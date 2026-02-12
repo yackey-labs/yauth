@@ -8,4 +8,5 @@ export { OAuthButtons } from "./components/oauth-buttons";
 export { ForgotPasswordForm } from "./components/forgot-password-form";
 export { ResetPasswordForm } from "./components/reset-password-form";
 export { VerifyEmail } from "./components/verify-email";
+export { ChangePasswordForm } from "./components/change-password-form";
 export { ProfileSettings } from "./components/profile-settings";

@@ -91,3 +91,16 @@ pub async fn delete_all_user_sessions(
         .await?;
     Ok(result.rows_affected)
 }
+
+pub async fn delete_other_user_sessions(
+    db: &DatabaseConnection,
+    user_id: Uuid,
+    keep_token_hash: &str,
+) -> Result<u64, sea_orm::DbErr> {
+    let result = yauth_entity::sessions::Entity::delete_many()
+        .filter(yauth_entity::sessions::Column::UserId.eq(user_id))
+        .filter(yauth_entity::sessions::Column::TokenHash.ne(keep_token_hash))
+        .exec(db)
+        .await?;
+    Ok(result.rows_affected)
+}

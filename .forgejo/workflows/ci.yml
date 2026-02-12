@@ -1,0 +1,128 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  REGISTRY: forgejo.yackey.cloud
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install JS dependencies
+        run: bun install --frozen-lockfile
+
+      - name: cargo fmt
+        run: cargo fmt --check
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --features full -- -D warnings
+
+      - name: Biome lint
+        run: bun run lint
+
+      - name: TypeScript typecheck
+        run: bun run typecheck
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: yauth
+          POSTGRES_PASSWORD: yauth
+          POSTGRES_DB: yauth_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U yauth"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Run tests
+        env:
+          DATABASE_URL: postgres://yauth:yauth@localhost:5433/yauth_test
+        run: cargo test --workspace --features full
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install JS dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build Rust crates
+        run: cargo build --workspace --features full --release
+
+      - name: Build TS packages
+        run: bun run build
+
+  publish:
+    name: Publish Packages
+    runs-on: ubuntu-latest
+    needs: [build]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install JS dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build TS packages
+        run: bun run build
+
+      - name: Publish Cargo crates
+        env:
+          CARGO_REGISTRIES_YAUTH_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          cargo publish -p yauth-entity --registry yauth --no-verify || echo "yauth-entity already published"
+          cargo publish -p yauth-migration --registry yauth --no-verify || echo "yauth-migration already published"
+          cargo publish -p yauth --registry yauth --no-verify || echo "yauth already published"
+
+      - name: Publish npm packages
+        env:
+          NPM_REGISTRY_TOKEN: ${{ secrets.NPM_REGISTRY_TOKEN }}
+        run: |
+          echo "@yauth:registry=https://forgejo.yackey.cloud/api/packages/yauth/npm/" > .npmrc
+          echo "//forgejo.yackey.cloud/api/packages/yauth/npm/:_authToken=${NPM_REGISTRY_TOKEN}" >> .npmrc
+          cd packages/shared && npm publish --access public || echo "@yauth/shared already published"
+          cd ../client && npm publish --access public || echo "@yauth/client already published"
+          cd ../ui-solidjs && npm publish --access public || echo "@yauth/ui-solidjs already published"

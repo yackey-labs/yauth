@@ -1,0 +1,2 @@
+[registries.yauth]
+index = "sparse+https://forgejo.yackey.cloud/api/packages/yauth/cargo/"

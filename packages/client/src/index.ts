@@ -104,6 +104,15 @@ function createClient(opts: YAuthClientOptions) {
 					method: "POST",
 					body: { token, password },
 				}),
+
+			changePassword: (currentPassword: string, newPassword: string) =>
+				request<{ message: string }>("/change-password", {
+					method: "POST",
+					body: {
+						current_password: currentPassword,
+						new_password: newPassword,
+					},
+				}),
 		},
 
 		/** Passkey (WebAuthn) operations */

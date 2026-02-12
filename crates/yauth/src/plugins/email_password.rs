@@ -1,16 +1,18 @@
 use axum::{
-    Json, Router,
+    Extension, Json, Router,
     extract::State,
     http::{StatusCode, header::SET_COOKIE},
     response::{IntoResponse, Response},
     routing::post,
 };
+use axum_extra::extract::cookie::CookieJar;
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::auth::{crypto, hibp, password, session};
+use crate::middleware::AuthUser;
 use crate::plugin::{AuthEvent, EventResponse, PluginContext, YAuthPlugin};
 use crate::state::YAuthState;
 
@@ -46,7 +48,7 @@ impl YAuthPlugin for EmailPasswordPlugin {
     }
 
     fn protected_routes(&self, _ctx: &PluginContext) -> Option<Router<YAuthState>> {
-        None
+        Some(Router::new().route("/change-password", post(change_password)))
     }
 }
 
@@ -102,6 +104,12 @@ struct ForgotPasswordRequest {
 struct ResetPasswordRequest {
     token: String,
     password: String,
+}
+
+#[derive(Deserialize)]
+struct ChangePasswordRequest {
+    current_password: String,
+    new_password: String,
 }
 
 async fn register(
@@ -730,5 +738,119 @@ async fn reset_password(
     Ok(Json(MessageResponse {
         message: "Password reset successfully. You can now sign in with your new password."
             .to_string(),
+    }))
+}
+
+async fn change_password(
+    State(state): State<YAuthState>,
+    Extension(user): Extension<AuthUser>,
+    jar: CookieJar,
+    Json(input): Json<ChangePasswordRequest>,
+) -> Result<Json<MessageResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let err = |status: StatusCode, msg: &str| (status, Json(serde_json::json!({ "error": msg })));
+
+    // Rate limit on user id
+    if !state
+        .rate_limiter
+        .check(&format!("change-pwd:{}", user.id))
+        .await
+    {
+        warn!(
+            event = "change_password_rate_limited",
+            user_id = %user.id,
+            "Change password rate limited"
+        );
+        return Err(err(StatusCode::TOO_MANY_REQUESTS, "Too many requests"));
+    }
+
+    let ep_config = &state.email_password_config;
+
+    // Validate new password length
+    if input.new_password.len() < ep_config.min_password_length {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            &format!(
+                "Password must be at least {} characters",
+                ep_config.min_password_length
+            ),
+        ));
+    }
+
+    // Lookup current password hash (use dummy hash if not found for timing safety)
+    let pwd_record = yauth_entity::passwords::Entity::find_by_id(user.id)
+        .one(&state.db)
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error: {}", e);
+            err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
+
+    let current_hash = pwd_record
+        .as_ref()
+        .map(|p| p.password_hash.as_str())
+        .unwrap_or(&state.dummy_hash);
+
+    // Verify current password (timing-safe)
+    let valid = password::verify_password(&input.current_password, current_hash).unwrap_or(false);
+    if !valid || pwd_record.is_none() {
+        warn!(
+            event = "change_password_wrong_current",
+            user_id = %user.id,
+            "Change password failed: wrong current password"
+        );
+        return Err(err(StatusCode::UNAUTHORIZED, "Current password is incorrect"));
+    }
+
+    // HIBP check on new password
+    if ep_config.hibp_check
+        && let Some(breach_msg) = hibp::validate_password_not_breached(&input.new_password).await
+    {
+        warn!(
+            event = "change_password_breached",
+            user_id = %user.id,
+            "Breached password rejected on change"
+        );
+        return Err(err(StatusCode::BAD_REQUEST, &breach_msg));
+    }
+
+    // Hash new password
+    let new_hash = password::hash_password(&input.new_password).map_err(|e| {
+        tracing::error!("Password hash error: {}", e);
+        err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+    })?;
+
+    // Update password
+    let existing = pwd_record.unwrap();
+    let mut pwd_active: yauth_entity::passwords::ActiveModel = existing.into();
+    pwd_active.password_hash = Set(new_hash);
+    pwd_active.update(&state.db).await.map_err(|e| {
+        tracing::error!("Failed to update password: {}", e);
+        err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+    })?;
+
+    // Invalidate all OTHER sessions (keep current session via cookie match)
+    if let Some(cookie) = jar.get(&state.config.session_cookie_name) {
+        let current_token_hash = crypto::hash_token(cookie.value());
+        session::delete_other_user_sessions(&state.db, user.id, &current_token_hash)
+            .await
+            .ok();
+    } else {
+        // No session cookie (e.g., bearer auth) — invalidate all sessions
+        session::delete_all_user_sessions(&state.db, user.id)
+            .await
+            .ok();
+    }
+
+    // Emit event
+    state.emit_event(&AuthEvent::PasswordChanged { user_id: user.id });
+
+    info!(
+        event = "password_changed",
+        user_id = %user.id,
+        "Password changed successfully, other sessions invalidated"
+    );
+
+    Ok(Json(MessageResponse {
+        message: "Password changed successfully.".to_string(),
     }))
 }

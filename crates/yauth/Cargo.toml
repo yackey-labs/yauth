@@ -1,0 +1,67 @@
+[package]
+name = "yauth"
+version.workspace = true
+edition.workspace = true
+
+[features]
+default = ["email-password"]
+email-password = ["yauth-entity/email-password", "yauth-migration/email-password"]
+passkey = ["yauth-entity/passkey", "yauth-migration/passkey", "dep:webauthn-rs", "dep:webauthn-rs-proto"]
+mfa = ["yauth-entity/mfa", "yauth-migration/mfa", "dep:totp-rs"]
+oauth = ["yauth-entity/oauth", "yauth-migration/oauth", "dep:oauth2"]
+bearer = ["yauth-entity/bearer", "yauth-migration/bearer", "dep:jsonwebtoken"]
+api-key = ["yauth-entity/api-key", "yauth-migration/api-key"]
+admin = []
+telemetry = ["dep:tracing-opentelemetry", "dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:opentelemetry-semantic-conventions"]
+full = ["email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "admin", "telemetry"]
+
+[dependencies]
+yauth-entity = { workspace = true }
+yauth-migration = { workspace = true }
+
+axum = { workspace = true }
+axum-extra = { workspace = true }
+tokio = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+
+sea-orm = { workspace = true }
+sea-orm-migration = { workspace = true }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+argon2 = { workspace = true }
+password-hash = { workspace = true }
+rand = { workspace = true }
+hex = { workspace = true }
+sha1 = { workspace = true }
+sha2 = "0.10"
+uuid = { workspace = true }
+chrono = { workspace = true }
+
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+lettre = { workspace = true }
+reqwest = { workspace = true }
+
+async-trait = { workspace = true }
+
+# Feature-gated
+webauthn-rs = { workspace = true, optional = true }
+webauthn-rs-proto = { workspace = true, optional = true }
+totp-rs = { workspace = true, optional = true }
+oauth2 = { workspace = true, optional = true }
+jsonwebtoken = { workspace = true, optional = true }
+
+tracing-opentelemetry = { workspace = true, optional = true }
+opentelemetry = { workspace = true, optional = true }
+opentelemetry_sdk = { workspace = true, optional = true }
+opentelemetry-otlp = { workspace = true, optional = true }
+opentelemetry-semantic-conventions = { workspace = true, optional = true }
+
+[dev-dependencies]
+totp-rs = { workspace = true }
+uuid = { workspace = true }

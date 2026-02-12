@@ -1,0 +1,21 @@
+{
+	"name": "@yauth/ui-solidjs",
+	"version": "0.1.0",
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"scripts": {
+		"build": "bun build src/index.ts --outdir dist --target browser",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@simplewebauthn/browser": "^13.0.0",
+		"@yauth/client": "workspace:*",
+		"@yauth/shared": "workspace:*",
+		"solid-js": "^1.9.5"
+	},
+	"devDependencies": {
+		"typescript": "^5.7.2"
+	}
+}

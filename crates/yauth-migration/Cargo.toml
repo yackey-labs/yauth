@@ -1,0 +1,19 @@
+[package]
+name = "yauth-migration"
+version.workspace = true
+edition.workspace = true
+
+[features]
+default = ["email-password"]
+email-password = []
+passkey = []
+mfa = []
+oauth = []
+bearer = []
+api-key = []
+full = ["email-password", "passkey", "mfa", "oauth", "bearer", "api-key"]
+
+[dependencies]
+sea-orm-migration = { workspace = true }
+async-trait = { workspace = true }
+uuid = { workspace = true }

@@ -1,0 +1,24 @@
+{
+	"name": "yauth",
+	"private": true,
+	"type": "module",
+	"workspaces": ["packages/*"],
+	"scripts": {
+		"build": "bun run --filter '*' build",
+		"lint": "biome check .",
+		"lint:fix": "biome check --write .",
+		"format": "biome format --write .",
+		"typecheck": "bun run --filter '*' typecheck",
+		"validate": "bun run lint:fix && bun run typecheck && bun run build",
+		"validate:ci": "bun run lint && bun run typecheck && bun run build",
+		"clean": "rm -rf node_modules packages/*/node_modules packages/*/dist"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^1.9.4",
+		"@types/bun": "latest",
+		"typescript": "^5.7.2"
+	},
+	"engines": {
+		"node": ">=20"
+	}
+}

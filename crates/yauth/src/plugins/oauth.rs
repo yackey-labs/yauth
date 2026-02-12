@@ -5,11 +5,11 @@ use axum::{
     response::{IntoResponse, Redirect},
     routing::{delete, get, post},
 };
+use oauth2::basic::BasicClient;
 use oauth2::{
-    AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, EndpointSet, EndpointNotSet,
+    AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, EndpointNotSet, EndpointSet,
     RedirectUrl, Scope, TokenResponse, TokenUrl,
 };
-use oauth2::basic::BasicClient;
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
@@ -126,23 +126,32 @@ fn find_provider_config<'a>(
 fn build_oauth_client(
     provider_config: &OAuthProviderConfig,
     redirect_uri: &str,
-) -> Result<BasicClient<EndpointSet, EndpointNotSet, EndpointNotSet, EndpointNotSet, EndpointSet>, ApiError> {
+) -> Result<
+    BasicClient<EndpointSet, EndpointNotSet, EndpointNotSet, EndpointNotSet, EndpointSet>,
+    ApiError,
+> {
     let client = BasicClient::new(ClientId::new(provider_config.client_id.clone()))
-        .set_client_secret(ClientSecret::new(
-            provider_config.client_secret.clone(),
-        ))
-        .set_auth_uri(
-            AuthUrl::new(provider_config.auth_url.clone())
-                .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Invalid auth URL: {}", e)))?,
-        )
+        .set_client_secret(ClientSecret::new(provider_config.client_secret.clone()))
+        .set_auth_uri(AuthUrl::new(provider_config.auth_url.clone()).map_err(|e| {
+            api_err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("Invalid auth URL: {}", e),
+            )
+        })?)
         .set_token_uri(
-            TokenUrl::new(provider_config.token_url.clone())
-                .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Invalid token URL: {}", e)))?,
+            TokenUrl::new(provider_config.token_url.clone()).map_err(|e| {
+                api_err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("Invalid token URL: {}", e),
+                )
+            })?,
         )
-        .set_redirect_uri(
-            RedirectUrl::new(redirect_uri.to_string())
-                .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Invalid redirect URL: {}", e)))?,
-        );
+        .set_redirect_uri(RedirectUrl::new(redirect_uri.to_string()).map_err(|e| {
+            api_err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("Invalid redirect URL: {}", e),
+            )
+        })?);
     Ok(client)
 }
 
@@ -188,8 +197,14 @@ async fn consume_state(
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?
         .ok_or_else(|| {
-            warn!(event = "oauth_state_invalid", "OAuth state parameter not found");
-            api_err(StatusCode::BAD_REQUEST, "Invalid or expired state parameter")
+            warn!(
+                event = "oauth_state_invalid",
+                "OAuth state parameter not found"
+            );
+            api_err(
+                StatusCode::BAD_REQUEST,
+                "Invalid or expired state parameter",
+            )
         })?;
 
     // Delete the state immediately (one-time use)
@@ -201,7 +216,10 @@ async fn consume_state(
     // Check expiry
     let now = chrono::Utc::now().fixed_offset();
     if stored.expires_at < now {
-        warn!(event = "oauth_state_expired", "OAuth state parameter expired");
+        warn!(
+            event = "oauth_state_expired",
+            "OAuth state parameter expired"
+        );
         return Err(api_err(
             StatusCode::BAD_REQUEST,
             "State parameter has expired. Please try again.",
@@ -289,7 +307,10 @@ async fn fetch_userinfo(
         .await
         .map_err(|e| {
             tracing::error!("Failed to fetch userinfo: {}", e);
-            api_err(StatusCode::BAD_GATEWAY, "Failed to fetch user info from provider")
+            api_err(
+                StatusCode::BAD_GATEWAY,
+                "Failed to fetch user info from provider",
+            )
         })?;
 
     if !resp.status().is_success() {
@@ -370,9 +391,7 @@ async fn handle_callback(
         })?;
 
     let access_token = token_result.access_token().secret().clone();
-    let refresh_token = token_result
-        .refresh_token()
-        .map(|t| t.secret().clone());
+    let refresh_token = token_result.refresh_token().map(|t| t.secret().clone());
 
     // 5. Fetch user info from provider
     let userinfo_json = fetch_userinfo(provider_config, &access_token).await?;
@@ -431,13 +450,12 @@ async fn handle_callback(
             })?
             .ok_or_else(|| api_err(StatusCode::INTERNAL_SERVER_ERROR, "User not found"))?;
 
-        let (token, _session_id) =
-            session::create_session(&state.db, user.id, None, None)
-                .await
-                .map_err(|e| {
-                    tracing::error!("Failed to create session: {}", e);
-                    api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-                })?;
+        let (token, _session_id) = session::create_session(&state.db, user.id, None, None)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to create session: {}", e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?;
 
         info!(
             event = "oauth_account_linked",
@@ -576,13 +594,12 @@ async fn handle_callback(
     };
 
     // 8. Create session
-    let (token, _session_id) =
-        session::create_session(&state.db, user_id, None, None)
-            .await
-            .map_err(|e| {
-                tracing::error!("Failed to create session: {}", e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
+    let (token, _session_id) = session::create_session(&state.db, user_id, None, None)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to create session: {}", e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
 
     Ok((
         user_id.to_string(),
@@ -610,7 +627,13 @@ async fn authorize(
     let state_token = crypto::generate_token();
 
     // Store state in DB
-    store_state(&state, &state_token, &provider, query.redirect_url.as_deref()).await?;
+    store_state(
+        &state,
+        &state_token,
+        &provider,
+        query.redirect_url.as_deref(),
+    )
+    .await?;
 
     // Build redirect URI
     let redirect_uri = format!(
@@ -648,7 +671,10 @@ async fn callback_get(
 ) -> Result<impl IntoResponse, ApiError> {
     // Check for error from provider
     if let Some(ref error) = query.error {
-        let desc = query.error_description.as_deref().unwrap_or("Unknown error");
+        let desc = query
+            .error_description
+            .as_deref()
+            .unwrap_or("Unknown error");
         warn!(
             event = "oauth_callback_error",
             provider = %provider,
@@ -769,7 +795,10 @@ async fn unlink_provider(
         })?;
 
     let account = account.ok_or_else(|| {
-        api_err(StatusCode::NOT_FOUND, "OAuth provider not linked to your account")
+        api_err(
+            StatusCode::NOT_FOUND,
+            "OAuth provider not linked to your account",
+        )
     })?;
 
     yauth_entity::oauth_accounts::Entity::delete_by_id(account.id)

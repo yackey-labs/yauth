@@ -65,36 +65,57 @@ mod tests {
 
     #[test]
     fn bad_request_returns_400() {
-        assert_eq!(status_of(YAuthError::BadRequest("x".into())), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            status_of(YAuthError::BadRequest("x".into())),
+            StatusCode::BAD_REQUEST
+        );
     }
 
     #[test]
     fn unauthorized_returns_401() {
-        assert_eq!(status_of(YAuthError::Unauthorized("x".into())), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            status_of(YAuthError::Unauthorized("x".into())),
+            StatusCode::UNAUTHORIZED
+        );
     }
 
     #[test]
     fn forbidden_returns_403() {
-        assert_eq!(status_of(YAuthError::Forbidden("x".into())), StatusCode::FORBIDDEN);
+        assert_eq!(
+            status_of(YAuthError::Forbidden("x".into())),
+            StatusCode::FORBIDDEN
+        );
     }
 
     #[test]
     fn not_found_returns_404() {
-        assert_eq!(status_of(YAuthError::NotFound("x".into())), StatusCode::NOT_FOUND);
+        assert_eq!(
+            status_of(YAuthError::NotFound("x".into())),
+            StatusCode::NOT_FOUND
+        );
     }
 
     #[test]
     fn conflict_returns_409() {
-        assert_eq!(status_of(YAuthError::Conflict("x".into())), StatusCode::CONFLICT);
+        assert_eq!(
+            status_of(YAuthError::Conflict("x".into())),
+            StatusCode::CONFLICT
+        );
     }
 
     #[test]
     fn too_many_requests_returns_429() {
-        assert_eq!(status_of(YAuthError::TooManyRequests), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            status_of(YAuthError::TooManyRequests),
+            StatusCode::TOO_MANY_REQUESTS
+        );
     }
 
     #[test]
     fn internal_returns_500() {
-        assert_eq!(status_of(YAuthError::Internal("x".into())), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            status_of(YAuthError::Internal("x".into())),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
     }
 }

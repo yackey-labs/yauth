@@ -16,7 +16,7 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::auth::{crypto, session};
-use crate::middleware::{require_admin, AuthUser};
+use crate::middleware::{AuthUser, require_admin};
 use crate::plugin::{PluginContext, YAuthPlugin};
 use crate::state::YAuthState;
 
@@ -105,8 +105,8 @@ async fn list_users(
 ) -> Result<impl IntoResponse, ApiError> {
     let (page, per_page) = paginate_params(params.page, params.per_page);
 
-    let mut query = yauth_entity::users::Entity::find()
-        .order_by_asc(yauth_entity::users::Column::CreatedAt);
+    let mut query =
+        yauth_entity::users::Entity::find().order_by_asc(yauth_entity::users::Column::CreatedAt);
 
     if let Some(ref search) = params.search {
         let pattern = format!("%{}%", search);

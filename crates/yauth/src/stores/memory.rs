@@ -145,10 +145,7 @@ mod tests {
     #[tokio::test]
     async fn challenge_store_set_and_get() {
         let store = MemoryChallengeStore::new();
-        store
-            .set("key1", json!({"foo": "bar"}), 60)
-            .await
-            .unwrap();
+        store.set("key1", json!({"foo": "bar"}), 60).await.unwrap();
         let val = store.get("key1").await.unwrap();
         assert_eq!(val, Some(json!({"foo": "bar"})));
     }

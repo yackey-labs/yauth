@@ -315,7 +315,9 @@ async fn login(
             });
 
             match event_response {
-                EventResponse::RequireMfa { pending_session_id, .. } => {
+                EventResponse::RequireMfa {
+                    pending_session_id, ..
+                } => {
                     info!(
                         event = "login_mfa_required",
                         email = %u.email,
@@ -326,7 +328,8 @@ async fn login(
                     Ok(Json(serde_json::json!({
                         "mfa_required": true,
                         "pending_session_id": pending_session_id,
-                    })).into_response())
+                    }))
+                    .into_response())
                 }
                 EventResponse::Block { status, message } => {
                     warn!(
@@ -336,17 +339,17 @@ async fn login(
                         message = %message,
                         "Login blocked by plugin"
                     );
-                    let status_code = StatusCode::from_u16(status)
-                        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+                    let status_code =
+                        StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
                     Err(err(status_code, &message))
                 }
                 EventResponse::Continue => {
                     let (token, _session_id) = session::create_session(&state.db, u.id, None, None)
                         .await
                         .map_err(|e| {
-                        tracing::error!("Failed to create session: {}", e);
-                        err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-                    })?;
+                            tracing::error!("Failed to create session: {}", e);
+                            err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+                        })?;
 
                     info!(event = "login_success", email = %u.email, user_id = %u.id, "User logged in");
 
@@ -358,7 +361,8 @@ async fn login(
                             "display_name": u.display_name,
                             "email_verified": u.email_verified,
                         })),
-                    ).into_response())
+                    )
+                        .into_response())
                 }
             }
         }
@@ -798,7 +802,10 @@ async fn change_password(
             user_id = %user.id,
             "Change password failed: wrong current password"
         );
-        return Err(err(StatusCode::UNAUTHORIZED, "Current password is incorrect"));
+        return Err(err(
+            StatusCode::UNAUTHORIZED,
+            "Current password is incorrect",
+        ));
     }
 
     // HIBP check on new password

@@ -68,9 +68,7 @@ pub async fn auth_middleware(
     if let Some(auth_header) = headers.get("authorization") {
         if let Ok(header_str) = auth_header.to_str() {
             if let Some(token) = header_str.strip_prefix("Bearer ") {
-                if let Ok(auth_user) =
-                    crate::plugins::bearer::validate_jwt(token, &state).await
-                {
+                if let Ok(auth_user) = crate::plugins::bearer::validate_jwt(token, &state).await {
                     req.extensions_mut().insert(auth_user);
                     return next.run(req).await;
                 }
@@ -83,8 +81,7 @@ pub async fn auth_middleware(
     #[allow(clippy::collapsible_if)]
     if let Some(api_key_header) = headers.get("x-api-key") {
         if let Ok(key_str) = api_key_header.to_str() {
-            if let Ok(auth_user) =
-                crate::plugins::api_key::validate_api_key(key_str, &state).await
+            if let Ok(auth_user) = crate::plugins::api_key::validate_api_key(key_str, &state).await
             {
                 req.extensions_mut().insert(auth_user);
                 return next.run(req).await;

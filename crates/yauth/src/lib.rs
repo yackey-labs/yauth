@@ -54,12 +54,10 @@ impl YAuth {
         }
 
         // Apply auth middleware to all protected routes
-        let protected_router = protected_router.layer(
-            axum::middleware::from_fn_with_state(
-                self.state.clone(),
-                middleware::auth_middleware,
-            ),
-        );
+        let protected_router = protected_router.layer(axum::middleware::from_fn_with_state(
+            self.state.clone(),
+            middleware::auth_middleware,
+        ));
 
         public_router.merge(protected_router)
     }
@@ -176,9 +174,9 @@ impl YAuthBuilder {
             StoreBackend::Memory => {
                 std::sync::Arc::new(stores::memory::MemoryChallengeStore::new())
             }
-            StoreBackend::Postgres => {
-                std::sync::Arc::new(stores::postgres::PostgresChallengeStore::new(self.db.clone()))
-            }
+            StoreBackend::Postgres => std::sync::Arc::new(
+                stores::postgres::PostgresChallengeStore::new(self.db.clone()),
+            ),
         };
 
         // Build rate limit store
@@ -187,9 +185,9 @@ impl YAuthBuilder {
             StoreBackend::Memory => {
                 std::sync::Arc::new(stores::memory::MemoryRateLimitStore::new(10, 60))
             }
-            StoreBackend::Postgres => {
-                std::sync::Arc::new(stores::postgres::PostgresRateLimitStore::new(self.db.clone()))
-            }
+            StoreBackend::Postgres => std::sync::Arc::new(
+                stores::postgres::PostgresRateLimitStore::new(self.db.clone()),
+            ),
         };
 
         // Build email service
@@ -207,7 +205,9 @@ impl YAuthBuilder {
         if let Some(ref ep_config) = self.email_password_config {
             self.plugins.insert(
                 0,
-                Box::new(plugins::email_password::EmailPasswordPlugin::new(ep_config.clone())),
+                Box::new(plugins::email_password::EmailPasswordPlugin::new(
+                    ep_config.clone(),
+                )),
             );
         }
 
@@ -223,18 +223,16 @@ impl YAuthBuilder {
             email_service,
             plugins: std::sync::Arc::new(Vec::new()), // placeholder, replaced below
             #[cfg(feature = "email-password")]
-            email_password_config: self
-                .email_password_config
-                .clone()
-                .unwrap_or_default(),
+            email_password_config: self.email_password_config.clone().unwrap_or_default(),
             #[cfg(feature = "bearer")]
-            bearer_config: self.bearer_config.clone().unwrap_or_else(|| {
-                config::BearerConfig {
+            bearer_config: self
+                .bearer_config
+                .clone()
+                .unwrap_or_else(|| config::BearerConfig {
                     jwt_secret: String::new(),
                     access_token_ttl: std::time::Duration::from_secs(900),
                     refresh_token_ttl: std::time::Duration::from_secs(30 * 24 * 3600),
-                }
-            }),
+                }),
             #[cfg(feature = "mfa")]
             mfa_config: self.mfa_config.clone().unwrap_or_default(),
             #[cfg(feature = "oauth")]
@@ -267,8 +265,7 @@ impl YAuthBuilder {
 
         #[cfg(feature = "oauth")]
         if self.oauth_config.is_some() {
-            self.plugins
-                .push(Box::new(plugins::oauth::OAuthPlugin));
+            self.plugins.push(Box::new(plugins::oauth::OAuthPlugin));
         }
 
         #[cfg(feature = "bearer")]

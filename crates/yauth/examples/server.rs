@@ -38,12 +38,7 @@
 //! - `GET  /api/me`           — returns the authenticated user (requires auth)
 //! - `/api/auth/...`          — all yauth auth routes (register, login, session, etc.)
 
-use axum::{
-    Extension, Json, Router,
-    http::StatusCode,
-    response::IntoResponse,
-    routing::get,
-};
+use axum::{Extension, Json, Router, http::StatusCode, response::IntoResponse, routing::get};
 use sea_orm_migration::MigratorTrait;
 use serde_json::json;
 use std::env;
@@ -80,10 +75,8 @@ async fn main() {
         .and_then(|p| p.parse().ok())
         .unwrap_or(3000);
     let base_url = env::var("BASE_URL").unwrap_or_else(|_| format!("http://localhost:{}", port));
-    let session_cookie_name =
-        env::var("SESSION_COOKIE_NAME").unwrap_or_else(|_| "session".into());
-    let jwt_secret =
-        env::var("JWT_SECRET").unwrap_or_else(|_| "dev-secret-change-me".into());
+    let session_cookie_name = env::var("SESSION_COOKIE_NAME").unwrap_or_else(|_| "session".into());
+    let jwt_secret = env::var("JWT_SECRET").unwrap_or_else(|_| "dev-secret-change-me".into());
 
     // SMTP — if SMTP_HOST is set, email sending is enabled
     let smtp_config = env::var("SMTP_HOST").ok().map(|host| {
@@ -96,12 +89,9 @@ async fn main() {
     });
 
     // Passkey / WebAuthn
-    let passkey_rp_id =
-        env::var("PASSKEY_RP_ID").unwrap_or_else(|_| "localhost".into());
-    let passkey_rp_origin =
-        env::var("PASSKEY_RP_ORIGIN").unwrap_or_else(|_| base_url.clone());
-    let passkey_rp_name =
-        env::var("PASSKEY_RP_NAME").unwrap_or_else(|_| "YAuth Dev".into());
+    let passkey_rp_id = env::var("PASSKEY_RP_ID").unwrap_or_else(|_| "localhost".into());
+    let passkey_rp_origin = env::var("PASSKEY_RP_ORIGIN").unwrap_or_else(|_| base_url.clone());
+    let passkey_rp_name = env::var("PASSKEY_RP_NAME").unwrap_or_else(|_| "YAuth Dev".into());
 
     // MFA / TOTP
     let mfa_issuer = env::var("MFA_ISSUER").unwrap_or_else(|_| "YAuth Dev".into());
@@ -162,7 +152,7 @@ async fn main() {
     // JWT bearer tokens (for API / mobile clients)
     .with_bearer(yauth::config::BearerConfig {
         jwt_secret,
-        access_token_ttl: Duration::from_secs(15 * 60),   // 15 minutes
+        access_token_ttl: Duration::from_secs(15 * 60), // 15 minutes
         refresh_token_ttl: Duration::from_secs(30 * 24 * 3600), // 30 days
     })
     // API key authentication (X-Api-Key header)
@@ -180,12 +170,12 @@ async fn main() {
 
     // Protected application routes — these use the yauth auth middleware so
     // that `AuthUser` is available via `Extension<AuthUser>`.
-    let app_protected = Router::new()
-        .route("/api/me", get(me_handler))
-        .layer(axum::middleware::from_fn_with_state(
+    let app_protected = Router::new().route("/api/me", get(me_handler)).layer(
+        axum::middleware::from_fn_with_state(
             auth_state.clone(),
             yauth::middleware::auth_middleware,
-        ));
+        ),
+    );
 
     let app = Router::new()
         // Public routes
@@ -204,14 +194,18 @@ async fn main() {
     let listener = TcpListener::bind(addr).await.expect("Failed to bind port");
     tracing::info!("YAuth example server listening on http://0.0.0.0:{}", port);
     tracing::info!("  Health:  GET  http://localhost:{}/api/health", port);
-    tracing::info!("  Me:      GET  http://localhost:{}/api/me  (requires auth)", port);
-    tracing::info!("  Auth:    POST http://localhost:{}/api/auth/register", port);
+    tracing::info!(
+        "  Me:      GET  http://localhost:{}/api/me  (requires auth)",
+        port
+    );
+    tracing::info!(
+        "  Auth:    POST http://localhost:{}/api/auth/register",
+        port
+    );
     tracing::info!("           POST http://localhost:{}/api/auth/login", port);
     tracing::info!("           GET  http://localhost:{}/api/auth/session", port);
 
-    axum::serve(listener, app)
-        .await
-        .expect("Server error");
+    axum::serve(listener, app).await.expect("Server error");
 }
 
 // ---------------------------------------------------------------------------
@@ -236,9 +230,7 @@ async fn health_handler() -> impl IntoResponse {
 ///   1. Session cookie
 ///   2. `Authorization: Bearer <jwt>` header
 ///   3. `X-Api-Key: <key>` header
-async fn me_handler(
-    Extension(user): Extension<AuthUser>,
-) -> impl IntoResponse {
+async fn me_handler(Extension(user): Extension<AuthUser>) -> impl IntoResponse {
     (
         StatusCode::OK,
         Json(json!({

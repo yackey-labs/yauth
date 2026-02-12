@@ -1,8 +1,5 @@
 use axum::{
-    Extension, Json, Router,
-    extract::State,
-    http::StatusCode,
-    response::IntoResponse,
+    Extension, Json, Router, extract::State, http::StatusCode, response::IntoResponse,
     routing::post,
 };
 use chrono::Utc;
@@ -142,8 +139,9 @@ async fn create_refresh_token(
     let raw_token = crypto::generate_token();
     let token_hash = crypto::hash_token(&raw_token);
     let now = Utc::now().fixed_offset();
-    let expires_at = (Utc::now() + chrono::Duration::from_std(ttl).unwrap_or(chrono::Duration::days(7)))
-        .fixed_offset();
+    let expires_at = (Utc::now()
+        + chrono::Duration::from_std(ttl).unwrap_or(chrono::Duration::days(7)))
+    .fixed_offset();
 
     let refresh = yauth_entity::refresh_tokens::ActiveModel {
         id: Set(Uuid::new_v4()),
@@ -277,7 +275,10 @@ async fn create_token(
         }
         _ => {
             warn!(event = "bearer_login_failure", email = %email, "Failed bearer login attempt");
-            Err(api_err(StatusCode::UNAUTHORIZED, "Invalid email or password"))
+            Err(api_err(
+                StatusCode::UNAUTHORIZED,
+                "Invalid email or password",
+            ))
         }
     }
 }
@@ -292,7 +293,10 @@ async fn refresh_token(
 ) -> Result<impl IntoResponse, ApiError> {
     let raw_token = input.refresh_token.trim();
     if raw_token.is_empty() {
-        return Err(api_err(StatusCode::BAD_REQUEST, "Refresh token is required"));
+        return Err(api_err(
+            StatusCode::BAD_REQUEST,
+            "Refresh token is required",
+        ));
     }
 
     let token_hash = crypto::hash_token(raw_token);
@@ -327,14 +331,20 @@ async fn refresh_token(
         if let Err(e) = revoke_family(&state.db, stored.family_id).await {
             tracing::error!("Failed to revoke token family: {}", e);
         }
-        return Err(api_err(StatusCode::UNAUTHORIZED, "Refresh token has been revoked"));
+        return Err(api_err(
+            StatusCode::UNAUTHORIZED,
+            "Refresh token has been revoked",
+        ));
     }
 
     // Check expiry
     let now = Utc::now().fixed_offset();
     if stored.expires_at < now {
         warn!(event = "bearer_refresh_expired", user_id = %stored.user_id, "Expired refresh token used");
-        return Err(api_err(StatusCode::UNAUTHORIZED, "Refresh token has expired"));
+        return Err(api_err(
+            StatusCode::UNAUTHORIZED,
+            "Refresh token has expired",
+        ));
     }
 
     // Revoke the old refresh token
@@ -399,7 +409,10 @@ async fn revoke_token(
 ) -> Result<impl IntoResponse, ApiError> {
     let raw_token = input.refresh_token.trim();
     if raw_token.is_empty() {
-        return Err(api_err(StatusCode::BAD_REQUEST, "Refresh token is required"));
+        return Err(api_err(
+            StatusCode::BAD_REQUEST,
+            "Refresh token is required",
+        ));
     }
 
     let token_hash = crypto::hash_token(raw_token);
@@ -423,7 +436,10 @@ async fn revoke_token(
 
     // Only allow revoking your own tokens (unless admin)
     if stored.user_id != auth_user.id && auth_user.role != "admin" {
-        return Err(api_err(StatusCode::FORBIDDEN, "Cannot revoke another user's token"));
+        return Err(api_err(
+            StatusCode::FORBIDDEN,
+            "Cannot revoke another user's token",
+        ));
     }
 
     if !stored.revoked {

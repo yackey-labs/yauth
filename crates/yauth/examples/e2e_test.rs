@@ -246,7 +246,10 @@ async fn main() {
     assert_eq!(res.status(), 200);
     let new_token_body: serde_json::Value = res.json().await.unwrap();
     let _new_access = new_token_body["access_token"].as_str().unwrap().to_string();
-    let new_refresh = new_token_body["refresh_token"].as_str().unwrap().to_string();
+    let new_refresh = new_token_body["refresh_token"]
+        .as_str()
+        .unwrap()
+        .to_string();
     assert_ne!(new_refresh, refresh_token, "Refresh token should rotate");
     pass("POST /token/refresh rotates tokens");
 
@@ -333,11 +336,18 @@ async fn main() {
     let key_body: serde_json::Value = res.json().await.unwrap();
     let api_key = key_body["key"].as_str().unwrap().to_string();
     let key_id = key_body["id"].as_str().unwrap().to_string();
-    assert!(api_key.starts_with("yauth_"), "Key should start with yauth_");
+    assert!(
+        api_key.starts_with("yauth_"),
+        "Key should start with yauth_"
+    );
     pass("POST /api-keys creates key with yauth_ prefix");
 
     // List API keys
-    let res = authed.get(format!("{}/api-keys", api)).send().await.unwrap();
+    let res = authed
+        .get(format!("{}/api-keys", api))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(res.status(), 200);
     let keys: serde_json::Value = res.json().await.unwrap();
     let keys_arr = keys.as_array().unwrap();
@@ -412,7 +422,12 @@ async fn main() {
         .iter()
         .map(|v| v.as_str().unwrap().to_string())
         .collect();
-    assert!(setup_body["otpauth_url"].as_str().unwrap().starts_with("otpauth://"));
+    assert!(
+        setup_body["otpauth_url"]
+            .as_str()
+            .unwrap()
+            .starts_with("otpauth://")
+    );
     assert!(!backup_codes.is_empty());
     pass("POST /mfa/totp/setup returns secret + backup codes");
 
@@ -448,7 +463,10 @@ async fn main() {
         .unwrap();
     assert_eq!(res.status(), 200);
     let count_body: serde_json::Value = res.json().await.unwrap();
-    assert_eq!(count_body["remaining"].as_u64().unwrap(), backup_codes.len() as u64);
+    assert_eq!(
+        count_body["remaining"].as_u64().unwrap(),
+        backup_codes.len() as u64
+    );
     pass("GET /mfa/backup-codes returns correct count");
 
     // Logout and try login — should get MFA challenge
@@ -471,8 +489,8 @@ async fn main() {
     let login_resp: serde_json::Value = res.json().await.unwrap();
     // MFA-enabled login should return mfa_required with pending_session_id
     // Check if the response indicates MFA is required
-    let has_mfa_challenge = login_resp.get("mfa_required").is_some()
-        || login_resp.get("pending_session_id").is_some();
+    let has_mfa_challenge =
+        login_resp.get("mfa_required").is_some() || login_resp.get("pending_session_id").is_some();
     // Note: The email_password login handler might not wire MFA events yet.
     // If it returns a normal session, MFA event wiring needs to be added.
     if has_mfa_challenge {

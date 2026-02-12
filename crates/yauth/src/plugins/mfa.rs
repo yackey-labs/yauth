@@ -47,7 +47,10 @@ impl YAuthPlugin for MfaPlugin {
                 .route("/mfa/totp/confirm", post(confirm_totp))
                 .route("/mfa/totp", delete(disable_totp))
                 .route("/mfa/backup-codes", get(get_backup_code_count))
-                .route("/mfa/backup-codes/regenerate", post(regenerate_backup_codes)),
+                .route(
+                    "/mfa/backup-codes/regenerate",
+                    post(regenerate_backup_codes),
+                ),
         )
     }
 
@@ -224,8 +227,7 @@ async fn store_backup_codes(
     user_id: Uuid,
     count: usize,
 ) -> Result<Vec<String>, (StatusCode, Json<serde_json::Value>)> {
-    let err =
-        |status: StatusCode, msg: &str| (status, Json(serde_json::json!({ "error": msg })));
+    let err = |status: StatusCode, msg: &str| (status, Json(serde_json::json!({ "error": msg })));
 
     let codes = generate_backup_codes(count);
     let now = chrono::Utc::now().fixed_offset();
@@ -279,8 +281,7 @@ async fn setup_totp(
     State(state): State<YAuthState>,
     Extension(user): Extension<AuthUser>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let err =
-        |status: StatusCode, msg: &str| (status, Json(serde_json::json!({ "error": msg })));
+    let err = |status: StatusCode, msg: &str| (status, Json(serde_json::json!({ "error": msg })));
 
     // Check if user already has a verified TOTP secret
     let existing = yauth_entity::totp_secrets::Entity::find()
@@ -349,7 +350,8 @@ async fn setup_totp(
 
     // Delete any existing backup codes and generate fresh ones
     delete_all_backup_codes(&state, user.id).await?;
-    let backup_codes = store_backup_codes(&state, user.id, state.mfa_config.backup_code_count).await?;
+    let backup_codes =
+        store_backup_codes(&state, user.id, state.mfa_config.backup_code_count).await?;
 
     info!(
         event = "mfa_totp_setup_initiated",
@@ -373,8 +375,7 @@ async fn confirm_totp(
     Extension(user): Extension<AuthUser>,
     Json(input): Json<ConfirmTotpRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let err =
-        |status: StatusCode, msg: &str| (status, Json(serde_json::json!({ "error": msg })));
+    let err = |status: StatusCode, msg: &str| (status, Json(serde_json::json!({ "error": msg })));
 
     // Find the unverified TOTP secret for this user
     let totp_record = yauth_entity::totp_secrets::Entity::find()
@@ -440,8 +441,7 @@ async fn disable_totp(
     State(state): State<YAuthState>,
     Extension(user): Extension<AuthUser>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let err =
-        |status: StatusCode, msg: &str| (status, Json(serde_json::json!({ "error": msg })));
+    let err = |status: StatusCode, msg: &str| (status, Json(serde_json::json!({ "error": msg })));
 
     // Delete TOTP secret (verified or not)
     let delete_result = yauth_entity::totp_secrets::Entity::delete_many()
@@ -479,8 +479,7 @@ async fn verify_mfa(
     State(state): State<YAuthState>,
     Json(input): Json<VerifyMfaRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let err =
-        |status: StatusCode, msg: &str| (status, Json(serde_json::json!({ "error": msg })));
+    let err = |status: StatusCode, msg: &str| (status, Json(serde_json::json!({ "error": msg })));
 
     // Look up the pending MFA session from the challenge store
     let key = format!("mfa_pending:{}", input.pending_session_id);
@@ -499,9 +498,12 @@ async fn verify_mfa(
             )
         })?;
 
-    let user_id_str = pending["user_id"]
-        .as_str()
-        .ok_or_else(|| err(StatusCode::INTERNAL_SERVER_ERROR, "Invalid pending session data"))?;
+    let user_id_str = pending["user_id"].as_str().ok_or_else(|| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Invalid pending session data",
+        )
+    })?;
     let user_id: Uuid = user_id_str.parse().map_err(|_| {
         err(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -622,8 +624,7 @@ async fn get_backup_code_count(
     State(state): State<YAuthState>,
     Extension(user): Extension<AuthUser>,
 ) -> Result<Json<BackupCodeCountResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let err =
-        |status: StatusCode, msg: &str| (status, Json(serde_json::json!({ "error": msg })));
+    let err = |status: StatusCode, msg: &str| (status, Json(serde_json::json!({ "error": msg })));
 
     let codes = yauth_entity::backup_codes::Entity::find()
         .filter(yauth_entity::backup_codes::Column::UserId.eq(user.id))
@@ -648,8 +649,7 @@ async fn regenerate_backup_codes(
     State(state): State<YAuthState>,
     Extension(user): Extension<AuthUser>,
 ) -> Result<Json<BackupCodesResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let err =
-        |status: StatusCode, msg: &str| (status, Json(serde_json::json!({ "error": msg })));
+    let err = |status: StatusCode, msg: &str| (status, Json(serde_json::json!({ "error": msg })));
 
     // Ensure MFA is enabled
     let has_mfa = yauth_entity::totp_secrets::Entity::find()

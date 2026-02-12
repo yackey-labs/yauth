@@ -90,11 +90,7 @@ impl ChallengeStore for PostgresChallengeStore {
             .execute(Statement::from_sql_and_values(
                 DbBackend::Postgres,
                 sql,
-                vec![
-                    key.into(),
-                    value.into(),
-                    (ttl_secs as f64).into(),
-                ],
+                vec![key.into(), value.into(), (ttl_secs as f64).into()],
             ))
             .await
             .map_err(|e| format!("challenge set failed: {e}"))?;
@@ -217,10 +213,7 @@ impl RateLimitStore for PostgresRateLimitStore {
             .query_one(Statement::from_sql_and_values(
                 DbBackend::Postgres,
                 sql,
-                vec![
-                    key.into(),
-                    (window_secs as f64).into(),
-                ],
+                vec![key.into(), (window_secs as f64).into()],
             ))
             .await;
 
@@ -235,8 +228,7 @@ impl RateLimitStore for PostgresRateLimitStore {
 
                 if count > limit {
                     // Over limit — compute retry_after
-                    let window_end = window_start
-                        + chrono::Duration::seconds(window_secs as i64);
+                    let window_end = window_start + chrono::Duration::seconds(window_secs as i64);
                     let now = chrono::Utc::now();
                     let retry_after = (window_end - now).num_seconds().max(0) as u64;
 

@@ -84,14 +84,11 @@ async fn create_api_key(
 
     let now = chrono::Utc::now().fixed_offset();
 
-    let expires_at = input.expires_in_days.map(|days| {
-        (chrono::Utc::now() + chrono::Duration::days(i64::from(days))).fixed_offset()
-    });
+    let expires_at = input
+        .expires_in_days
+        .map(|days| (chrono::Utc::now() + chrono::Duration::days(i64::from(days))).fixed_offset());
 
-    let scopes_json = input
-        .scopes
-        .as_ref()
-        .map(|s| serde_json::json!(s));
+    let scopes_json = input.scopes.as_ref().map(|s| serde_json::json!(s));
 
     let api_key_id = Uuid::new_v4();
 

@@ -24,6 +24,10 @@ pub struct Migrator;
 
 #[async_trait::async_trait]
 impl MigratorTrait for Migrator {
+    fn migration_table_name() -> sea_orm::DynIden {
+        Alias::new("yauth_migrations").into_iden()
+    }
+
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
         let mut migrations: Vec<Box<dyn MigrationTrait>> =
             vec![Box::new(m20250101_000001_core::Migration)];

@@ -58,6 +58,9 @@ function createClient(opts: YAuthClientOptions) {
 
 		logout: () => request<{ success: boolean }>("/logout", { method: "POST" }),
 
+		updateProfile: (data: { display_name?: string }) =>
+			request<{ user: AuthUser }>("/me", { method: "PATCH", body: data }),
+
 		/** Email/password operations */
 		emailPassword: {
 			register: (data: {

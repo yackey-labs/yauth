@@ -37,7 +37,7 @@ export const RegisterForm: Component<RegisterFormProps> = (props) => {
 	};
 
 	return (
-		<form class="space-y-4" onSubmit={handleSubmit}>
+		<form class="space-y-6" onSubmit={handleSubmit}>
 			<Show when={error()}>
 				<div class="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
 					{error()}

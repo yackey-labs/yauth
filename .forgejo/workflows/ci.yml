@@ -121,18 +121,18 @@ jobs:
 
       - name: Publish Cargo crates
         env:
-          CARGO_REGISTRIES_YAUTH_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRIES_YAUTH_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
         run: |
-          cargo publish -p yauth-entity --registry yauth --no-verify || echo "yauth-entity already published"
-          cargo publish -p yauth-migration --registry yauth --no-verify || echo "yauth-migration already published"
-          cargo publish -p yauth --registry yauth --no-verify || echo "yauth already published"
+          cargo publish -p yauth-entity --registry yauth --no-verify
+          cargo publish -p yauth-migration --registry yauth --no-verify
+          cargo publish -p yauth --registry yauth --no-verify
 
       - name: Publish npm packages
         env:
-          NPM_REGISTRY_TOKEN: ${{ secrets.NPM_REGISTRY_TOKEN }}
+          REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
         run: |
           echo "@yauth:registry=https://forgejo.yackey.cloud/api/packages/yauth/npm/" > .npmrc
-          echo "//forgejo.yackey.cloud/api/packages/yauth/npm/:_authToken=${NPM_REGISTRY_TOKEN}" >> .npmrc
-          cd packages/shared && npm publish --access public || echo "@yauth/shared already published"
-          cd ../client && npm publish --access public || echo "@yauth/client already published"
-          cd ../ui-solidjs && npm publish --access public || echo "@yauth/ui-solidjs already published"
+          echo "//forgejo.yackey.cloud/api/packages/yauth/npm/:_authToken=${REGISTRY_TOKEN}" >> .npmrc
+          cd packages/shared && npm publish --access public
+          cd ../client && npm publish --access public
+          cd ../ui-solidjs && npm publish --access public

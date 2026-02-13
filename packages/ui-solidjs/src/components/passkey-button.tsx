@@ -64,7 +64,12 @@ export const PasskeyButton: Component<PasskeyButtonProps> = (props) => {
 			}
 		} catch (err) {
 			const error = err instanceof Error ? err : new Error(String(err));
-			setError(error.message);
+			console.error("[yauth] Passkey error:", error);
+			const message =
+				error.name === "NotAllowedError"
+					? "Passkey authentication was cancelled or not available on this device."
+					: error.message;
+			setError(message);
 			props.onError?.(error);
 		} finally {
 			setLoading(false);

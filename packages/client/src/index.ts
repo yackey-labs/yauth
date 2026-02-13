@@ -121,12 +121,12 @@ function createClient(opts: YAuthClientOptions) {
 
 		/** Passkey (WebAuthn) operations */
 		passkey: {
-			loginBegin: (email: string) =>
+			loginBegin: (email?: string) =>
 				request<{ challenge_id: string; options: unknown }>(
 					"/passkey/login/begin",
 					{
 						method: "POST",
-						body: { email },
+						body: email ? { email } : {},
 					},
 				),
 

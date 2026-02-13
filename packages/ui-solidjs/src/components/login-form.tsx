@@ -1,8 +1,8 @@
 import type { AuthUser } from "@yauth/shared";
 import { type Component, createSignal } from "solid-js";
 import { Show } from "solid-js/web";
-import { PasskeyButton } from "./passkey-button";
 import { useYAuth } from "../provider";
+import { PasskeyButton } from "./passkey-button";
 
 export interface LoginFormProps {
 	onSuccess?: (user: AuthUser) => void;
@@ -99,7 +99,10 @@ export const LoginForm: Component<LoginFormProps> = (props) => {
 
 			<Show when={props.showPasskey}>
 				<div class="relative">
-					<div class="absolute inset-0 flex items-center" style="pointer-events:none">
+					<div
+						class="absolute inset-0 flex items-center"
+						style="pointer-events:none"
+					>
 						<span class="w-full border-t" />
 					</div>
 					<div class="relative flex justify-center text-xs uppercase">

@@ -20,14 +20,9 @@ export const PasskeyButton: Component<PasskeyButtonProps> = (props) => {
 	const [loading, setLoading] = createSignal(false);
 
 	const handleLogin = async () => {
-		if (!props.email) {
-			const err = new Error("Email is required for passkey login");
-			setError(err.message);
-			props.onError?.(err);
-			return;
-		}
-
-		const beginResult = await client.passkey.loginBegin(props.email);
+		const beginResult = await client.passkey.loginBegin(
+			props.email || undefined,
+		);
 		const rcr = beginResult.options as { publicKey: unknown };
 		const credential = await startAuthentication({
 			optionsJSON: rcr.publicKey as Parameters<

@@ -285,7 +285,7 @@ async fn register_finish(
 
 #[derive(Deserialize)]
 struct PasskeyLoginBeginRequest {
-    email: String,
+    email: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -299,92 +299,135 @@ async fn login_begin(
     Json(input): Json<PasskeyLoginBeginRequest>,
     webauthn: Arc<Webauthn>,
 ) -> Result<Json<PasskeyLoginBeginResponse>, (StatusCode, String)> {
-    let email = input.email.trim().to_lowercase();
-
-    // Rate limit passkey login attempts per email
-    if !state
-        .rate_limiter
-        .check(&format!("passkey_login:{}", email))
-        .await
-    {
-        warn!(event = "passkey_login_rate_limited", email = %email, "Passkey login rate limited");
-        return Err((
-            StatusCode::TOO_MANY_REQUESTS,
-            "Too many requests".to_string(),
-        ));
-    }
-
-    let user = yauth_entity::users::Entity::find()
-        .filter(yauth_entity::users::Column::Email.eq(&email))
-        .one(&state.db)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Internal error".to_string(),
-            )
-        })?
-        .ok_or((
-            StatusCode::BAD_REQUEST,
-            "No passkeys registered for this email".to_string(),
-        ))?;
-
-    let creds = yauth_entity::webauthn_credentials::Entity::find()
-        .filter(yauth_entity::webauthn_credentials::Column::UserId.eq(user.id))
-        .all(&state.db)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Internal error".to_string(),
-            )
-        })?;
-
-    if creds.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "No passkeys registered for this email".to_string(),
-        ));
-    }
-
-    let passkeys: Vec<Passkey> = creds
-        .iter()
-        .filter_map(|c| serde_json::from_value(c.credential.clone()).ok())
-        .collect();
-
-    if passkeys.is_empty() {
-        return Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Failed to deserialize credentials".to_string(),
-        ));
-    }
-
-    let (rcr, auth_state) = webauthn
-        .start_passkey_authentication(&passkeys)
-        .map_err(|e| {
-            tracing::error!("WebAuthn auth start error: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "WebAuthn error".to_string(),
-            )
-        })?;
-
     let challenge_id = Uuid::new_v4();
-    let auth_state_json = serde_json::to_value(&auth_state).map_err(|e| {
-        tracing::error!("Serialize error: {}", e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Internal error".to_string(),
-        )
-    })?;
 
-    // Store challenge with user_id embedded
-    let challenge_data = serde_json::json!({
-        "user_id": user.id,
-        "auth_state": auth_state_json,
-    });
+    let (rcr, challenge_data) = if let Some(ref email_raw) = input.email {
+        // --- Email-based flow ---
+        let email = email_raw.trim().to_lowercase();
+
+        if !state
+            .rate_limiter
+            .check(&format!("passkey_login:{}", email))
+            .await
+        {
+            warn!(event = "passkey_login_rate_limited", email = %email, "Passkey login rate limited");
+            return Err((
+                StatusCode::TOO_MANY_REQUESTS,
+                "Too many requests".to_string(),
+            ));
+        }
+
+        let user = yauth_entity::users::Entity::find()
+            .filter(yauth_entity::users::Column::Email.eq(&email))
+            .one(&state.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal error".to_string(),
+                )
+            })?
+            .ok_or((
+                StatusCode::BAD_REQUEST,
+                "No passkeys registered for this email".to_string(),
+            ))?;
+
+        let creds = yauth_entity::webauthn_credentials::Entity::find()
+            .filter(yauth_entity::webauthn_credentials::Column::UserId.eq(user.id))
+            .all(&state.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal error".to_string(),
+                )
+            })?;
+
+        if creds.is_empty() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "No passkeys registered for this email".to_string(),
+            ));
+        }
+
+        let passkeys: Vec<Passkey> = creds
+            .iter()
+            .filter_map(|c| serde_json::from_value(c.credential.clone()).ok())
+            .collect();
+
+        if passkeys.is_empty() {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to deserialize credentials".to_string(),
+            ));
+        }
+
+        let (rcr, auth_state) = webauthn
+            .start_passkey_authentication(&passkeys)
+            .map_err(|e| {
+                tracing::error!("WebAuthn auth start error: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "WebAuthn error".to_string(),
+                )
+            })?;
+
+        let auth_state_json = serde_json::to_value(&auth_state).map_err(|e| {
+            tracing::error!("Serialize error: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Internal error".to_string(),
+            )
+        })?;
+
+        let data = serde_json::json!({
+            "discoverable": false,
+            "user_id": user.id,
+            "auth_state": auth_state_json,
+        });
+
+        (rcr, data)
+    } else {
+        // --- Discoverable (usernameless) flow ---
+        if !state
+            .rate_limiter
+            .check("passkey_login:discoverable")
+            .await
+        {
+            warn!(event = "passkey_login_rate_limited", "Discoverable passkey login rate limited");
+            return Err((
+                StatusCode::TOO_MANY_REQUESTS,
+                "Too many requests".to_string(),
+            ));
+        }
+
+        let (rcr, auth_state) = webauthn
+            .start_discoverable_authentication()
+            .map_err(|e| {
+                tracing::error!("WebAuthn discoverable auth start error: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "WebAuthn error".to_string(),
+                )
+            })?;
+
+        let auth_state_json = serde_json::to_value(&auth_state).map_err(|e| {
+            tracing::error!("Serialize error: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Internal error".to_string(),
+            )
+        })?;
+
+        let data = serde_json::json!({
+            "discoverable": true,
+            "auth_state": auth_state_json,
+        });
+
+        (rcr, data)
+    };
 
     let challenge_key = format!("passkey_auth:{}", challenge_id);
     state
@@ -436,39 +479,113 @@ async fn login_finish(
     // Clean up challenge
     let _ = state.challenge_store.delete(&challenge_key).await;
 
-    let user_id: Uuid = serde_json::from_value(challenge_data.get("user_id").cloned().ok_or((
+    let discoverable = challenge_data
+        .get("discoverable")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let auth_state_json = challenge_data.get("auth_state").cloned().ok_or((
         StatusCode::INTERNAL_SERVER_ERROR,
         "Internal error".to_string(),
-    ))?)
-    .map_err(|_| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Internal error".to_string(),
-        )
-    })?;
+    ))?;
 
-    let auth_state: PasskeyAuthentication =
-        serde_json::from_value(challenge_data.get("auth_state").cloned().ok_or((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Internal error".to_string(),
-        ))?)
-        .map_err(|e| {
-            tracing::error!("Deserialize error: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Internal error".to_string(),
-            )
-        })?;
+    let user_id = if discoverable {
+        // --- Discoverable flow ---
+        let auth_state: DiscoverableAuthentication =
+            serde_json::from_value(auth_state_json).map_err(|e| {
+                tracing::error!("Deserialize error: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal error".to_string(),
+                )
+            })?;
 
-    let _auth_result = webauthn
-        .finish_passkey_authentication(&input.credential, &auth_state)
-        .map_err(|e| {
-            tracing::error!("WebAuthn auth finish error: {}", e);
-            (
+        // Identify which user owns this credential
+        // Returns (user_uuid, credential_id_bytes)
+        let (uid, _cred_id) = webauthn
+            .identify_discoverable_authentication(&input.credential)
+            .map_err(|e| {
+                tracing::error!("WebAuthn identify error: {}", e);
+                (
+                    StatusCode::UNAUTHORIZED,
+                    "Authentication failed".to_string(),
+                )
+            })?;
+
+        // Load user's passkeys from DB
+        let creds = yauth_entity::webauthn_credentials::Entity::find()
+            .filter(yauth_entity::webauthn_credentials::Column::UserId.eq(uid))
+            .all(&state.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal error".to_string(),
+                )
+            })?;
+
+        if creds.is_empty() {
+            return Err((
                 StatusCode::UNAUTHORIZED,
                 "Authentication failed".to_string(),
-            )
-        })?;
+            ));
+        }
+
+        let passkeys: Vec<Passkey> = creds
+            .iter()
+            .filter_map(|c| serde_json::from_value(c.credential.clone()).ok())
+            .collect();
+
+        let discoverable_keys: Vec<DiscoverableKey> =
+            passkeys.into_iter().map(DiscoverableKey::from).collect();
+
+        let _auth_result = webauthn
+            .finish_discoverable_authentication(&input.credential, auth_state, &discoverable_keys)
+            .map_err(|e| {
+                tracing::error!("WebAuthn discoverable auth finish error: {}", e);
+                (
+                    StatusCode::UNAUTHORIZED,
+                    "Authentication failed".to_string(),
+                )
+            })?;
+
+        uid
+    } else {
+        // --- Email-based flow ---
+        let user_id: Uuid =
+            serde_json::from_value(challenge_data.get("user_id").cloned().ok_or((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Internal error".to_string(),
+            ))?)
+            .map_err(|_| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal error".to_string(),
+                )
+            })?;
+
+        let auth_state: PasskeyAuthentication =
+            serde_json::from_value(auth_state_json).map_err(|e| {
+                tracing::error!("Deserialize error: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal error".to_string(),
+                )
+            })?;
+
+        let _auth_result = webauthn
+            .finish_passkey_authentication(&input.credential, &auth_state)
+            .map_err(|e| {
+                tracing::error!("WebAuthn auth finish error: {}", e);
+                (
+                    StatusCode::UNAUTHORIZED,
+                    "Authentication failed".to_string(),
+                )
+            })?;
+
+        user_id
+    };
 
     // Update last_used_at for credentials (best-effort)
     let _ = update_credential_last_used(&state, user_id).await;

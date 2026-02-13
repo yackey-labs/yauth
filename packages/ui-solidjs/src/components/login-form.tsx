@@ -12,6 +12,7 @@ export interface LoginFormProps {
 }
 
 export const LoginForm: Component<LoginFormProps> = (props) => {
+	console.log("[yauth] LoginForm mounting");
 	const { client, refetch } = useYAuth();
 	const [email, setEmail] = createSignal("");
 	const [password, setPassword] = createSignal("");
@@ -19,6 +20,10 @@ export const LoginForm: Component<LoginFormProps> = (props) => {
 	const [loading, setLoading] = createSignal(false);
 
 	const handleSubmit = async (e: SubmitEvent) => {
+		console.log("[yauth] LoginForm submit fired", {
+			email: email(),
+			hasPassword: !!password(),
+		});
 		e.preventDefault();
 		setError(null);
 		setLoading(true);
@@ -63,7 +68,10 @@ export const LoginForm: Component<LoginFormProps> = (props) => {
 					id="yauth-login-email"
 					type="email"
 					value={email()}
-					onInput={(e) => setEmail(e.currentTarget.value)}
+					onInput={(e) => {
+						console.log("[yauth] email input:", e.currentTarget.value);
+						setEmail(e.currentTarget.value);
+					}}
 					required
 					autocomplete="email"
 					disabled={loading()}

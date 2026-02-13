@@ -1,6 +1,6 @@
 {
 	"name": "@yauth/ui-solidjs",
-	"version": "0.1.16",
+	"version": "0.1.17",
 	"type": "module",
 	"main": "dist/index.js",
 	"module": "dist/index.js",
@@ -19,7 +19,7 @@
 	},
 	"dependencies": {
 		"@simplewebauthn/browser": "^13.0.0",
-		"@yauth/client": "^0.1.0",
+		"@yauth/client": "^0.1.5",
 		"@yauth/shared": "^0.1.0",
 		"solid-js": "^1.9.5"
 	},

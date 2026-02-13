@@ -1,12 +1,14 @@
 import type { AuthUser } from "@yauth/shared";
 import { type Component, createSignal } from "solid-js";
 import { Show } from "solid-js/web";
+import { PasskeyButton } from "./passkey-button";
 import { useYAuth } from "../provider";
 
 export interface LoginFormProps {
 	onSuccess?: (user: AuthUser) => void;
 	onMfaRequired?: (pendingSessionId: string) => void;
 	onError?: (error: Error) => void;
+	showPasskey?: boolean;
 }
 
 export const LoginForm: Component<LoginFormProps> = (props) => {
@@ -94,6 +96,27 @@ export const LoginForm: Component<LoginFormProps> = (props) => {
 			>
 				{loading() ? "Signing in..." : "Sign in"}
 			</button>
+
+			<Show when={props.showPasskey}>
+				<div class="relative">
+					<div class="absolute inset-0 flex items-center">
+						<span class="w-full border-t" />
+					</div>
+					<div class="relative flex justify-center text-xs uppercase">
+						<span class="bg-background px-2 text-muted-foreground">or</span>
+					</div>
+				</div>
+
+				<PasskeyButton
+					mode="login"
+					email={email()}
+					onSuccess={(user) => {
+						refetch();
+						props.onSuccess?.(user);
+					}}
+					onError={props.onError}
+				/>
+			</Show>
 		</form>
 	);
 };

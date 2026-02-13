@@ -10,7 +10,14 @@ export default defineConfig({
 			fileName: "index",
 		},
 		rollupOptions: {
-			external: ["solid-js", "solid-js/web", "solid-js/store", "@yauth/client", "@yauth/shared", "@simplewebauthn/browser"],
+			external: [
+				"solid-js",
+				"solid-js/web",
+				"solid-js/store",
+				"@yauth/client",
+				"@yauth/shared",
+				"@simplewebauthn/browser",
+			],
 		},
 		target: "esnext",
 		outDir: "dist",

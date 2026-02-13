@@ -41,11 +41,11 @@ async fn get_session(Extension(user): Extension<AuthUser>) -> Json<serde_json::V
         "user": {
             "id": user.id,
             "email": user.email,
-            "displayName": user.display_name,
-            "emailVerified": user.email_verified,
+            "display_name": user.display_name,
+            "email_verified": user.email_verified,
             "role": user.role,
             "banned": user.banned,
-            "authMethod": format!("{:?}", user.auth_method).to_lowercase(),
+            "auth_method": format!("{:?}", user.auth_method).to_lowercase(),
         }
     }))
 }

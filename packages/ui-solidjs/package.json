@@ -1,6 +1,6 @@
 {
 	"name": "@yauth/ui-solidjs",
-	"version": "0.1.1",
+	"version": "0.1.2",
 	"type": "module",
 	"main": "dist/index.js",
 	"module": "dist/index.js",
@@ -14,7 +14,7 @@
 	},
 	"files": ["dist", "src"],
 	"scripts": {
-		"build": "bun build src/index.ts --outdir dist --target browser",
+		"build": "vite build",
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
@@ -24,6 +24,8 @@
 		"solid-js": "^1.9.5"
 	},
 	"devDependencies": {
-		"typescript": "^5.7.2"
+		"typescript": "^5.7.2",
+		"vite": "^7.3.1",
+		"vite-plugin-solid": "^2.11.10"
 	}
 }

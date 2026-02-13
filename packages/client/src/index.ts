@@ -142,7 +142,7 @@ function createClient(opts: YAuthClientOptions) {
 
 			registerBegin: () =>
 				request<{ challenge_id: string; options: unknown }>(
-					"/passkey/register/begin",
+					"/passkeys/register/begin",
 					{
 						method: "POST",
 					},
@@ -156,26 +156,26 @@ function createClient(opts: YAuthClientOptions) {
 				request<{
 					id: string;
 					name: string;
-					device_name: string | null;
 					created_at: string;
-				}>("/passkey/register/finish", {
+				}>("/passkeys/register/finish", {
 					method: "POST",
 					body: { challenge_id, credential, name },
 				}),
 
 			list: () =>
-				request<{
-					passkeys: Array<{
+				request<
+					Array<{
 						id: string;
-						name: string | null;
-						device_name: string | null;
+						name: string;
 						created_at: string;
 						last_used_at: string | null;
-					}>;
-				}>("/passkey/list"),
+					}>
+				>("/passkeys"),
 
 			delete: (id: string) =>
-				request<{ message: string }>(`/passkey/${id}`, { method: "DELETE" }),
+				request<{ message: string }>(`/passkeys/${id}`, {
+					method: "DELETE",
+				}),
 		},
 
 		/** MFA (TOTP + backup codes) operations */

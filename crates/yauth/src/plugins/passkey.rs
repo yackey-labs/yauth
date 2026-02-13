@@ -285,6 +285,7 @@ async fn register_finish(
 
 #[derive(Deserialize)]
 struct PasskeyLoginBeginRequest {
+    #[serde(default)]
     email: Option<String>,
 }
 

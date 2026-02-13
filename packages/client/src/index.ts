@@ -49,7 +49,8 @@ function createClient(opts: YAuthClientOptions) {
 			throw new YAuthError(error, response.status);
 		}
 
-		return response.json();
+		const text = await response.text();
+		return (text ? JSON.parse(text) : undefined) as T;
 	}
 
 	return {
@@ -141,25 +142,14 @@ function createClient(opts: YAuthClientOptions) {
 				}),
 
 			registerBegin: () =>
-				request<{ challenge_id: string; options: unknown }>(
-					"/passkeys/register/begin",
-					{
-						method: "POST",
-					},
-				),
-
-			registerFinish: (
-				challenge_id: string,
-				credential: unknown,
-				name?: string,
-			) =>
-				request<{
-					id: string;
-					name: string;
-					created_at: string;
-				}>("/passkeys/register/finish", {
+				request<unknown>("/passkeys/register/begin", {
 					method: "POST",
-					body: { challenge_id, credential, name },
+				}),
+
+			registerFinish: (credential: unknown, name: string) =>
+				request<void>("/passkeys/register/finish", {
+					method: "POST",
+					body: { credential, name },
 				}),
 
 			list: () =>

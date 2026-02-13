@@ -39,13 +39,13 @@ export const PasskeyButton: Component<PasskeyButtonProps> = (props) => {
 	};
 
 	const handleRegister = async () => {
-		const beginResult = await client.passkey.registerBegin();
+		const options = await client.passkey.registerBegin();
 		const credential = await startRegistration({
-			optionsJSON: beginResult.options as Parameters<
+			optionsJSON: options as Parameters<
 				typeof startRegistration
 			>[0]["optionsJSON"],
 		});
-		await client.passkey.registerFinish(beginResult.challenge_id, credential);
+		await client.passkey.registerFinish(credential, "Passkey");
 		props.onSuccess?.(undefined as unknown as AuthUser);
 	};
 

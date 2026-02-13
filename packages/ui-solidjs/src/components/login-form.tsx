@@ -99,7 +99,7 @@ export const LoginForm: Component<LoginFormProps> = (props) => {
 
 			<Show when={props.showPasskey}>
 				<div class="relative">
-					<div class="pointer-events-none absolute inset-0 flex items-center">
+					<div class="absolute inset-0 flex items-center" style="pointer-events:none">
 						<span class="w-full border-t" />
 					</div>
 					<div class="relative flex justify-center text-xs uppercase">

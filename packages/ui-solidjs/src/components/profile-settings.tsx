@@ -8,8 +8,7 @@ export const ProfileSettings: Component = () => {
 	// Passkeys
 	const [passkeys, { refetch: refetchPasskeys }] = createResource(async () => {
 		try {
-			const result = await client.passkey.list();
-			return result.passkeys;
+			return await client.passkey.list();
 		} catch {
 			return [];
 		}
@@ -191,9 +190,7 @@ export const ProfileSettings: Component = () => {
 													<li class="flex items-center justify-between rounded-md border border-input px-3 py-2">
 														<div class="space-y-0.5">
 															<span class="text-sm font-medium">
-																{passkey.name ??
-																	passkey.device_name ??
-																	"Unnamed passkey"}
+																{passkey.name ?? "Unnamed passkey"}
 															</span>
 															<span class="block text-xs text-muted-foreground">
 																Added{" "}

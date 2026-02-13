@@ -43,7 +43,6 @@ export const ProfileSettings: Component = () => {
 	const [mfaError, setMfaError] = createSignal<string | null>(null);
 	const [mfaLoading, setMfaLoading] = createSignal(false);
 
-	// Delete passkey handler
 	const handleDeletePasskey = async (id: string) => {
 		setPasskeyError(null);
 		setDeletingPasskey(id);
@@ -59,7 +58,6 @@ export const ProfileSettings: Component = () => {
 		}
 	};
 
-	// Unlink OAuth handler
 	const handleUnlinkOAuth = async (provider: string) => {
 		setOauthError(null);
 		setUnlinkingOAuth(provider);
@@ -75,7 +73,6 @@ export const ProfileSettings: Component = () => {
 		}
 	};
 
-	// MFA setup handlers
 	const handleMfaBegin = async () => {
 		setMfaError(null);
 		setMfaLoading(true);
@@ -130,58 +127,50 @@ export const ProfileSettings: Component = () => {
 	};
 
 	return (
-		<div class="yauth-profile-settings">
+		<div class="space-y-8">
 			<Show when={userLoading()}>
-				<div class="yauth-profile-settings__loading">Loading profile...</div>
+				<div class="text-sm text-muted-foreground">Loading profile...</div>
 			</Show>
 
 			<Show when={user()}>
 				{(currentUser) => (
 					<>
 						{/* User info */}
-						<section class="yauth-profile-settings__section yauth-profile-settings__section--info">
-							<h2 class="yauth-profile-settings__section-title">Profile</h2>
-							<dl class="yauth-profile-settings__info-list">
-								<dt class="yauth-profile-settings__info-label">Email</dt>
-								<dd class="yauth-profile-settings__info-value">
-									{currentUser().email}
-								</dd>
+						<section class="space-y-4">
+							<h2 class="text-lg font-semibold tracking-tight">Profile</h2>
+							<dl class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
+								<dt class="font-medium text-muted-foreground">Email</dt>
+								<dd>{currentUser().email}</dd>
 
 								<Show when={currentUser().display_name}>
-									<dt class="yauth-profile-settings__info-label">
+									<dt class="font-medium text-muted-foreground">
 										Display name
 									</dt>
-									<dd class="yauth-profile-settings__info-value">
-										{currentUser().display_name}
-									</dd>
+									<dd>{currentUser().display_name}</dd>
 								</Show>
 
-								<dt class="yauth-profile-settings__info-label">
+								<dt class="font-medium text-muted-foreground">
 									Email verified
 								</dt>
-								<dd class="yauth-profile-settings__info-value">
-									{currentUser().email_verified ? "Yes" : "No"}
-								</dd>
+								<dd>{currentUser().email_verified ? "Yes" : "No"}</dd>
 
-								<dt class="yauth-profile-settings__info-label">Role</dt>
-								<dd class="yauth-profile-settings__info-value">
-									{currentUser().role}
-								</dd>
+								<dt class="font-medium text-muted-foreground">Role</dt>
+								<dd>{currentUser().role}</dd>
 							</dl>
 						</section>
 
 						{/* Passkeys */}
-						<section class="yauth-profile-settings__section yauth-profile-settings__section--passkeys">
-							<h2 class="yauth-profile-settings__section-title">Passkeys</h2>
+						<section class="space-y-4">
+							<h2 class="text-lg font-semibold tracking-tight">Passkeys</h2>
 
 							<Show when={passkeyError()}>
-								<div class="yauth-profile-settings__error">
+								<div class="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
 									{passkeyError()}
 								</div>
 							</Show>
 
 							<Show when={passkeys.loading}>
-								<div class="yauth-profile-settings__loading">
+								<div class="text-sm text-muted-foreground">
 									Loading passkeys...
 								</div>
 							</Show>
@@ -191,28 +180,30 @@ export const ProfileSettings: Component = () => {
 									<Show
 										when={passkeyList().length > 0}
 										fallback={
-											<p class="yauth-profile-settings__empty">
+											<p class="text-sm text-muted-foreground">
 												No passkeys registered.
 											</p>
 										}
 									>
-										<ul class="yauth-profile-settings__passkey-list">
+										<ul class="space-y-2">
 											<For each={passkeyList()}>
 												{(passkey) => (
-													<li class="yauth-profile-settings__passkey-item">
-														<span class="yauth-profile-settings__passkey-name">
-															{passkey.name ??
-																passkey.device_name ??
-																"Unnamed passkey"}
-														</span>
-														<span class="yauth-profile-settings__passkey-created">
-															Added{" "}
-															{new Date(
-																passkey.created_at,
-															).toLocaleDateString()}
-														</span>
+													<li class="flex items-center justify-between rounded-md border border-input px-3 py-2">
+														<div class="space-y-0.5">
+															<span class="text-sm font-medium">
+																{passkey.name ??
+																	passkey.device_name ??
+																	"Unnamed passkey"}
+															</span>
+															<span class="block text-xs text-muted-foreground">
+																Added{" "}
+																{new Date(
+																	passkey.created_at,
+																).toLocaleDateString()}
+															</span>
+														</div>
 														<button
-															class="yauth-profile-settings__passkey-delete"
+															class="inline-flex h-8 cursor-pointer items-center justify-center rounded-md border border-input bg-background px-3 text-xs font-medium shadow-sm transition-colors hover:bg-destructive hover:text-destructive-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
 															type="button"
 															onClick={() => handleDeletePasskey(passkey.id)}
 															disabled={deletingPasskey() === passkey.id}
@@ -231,17 +222,19 @@ export const ProfileSettings: Component = () => {
 						</section>
 
 						{/* OAuth accounts */}
-						<section class="yauth-profile-settings__section yauth-profile-settings__section--oauth">
-							<h2 class="yauth-profile-settings__section-title">
+						<section class="space-y-4">
+							<h2 class="text-lg font-semibold tracking-tight">
 								Connected accounts
 							</h2>
 
 							<Show when={oauthError()}>
-								<div class="yauth-profile-settings__error">{oauthError()}</div>
+								<div class="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+									{oauthError()}
+								</div>
 							</Show>
 
 							<Show when={oauthAccounts.loading}>
-								<div class="yauth-profile-settings__loading">
+								<div class="text-sm text-muted-foreground">
 									Loading accounts...
 								</div>
 							</Show>
@@ -251,27 +244,29 @@ export const ProfileSettings: Component = () => {
 									<Show
 										when={accountList().length > 0}
 										fallback={
-											<p class="yauth-profile-settings__empty">
+											<p class="text-sm text-muted-foreground">
 												No connected accounts.
 											</p>
 										}
 									>
-										<ul class="yauth-profile-settings__oauth-list">
+										<ul class="space-y-2">
 											<For each={accountList()}>
 												{(account) => (
-													<li class="yauth-profile-settings__oauth-item">
-														<span class="yauth-profile-settings__oauth-provider">
-															{account.provider.charAt(0).toUpperCase() +
-																account.provider.slice(1)}
-														</span>
-														<span class="yauth-profile-settings__oauth-connected">
-															Connected{" "}
-															{new Date(
-																account.created_at,
-															).toLocaleDateString()}
-														</span>
+													<li class="flex items-center justify-between rounded-md border border-input px-3 py-2">
+														<div class="space-y-0.5">
+															<span class="text-sm font-medium">
+																{account.provider.charAt(0).toUpperCase() +
+																	account.provider.slice(1)}
+															</span>
+															<span class="block text-xs text-muted-foreground">
+																Connected{" "}
+																{new Date(
+																	account.created_at,
+																).toLocaleDateString()}
+															</span>
+														</div>
 														<button
-															class="yauth-profile-settings__oauth-unlink"
+															class="inline-flex h-8 cursor-pointer items-center justify-center rounded-md border border-input bg-background px-3 text-xs font-medium shadow-sm transition-colors hover:bg-destructive hover:text-destructive-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
 															type="button"
 															onClick={() =>
 																handleUnlinkOAuth(account.provider)
@@ -292,73 +287,74 @@ export const ProfileSettings: Component = () => {
 						</section>
 
 						{/* MFA setup */}
-						<section class="yauth-profile-settings__section yauth-profile-settings__section--mfa">
-							<h2 class="yauth-profile-settings__section-title">
+						<section class="space-y-4">
+							<h2 class="text-lg font-semibold tracking-tight">
 								Two-factor authentication
 							</h2>
 
 							<Show when={mfaError()}>
-								<div class="yauth-profile-settings__error">{mfaError()}</div>
+								<div class="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+									{mfaError()}
+								</div>
 							</Show>
 
 							<Show when={mfaStep() === "idle"}>
-								<button
-									class="yauth-profile-settings__mfa-setup-button"
-									type="button"
-									onClick={handleMfaBegin}
-									disabled={mfaLoading()}
-								>
-									{mfaLoading() ? "Setting up..." : "Set up 2FA"}
-								</button>
+								<div class="flex gap-2">
+									<button
+										class="inline-flex h-9 cursor-pointer items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+										type="button"
+										onClick={handleMfaBegin}
+										disabled={mfaLoading()}
+									>
+										{mfaLoading() ? "Setting up..." : "Set up 2FA"}
+									</button>
 
-								<button
-									class="yauth-profile-settings__mfa-disable-button"
-									type="button"
-									onClick={handleMfaDisable}
-									disabled={mfaLoading()}
-								>
-									{mfaLoading() ? "Disabling..." : "Disable 2FA"}
-								</button>
+									<button
+										class="inline-flex h-9 cursor-pointer items-center justify-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium shadow-sm transition-colors hover:bg-destructive hover:text-destructive-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+										type="button"
+										onClick={handleMfaDisable}
+										disabled={mfaLoading()}
+									>
+										{mfaLoading() ? "Disabling..." : "Disable 2FA"}
+									</button>
+								</div>
 							</Show>
 
 							<Show when={mfaStep() === "confirm"}>
-								<div class="yauth-profile-settings__mfa-setup">
-									<p class="yauth-profile-settings__description">
+								<div class="space-y-4">
+									<p class="text-sm text-muted-foreground">
 										Add this account to your authenticator app, then enter the
 										verification code.
 									</p>
 
-									<div class="yauth-profile-settings__mfa-uri">
-										<span class="yauth-profile-settings__label">
+									<div class="space-y-1">
+										<span class="text-sm font-medium leading-none">
 											OTP Auth URI
 										</span>
-										<code class="yauth-profile-settings__mfa-uri-value">
+										<code class="block w-full break-all rounded-md border border-input bg-muted px-3 py-2 text-xs">
 											{mfaUri()}
 										</code>
 									</div>
 
-									<div class="yauth-profile-settings__mfa-secret">
-										<span class="yauth-profile-settings__label">
+									<div class="space-y-1">
+										<span class="text-sm font-medium leading-none">
 											Manual entry key
 										</span>
-										<code class="yauth-profile-settings__mfa-secret-value">
+										<code class="block w-full break-all rounded-md border border-input bg-muted px-3 py-2 text-xs font-mono tracking-wider">
 											{mfaSecret()}
 										</code>
 									</div>
 
-									<form
-										class="yauth-profile-settings__mfa-confirm-form"
-										onSubmit={handleMfaConfirm}
-									>
-										<div class="yauth-profile-settings__field">
+									<form class="space-y-4" onSubmit={handleMfaConfirm}>
+										<div class="space-y-2">
 											<label
-												class="yauth-profile-settings__label"
+												class="text-sm font-medium leading-none"
 												for="yauth-profile-mfa-code"
 											>
 												Verification code
 											</label>
 											<input
-												class="yauth-profile-settings__input"
+												class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 md:text-sm"
 												id="yauth-profile-mfa-code"
 												type="text"
 												inputmode="numeric"
@@ -371,7 +367,7 @@ export const ProfileSettings: Component = () => {
 										</div>
 
 										<button
-											class="yauth-profile-settings__submit"
+											class="inline-flex h-9 w-full cursor-pointer items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
 											type="submit"
 											disabled={mfaLoading()}
 										>
@@ -382,17 +378,17 @@ export const ProfileSettings: Component = () => {
 							</Show>
 
 							<Show when={mfaStep() === "done"}>
-								<div class="yauth-profile-settings__mfa-done">
-									<p class="yauth-profile-settings__description">
+								<div class="space-y-4">
+									<div class="rounded-md bg-emerald-500/10 px-3 py-2 text-sm text-emerald-600 dark:text-emerald-400">
 										Two-factor authentication is enabled. Save these backup
 										codes in a safe place.
-									</p>
+									</div>
 
-									<ul class="yauth-profile-settings__backup-codes">
+									<ul class="space-y-1">
 										<For each={mfaBackupCodes()}>
 											{(code) => (
-												<li class="yauth-profile-settings__backup-code">
-													<code>{code}</code>
+												<li class="rounded-md border border-input bg-muted px-3 py-1.5 text-center font-mono text-sm tracking-wider">
+													{code}
 												</li>
 											)}
 										</For>

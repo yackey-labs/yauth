@@ -34,7 +34,6 @@ export const PasskeyButton: Component<PasskeyButtonProps> = (props) => {
 			>[0]["optionsJSON"],
 		});
 		await client.passkey.loginFinish(beginResult.challenge_id, credential);
-		// Session cookie is set — fetch full user from session
 		const session = await client.getSession();
 		props.onSuccess?.(session.user);
 	};
@@ -47,8 +46,6 @@ export const PasskeyButton: Component<PasskeyButtonProps> = (props) => {
 			>[0]["optionsJSON"],
 		});
 		await client.passkey.registerFinish(beginResult.challenge_id, credential);
-		// Registration doesn't return a user session directly;
-		// call onSuccess with undefined to signal completion
 		props.onSuccess?.(undefined as unknown as AuthUser);
 	};
 
@@ -72,13 +69,15 @@ export const PasskeyButton: Component<PasskeyButtonProps> = (props) => {
 	};
 
 	return (
-		<div class="yauth-passkey-button">
+		<div class="space-y-2">
 			<Show when={error()}>
-				<div class="yauth-passkey-button__error">{error()}</div>
+				<div class="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+					{error()}
+				</div>
 			</Show>
 
 			<button
-				class="yauth-passkey-button__trigger"
+				class="inline-flex h-9 w-full cursor-pointer items-center justify-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
 				type="button"
 				onClick={handleClick}
 				disabled={loading()}

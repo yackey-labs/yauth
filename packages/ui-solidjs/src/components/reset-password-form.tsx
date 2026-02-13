@@ -36,24 +36,28 @@ export const ResetPasswordForm: Component<ResetPasswordFormProps> = (props) => {
 	};
 
 	return (
-		<form class="yauth-reset-password-form" onSubmit={handleSubmit}>
+		<form class="space-y-4" onSubmit={handleSubmit}>
 			<Show when={error()}>
-				<div class="yauth-reset-password-form__error">{error()}</div>
+				<div class="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+					{error()}
+				</div>
 			</Show>
 
 			<Show when={success()}>
-				<div class="yauth-reset-password-form__success">{success()}</div>
+				<div class="rounded-md bg-emerald-500/10 px-3 py-2 text-sm text-emerald-600 dark:text-emerald-400">
+					{success()}
+				</div>
 			</Show>
 
-			<div class="yauth-reset-password-form__field">
+			<div class="space-y-2">
 				<label
-					class="yauth-reset-password-form__label"
+					class="text-sm font-medium leading-none"
 					for="yauth-reset-password-input"
 				>
 					New password
 				</label>
 				<input
-					class="yauth-reset-password-form__input"
+					class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 md:text-sm"
 					id="yauth-reset-password-input"
 					type="password"
 					value={password()}
@@ -65,7 +69,7 @@ export const ResetPasswordForm: Component<ResetPasswordFormProps> = (props) => {
 			</div>
 
 			<button
-				class="yauth-reset-password-form__submit"
+				class="inline-flex h-9 w-full cursor-pointer items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
 				type="submit"
 				disabled={loading()}
 			>

@@ -13,11 +13,11 @@ export const OAuthButtons: Component<OAuthButtonsProps> = (props) => {
 	};
 
 	return (
-		<div class="yauth-oauth-buttons">
+		<div class="space-y-2">
 			<For each={props.providers}>
 				{(provider) => (
 					<button
-						class={`yauth-oauth-buttons__button yauth-oauth-buttons__button--${provider}`}
+						class="inline-flex h-9 w-full cursor-pointer items-center justify-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
 						type="button"
 						onClick={() => handleClick(provider)}
 					>

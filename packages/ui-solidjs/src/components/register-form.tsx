@@ -37,17 +37,22 @@ export const RegisterForm: Component<RegisterFormProps> = (props) => {
 	};
 
 	return (
-		<form class="yauth-register-form" onSubmit={handleSubmit}>
+		<form class="space-y-4" onSubmit={handleSubmit}>
 			<Show when={error()}>
-				<div class="yauth-register-form__error">{error()}</div>
+				<div class="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+					{error()}
+				</div>
 			</Show>
 
-			<div class="yauth-register-form__field">
-				<label class="yauth-register-form__label" for="yauth-register-email">
+			<div class="space-y-2">
+				<label
+					class="text-sm font-medium leading-none"
+					for="yauth-register-email"
+				>
 					Email
 				</label>
 				<input
-					class="yauth-register-form__input"
+					class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 md:text-sm"
 					id="yauth-register-email"
 					type="email"
 					value={email()}
@@ -58,12 +63,15 @@ export const RegisterForm: Component<RegisterFormProps> = (props) => {
 				/>
 			</div>
 
-			<div class="yauth-register-form__field">
-				<label class="yauth-register-form__label" for="yauth-register-password">
+			<div class="space-y-2">
+				<label
+					class="text-sm font-medium leading-none"
+					for="yauth-register-password"
+				>
 					Password
 				</label>
 				<input
-					class="yauth-register-form__input"
+					class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 md:text-sm"
 					id="yauth-register-password"
 					type="password"
 					value={password()}
@@ -74,15 +82,15 @@ export const RegisterForm: Component<RegisterFormProps> = (props) => {
 				/>
 			</div>
 
-			<div class="yauth-register-form__field">
+			<div class="space-y-2">
 				<label
-					class="yauth-register-form__label"
+					class="text-sm font-medium leading-none"
 					for="yauth-register-display-name"
 				>
 					Display name (optional)
 				</label>
 				<input
-					class="yauth-register-form__input"
+					class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 md:text-sm"
 					id="yauth-register-display-name"
 					type="text"
 					value={displayName()}
@@ -93,7 +101,7 @@ export const RegisterForm: Component<RegisterFormProps> = (props) => {
 			</div>
 
 			<button
-				class="yauth-register-form__submit"
+				class="inline-flex h-9 w-full cursor-pointer items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
 				type="submit"
 				disabled={loading()}
 			>

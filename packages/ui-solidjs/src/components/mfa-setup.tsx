@@ -54,18 +54,20 @@ export const MfaSetup: Component<MfaSetupProps> = (props) => {
 	};
 
 	return (
-		<div class="yauth-mfa-setup">
+		<div class="space-y-4">
 			<Show when={error()}>
-				<div class="yauth-mfa-setup__error">{error()}</div>
+				<div class="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+					{error()}
+				</div>
 			</Show>
 
 			<Show when={step() === "begin"}>
-				<div class="yauth-mfa-setup__step yauth-mfa-setup__step--begin">
-					<p class="yauth-mfa-setup__description">
+				<div class="space-y-4">
+					<p class="text-sm text-muted-foreground">
 						Set up two-factor authentication to secure your account.
 					</p>
 					<button
-						class="yauth-mfa-setup__begin-button"
+						class="inline-flex h-9 w-full cursor-pointer items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
 						type="button"
 						onClick={handleBegin}
 						disabled={loading()}
@@ -76,29 +78,38 @@ export const MfaSetup: Component<MfaSetupProps> = (props) => {
 			</Show>
 
 			<Show when={step() === "confirm"}>
-				<div class="yauth-mfa-setup__step yauth-mfa-setup__step--confirm">
-					<p class="yauth-mfa-setup__description">
+				<div class="space-y-4">
+					<p class="text-sm text-muted-foreground">
 						Add this account to your authenticator app using the URI below, then
 						enter the verification code.
 					</p>
 
-					<div class="yauth-mfa-setup__uri">
-						<span class="yauth-mfa-setup__label">OTP Auth URI</span>
-						<code class="yauth-mfa-setup__uri-value">{uri()}</code>
+					<div class="space-y-1">
+						<span class="text-sm font-medium leading-none">OTP Auth URI</span>
+						<code class="block w-full break-all rounded-md border border-input bg-muted px-3 py-2 text-xs">
+							{uri()}
+						</code>
 					</div>
 
-					<div class="yauth-mfa-setup__secret">
-						<span class="yauth-mfa-setup__label">Manual entry key</span>
-						<code class="yauth-mfa-setup__secret-value">{secret()}</code>
+					<div class="space-y-1">
+						<span class="text-sm font-medium leading-none">
+							Manual entry key
+						</span>
+						<code class="block w-full break-all rounded-md border border-input bg-muted px-3 py-2 text-xs font-mono tracking-wider">
+							{secret()}
+						</code>
 					</div>
 
-					<form class="yauth-mfa-setup__confirm-form" onSubmit={handleConfirm}>
-						<div class="yauth-mfa-setup__field">
-							<label class="yauth-mfa-setup__label" for="yauth-mfa-setup-code">
+					<form class="space-y-4" onSubmit={handleConfirm}>
+						<div class="space-y-2">
+							<label
+								class="text-sm font-medium leading-none"
+								for="yauth-mfa-setup-code"
+							>
 								Verification code
 							</label>
 							<input
-								class="yauth-mfa-setup__input"
+								class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 md:text-sm"
 								id="yauth-mfa-setup-code"
 								type="text"
 								inputmode="numeric"
@@ -111,7 +122,7 @@ export const MfaSetup: Component<MfaSetupProps> = (props) => {
 						</div>
 
 						<button
-							class="yauth-mfa-setup__confirm-button"
+							class="inline-flex h-9 w-full cursor-pointer items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
 							type="submit"
 							disabled={loading()}
 						>
@@ -122,17 +133,17 @@ export const MfaSetup: Component<MfaSetupProps> = (props) => {
 			</Show>
 
 			<Show when={step() === "done"}>
-				<div class="yauth-mfa-setup__step yauth-mfa-setup__step--done">
-					<p class="yauth-mfa-setup__description">
+				<div class="space-y-4">
+					<div class="rounded-md bg-emerald-500/10 px-3 py-2 text-sm text-emerald-600 dark:text-emerald-400">
 						Two-factor authentication has been enabled. Save these backup codes
 						in a safe place. Each code can only be used once.
-					</p>
+					</div>
 
-					<ul class="yauth-mfa-setup__backup-codes">
+					<ul class="space-y-1">
 						<For each={backupCodes()}>
 							{(code) => (
-								<li class="yauth-mfa-setup__backup-code">
-									<code>{code}</code>
+								<li class="rounded-md border border-input bg-muted px-3 py-1.5 text-center font-mono text-sm tracking-wider">
+									{code}
 								</li>
 							)}
 						</For>

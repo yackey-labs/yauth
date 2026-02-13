@@ -22,7 +22,6 @@ export const MfaChallenge: Component<MfaChallengeProps> = (props) => {
 
 		try {
 			await client.mfa.verify(props.pendingSessionId, code());
-			// Session cookie is set — fetch full user from session
 			const session = await client.getSession();
 			props.onSuccess?.(session.user);
 		} catch (err) {
@@ -35,24 +34,26 @@ export const MfaChallenge: Component<MfaChallengeProps> = (props) => {
 	};
 
 	return (
-		<form class="yauth-mfa-challenge" onSubmit={handleSubmit}>
+		<form class="space-y-4" onSubmit={handleSubmit}>
 			<Show when={error()}>
-				<div class="yauth-mfa-challenge__error">{error()}</div>
+				<div class="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+					{error()}
+				</div>
 			</Show>
 
-			<p class="yauth-mfa-challenge__description">
+			<p class="text-sm text-muted-foreground">
 				Enter the code from your authenticator app, or use a backup code.
 			</p>
 
-			<div class="yauth-mfa-challenge__field">
+			<div class="space-y-2">
 				<label
-					class="yauth-mfa-challenge__label"
+					class="text-sm font-medium leading-none"
 					for="yauth-mfa-challenge-code"
 				>
 					Verification code
 				</label>
 				<input
-					class="yauth-mfa-challenge__input"
+					class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 md:text-sm"
 					id="yauth-mfa-challenge-code"
 					type="text"
 					inputmode="numeric"
@@ -65,7 +66,7 @@ export const MfaChallenge: Component<MfaChallengeProps> = (props) => {
 			</div>
 
 			<button
-				class="yauth-mfa-challenge__submit"
+				class="inline-flex h-9 w-full cursor-pointer items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
 				type="submit"
 				disabled={loading()}
 			>

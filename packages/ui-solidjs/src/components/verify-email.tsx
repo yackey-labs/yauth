@@ -31,19 +31,23 @@ export const VerifyEmail: Component<VerifyEmailProps> = (props) => {
 	});
 
 	return (
-		<div class="yauth-verify-email">
+		<div class="space-y-4">
 			<Show when={state() === "loading"}>
-				<div class="yauth-verify-email__loading">
+				<div class="text-sm text-muted-foreground">
 					Verifying your email address...
 				</div>
 			</Show>
 
 			<Show when={state() === "success"}>
-				<div class="yauth-verify-email__success">{message()}</div>
+				<div class="rounded-md bg-emerald-500/10 px-3 py-2 text-sm text-emerald-600 dark:text-emerald-400">
+					{message()}
+				</div>
 			</Show>
 
 			<Show when={state() === "error"}>
-				<div class="yauth-verify-email__error">{errorMessage()}</div>
+				<div class="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+					{errorMessage()}
+				</div>
 			</Show>
 		</div>
 	);

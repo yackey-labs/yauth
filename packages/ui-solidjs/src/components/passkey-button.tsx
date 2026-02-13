@@ -28,8 +28,9 @@ export const PasskeyButton: Component<PasskeyButtonProps> = (props) => {
 		}
 
 		const beginResult = await client.passkey.loginBegin(props.email);
+		const rcr = beginResult.options as { publicKey: unknown };
 		const credential = await startAuthentication({
-			optionsJSON: beginResult.options as Parameters<
+			optionsJSON: rcr.publicKey as Parameters<
 				typeof startAuthentication
 			>[0]["optionsJSON"],
 		});
@@ -39,9 +40,11 @@ export const PasskeyButton: Component<PasskeyButtonProps> = (props) => {
 	};
 
 	const handleRegister = async () => {
-		const options = await client.passkey.registerBegin();
+		const ccr = (await client.passkey.registerBegin()) as {
+			publicKey: unknown;
+		};
 		const credential = await startRegistration({
-			optionsJSON: options as Parameters<
+			optionsJSON: ccr.publicKey as Parameters<
 				typeof startRegistration
 			>[0]["optionsJSON"],
 		});

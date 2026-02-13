@@ -32,7 +32,7 @@
 
 ```bash
 # Rust
-cargo test --features full          # Run all unit tests (53)
+cargo test --features full          # Run all unit tests (91)
 cargo fmt --check                    # Format check
 cargo clippy --features full -- -D warnings  # Lint
 
@@ -43,7 +43,11 @@ bun run lint                         # Biome lint check
 bun run lint:fix                     # Biome lint + fix
 bun run typecheck                    # TypeScript type check
 bun validate                         # lint:fix + typecheck + build
-bun validate:ci                      # lint + typecheck + build (strict)
+bun validate:ci                      # lint + typecheck + build + generate:check (strict)
+
+# Client generation
+bun generate                         # Regenerate TS client from Rust types + routes
+bun generate:check                   # Fail if generated client is out of date (CI)
 
 # Integration / Pentest
 docker compose up -d                 # Start PostgreSQL + Mailpit
@@ -102,6 +106,18 @@ Authenticated user is injected as `Extension<AuthUser>` on the request.
 
 - `GET /session` — returns authenticated user info
 - `POST /logout` — invalidates session cookie
+
+## Generated TypeScript Client
+
+This project uses `axum-ts-client` to auto-generate `@yauth/client` from Rust types + route metadata.
+
+**When modifying any API endpoint or request/response type:**
+1. Update the route metadata in `crates/yauth/src/routes_meta.rs`
+2. Ensure request/response types have `#[derive(TS)] #[ts(export)]`
+3. Run `bun generate` to regenerate the TypeScript client
+4. Commit the regenerated `packages/client/src/generated.ts` alongside Rust changes
+
+**CI check:** `bun generate:check` (part of `bun validate:ci`) fails if the generated client is out of date.
 
 ## Conventions
 

@@ -7,11 +7,13 @@ use axum::{
 use axum_extra::extract::cookie::CookieJar;
 use sea_orm::EntityTrait;
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::state::YAuthState;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct AuthUser {
     pub id: Uuid,
     pub email: String,
@@ -22,7 +24,8 @@ pub struct AuthUser {
     pub auth_method: AuthMethod,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub enum AuthMethod {
     Session,
     Bearer,

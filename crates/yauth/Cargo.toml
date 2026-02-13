@@ -51,6 +51,8 @@ lettre = { workspace = true }
 reqwest = { workspace = true }
 
 async-trait = { workspace = true }
+ts-rs = { workspace = true }
+axum-ts-client = { workspace = true }
 
 # Feature-gated
 webauthn-rs = { workspace = true, optional = true }

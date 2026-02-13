@@ -9,6 +9,7 @@ use axum_extra::extract::cookie::CookieJar;
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
+use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::auth::{crypto, hibp, password, session};
@@ -67,49 +68,57 @@ fn session_set_cookie(state: &YAuthState, token: &str) -> String {
     cookie
 }
 
-#[derive(Deserialize)]
-struct RegisterRequest {
-    email: String,
-    password: String,
-    display_name: Option<String>,
+#[derive(Deserialize, TS)]
+#[ts(export)]
+pub struct RegisterRequest {
+    pub email: String,
+    pub password: String,
+    pub display_name: Option<String>,
 }
 
-#[derive(Deserialize)]
-struct LoginRequest {
-    email: String,
-    password: String,
+#[derive(Deserialize, TS)]
+#[ts(export)]
+pub struct LoginRequest {
+    pub email: String,
+    pub password: String,
 }
 
-#[derive(Serialize)]
-struct MessageResponse {
-    message: String,
+#[derive(Serialize, TS)]
+#[ts(export)]
+pub struct MessageResponse {
+    pub message: String,
 }
 
-#[derive(Deserialize)]
-struct VerifyEmailRequest {
-    token: String,
+#[derive(Deserialize, TS)]
+#[ts(export)]
+pub struct VerifyEmailRequest {
+    pub token: String,
 }
 
-#[derive(Deserialize)]
-struct ResendVerificationRequest {
-    email: String,
+#[derive(Deserialize, TS)]
+#[ts(export)]
+pub struct ResendVerificationRequest {
+    pub email: String,
 }
 
-#[derive(Deserialize)]
-struct ForgotPasswordRequest {
-    email: String,
+#[derive(Deserialize, TS)]
+#[ts(export)]
+pub struct ForgotPasswordRequest {
+    pub email: String,
 }
 
-#[derive(Deserialize)]
-struct ResetPasswordRequest {
-    token: String,
-    password: String,
+#[derive(Deserialize, TS)]
+#[ts(export)]
+pub struct ResetPasswordRequest {
+    pub token: String,
+    pub password: String,
 }
 
-#[derive(Deserialize)]
-struct ChangePasswordRequest {
-    current_password: String,
-    new_password: String,
+#[derive(Deserialize, TS)]
+#[ts(export)]
+pub struct ChangePasswordRequest {
+    pub current_password: String,
+    pub new_password: String,
 }
 
 async fn register(

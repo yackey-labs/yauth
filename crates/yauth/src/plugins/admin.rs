@@ -13,6 +13,7 @@ use sea_orm::{
 };
 use serde::Deserialize;
 use tracing::{info, warn};
+use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::auth::{crypto, session};
@@ -52,30 +53,34 @@ impl YAuthPlugin for AdminPlugin {
 // Request / query types
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize)]
-struct ListUsersQuery {
-    page: Option<u64>,
-    per_page: Option<u64>,
-    search: Option<String>,
+#[derive(Deserialize, TS)]
+#[ts(export)]
+pub struct ListUsersQuery {
+    pub page: Option<u64>,
+    pub per_page: Option<u64>,
+    pub search: Option<String>,
 }
 
-#[derive(Deserialize)]
-struct ListSessionsQuery {
-    page: Option<u64>,
-    per_page: Option<u64>,
+#[derive(Deserialize, TS)]
+#[ts(export)]
+pub struct ListSessionsQuery {
+    pub page: Option<u64>,
+    pub per_page: Option<u64>,
 }
 
-#[derive(Deserialize)]
-struct UpdateUserRequest {
-    display_name: Option<String>,
-    role: Option<String>,
-    email_verified: Option<bool>,
+#[derive(Deserialize, TS)]
+#[ts(export)]
+pub struct UpdateUserRequest {
+    pub display_name: Option<String>,
+    pub role: Option<String>,
+    pub email_verified: Option<bool>,
 }
 
-#[derive(Deserialize)]
-struct BanRequest {
-    reason: Option<String>,
-    until: Option<String>,
+#[derive(Deserialize, TS)]
+#[ts(export)]
+pub struct BanRequest {
+    pub reason: Option<String>,
+    pub until: Option<String>,
 }
 
 // ---------------------------------------------------------------------------

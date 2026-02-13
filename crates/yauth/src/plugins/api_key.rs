@@ -8,6 +8,7 @@ use axum::{
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
+use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::auth::crypto;
@@ -36,33 +37,36 @@ impl YAuthPlugin for ApiKeyPlugin {
     }
 }
 
-#[derive(Deserialize)]
-struct CreateApiKeyRequest {
-    name: String,
-    scopes: Option<Vec<String>>,
-    expires_in_days: Option<u32>,
+#[derive(Deserialize, TS)]
+#[ts(export)]
+pub struct CreateApiKeyRequest {
+    pub name: String,
+    pub scopes: Option<Vec<String>>,
+    pub expires_in_days: Option<u32>,
 }
 
-#[derive(Serialize)]
-struct CreateApiKeyResponse {
-    id: Uuid,
-    key: String,
-    name: String,
-    prefix: String,
-    scopes: Option<Vec<String>>,
-    expires_at: Option<chrono::DateTime<chrono::FixedOffset>>,
-    created_at: chrono::DateTime<chrono::FixedOffset>,
+#[derive(Serialize, TS)]
+#[ts(export)]
+pub struct CreateApiKeyResponse {
+    pub id: Uuid,
+    pub key: String,
+    pub name: String,
+    pub prefix: String,
+    pub scopes: Option<Vec<String>>,
+    pub expires_at: Option<chrono::DateTime<chrono::FixedOffset>>,
+    pub created_at: chrono::DateTime<chrono::FixedOffset>,
 }
 
-#[derive(Serialize)]
-struct ApiKeyResponse {
-    id: Uuid,
-    name: String,
-    prefix: String,
-    scopes: Option<Vec<String>>,
-    last_used_at: Option<chrono::DateTime<chrono::FixedOffset>>,
-    expires_at: Option<chrono::DateTime<chrono::FixedOffset>>,
-    created_at: chrono::DateTime<chrono::FixedOffset>,
+#[derive(Serialize, TS)]
+#[ts(export)]
+pub struct ApiKeyResponse {
+    pub id: Uuid,
+    pub name: String,
+    pub prefix: String,
+    pub scopes: Option<Vec<String>>,
+    pub last_used_at: Option<chrono::DateTime<chrono::FixedOffset>>,
+    pub expires_at: Option<chrono::DateTime<chrono::FixedOffset>>,
+    pub created_at: chrono::DateTime<chrono::FixedOffset>,
 }
 
 async fn create_api_key(

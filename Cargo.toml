@@ -70,5 +70,9 @@ opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.31", features = ["grpc-tonic"] }
 opentelemetry-semantic-conventions = { version = "0.31" }
 
+# Code generation
+ts-rs = { version = "11", features = ["serde-compat", "uuid-impl", "chrono-impl"] }
+axum-ts-client = { path = "../axum-ts-client" }
+
 # Misc
 async-trait = "0.1"

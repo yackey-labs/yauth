@@ -8,6 +8,7 @@ use axum::{
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
+use ts_rs::TS;
 use uuid::Uuid;
 use webauthn_rs::Webauthn;
 use webauthn_rs::prelude::*;
@@ -199,9 +200,9 @@ async fn register_begin(
 }
 
 #[derive(Deserialize)]
-struct RegisterFinishRequest {
-    name: String,
-    credential: RegisterPublicKeyCredential,
+pub struct RegisterFinishRequest {
+    pub name: String,
+    pub credential: RegisterPublicKeyCredential,
 }
 
 async fn register_finish(
@@ -283,16 +284,17 @@ async fn register_finish(
 
 // --- Authentication ---
 
-#[derive(Deserialize)]
-struct PasskeyLoginBeginRequest {
+#[derive(Deserialize, TS)]
+#[ts(export)]
+pub struct PasskeyLoginBeginRequest {
     #[serde(default)]
-    email: Option<String>,
+    pub email: Option<String>,
 }
 
 #[derive(Serialize)]
-struct PasskeyLoginBeginResponse {
-    challenge_id: Uuid,
-    options: RequestChallengeResponse,
+pub struct PasskeyLoginBeginResponse {
+    pub challenge_id: Uuid,
+    pub options: RequestChallengeResponse,
 }
 
 async fn login_begin(
@@ -392,27 +394,24 @@ async fn login_begin(
         (rcr, data)
     } else {
         // --- Discoverable (usernameless) flow ---
-        if !state
-            .rate_limiter
-            .check("passkey_login:discoverable")
-            .await
-        {
-            warn!(event = "passkey_login_rate_limited", "Discoverable passkey login rate limited");
+        if !state.rate_limiter.check("passkey_login:discoverable").await {
+            warn!(
+                event = "passkey_login_rate_limited",
+                "Discoverable passkey login rate limited"
+            );
             return Err((
                 StatusCode::TOO_MANY_REQUESTS,
                 "Too many requests".to_string(),
             ));
         }
 
-        let (rcr, auth_state) = webauthn
-            .start_discoverable_authentication()
-            .map_err(|e| {
-                tracing::error!("WebAuthn discoverable auth start error: {}", e);
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "WebAuthn error".to_string(),
-                )
-            })?;
+        let (rcr, auth_state) = webauthn.start_discoverable_authentication().map_err(|e| {
+            tracing::error!("WebAuthn discoverable auth start error: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "WebAuthn error".to_string(),
+            )
+        })?;
 
         let auth_state_json = serde_json::to_value(&auth_state).map_err(|e| {
             tracing::error!("Serialize error: {}", e);
@@ -450,9 +449,9 @@ async fn login_begin(
 }
 
 #[derive(Deserialize)]
-struct PasskeyLoginFinishRequest {
-    challenge_id: Uuid,
-    credential: PublicKeyCredential,
+pub struct PasskeyLoginFinishRequest {
+    pub challenge_id: Uuid,
+    pub credential: PublicKeyCredential,
 }
 
 async fn login_finish(
@@ -492,8 +491,8 @@ async fn login_finish(
 
     let user_id = if discoverable {
         // --- Discoverable flow ---
-        let auth_state: DiscoverableAuthentication =
-            serde_json::from_value(auth_state_json).map_err(|e| {
+        let auth_state: DiscoverableAuthentication = serde_json::from_value(auth_state_json)
+            .map_err(|e| {
                 tracing::error!("Deserialize error: {}", e);
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -644,12 +643,13 @@ async fn update_credential_last_used(state: &YAuthState, user_id: Uuid) -> Resul
 
 // --- Passkey Management ---
 
-#[derive(Serialize)]
-struct PasskeyInfo {
-    id: Uuid,
-    name: String,
-    created_at: chrono::DateTime<chrono::FixedOffset>,
-    last_used_at: Option<chrono::DateTime<chrono::FixedOffset>>,
+#[derive(Serialize, TS)]
+#[ts(export)]
+pub struct PasskeyInfo {
+    pub id: Uuid,
+    pub name: String,
+    pub created_at: chrono::DateTime<chrono::FixedOffset>,
+    pub last_used_at: Option<chrono::DateTime<chrono::FixedOffset>>,
 }
 
 async fn list_passkeys(

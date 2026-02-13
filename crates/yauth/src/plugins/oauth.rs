@@ -13,6 +13,7 @@ use oauth2::{
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
+use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::auth::{crypto, session};
@@ -59,9 +60,10 @@ fn api_err(status: StatusCode, msg: &str) -> ApiError {
     (status, Json(serde_json::json!({ "error": msg })))
 }
 
-#[derive(Deserialize)]
-struct AuthorizeQuery {
-    redirect_url: Option<String>,
+#[derive(Deserialize, TS)]
+#[ts(export)]
+pub struct AuthorizeQuery {
+    pub redirect_url: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -72,10 +74,11 @@ struct CallbackQuery {
     error_description: Option<String>,
 }
 
-#[derive(Deserialize)]
-struct CallbackBody {
-    code: String,
-    state: String,
+#[derive(Deserialize, TS)]
+#[ts(export)]
+pub struct CallbackBody {
+    pub code: String,
+    pub state: String,
 }
 
 /// Common userinfo fields parsed from the provider's response.
@@ -86,25 +89,28 @@ struct ProviderUserInfo {
     name: Option<String>,
 }
 
-#[derive(Serialize)]
-struct OAuthAccountResponse {
-    id: String,
-    provider: String,
-    provider_user_id: String,
-    created_at: String,
+#[derive(Serialize, TS)]
+#[ts(export)]
+pub struct OAuthAccountResponse {
+    pub id: String,
+    pub provider: String,
+    pub provider_user_id: String,
+    pub created_at: String,
 }
 
-#[derive(Serialize)]
-struct AuthResponse {
-    user_id: String,
-    email: String,
-    display_name: Option<String>,
-    email_verified: bool,
+#[derive(Serialize, TS)]
+#[ts(export)]
+pub struct OAuthAuthResponse {
+    pub user_id: String,
+    pub email: String,
+    pub display_name: Option<String>,
+    pub email_verified: bool,
 }
 
-#[derive(Serialize)]
-struct AuthorizeResponse {
-    auth_url: String,
+#[derive(Serialize, TS)]
+#[ts(export)]
+pub struct AuthorizeResponse {
+    pub auth_url: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -717,7 +723,7 @@ async fn callback_get(
     // Default: return JSON with session cookie
     Ok((
         [(SET_COOKIE, session_set_cookie(&state, &token))],
-        Json(AuthResponse {
+        Json(OAuthAuthResponse {
             user_id,
             email,
             display_name,
@@ -738,7 +744,7 @@ async fn callback_post(
 
     Ok((
         [(SET_COOKIE, session_set_cookie(&state, &token))],
-        Json(AuthResponse {
+        Json(OAuthAuthResponse {
             user_id,
             email,
             display_name,

@@ -7,6 +7,7 @@ pub mod state;
 pub mod stores;
 
 pub mod plugins;
+pub mod routes_meta;
 
 #[cfg(feature = "telemetry")]
 pub mod telemetry;

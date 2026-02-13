@@ -8,6 +8,7 @@ use axum::{
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
+use ts_rs::TS;
 use uuid::Uuid;
 
 use totp_rs::{Algorithm, Secret, TOTP};
@@ -118,45 +119,52 @@ impl YAuthPlugin for MfaPlugin {
 // Request / response types
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize)]
-struct ConfirmTotpRequest {
-    code: String,
+#[derive(Deserialize, TS)]
+#[ts(export)]
+pub struct ConfirmTotpRequest {
+    pub code: String,
 }
 
-#[derive(Deserialize)]
-struct VerifyMfaRequest {
-    pending_session_id: Uuid,
-    code: String,
+#[derive(Deserialize, TS)]
+#[ts(export)]
+pub struct VerifyMfaRequest {
+    pub pending_session_id: Uuid,
+    pub code: String,
 }
 
-#[derive(Serialize)]
-struct SetupTotpResponse {
-    otpauth_url: String,
-    secret: String,
-    backup_codes: Vec<String>,
+#[derive(Serialize, TS)]
+#[ts(export)]
+pub struct SetupTotpResponse {
+    pub otpauth_url: String,
+    pub secret: String,
+    pub backup_codes: Vec<String>,
 }
 
-#[derive(Serialize)]
-struct MessageResponse {
-    message: String,
+#[derive(Serialize, TS)]
+#[ts(export)]
+pub struct MfaMessageResponse {
+    pub message: String,
 }
 
-#[derive(Serialize)]
-struct BackupCodeCountResponse {
-    remaining: usize,
+#[derive(Serialize, TS)]
+#[ts(export)]
+pub struct BackupCodeCountResponse {
+    pub remaining: usize,
 }
 
-#[derive(Serialize)]
-struct BackupCodesResponse {
-    backup_codes: Vec<String>,
+#[derive(Serialize, TS)]
+#[ts(export)]
+pub struct BackupCodesResponse {
+    pub backup_codes: Vec<String>,
 }
 
-#[derive(Serialize)]
-struct AuthResponse {
-    user_id: String,
-    email: String,
-    display_name: Option<String>,
-    email_verified: bool,
+#[derive(Serialize, TS)]
+#[ts(export)]
+pub struct MfaAuthResponse {
+    pub user_id: String,
+    pub email: String,
+    pub display_name: Option<String>,
+    pub email_verified: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -429,7 +437,7 @@ async fn confirm_totp(
         "TOTP MFA enabled successfully"
     );
 
-    Ok(Json(MessageResponse {
+    Ok(Json(MfaMessageResponse {
         message: "TOTP MFA enabled successfully".to_string(),
     }))
 }
@@ -466,7 +474,7 @@ async fn disable_totp(
         "TOTP MFA disabled, backup codes deleted"
     );
 
-    Ok(Json(MessageResponse {
+    Ok(Json(MfaMessageResponse {
         message: "TOTP MFA disabled successfully".to_string(),
     }))
 }
@@ -608,7 +616,7 @@ async fn verify_mfa(
 
     Ok((
         [(SET_COOKIE, session_set_cookie(&state, &token))],
-        Json(AuthResponse {
+        Json(MfaAuthResponse {
             user_id: user.id.to_string(),
             email: user.email.clone(),
             display_name: user.display_name.clone(),

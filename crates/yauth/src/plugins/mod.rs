@@ -27,6 +27,7 @@ use axum::{
 use chrono::Utc;
 use sea_orm::{ActiveModelTrait, EntityTrait, Set};
 use serde::Deserialize;
+use ts_rs::TS;
 
 use crate::middleware::AuthUser;
 use crate::plugin::PluginContext;
@@ -54,9 +55,10 @@ async fn get_session(Extension(user): Extension<AuthUser>) -> Json<serde_json::V
     }))
 }
 
-#[derive(Deserialize)]
-struct UpdateProfileRequest {
-    display_name: Option<String>,
+#[derive(Deserialize, TS)]
+#[ts(export)]
+pub struct UpdateProfileRequest {
+    pub display_name: Option<String>,
 }
 
 async fn update_profile(

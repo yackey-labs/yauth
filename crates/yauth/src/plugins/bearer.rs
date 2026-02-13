@@ -7,6 +7,7 @@ use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, deco
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
+use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::auth::{crypto, password};
@@ -65,28 +66,32 @@ struct Claims {
 // Request / Response types
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize)]
-struct TokenRequest {
-    email: String,
-    password: String,
+#[derive(Deserialize, TS)]
+#[ts(export)]
+pub struct TokenRequest {
+    pub email: String,
+    pub password: String,
 }
 
-#[derive(Deserialize)]
-struct RefreshRequest {
-    refresh_token: String,
+#[derive(Deserialize, TS)]
+#[ts(export)]
+pub struct RefreshRequest {
+    pub refresh_token: String,
 }
 
-#[derive(Deserialize)]
-struct RevokeRequest {
-    refresh_token: String,
+#[derive(Deserialize, TS)]
+#[ts(export)]
+pub struct RevokeRequest {
+    pub refresh_token: String,
 }
 
-#[derive(Serialize)]
-struct TokenResponse {
-    access_token: String,
-    refresh_token: String,
-    token_type: String,
-    expires_in: u64,
+#[derive(Serialize, TS)]
+#[ts(export)]
+pub struct TokenResponse {
+    pub access_token: String,
+    pub refresh_token: String,
+    pub token_type: String,
+    pub expires_in: u64,
 }
 
 // ---------------------------------------------------------------------------

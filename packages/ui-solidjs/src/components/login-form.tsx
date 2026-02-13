@@ -47,7 +47,7 @@ export const LoginForm: Component<LoginFormProps> = (props) => {
 	};
 
 	return (
-		<form class="space-y-6" onSubmit={handleSubmit}>
+		<form class="space-y-6" on:submit={handleSubmit}>
 			<Show when={error()}>
 				<div class="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
 					{error()}
@@ -63,7 +63,7 @@ export const LoginForm: Component<LoginFormProps> = (props) => {
 					id="yauth-login-email"
 					type="email"
 					value={email()}
-					onInput={(e) => setEmail(e.currentTarget.value)}
+					on:input={(e) => setEmail(e.currentTarget.value)}
 					required
 					autocomplete="email"
 					disabled={loading()}
@@ -82,7 +82,7 @@ export const LoginForm: Component<LoginFormProps> = (props) => {
 					id="yauth-login-password"
 					type="password"
 					value={password()}
-					onInput={(e) => setPassword(e.currentTarget.value)}
+					on:input={(e) => setPassword(e.currentTarget.value)}
 					required
 					autocomplete="current-password"
 					disabled={loading()}

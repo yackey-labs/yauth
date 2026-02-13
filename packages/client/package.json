@@ -1,26 +1,29 @@
 {
-	"name": "@yauth/client",
-	"version": "0.1.0",
-	"type": "module",
-	"main": "dist/index.js",
-	"module": "dist/index.js",
-	"types": "src/index.ts",
-	"exports": {
-		".": {
-			"import": "./dist/index.js",
-			"types": "./src/index.ts",
-			"default": "./src/index.ts"
-		}
-	},
-	"files": ["dist", "src"],
-	"scripts": {
-		"build": "bun build src/index.ts --outdir dist --target browser",
-		"typecheck": "tsc --noEmit"
-	},
-	"dependencies": {
-		"@yauth/shared": "workspace:*"
-	},
-	"devDependencies": {
-		"typescript": "^5.7.2"
-	}
+  "name": "@yauth/client",
+  "version": "0.1.1",
+  "type": "module",
+  "main": "dist/index.js",
+  "module": "dist/index.js",
+  "types": "src/index.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "bun build src/index.ts --outdir dist --target browser",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@yauth/shared": "^0.1.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
 }

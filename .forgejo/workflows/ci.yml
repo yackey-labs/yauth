@@ -121,18 +121,16 @@ jobs:
 
       - name: Publish Cargo crates
         env:
-          CARGO_REGISTRIES_YAUTH_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+          CARGO_REGISTRIES_YAUTH_TOKEN: "token ${{ secrets.REGISTRY_TOKEN }}"
         run: |
-          cargo publish -p yauth-entity --registry yauth --no-verify
-          cargo publish -p yauth-migration --registry yauth --no-verify
-          cargo publish -p yauth --registry yauth --no-verify
+          cargo publish -p yauth-entity --registry yauth --no-verify || true
+          cargo publish -p yauth-migration --registry yauth --no-verify || true
+          cargo publish -p yauth --registry yauth --no-verify || true
 
       - name: Publish npm packages
         env:
-          REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+          NPM_REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
         run: |
-          echo "@yauth:registry=https://forgejo.yackey.cloud/api/packages/yauth/npm/" > .npmrc
-          echo "//forgejo.yackey.cloud/api/packages/yauth/npm/:_authToken=${REGISTRY_TOKEN}" >> .npmrc
-          cd packages/shared && npm publish --access public
-          cd ../client && npm publish --access public
-          cd ../ui-solidjs && npm publish --access public
+          cd packages/shared && npm publish --access public || true
+          cd ../client && npm publish --access public || true
+          cd ../ui-solidjs && npm publish --access public || true

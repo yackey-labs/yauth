@@ -39,196 +39,263 @@ import type { VerifyEmailRequest } from "../../../crates/yauth/bindings/VerifyEm
 import type { VerifyMfaRequest } from "../../../crates/yauth/bindings/VerifyMfaRequest";
 
 export class YAuthError extends Error {
-  constructor(message: string, public status: number, public body?: unknown) {
-    super(message);
-    this.name = "YAuthError";
-  }
+	constructor(
+		message: string,
+		public status: number,
+		public body?: unknown,
+	) {
+		super(message);
+		this.name = "YAuthError";
+	}
 }
 
 export interface YAuthClientOptions {
-  baseUrl: string;
-  getToken?: () => Promise<string | null>;
-  credentials?: RequestCredentials;
-  fetch?: typeof fetch;
-  onError?: (error: YAuthError) => void;
+	baseUrl: string;
+	getToken?: () => Promise<string | null>;
+	credentials?: RequestCredentials;
+	fetch?: typeof fetch;
+	onError?: (error: YAuthError) => void;
 }
 
 type RequestOptions = {
-  method?: string;
-  body?: unknown;
-  query?: Record<string, unknown>;
-  auth?: boolean;
+	method?: string;
+	body?: unknown;
+	query?: Record<string, unknown>;
+	auth?: boolean;
 };
 
 function createRequest(options: YAuthClientOptions) {
-  const { baseUrl, credentials = "include" } = options;
-  const fetchFn = options.fetch ?? globalThis.fetch;
+	const { baseUrl, credentials = "include" } = options;
+	const fetchFn = options.fetch ?? globalThis.fetch;
 
-  async function request<T>(
-    path: string,
-    opts: RequestOptions = {},
-  ): Promise<T> {
-    const { method = "GET", body, query, auth } = opts;
+	async function request<T>(
+		path: string,
+		opts: RequestOptions = {},
+	): Promise<T> {
+		const { method = "GET", body, query, auth } = opts;
 
-    let url = `${baseUrl}${path}`;
-    if (query) {
-      const params = new URLSearchParams();
-      for (const [key, value] of Object.entries(query)) {
-        if (value !== undefined && value !== null) {
-          params.set(key, String(value));
-        }
-      }
-      const qs = params.toString();
-      if (qs) url += `?${qs}`;
-    }
+		let url = `${baseUrl}${path}`;
+		if (query) {
+			const params = new URLSearchParams();
+			for (const [key, value] of Object.entries(query)) {
+				if (value !== undefined && value !== null) {
+					params.set(key, String(value));
+				}
+			}
+			const qs = params.toString();
+			if (qs) url += `?${qs}`;
+		}
 
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
+		const headers: Record<string, string> = {
+			"Content-Type": "application/json",
+		};
 
-    if (auth && options.getToken) {
-      const token = await options.getToken();
-      if (token) headers["Authorization"] = `Bearer ${token}`;
-    }
+		if (auth && options.getToken) {
+			const token = await options.getToken();
+			if (token) headers.Authorization = `Bearer ${token}`;
+		}
 
-    const response = await fetchFn(url, {
-      method,
-      credentials,
-      headers,
-      body: body ? JSON.stringify(body) : undefined,
-    });
+		const response = await fetchFn(url, {
+			method,
+			credentials,
+			headers,
+			body: body ? JSON.stringify(body) : undefined,
+		});
 
-    if (!response.ok) {
-      const text = await response.text();
-      let message: string;
-      let errorBody: unknown;
-      try {
-        const json = JSON.parse(text);
-        message = json.error ?? json.message ?? text;
-        errorBody = json;
-      } catch {
-        message = text;
-      }
-      const error = new YAuthError(message, response.status, errorBody);
-      if (options.onError) options.onError(error);
-      throw error;
-    }
+		if (!response.ok) {
+			const text = await response.text();
+			let message: string;
+			let errorBody: unknown;
+			try {
+				const json = JSON.parse(text);
+				message = json.error ?? json.message ?? text;
+				errorBody = json;
+			} catch {
+				message = text;
+			}
+			const error = new YAuthError(message, response.status, errorBody);
+			if (options.onError) options.onError(error);
+			throw error;
+		}
 
-    const text = await response.text();
-    return (text ? JSON.parse(text) : undefined) as T;
-  }
+		const text = await response.text();
+		return (text ? JSON.parse(text) : undefined) as T;
+	}
 
-  return request;
+	return request;
 }
 
 export function createYAuthClient(options: YAuthClientOptions) {
-  const request = createRequest(options);
+	const request = createRequest(options);
 
-  return {
-    getSession: () => request<AuthUser>("/session", { auth: true }),
-    logout: () => request<void>("/logout", { method: "POST", auth: true }),
-    updateProfile: (body: UpdateProfileRequest) =>
-      request<AuthUser>("/me", { method: "PATCH", auth: true, body }),
+	return {
+		getSession: () => request<AuthUser>("/session", { auth: true }),
+		logout: () => request<void>("/logout", { method: "POST", auth: true }),
+		updateProfile: (body: UpdateProfileRequest) =>
+			request<AuthUser>("/me", { method: "PATCH", auth: true, body }),
 
-    admin: {
-      listUsers: (query?: ListUsersQuery) =>
-        request<void>("/admin/users", { auth: true, query }),
-      getUser: (id: string) =>
-        request<AuthUser>(`/admin/users/${id}`, { auth: true }),
-      updateUser: (id: string, body: UpdateUserRequest) =>
-        request<AuthUser>(`/admin/users/${id}`, { method: "PUT", auth: true, body }),
-      deleteUser: (id: string) =>
-        request<void>(`/admin/users/${id}`, { method: "DELETE", auth: true }),
-      banUser: (id: string, body: BanRequest) =>
-        request<AuthUser>(`/admin/users/${id}/ban`, { method: "POST", auth: true, body }),
-      unbanUser: (id: string) =>
-        request<AuthUser>(`/admin/users/${id}/unban`, { method: "POST", auth: true }),
-      impersonate: (id: string) =>
-        request<void>(`/admin/users/${id}/impersonate`, { method: "POST", auth: true }),
-      listSessions: (query?: ListSessionsQuery) =>
-        request<void>("/admin/sessions", { auth: true, query }),
-      deleteSession: (id: string) =>
-        request<void>(`/admin/sessions/${id}`, { method: "DELETE", auth: true }),
-    },
+		admin: {
+			listUsers: (query?: ListUsersQuery) =>
+				request<void>("/admin/users", { auth: true, query }),
+			getUser: (id: string) =>
+				request<AuthUser>(`/admin/users/${id}`, { auth: true }),
+			updateUser: (id: string, body: UpdateUserRequest) =>
+				request<AuthUser>(`/admin/users/${id}`, {
+					method: "PUT",
+					auth: true,
+					body,
+				}),
+			deleteUser: (id: string) =>
+				request<void>(`/admin/users/${id}`, { method: "DELETE", auth: true }),
+			banUser: (id: string, body: BanRequest) =>
+				request<AuthUser>(`/admin/users/${id}/ban`, {
+					method: "POST",
+					auth: true,
+					body,
+				}),
+			unbanUser: (id: string) =>
+				request<AuthUser>(`/admin/users/${id}/unban`, {
+					method: "POST",
+					auth: true,
+				}),
+			impersonate: (id: string) =>
+				request<void>(`/admin/users/${id}/impersonate`, {
+					method: "POST",
+					auth: true,
+				}),
+			listSessions: (query?: ListSessionsQuery) =>
+				request<void>("/admin/sessions", { auth: true, query }),
+			deleteSession: (id: string) =>
+				request<void>(`/admin/sessions/${id}`, {
+					method: "DELETE",
+					auth: true,
+				}),
+		},
 
-    apiKeys: {
-      create: (body: CreateApiKeyRequest) =>
-        request<CreateApiKeyResponse>("/api-keys", { method: "POST", auth: true, body }),
-      list: () => request<ApiKeyResponse>("/api-keys", { auth: true }),
-      delete: (id: string) =>
-        request<void>(`/api-keys/${id}`, { method: "DELETE", auth: true }),
-    },
+		apiKeys: {
+			create: (body: CreateApiKeyRequest) =>
+				request<CreateApiKeyResponse>("/api-keys", {
+					method: "POST",
+					auth: true,
+					body,
+				}),
+			list: () => request<ApiKeyResponse>("/api-keys", { auth: true }),
+			delete: (id: string) =>
+				request<void>(`/api-keys/${id}`, { method: "DELETE", auth: true }),
+		},
 
-    bearer: {
-      getToken: (body: TokenRequest) =>
-        request<TokenResponse>("/token", { method: "POST", body }),
-      refresh: (body: RefreshRequest) =>
-        request<TokenResponse>("/token/refresh", { method: "POST", body }),
-      revoke: (body: RevokeRequest) =>
-        request<void>("/token/revoke", { method: "POST", auth: true, body }),
-    },
+		bearer: {
+			getToken: (body: TokenRequest) =>
+				request<TokenResponse>("/token", { method: "POST", body }),
+			refresh: (body: RefreshRequest) =>
+				request<TokenResponse>("/token/refresh", { method: "POST", body }),
+			revoke: (body: RevokeRequest) =>
+				request<void>("/token/revoke", { method: "POST", auth: true, body }),
+		},
 
-    emailPassword: {
-      register: (body: RegisterRequest) =>
-        request<MessageResponse>("/register", { method: "POST", body }),
-      login: (body: LoginRequest) =>
-        request<void>("/login", { method: "POST", body }),
-      verifyEmail: (body: VerifyEmailRequest) =>
-        request<MessageResponse>("/verify-email", { method: "POST", body }),
-      resendVerification: (body: ResendVerificationRequest) =>
-        request<MessageResponse>("/resend-verification", { method: "POST", body }),
-      forgotPassword: (body: ForgotPasswordRequest) =>
-        request<MessageResponse>("/forgot-password", { method: "POST", body }),
-      resetPassword: (body: ResetPasswordRequest) =>
-        request<MessageResponse>("/reset-password", { method: "POST", body }),
-      changePassword: (body: ChangePasswordRequest) =>
-        request<MessageResponse>("/change-password", { method: "POST", auth: true, body }),
-    },
+		emailPassword: {
+			register: (body: RegisterRequest) =>
+				request<MessageResponse>("/register", { method: "POST", body }),
+			login: (body: LoginRequest) =>
+				request<void>("/login", { method: "POST", body }),
+			verifyEmail: (body: VerifyEmailRequest) =>
+				request<MessageResponse>("/verify-email", { method: "POST", body }),
+			resendVerification: (body: ResendVerificationRequest) =>
+				request<MessageResponse>("/resend-verification", {
+					method: "POST",
+					body,
+				}),
+			forgotPassword: (body: ForgotPasswordRequest) =>
+				request<MessageResponse>("/forgot-password", { method: "POST", body }),
+			resetPassword: (body: ResetPasswordRequest) =>
+				request<MessageResponse>("/reset-password", { method: "POST", body }),
+			changePassword: (body: ChangePasswordRequest) =>
+				request<MessageResponse>("/change-password", {
+					method: "POST",
+					auth: true,
+					body,
+				}),
+		},
 
-    mfa: {
-      setup: () => request<SetupTotpResponse>("/mfa/totp/setup", { method: "POST", auth: true }),
-      confirm: (body: ConfirmTotpRequest) =>
-        request<MfaMessageResponse>("/mfa/totp/confirm", { method: "POST", auth: true, body }),
-      disable: () => request<MfaMessageResponse>("/mfa/totp", { method: "DELETE", auth: true }),
-      verify: (body: VerifyMfaRequest) =>
-        request<MfaAuthResponse>("/mfa/verify", { method: "POST", body }),
-      getBackupCodeCount: () => request<BackupCodeCountResponse>("/mfa/backup-codes", { auth: true }),
-      regenerateBackupCodes: () => request<BackupCodesResponse>("/mfa/backup-codes/regenerate", { method: "POST", auth: true }),
-    },
+		mfa: {
+			setup: () =>
+				request<SetupTotpResponse>("/mfa/totp/setup", {
+					method: "POST",
+					auth: true,
+				}),
+			confirm: (body: ConfirmTotpRequest) =>
+				request<MfaMessageResponse>("/mfa/totp/confirm", {
+					method: "POST",
+					auth: true,
+					body,
+				}),
+			disable: () =>
+				request<MfaMessageResponse>("/mfa/totp", {
+					method: "DELETE",
+					auth: true,
+				}),
+			verify: (body: VerifyMfaRequest) =>
+				request<MfaAuthResponse>("/mfa/verify", { method: "POST", body }),
+			getBackupCodeCount: () =>
+				request<BackupCodeCountResponse>("/mfa/backup-codes", { auth: true }),
+			regenerateBackupCodes: () =>
+				request<BackupCodesResponse>("/mfa/backup-codes/regenerate", {
+					method: "POST",
+					auth: true,
+				}),
+		},
 
-    oauth: {
-      authorize: (provider: string, query?: AuthorizeQuery) => {
-        let url = `${options.baseUrl}/oauth/${provider}/authorize`;
-        if (query) {
-          const params = new URLSearchParams();
-          for (const [key, value] of Object.entries(query)) {
-            if (value !== undefined && value !== null) params.set(key, String(value));
-          }
-          const qs = params.toString();
-          if (qs) url += `?${qs}`;
-        }
-        return url;
-      },
-      callback: (provider: string, body: CallbackBody) =>
-        request<OAuthAuthResponse>(`/oauth/${provider}/callback`, { method: "POST", body }),
-      accounts: () => request<OAuthAccountResponse>("/oauth/accounts", { auth: true }),
-      unlink: (provider: string) =>
-        request<void>(`/oauth/${provider}`, { method: "DELETE", auth: true }),
-      link: (provider: string) =>
-        request<AuthorizeResponse>(`/oauth/${provider}/link`, { method: "POST", auth: true }),
-    },
+		oauth: {
+			authorize: (provider: string, query?: AuthorizeQuery) => {
+				let url = `${options.baseUrl}/oauth/${provider}/authorize`;
+				if (query) {
+					const params = new URLSearchParams();
+					for (const [key, value] of Object.entries(query)) {
+						if (value !== undefined && value !== null)
+							params.set(key, String(value));
+					}
+					const qs = params.toString();
+					if (qs) url += `?${qs}`;
+				}
+				return url;
+			},
+			callback: (provider: string, body: CallbackBody) =>
+				request<OAuthAuthResponse>(`/oauth/${provider}/callback`, {
+					method: "POST",
+					body,
+				}),
+			accounts: () =>
+				request<OAuthAccountResponse>("/oauth/accounts", { auth: true }),
+			unlink: (provider: string) =>
+				request<void>(`/oauth/${provider}`, { method: "DELETE", auth: true }),
+			link: (provider: string) =>
+				request<AuthorizeResponse>(`/oauth/${provider}/link`, {
+					method: "POST",
+					auth: true,
+				}),
+		},
 
-    passkey: {
-      loginBegin: (body: PasskeyLoginBeginRequest) =>
-        request<void>("/passkey/login/begin", { method: "POST", body }),
-      loginFinish: (body: PasskeyLoginFinishRequest) =>
-        request<void>("/passkey/login/finish", { method: "POST", body }),
-      registerBegin: () => request<void>("/passkeys/register/begin", { method: "POST", auth: true }),
-      registerFinish: (body: RegisterFinishRequest) =>
-        request<void>("/passkeys/register/finish", { method: "POST", auth: true, body }),
-      list: () => request<PasskeyInfo>("/passkeys", { auth: true }),
-      delete: (id: string) =>
-        request<void>(`/passkeys/${id}`, { method: "DELETE", auth: true }),
-    },
-  };
+		passkey: {
+			loginBegin: (body: PasskeyLoginBeginRequest) =>
+				request<void>("/passkey/login/begin", { method: "POST", body }),
+			loginFinish: (body: PasskeyLoginFinishRequest) =>
+				request<void>("/passkey/login/finish", { method: "POST", body }),
+			registerBegin: () =>
+				request<void>("/passkeys/register/begin", {
+					method: "POST",
+					auth: true,
+				}),
+			registerFinish: (body: RegisterFinishRequest) =>
+				request<void>("/passkeys/register/finish", {
+					method: "POST",
+					auth: true,
+					body,
+				}),
+			list: () => request<PasskeyInfo>("/passkeys", { auth: true }),
+			delete: (id: string) =>
+				request<void>(`/passkeys/${id}`, { method: "DELETE", auth: true }),
+		},
+	};
 }
 
 export type YAuthClient = ReturnType<typeof createYAuthClient>;

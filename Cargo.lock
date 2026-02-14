@@ -4653,7 +4653,7 @@ checksum = "cfe53a6657fd280eaa890a3bc59152892ffa3e30101319d168b781ed6529b049"
 
 [[package]]
 name = "yauth"
-version = "0.1.17"
+version = "0.1.18"
 dependencies = [
  "argon2",
  "async-trait",
@@ -4696,7 +4696,7 @@ dependencies = [
 
 [[package]]
 name = "yauth-entity"
-version = "0.1.17"
+version = "0.1.18"
 dependencies = [
  "chrono",
  "sea-orm",
@@ -4707,7 +4707,7 @@ dependencies = [
 
 [[package]]
 name = "yauth-migration"
-version = "0.1.17"
+version = "0.1.18"
 dependencies = [
  "async-trait",
  "sea-orm-migration",

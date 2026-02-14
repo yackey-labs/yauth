@@ -1,31 +1,34 @@
 {
-	"name": "@yauth/ui-solidjs",
-	"version": "0.1.17",
-	"type": "module",
-	"main": "dist/index.js",
-	"module": "dist/index.js",
-	"types": "src/index.ts",
-	"exports": {
-		".": {
-			"import": "./dist/index.js",
-			"types": "./src/index.ts",
-			"default": "./src/index.ts"
-		}
-	},
-	"files": ["dist", "src"],
-	"scripts": {
-		"build": "vite build",
-		"typecheck": "tsc --noEmit"
-	},
-	"dependencies": {
-		"@simplewebauthn/browser": "^13.0.0",
-		"@yauth/client": "workspace:*",
-		"@yauth/shared": "workspace:*",
-		"solid-js": "^1.9.5"
-	},
-	"devDependencies": {
-		"typescript": "^5.7.2",
-		"vite": "^7.3.1",
-		"vite-plugin-solid": "^2.11.10"
-	}
+  "name": "@yauth/ui-solidjs",
+  "version": "0.1.18",
+  "type": "module",
+  "main": "dist/index.js",
+  "module": "dist/index.js",
+  "types": "src/index.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "vite build",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@simplewebauthn/browser": "^13.0.0",
+    "@yauth/client": "workspace:*",
+    "@yauth/shared": "workspace:*",
+    "solid-js": "^1.9.5"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "vite": "^7.3.1",
+    "vite-plugin-solid": "^2.11.10"
+  }
 }

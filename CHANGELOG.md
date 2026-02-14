@@ -1,3 +1,9 @@
+## 0.1.19 (2026-02-14)
+
+### Fixes
+
+- add yackey-cloud cargo registry and version for axum-ts-client dep
+
 ## 0.1.18 (2026-02-14)
 
 ### Features

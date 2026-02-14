@@ -23,6 +23,12 @@ name = "release"
 [[workflows.steps]]
 type = "PrepareRelease"
 
+# Reformat knope's 2-space JSON to match Biome tab convention
+[[workflows.steps]]
+type = "Command"
+command = "bun biome format --write packages/shared/package.json packages/client/package.json packages/ui-solidjs/package.json"
+shell = true
+
 [[workflows.steps]]
 type = "Command"
 command = "git commit -m \"chore: prepare release $version\""

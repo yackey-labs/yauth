@@ -11,8 +11,8 @@
 		"typecheck": "bun run --filter '*' typecheck",
 		"validate": "bun run lint:fix && bun run typecheck && bun run build",
 		"validate:ci": "bun run lint && bun run typecheck && bun run build && bun run generate:check",
-		"generate": "cargo test --features full -- generate_ts_client --exact && biome check --write --unsafe packages/client/src/generated.ts crates/yauth/bindings/",
-		"generate:check": "bun generate && git diff --exit-code packages/client/src/generated.ts crates/yauth/bindings/",
+		"generate": "cargo test --features full -- generate_ts_client --exact",
+		"generate:check": "cargo test --features full -- check_ts_client_up_to_date --exact",
 		"clean": "rm -rf node_modules packages/*/node_modules packages/*/dist"
 	},
 	"devDependencies": {

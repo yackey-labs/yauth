@@ -44,9 +44,6 @@ jobs:
       - name: TypeScript typecheck
         run: bun run typecheck
 
-      - name: Check generated client is up to date
-        run: bun generate:check
-
   test:
     name: Test
     runs-on: ubuntu-latest
@@ -78,7 +75,7 @@ jobs:
       - name: Run tests
         env:
           DATABASE_URL: postgres://yauth:yauth@localhost:5433/yauth_test
-        run: cargo test --workspace --features full -- --skip check_ts_client_up_to_date
+        run: cargo test --workspace --features full
 
   build:
     name: Build

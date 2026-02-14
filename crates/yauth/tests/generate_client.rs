@@ -13,6 +13,7 @@ fn config() -> GeneratorConfig {
         options_interface_name: "YAuthClientOptions".into(),
         default_credentials: "include".into(),
         type_import_prefix: "../../../crates/yauth/bindings".into(),
+        format_command: Some("bun biome check --write --unsafe".into()),
     }
 }
 

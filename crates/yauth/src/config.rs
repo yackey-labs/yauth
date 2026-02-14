@@ -11,6 +11,9 @@ pub struct YAuthConfig {
     pub secure_cookies: bool,
     pub trusted_origins: Vec<String>,
     pub smtp: Option<SmtpConfig>,
+    /// When true, the first registered user automatically gets the "admin" role.
+    #[serde(default)]
+    pub auto_admin_first_user: bool,
 }
 
 impl Default for YAuthConfig {
@@ -23,6 +26,7 @@ impl Default for YAuthConfig {
             secure_cookies: false,
             trusted_origins: vec!["http://localhost:3000".into()],
             smtp: None,
+            auto_admin_first_user: false,
         }
     }
 }
@@ -157,6 +161,7 @@ mod tests {
         assert_eq!(config.session_ttl, Duration::from_secs(604800));
         assert!(!config.secure_cookies);
         assert!(config.smtp.is_none());
+        assert!(!config.auto_admin_first_user);
     }
 
     #[test]

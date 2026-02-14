@@ -865,6 +865,7 @@ async fn start_server(db: DatabaseConnection) -> u16 {
                 port: MAILPIT_SMTP_PORT,
                 from: "noreply@yauth.test".into(),
             }),
+            auto_admin_first_user: false,
         },
     )
     .with_email_password(yauth::config::EmailPasswordConfig {

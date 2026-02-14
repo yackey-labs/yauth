@@ -258,11 +258,16 @@ async fn verify_magic_link(
 
             // Auto-create user
             let user_id = Uuid::new_v4();
-            let role = ml_config
-                .default_role
-                .as_deref()
-                .unwrap_or("user")
-                .to_string();
+            let role = if state.should_auto_admin().await {
+                tracing::info!(event = "auto_admin_first_user", email = %email, "First user — assigning admin role");
+                "admin".to_string()
+            } else {
+                ml_config
+                    .default_role
+                    .as_deref()
+                    .unwrap_or("user")
+                    .to_string()
+            };
 
             let new_user = yauth_entity::users::ActiveModel {
                 id: Set(user_id),

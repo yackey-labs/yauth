@@ -171,12 +171,19 @@ async fn register(
     let now = chrono::Utc::now().fixed_offset();
     let user_id = Uuid::new_v4();
 
+    let role = if state.should_auto_admin().await {
+        info!(event = "auto_admin_first_user", email = %email, "First user — assigning admin role");
+        "admin".to_string()
+    } else {
+        "user".to_string()
+    };
+
     let user = yauth_entity::users::ActiveModel {
         id: Set(user_id),
         email: Set(email.clone()),
         display_name: Set(input.display_name.map(|n| n.trim().to_string())),
         email_verified: Set(!ep_config.require_email_verification),
-        role: Set("user".to_string()),
+        role: Set(role),
         banned: Set(false),
         banned_reason: Set(None),
         banned_until: Set(None),

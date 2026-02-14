@@ -2,7 +2,7 @@ use crate::auth::{email::EmailService, rate_limit::RateLimiter};
 use crate::config::YAuthConfig;
 use crate::plugin::{AuthEvent, EventResponse, PluginContext, YAuthPlugin};
 use crate::stores::{ChallengeStore, RateLimitStore};
-use sea_orm::{ActiveModelTrait, DatabaseConnection, Set};
+use sea_orm::{ActiveModelTrait, DatabaseConnection, EntityTrait, PaginatorTrait, Set};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -40,6 +40,18 @@ impl YAuthState {
             }
         }
         EventResponse::Continue
+    }
+
+    /// Returns true if auto_admin_first_user is enabled and no users exist yet.
+    pub async fn should_auto_admin(&self) -> bool {
+        if !self.config.auto_admin_first_user {
+            return false;
+        }
+        let count = yauth_entity::users::Entity::find()
+            .count(&self.db)
+            .await
+            .unwrap_or(1);
+        count == 0
     }
 
     /// Write an audit log entry (best-effort, never fails the caller).

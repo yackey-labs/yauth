@@ -130,6 +130,7 @@ async fn main() {
             secure_cookies: !base_url.starts_with("http://localhost"),
             trusted_origins: vec![base_url.clone()],
             smtp: smtp_config,
+            auto_admin_first_user: true,
         },
     )
     // Email + password registration and login

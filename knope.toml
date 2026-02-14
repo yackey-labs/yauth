@@ -33,14 +33,10 @@ shell = true
 type = "Command"
 command = "git commit -m \"chore: prepare release $version\""
 
-[[workflows.steps]]
-type = "Command"
-command = "git push"
+# Build and publish BEFORE git push — the push triggers a new CI run
+# that may cancel this job, so all publishing must complete first.
 
-[[workflows.steps]]
-type = "Release"
-
-# Build TS packages before publishing
+# Build TS packages
 [[workflows.steps]]
 type = "Command"
 command = "bun install --frozen-lockfile && bun run build"
@@ -77,3 +73,11 @@ shell = true
 type = "Command"
 command = "cd packages/ui-solidjs && bun publish --access public"
 shell = true
+
+# Push and create release after all packages are published
+[[workflows.steps]]
+type = "Command"
+command = "git push"
+
+[[workflows.steps]]
+type = "Release"

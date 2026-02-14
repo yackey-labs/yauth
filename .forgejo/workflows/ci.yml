@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   REGISTRY: forgejo.yackey.cloud
   CARGO_TERM_COLOR: always

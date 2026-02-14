@@ -1,3 +1,10 @@
+## 0.1.24 (2026-02-14)
+
+### Fixes
+
+- resolve workspace:* deps to actual versions for npm publish
+- re-trigger release after v0.1.23 tag correction
+
 ## 0.1.22 (2026-02-14)
 
 ### Fixes

@@ -59,15 +59,15 @@ shell = true
 # Publish npm packages
 [[workflows.steps]]
 type = "Command"
-command = "cd packages/shared && npm publish --access public"
+command = "cd packages/shared && bun publish --access public"
 shell = true
 
 [[workflows.steps]]
 type = "Command"
-command = "cd packages/client && npm publish --access public"
+command = "cd packages/client && bun publish --access public"
 shell = true
 
 [[workflows.steps]]
 type = "Command"
-command = "cd packages/ui-solidjs && npm publish --access public"
+command = "cd packages/ui-solidjs && bun publish --access public"
 shell = true

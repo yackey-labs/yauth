@@ -16,7 +16,7 @@ jobs:
           token: ${{ secrets.RELEASE_PAT }}
 
       - name: Clone axum-ts-client (path dependency)
-        run: git clone https://forgejo.yackey.cloud/yackey-cloud/axum-ts-client.git ../axum-ts-client
+        run: git clone http://forgejo-http.forgejo.svc.cluster.local:3000/yackey-cloud/axum-ts-client.git ../axum-ts-client
 
       - name: Install Rust
         run: |

@@ -72,6 +72,13 @@ jobs:
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install JS dependencies
+        run: bun install --frozen-lockfile
+
       - name: Run tests
         env:
           DATABASE_URL: postgres://yauth:yauth@localhost:5433/yauth_test

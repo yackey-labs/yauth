@@ -269,12 +269,14 @@ async fn register_finish(
 
     info!(event = "passkey_registered", user_id = %auth_user.id, "Passkey registered");
 
-    state.write_audit_log(
-        Some(auth_user.id),
-        "passkey_registered",
-        Some(serde_json::json!({ "name": passkey_name })),
-        None,
-    ).await;
+    state
+        .write_audit_log(
+            Some(auth_user.id),
+            "passkey_registered",
+            Some(serde_json::json!({ "name": passkey_name })),
+            None,
+        )
+        .await;
 
     Ok(StatusCode::CREATED)
 }
@@ -613,12 +615,14 @@ async fn login_finish(
 
     info!(event = "passkey_login_success", user_id = %user.id, email = %user.email, "Passkey login successful");
 
-    state.write_audit_log(
-        Some(user.id),
-        "login_succeeded",
-        Some(serde_json::json!({ "method": "passkey" })),
-        None,
-    ).await;
+    state
+        .write_audit_log(
+            Some(user.id),
+            "login_succeeded",
+            Some(serde_json::json!({ "method": "passkey" })),
+            None,
+        )
+        .await;
 
     Ok((
         [(SET_COOKIE, session_set_cookie(&state, &token))],
@@ -718,12 +722,14 @@ async fn delete_passkey(
 
     info!(event = "passkey_deleted", user_id = %auth_user.id, passkey_id = %id, "Passkey deleted");
 
-    state.write_audit_log(
-        Some(auth_user.id),
-        "passkey_deleted",
-        Some(serde_json::json!({ "passkey_id": id })),
-        None,
-    ).await;
+    state
+        .write_audit_log(
+            Some(auth_user.id),
+            "passkey_deleted",
+            Some(serde_json::json!({ "passkey_id": id })),
+            None,
+        )
+        .await;
 
     Ok(StatusCode::NO_CONTENT)
 }

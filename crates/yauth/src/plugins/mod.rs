@@ -136,12 +136,9 @@ async fn logout(
         let _ = crate::auth::session::delete_session(&state.db, cookie.value()).await;
     }
 
-    state.write_audit_log(
-        Some(user.id),
-        "logout",
-        None,
-        None,
-    ).await;
+    state
+        .write_audit_log(Some(user.id), "logout", None, None)
+        .await;
 
     let clear_cookie = format!(
         "{}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0",

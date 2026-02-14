@@ -424,12 +424,14 @@ async fn confirm_totp(
         "TOTP MFA enabled successfully"
     );
 
-    state.write_audit_log(
-        Some(user.id),
-        "mfa_enabled",
-        Some(serde_json::json!({ "method": "totp" })),
-        None,
-    ).await;
+    state
+        .write_audit_log(
+            Some(user.id),
+            "mfa_enabled",
+            Some(serde_json::json!({ "method": "totp" })),
+            None,
+        )
+        .await;
 
     Ok(Json(MfaMessageResponse {
         message: "TOTP MFA enabled successfully".to_string(),
@@ -468,12 +470,14 @@ async fn disable_totp(
         "TOTP MFA disabled, backup codes deleted"
     );
 
-    state.write_audit_log(
-        Some(user.id),
-        "mfa_disabled",
-        Some(serde_json::json!({ "method": "totp" })),
-        None,
-    ).await;
+    state
+        .write_audit_log(
+            Some(user.id),
+            "mfa_disabled",
+            Some(serde_json::json!({ "method": "totp" })),
+            None,
+        )
+        .await;
 
     Ok(Json(MfaMessageResponse {
         message: "TOTP MFA disabled successfully".to_string(),
@@ -615,12 +619,14 @@ async fn verify_mfa(
         "MFA verification successful, session created"
     );
 
-    state.write_audit_log(
-        Some(user_id),
-        "mfa_verified",
-        Some(serde_json::json!({ "method": "totp" })),
-        None,
-    ).await;
+    state
+        .write_audit_log(
+            Some(user_id),
+            "mfa_verified",
+            Some(serde_json::json!({ "method": "totp" })),
+            None,
+        )
+        .await;
 
     Ok((
         [(SET_COOKIE, session_set_cookie(&state, &token))],

@@ -290,7 +290,9 @@ impl YAuthBuilder {
         #[cfg(feature = "magic-link")]
         if let Some(ml_config) = self.magic_link_config {
             self.plugins
-                .push(Box::new(plugins::magic_link::MagicLinkPlugin::new(ml_config)));
+                .push(Box::new(plugins::magic_link::MagicLinkPlugin::new(
+                    ml_config,
+                )));
         }
 
         // Now set the real plugins on state

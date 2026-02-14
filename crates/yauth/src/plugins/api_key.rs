@@ -121,12 +121,14 @@ async fn create_api_key(
         "API key created"
     );
 
-    state.write_audit_log(
-        Some(user.id),
-        "api_key_created",
-        Some(serde_json::json!({ "key_id": api_key_id, "name": name, "prefix": prefix })),
-        None,
-    ).await;
+    state
+        .write_audit_log(
+            Some(user.id),
+            "api_key_created",
+            Some(serde_json::json!({ "key_id": api_key_id, "name": name, "prefix": prefix })),
+            None,
+        )
+        .await;
 
     Ok((
         StatusCode::CREATED,
@@ -211,12 +213,14 @@ async fn delete_api_key(
         "API key deleted"
     );
 
-    state.write_audit_log(
-        Some(user.id),
-        "api_key_deleted",
-        Some(serde_json::json!({ "key_id": id })),
-        None,
-    ).await;
+    state
+        .write_audit_log(
+            Some(user.id),
+            "api_key_deleted",
+            Some(serde_json::json!({ "key_id": id })),
+            None,
+        )
+        .await;
 
     Ok(StatusCode::NO_CONTENT)
 }

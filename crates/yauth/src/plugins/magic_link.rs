@@ -11,8 +11,8 @@ use tracing::{info, warn};
 use ts_rs::TS;
 use uuid::Uuid;
 
-use crate::auth::{crypto, session};
 use crate::auth::session::session_set_cookie;
+use crate::auth::{crypto, session};
 use crate::config::MagicLinkConfig;
 use crate::error::{ApiError, api_err};
 use crate::plugin::{AuthEvent, PluginContext, YAuthPlugin};

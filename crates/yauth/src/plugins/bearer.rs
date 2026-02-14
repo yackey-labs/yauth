@@ -264,12 +264,14 @@ async fn create_token(
                 "User authenticated via bearer token"
             );
 
-            state.write_audit_log(
-                Some(u.id),
-                "login_succeeded",
-                Some(serde_json::json!({ "method": "bearer" })),
-                None,
-            ).await;
+            state
+                .write_audit_log(
+                    Some(u.id),
+                    "login_succeeded",
+                    Some(serde_json::json!({ "method": "bearer" })),
+                    None,
+                )
+                .await;
 
             Ok(Json(TokenResponse {
                 access_token,
@@ -468,12 +470,9 @@ async fn revoke_token(
         "Refresh token revoked"
     );
 
-    state.write_audit_log(
-        Some(auth_user.id),
-        "bearer_token_revoked",
-        None,
-        None,
-    ).await;
+    state
+        .write_audit_log(Some(auth_user.id), "bearer_token_revoked", None, None)
+        .await;
 
     Ok(Json(serde_json::json!({ "success": true })))
 }

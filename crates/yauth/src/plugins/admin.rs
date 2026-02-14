@@ -204,12 +204,14 @@ async fn update_user(
         "Admin updated user"
     );
 
-    state.write_audit_log(
-        Some(admin.id),
-        "admin_update_user",
-        Some(serde_json::json!({ "target_user_id": id })),
-        None,
-    ).await;
+    state
+        .write_audit_log(
+            Some(admin.id),
+            "admin_update_user",
+            Some(serde_json::json!({ "target_user_id": id })),
+            None,
+        )
+        .await;
 
     Ok(Json(serde_json::json!(updated)))
 }
@@ -251,12 +253,14 @@ async fn delete_user(
         "Admin deleted user"
     );
 
-    state.write_audit_log(
-        Some(admin.id),
-        "admin_delete_user",
-        Some(serde_json::json!({ "target_user_id": id })),
-        None,
-    ).await;
+    state
+        .write_audit_log(
+            Some(admin.id),
+            "admin_delete_user",
+            Some(serde_json::json!({ "target_user_id": id })),
+            None,
+        )
+        .await;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -322,12 +326,14 @@ async fn ban_user(
         "Admin banned user"
     );
 
-    state.write_audit_log(
-        Some(admin.id),
-        "admin_ban_user",
-        Some(serde_json::json!({ "target_user_id": id, "reason": input.reason })),
-        None,
-    ).await;
+    state
+        .write_audit_log(
+            Some(admin.id),
+            "admin_ban_user",
+            Some(serde_json::json!({ "target_user_id": id, "reason": input.reason })),
+            None,
+        )
+        .await;
 
     Ok(Json(serde_json::json!(updated)))
 }
@@ -368,12 +374,14 @@ async fn unban_user(
         "Admin unbanned user"
     );
 
-    state.write_audit_log(
-        Some(admin.id),
-        "admin_unban_user",
-        Some(serde_json::json!({ "target_user_id": id })),
-        None,
-    ).await;
+    state
+        .write_audit_log(
+            Some(admin.id),
+            "admin_unban_user",
+            Some(serde_json::json!({ "target_user_id": id })),
+            None,
+        )
+        .await;
 
     Ok(Json(serde_json::json!(updated)))
 }
@@ -388,7 +396,10 @@ async fn impersonate_user(
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
     if admin.id == id {
-        return Err(api_err(StatusCode::BAD_REQUEST, "Cannot impersonate yourself"));
+        return Err(api_err(
+            StatusCode::BAD_REQUEST,
+            "Cannot impersonate yourself",
+        ));
     }
 
     // Verify target user exists
@@ -524,12 +535,14 @@ async fn delete_session(
         "Admin deleted session"
     );
 
-    state.write_audit_log(
-        Some(admin.id),
-        "admin_delete_session",
-        Some(serde_json::json!({ "session_id": id, "session_user_id": session.user_id })),
-        None,
-    ).await;
+    state
+        .write_audit_log(
+            Some(admin.id),
+            "admin_delete_session",
+            Some(serde_json::json!({ "session_id": id, "session_user_id": session.user_id })),
+            None,
+        )
+        .await;
 
     Ok(StatusCode::NO_CONTENT)
 }

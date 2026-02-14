@@ -235,12 +235,14 @@ async fn register(
         "User registered, verification email sent"
     );
 
-    state.write_audit_log(
-        Some(user_id),
-        "user_registered",
-        Some(serde_json::json!({ "email": email, "method": "email-password" })),
-        None,
-    ).await;
+    state
+        .write_audit_log(
+            Some(user_id),
+            "user_registered",
+            Some(serde_json::json!({ "email": email, "method": "email-password" })),
+            None,
+        )
+        .await;
 
     Ok((
         StatusCode::CREATED,
@@ -356,12 +358,14 @@ async fn login(
 
                     info!(event = "login_success", email = %u.email, user_id = %u.id, "User logged in");
 
-                    state.write_audit_log(
-                        Some(u.id),
-                        "login_succeeded",
-                        Some(serde_json::json!({ "method": "email-password" })),
-                        None,
-                    ).await;
+                    state
+                        .write_audit_log(
+                            Some(u.id),
+                            "login_succeeded",
+                            Some(serde_json::json!({ "method": "email-password" })),
+                            None,
+                        )
+                        .await;
 
                     Ok((
                         [(SET_COOKIE, session_set_cookie(&state, &token))],
@@ -465,12 +469,9 @@ async fn verify_email(
         "Email verified successfully"
     );
 
-    state.write_audit_log(
-        Some(verification.user_id),
-        "email_verified",
-        None,
-        None,
-    ).await;
+    state
+        .write_audit_log(Some(verification.user_id), "email_verified", None, None)
+        .await;
 
     Ok(Json(MessageResponse {
         message: "Email verified successfully. You can now sign in.".to_string(),
@@ -762,12 +763,9 @@ async fn reset_password(
         "Password reset successfully, all sessions invalidated"
     );
 
-    state.write_audit_log(
-        Some(reset_user_id),
-        "password_reset",
-        None,
-        None,
-    ).await;
+    state
+        .write_audit_log(Some(reset_user_id), "password_reset", None, None)
+        .await;
 
     Ok(Json(MessageResponse {
         message: "Password reset successfully. You can now sign in with your new password."
@@ -887,12 +885,9 @@ async fn change_password(
         "Password changed successfully, other sessions invalidated"
     );
 
-    state.write_audit_log(
-        Some(user.id),
-        "password_changed",
-        None,
-        None,
-    ).await;
+    state
+        .write_audit_log(Some(user.id), "password_changed", None, None)
+        .await;
 
     Ok(Json(MessageResponse {
         message: "Password changed successfully.".to_string(),

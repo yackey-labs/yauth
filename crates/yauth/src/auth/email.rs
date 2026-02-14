@@ -86,10 +86,7 @@ impl EmailService {
     }
 
     pub fn send_magic_link_email(&self, to: &str, token: &str) -> Result<(), String> {
-        let magic_url = format!(
-            "{}/auth/magic-link/verify?token={}",
-            self.app_url, token
-        );
+        let magic_url = format!("{}/auth/magic-link/verify?token={}", self.app_url, token);
 
         let body = format!(
             r#"<!DOCTYPE html>

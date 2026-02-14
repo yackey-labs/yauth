@@ -1,3 +1,19 @@
+## 0.1.21 (2026-02-14)
+
+### Features
+
+- use axum-ts-client format_command for TS client formatting
+
+### Fixes
+
+- apply Biome formatting to generated TS client
+- add Biome format step to knope release workflow
+- export passkey finish request types for TS client
+- add bun to test job for format_command support
+- publish packages before git push to prevent cancellation
+- add --allow-dirty to cargo publish commands
+- install JS deps before knope release for Biome format step
+
 ## 0.1.20 (2026-02-14)
 
 ### Fixes

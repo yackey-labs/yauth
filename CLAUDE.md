@@ -131,6 +131,7 @@ This project uses `axum-ts-client` to auto-generate `@yauth/client` from Rust ty
 
 ## Conventions
 
+- **Always use Bun** — `bun install`, `bun publish`, `bun run`, etc. Never use npm or yarn
 - **Conventional commits** for all commit messages — this directly drives automated versioning
 - **Biome** for TypeScript linting/formatting (not ESLint)
 - **`cargo fmt` + `cargo clippy`** for Rust

@@ -29,6 +29,11 @@ type = "Command"
 command = "bun biome format --write packages/shared/package.json packages/client/package.json packages/ui-solidjs/package.json"
 shell = true
 
+# Stage the reformatted files (PrepareRelease staged the 2-space originals)
+[[workflows.steps]]
+type = "Command"
+command = "git add packages/shared/package.json packages/client/package.json packages/ui-solidjs/package.json"
+
 [[workflows.steps]]
 type = "Command"
 command = "git commit -m \"chore: prepare release $version\""

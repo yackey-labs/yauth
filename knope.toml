@@ -1,0 +1,73 @@
+[package]
+versioned_files = [
+    "Cargo.toml",
+    { path = "Cargo.lock", dependency = "yauth" },
+    { path = "Cargo.lock", dependency = "yauth-entity" },
+    { path = "Cargo.lock", dependency = "yauth-migration" },
+    "packages/shared/package.json",
+    "packages/client/package.json",
+    "packages/ui-solidjs/package.json",
+    { path = "Cargo.toml", dependency = "yauth-entity" },
+    { path = "Cargo.toml", dependency = "yauth-migration" },
+]
+changelog = "CHANGELOG.md"
+
+[gitea]
+owner = "yauth"
+repo = "yauth"
+host = "https://forgejo.yackey.cloud"
+
+[[workflows]]
+name = "release"
+
+[[workflows.steps]]
+type = "PrepareRelease"
+
+[[workflows.steps]]
+type = "Command"
+command = "git commit -m \"chore: prepare release $version\""
+
+[[workflows.steps]]
+type = "Command"
+command = "git push"
+
+[[workflows.steps]]
+type = "Release"
+
+# Build TS packages before publishing
+[[workflows.steps]]
+type = "Command"
+command = "bun install --frozen-lockfile && bun run build"
+shell = true
+
+# Publish Cargo crates (order matters: entity → migration → yauth)
+[[workflows.steps]]
+type = "Command"
+command = "cargo publish -p yauth-entity --registry yauth --no-verify"
+shell = true
+
+[[workflows.steps]]
+type = "Command"
+command = "cargo publish -p yauth-migration --registry yauth --no-verify"
+shell = true
+
+[[workflows.steps]]
+type = "Command"
+command = "cargo publish -p yauth --registry yauth --no-verify"
+shell = true
+
+# Publish npm packages
+[[workflows.steps]]
+type = "Command"
+command = "cd packages/shared && npm publish --access public"
+shell = true
+
+[[workflows.steps]]
+type = "Command"
+command = "cd packages/client && npm publish --access public"
+shell = true
+
+[[workflows.steps]]
+type = "Command"
+command = "cd packages/ui-solidjs && npm publish --access public"
+shell = true

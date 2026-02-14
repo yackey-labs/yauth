@@ -119,9 +119,19 @@ This project uses `axum-ts-client` to auto-generate `@yauth/client` from Rust ty
 
 **CI check:** `bun generate:check` (part of `bun validate:ci`) fails if the generated client is out of date.
 
+## Versioning
+
+- **Semantic versioning** is automated via [knope](https://knope.tech) + Forgejo CI
+- **NEVER manually edit version numbers** in `Cargo.toml`, `Cargo.lock`, or `package.json` — knope manages all of them from conventional commits
+- All Rust crates and npm packages share a **single unified version** managed by `knope.toml`
+- `feat:` → minor bump, `fix:` → patch bump, `feat!:` / `fix!:` / `BREAKING CHANGE:` → major bump
+- Pushing to `main` triggers: `knope release` → version bump + changelog + Forgejo release + publish (Cargo + npm)
+- The `chore: prepare release` commit pushed by the release job is skipped by the `if: !startsWith(...)` guard
+- To preview what knope will do: `knope release --dry-run`
+
 ## Conventions
 
-- **Conventional commits** for all commit messages
+- **Conventional commits** for all commit messages — this directly drives automated versioning
 - **Biome** for TypeScript linting/formatting (not ESLint)
 - **`cargo fmt` + `cargo clippy`** for Rust
 - **`yauth_` table prefix** on all database tables

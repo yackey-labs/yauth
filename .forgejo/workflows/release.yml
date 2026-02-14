@@ -1,0 +1,42 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    if: "!startsWith(github.event.head_commit.message, 'chore:')"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_PAT }}
+
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install knope
+        run: |
+          curl -sSL "https://github.com/knope-dev/knope/releases/latest/download/knope-x86_64-unknown-linux-musl.tgz" | tar xz
+          mv knope /usr/local/bin/
+
+      - name: Configure git
+        run: |
+          git config user.name "forgejo-actions[bot]"
+          git config user.email "forgejo-actions[bot]@noreply.forgejo.yackey.cloud"
+
+      - name: Release
+        env:
+          GITEA_TOKEN: ${{ secrets.RELEASE_PAT }}
+          CARGO_REGISTRIES_YAUTH_TOKEN: "token ${{ secrets.REGISTRY_TOKEN }}"
+          NPM_REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+        run: knope release || echo "No unreleased changes"

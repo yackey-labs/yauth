@@ -41,5 +41,7 @@ jobs:
         env:
           GITEA_TOKEN: ${{ secrets.RELEASE_PAT }}
           CARGO_REGISTRIES_YAUTH_TOKEN: "token ${{ secrets.REGISTRY_TOKEN }}"
+          CARGO_REGISTRIES_YACKEY_CLOUD_TOKEN: "token ${{ secrets.REGISTRY_TOKEN }}"
+          CARGO_REGISTRY_GLOBAL_CREDENTIAL_PROVIDERS: "cargo:token"
           NPM_REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
         run: knope release || echo "No unreleased changes"

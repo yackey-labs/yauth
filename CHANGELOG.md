@@ -1,3 +1,9 @@
+## 0.1.25 (2026-02-14)
+
+### Features
+
+- add auto_admin_first_user config option
+
 ## 0.1.24 (2026-02-14)
 
 ### Fixes

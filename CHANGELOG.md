@@ -1,3 +1,9 @@
+## 0.1.20 (2026-02-14)
+
+### Fixes
+
+- regenerate TS bindings and apply Biome formatting
+
 ## 0.1.19 (2026-02-14)
 
 ### Fixes

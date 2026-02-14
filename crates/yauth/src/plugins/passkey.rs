@@ -199,9 +199,11 @@ async fn register_begin(
     Ok(Json(ccr))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, TS)]
+#[ts(export)]
 pub struct RegisterFinishRequest {
     pub name: String,
+    #[ts(type = "unknown")]
     pub credential: RegisterPublicKeyCredential,
 }
 
@@ -448,9 +450,11 @@ async fn login_begin(
     }))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, TS)]
+#[ts(export)]
 pub struct PasskeyLoginFinishRequest {
     pub challenge_id: Uuid,
+    #[ts(type = "unknown")]
     pub credential: PublicKeyCredential,
 }
 

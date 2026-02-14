@@ -1,3 +1,9 @@
+## 0.1.22 (2026-02-14)
+
+### Fixes
+
+- stage biome-reformatted package.json files before commit
+
 ## 0.1.21 (2026-02-14)
 
 ### Features

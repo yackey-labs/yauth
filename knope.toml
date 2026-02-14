@@ -39,7 +39,7 @@ command = "git commit -m \"chore: prepare release $version\""
 # Build TS packages
 [[workflows.steps]]
 type = "Command"
-command = "bun install --frozen-lockfile && bun run build"
+command = "bun run build"
 shell = true
 
 # Publish Cargo crates (order matters: entity → migration → yauth)

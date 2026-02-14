@@ -36,6 +36,9 @@ jobs:
           curl -sSL "https://github.com/knope-dev/knope/releases/latest/download/knope-x86_64-unknown-linux-musl.tgz" | tar xz --strip-components=1
           mv knope /usr/local/bin/
 
+      - name: Install JS dependencies
+        run: bun install --frozen-lockfile
+
       - name: Configure git
         run: |
           git config user.name "forgejo-actions[bot]"

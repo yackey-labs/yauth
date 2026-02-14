@@ -17,6 +17,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Clone axum-ts-client (path dependency)
+        run: git clone https://forgejo.yackey.cloud/yackey-cloud/axum-ts-client.git ../axum-ts-client
+
       - name: Install Rust
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --component rustfmt --component clippy
@@ -61,6 +64,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Clone axum-ts-client (path dependency)
+        run: git clone https://forgejo.yackey.cloud/yackey-cloud/axum-ts-client.git ../axum-ts-client
+
       - name: Install Rust
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
@@ -77,6 +83,9 @@ jobs:
     needs: [lint, test]
     steps:
       - uses: actions/checkout@v4
+
+      - name: Clone axum-ts-client (path dependency)
+        run: git clone https://forgejo.yackey.cloud/yackey-cloud/axum-ts-client.git ../axum-ts-client
 
       - name: Install Rust
         run: |

@@ -15,6 +15,9 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.RELEASE_PAT }}
 
+      - name: Clone axum-ts-client (path dependency)
+        run: git clone https://forgejo.yackey.cloud/yackey-cloud/axum-ts-client.git ../axum-ts-client
+
       - name: Install Rust
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
@@ -26,7 +29,7 @@ jobs:
 
       - name: Install knope
         run: |
-          curl -sSL "https://github.com/knope-dev/knope/releases/latest/download/knope-x86_64-unknown-linux-musl.tgz" | tar xz
+          curl -sSL "https://github.com/knope-dev/knope/releases/latest/download/knope-x86_64-unknown-linux-musl.tgz" | tar xz --strip-components=1
           mv knope /usr/local/bin/
 
       - name: Configure git

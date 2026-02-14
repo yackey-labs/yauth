@@ -18,7 +18,7 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@yauth/shared": "workspace:*"
+		"@yauth/shared": "0.1.22"
 	},
 	"devDependencies": {
 		"typescript": "^5.7.2"

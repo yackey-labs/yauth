@@ -7,6 +7,9 @@ versioned_files = [
     "packages/shared/package.json",
     "packages/client/package.json",
     "packages/ui-solidjs/package.json",
+    { path = "packages/client/package.json", dependency = "@yauth/shared" },
+    { path = "packages/ui-solidjs/package.json", dependency = "@yauth/client" },
+    { path = "packages/ui-solidjs/package.json", dependency = "@yauth/shared" },
     { path = "Cargo.toml", dependency = "yauth-entity" },
     { path = "Cargo.toml", dependency = "yauth-migration" },
 ]

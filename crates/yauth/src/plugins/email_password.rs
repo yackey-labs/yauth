@@ -53,20 +53,7 @@ impl YAuthPlugin for EmailPasswordPlugin {
     }
 }
 
-fn session_set_cookie(state: &YAuthState, token: &str) -> String {
-    let max_age = state.config.session_ttl.as_secs();
-    let mut cookie = format!(
-        "{}={}; HttpOnly; SameSite=Lax; Path=/; Max-Age={}",
-        state.config.session_cookie_name, token, max_age
-    );
-    if state.config.secure_cookies {
-        cookie.push_str("; Secure");
-    }
-    if let Some(ref domain) = state.config.cookie_domain {
-        cookie.push_str(&format!("; Domain={}", domain));
-    }
-    cookie
-}
+use crate::auth::session::session_set_cookie;
 
 #[derive(Deserialize, TS)]
 #[ts(export)]
@@ -248,6 +235,13 @@ async fn register(
         "User registered, verification email sent"
     );
 
+    state.write_audit_log(
+        Some(user_id),
+        "user_registered",
+        Some(serde_json::json!({ "email": email, "method": "email-password" })),
+        None,
+    ).await;
+
     Ok((
         StatusCode::CREATED,
         Json(MessageResponse {
@@ -362,6 +356,13 @@ async fn login(
 
                     info!(event = "login_success", email = %u.email, user_id = %u.id, "User logged in");
 
+                    state.write_audit_log(
+                        Some(u.id),
+                        "login_succeeded",
+                        Some(serde_json::json!({ "method": "email-password" })),
+                        None,
+                    ).await;
+
                     Ok((
                         [(SET_COOKIE, session_set_cookie(&state, &token))],
                         Json(serde_json::json!({
@@ -377,6 +378,12 @@ async fn login(
         }
         _ => {
             warn!(event = "login_failure", email = %email, "Failed login attempt");
+            state.write_audit_log(
+                None,
+                "login_failed",
+                Some(serde_json::json!({ "email": email, "method": "email-password", "reason": "invalid_credentials" })),
+                None,
+            ).await;
             Err(err(StatusCode::UNAUTHORIZED, "Invalid email or password"))
         }
     }
@@ -457,6 +464,13 @@ async fn verify_email(
         user_id = %verification.user_id,
         "Email verified successfully"
     );
+
+    state.write_audit_log(
+        Some(verification.user_id),
+        "email_verified",
+        None,
+        None,
+    ).await;
 
     Ok(Json(MessageResponse {
         message: "Email verified successfully. You can now sign in.".to_string(),
@@ -748,6 +762,13 @@ async fn reset_password(
         "Password reset successfully, all sessions invalidated"
     );
 
+    state.write_audit_log(
+        Some(reset_user_id),
+        "password_reset",
+        None,
+        None,
+    ).await;
+
     Ok(Json(MessageResponse {
         message: "Password reset successfully. You can now sign in with your new password."
             .to_string(),
@@ -865,6 +886,13 @@ async fn change_password(
         user_id = %user.id,
         "Password changed successfully, other sessions invalidated"
     );
+
+    state.write_audit_log(
+        Some(user.id),
+        "password_changed",
+        None,
+        None,
+    ).await;
 
     Ok(Json(MessageResponse {
         message: "Password changed successfully.".to_string(),

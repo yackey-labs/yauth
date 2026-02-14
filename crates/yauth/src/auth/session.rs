@@ -6,6 +6,22 @@ use uuid::Uuid;
 use sea_orm::DatabaseConnection;
 
 use super::crypto;
+use crate::state::YAuthState;
+
+pub fn session_set_cookie(state: &YAuthState, token: &str) -> String {
+    let max_age = state.config.session_ttl.as_secs();
+    let mut cookie = format!(
+        "{}={}; HttpOnly; SameSite=Lax; Path=/; Max-Age={}",
+        state.config.session_cookie_name, token, max_age
+    );
+    if state.config.secure_cookies {
+        cookie.push_str("; Secure");
+    }
+    if let Some(ref domain) = state.config.cookie_domain {
+        cookie.push_str(&format!("; Domain={}", domain));
+    }
+    cookie
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionUser {

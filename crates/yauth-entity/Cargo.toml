@@ -14,7 +14,8 @@ mfa = []
 oauth = []
 bearer = []
 api-key = []
-full = ["email-password", "passkey", "mfa", "oauth", "bearer", "api-key"]
+magic-link = []
+full = ["email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link"]
 
 [dependencies]
 sea-orm = { workspace = true }

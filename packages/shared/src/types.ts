@@ -10,7 +10,9 @@ export type AuthEvent =
 	| { type: "mfaEnabled"; userId: string; method: string }
 	| { type: "mfaDisabled"; userId: string; method: string }
 	| { type: "userBanned"; userId: string }
-	| { type: "userUnbanned"; userId: string };
+	| { type: "userUnbanned"; userId: string }
+	| { type: "magicLinkSent"; email: string }
+	| { type: "magicLinkVerified"; userId: string; isNewUser: boolean };
 
 /** Response from an event handler — controls auth flow */
 export type EventResponse =

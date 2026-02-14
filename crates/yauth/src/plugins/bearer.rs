@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 use crate::auth::{crypto, password};
 use crate::config::BearerConfig;
+use crate::error::{ApiError, api_err};
 use crate::middleware::{AuthMethod, AuthUser};
 use crate::plugin::{PluginContext, YAuthPlugin};
 use crate::state::YAuthState;
@@ -20,13 +21,11 @@ use crate::state::YAuthState;
 // Plugin
 // ---------------------------------------------------------------------------
 
-pub struct BearerPlugin {
-    _config: BearerConfig,
-}
+pub struct BearerPlugin;
 
 impl BearerPlugin {
-    pub fn new(config: BearerConfig) -> Self {
-        Self { _config: config }
+    pub fn new(_config: BearerConfig) -> Self {
+        Self
     }
 }
 
@@ -97,12 +96,6 @@ pub struct TokenResponse {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-type ApiError = (StatusCode, Json<serde_json::Value>);
-
-fn api_err(status: StatusCode, msg: &str) -> ApiError {
-    (status, Json(serde_json::json!({ "error": msg })))
-}
 
 fn create_jwt(
     user: &yauth_entity::users::Model,
@@ -271,6 +264,13 @@ async fn create_token(
                 "User authenticated via bearer token"
             );
 
+            state.write_audit_log(
+                Some(u.id),
+                "login_succeeded",
+                Some(serde_json::json!({ "method": "bearer" })),
+                None,
+            ).await;
+
             Ok(Json(TokenResponse {
                 access_token,
                 refresh_token,
@@ -280,6 +280,12 @@ async fn create_token(
         }
         _ => {
             warn!(event = "bearer_login_failure", email = %email, "Failed bearer login attempt");
+            state.write_audit_log(
+                None,
+                "login_failed",
+                Some(serde_json::json!({ "email": email, "method": "bearer", "reason": "invalid_credentials" })),
+                None,
+            ).await;
             Err(api_err(
                 StatusCode::UNAUTHORIZED,
                 "Invalid email or password",
@@ -461,6 +467,13 @@ async fn revoke_token(
         user_id = %auth_user.id,
         "Refresh token revoked"
     );
+
+    state.write_audit_log(
+        Some(auth_user.id),
+        "bearer_token_revoked",
+        None,
+        None,
+    ).await;
 
     Ok(Json(serde_json::json!({ "success": true })))
 }

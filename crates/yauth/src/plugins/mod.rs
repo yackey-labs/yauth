@@ -16,6 +16,9 @@ pub mod bearer;
 #[cfg(feature = "api-key")]
 pub mod api_key;
 
+#[cfg(feature = "magic-link")]
+pub mod magic_link;
+
 #[cfg(feature = "admin")]
 pub mod admin;
 
@@ -128,12 +131,17 @@ async fn logout(
     Extension(user): Extension<AuthUser>,
     jar: axum_extra::extract::cookie::CookieJar,
 ) -> impl axum::response::IntoResponse {
-    let _ = &user; // acknowledge user is authenticated
-
     // Delete session if cookie-based auth
     if let Some(cookie) = jar.get(&state.config.session_cookie_name) {
         let _ = crate::auth::session::delete_session(&state.db, cookie.value()).await;
     }
+
+    state.write_audit_log(
+        Some(user.id),
+        "logout",
+        None,
+        None,
+    ).await;
 
     let clear_cookie = format!(
         "{}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0",

@@ -17,7 +17,9 @@ use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::auth::{crypto, session};
+use crate::auth::session::session_set_cookie;
 use crate::config::OAuthProviderConfig;
+use crate::error::{ApiError, api_err};
 use crate::middleware::AuthUser;
 use crate::plugin::{PluginContext, YAuthPlugin};
 use crate::state::YAuthState;
@@ -53,12 +55,6 @@ impl YAuthPlugin for OAuthPlugin {
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
-
-type ApiError = (StatusCode, Json<serde_json::Value>);
-
-fn api_err(status: StatusCode, msg: &str) -> ApiError {
-    (status, Json(serde_json::json!({ "error": msg })))
-}
 
 #[derive(Deserialize, TS)]
 #[ts(export)]
@@ -340,21 +336,6 @@ async fn fetch_userinfo(
     })
 }
 
-fn session_set_cookie(state: &YAuthState, token: &str) -> String {
-    let max_age = state.config.session_ttl.as_secs();
-    let mut cookie = format!(
-        "{}={}; HttpOnly; SameSite=Lax; Path=/; Max-Age={}",
-        state.config.session_cookie_name, token, max_age
-    );
-    if state.config.secure_cookies {
-        cookie.push_str("; Secure");
-    }
-    if let Some(ref domain) = state.config.cookie_domain {
-        cookie.push_str(&format!("; Domain={}", domain));
-    }
-    cookie
-}
-
 /// Core callback logic shared by GET and POST handlers.
 /// Returns `(user_id, email, display_name, email_verified, session_token, redirect_url)`.
 async fn handle_callback(
@@ -470,6 +451,13 @@ async fn handle_callback(
             "OAuth account linked"
         );
 
+        state.write_audit_log(
+            Some(user.id),
+            "oauth_linked",
+            Some(serde_json::json!({ "provider": provider })),
+            None,
+        ).await;
+
         return Ok((
             user.id.to_string(),
             user.email,
@@ -521,6 +509,13 @@ async fn handle_callback(
             provider = %provider,
             "User logged in via OAuth"
         );
+
+        state.write_audit_log(
+            Some(user.id),
+            "login_succeeded",
+            Some(serde_json::json!({ "method": "oauth", "provider": provider })),
+            None,
+        ).await;
 
         (user.id, user.email, user.display_name, user.email_verified)
     } else {
@@ -595,6 +590,13 @@ async fn handle_callback(
             provider = %provider,
             "New user registered via OAuth"
         );
+
+        state.write_audit_log(
+            Some(uid),
+            "user_registered",
+            Some(serde_json::json!({ "method": "oauth", "provider": provider })),
+            None,
+        ).await;
 
         (uid, email, display_name, email_verified)
     };
@@ -821,6 +823,13 @@ async fn unlink_provider(
         provider = %provider,
         "OAuth account unlinked"
     );
+
+    state.write_audit_log(
+        Some(user.id),
+        "oauth_unlinked",
+        Some(serde_json::json!({ "provider": provider })),
+        None,
+    ).await;
 
     Ok(StatusCode::NO_CONTENT)
 }

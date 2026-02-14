@@ -19,7 +19,7 @@ pub use yauth_migration as migration;
 pub mod prelude {
     pub use crate::YAuthBuilder;
     pub use crate::config::*;
-    pub use crate::error::YAuthError;
+    pub use crate::error::{ApiError, api_err};
     pub use crate::plugin::{AuthEvent, EventResponse, PluginContext, YAuthPlugin};
     pub use crate::state::YAuthState;
     pub use std::time::Duration;
@@ -87,6 +87,8 @@ pub struct YAuthBuilder {
     oauth_config: Option<config::OAuthConfig>,
     #[cfg(feature = "bearer")]
     bearer_config: Option<config::BearerConfig>,
+    #[cfg(feature = "magic-link")]
+    magic_link_config: Option<config::MagicLinkConfig>,
 }
 
 impl YAuthBuilder {
@@ -106,6 +108,8 @@ impl YAuthBuilder {
             oauth_config: None,
             #[cfg(feature = "bearer")]
             bearer_config: None,
+            #[cfg(feature = "magic-link")]
+            magic_link_config: None,
         }
     }
 
@@ -136,6 +140,12 @@ impl YAuthBuilder {
     #[cfg(feature = "oauth")]
     pub fn with_oauth(mut self, config: config::OAuthConfig) -> Self {
         self.oauth_config = Some(config);
+        self
+    }
+
+    #[cfg(feature = "magic-link")]
+    pub fn with_magic_link(mut self, config: config::MagicLinkConfig) -> Self {
+        self.magic_link_config = Some(config);
         self
     }
 
@@ -243,6 +253,8 @@ impl YAuthBuilder {
                 .unwrap_or_else(|| config::OAuthConfig {
                     providers: Vec::new(),
                 }),
+            #[cfg(feature = "magic-link")]
+            magic_link_config: self.magic_link_config.clone().unwrap_or_default(),
         };
 
         #[cfg(feature = "passkey")]
@@ -273,6 +285,12 @@ impl YAuthBuilder {
         if let Some(bearer_config) = self.bearer_config {
             self.plugins
                 .push(Box::new(plugins::bearer::BearerPlugin::new(bearer_config)));
+        }
+
+        #[cfg(feature = "magic-link")]
+        if let Some(ml_config) = self.magic_link_config {
+            self.plugins
+                .push(Box::new(plugins::magic_link::MagicLinkPlugin::new(ml_config)));
         }
 
         // Now set the real plugins on state

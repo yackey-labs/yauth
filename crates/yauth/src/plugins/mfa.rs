@@ -171,20 +171,7 @@ pub struct MfaAuthResponse {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn session_set_cookie(state: &YAuthState, token: &str) -> String {
-    let max_age = state.config.session_ttl.as_secs();
-    let mut cookie = format!(
-        "{}={}; HttpOnly; SameSite=Lax; Path=/; Max-Age={}",
-        state.config.session_cookie_name, token, max_age
-    );
-    if state.config.secure_cookies {
-        cookie.push_str("; Secure");
-    }
-    if let Some(ref domain) = state.config.cookie_domain {
-        cookie.push_str(&format!("; Domain={}", domain));
-    }
-    cookie
-}
+use crate::auth::session::session_set_cookie;
 
 fn generate_backup_codes(count: usize) -> Vec<String> {
     (0..count)
@@ -437,6 +424,13 @@ async fn confirm_totp(
         "TOTP MFA enabled successfully"
     );
 
+    state.write_audit_log(
+        Some(user.id),
+        "mfa_enabled",
+        Some(serde_json::json!({ "method": "totp" })),
+        None,
+    ).await;
+
     Ok(Json(MfaMessageResponse {
         message: "TOTP MFA enabled successfully".to_string(),
     }))
@@ -473,6 +467,13 @@ async fn disable_totp(
         user_id = %user.id,
         "TOTP MFA disabled, backup codes deleted"
     );
+
+    state.write_audit_log(
+        Some(user.id),
+        "mfa_disabled",
+        Some(serde_json::json!({ "method": "totp" })),
+        None,
+    ).await;
 
     Ok(Json(MfaMessageResponse {
         message: "TOTP MFA disabled successfully".to_string(),
@@ -613,6 +614,13 @@ async fn verify_mfa(
         user_id = %user_id,
         "MFA verification successful, session created"
     );
+
+    state.write_audit_log(
+        Some(user_id),
+        "mfa_verified",
+        Some(serde_json::json!({ "method": "totp" })),
+        None,
+    ).await;
 
     Ok((
         [(SET_COOKIE, session_set_cookie(&state, &token))],

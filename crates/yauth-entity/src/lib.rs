@@ -27,3 +27,6 @@ pub mod api_keys;
 
 #[cfg(feature = "bearer")]
 pub mod refresh_tokens;
+
+#[cfg(feature = "magic-link")]
+pub mod magic_links;

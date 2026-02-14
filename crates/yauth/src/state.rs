@@ -2,8 +2,9 @@ use crate::auth::{email::EmailService, rate_limit::RateLimiter};
 use crate::config::YAuthConfig;
 use crate::plugin::{AuthEvent, EventResponse, PluginContext, YAuthPlugin};
 use crate::stores::{ChallengeStore, RateLimitStore};
-use sea_orm::DatabaseConnection;
+use sea_orm::{ActiveModelTrait, DatabaseConnection, Set};
 use std::sync::Arc;
+use uuid::Uuid;
 
 #[derive(Clone)]
 pub struct YAuthState {
@@ -23,6 +24,8 @@ pub struct YAuthState {
     pub mfa_config: crate::config::MfaConfig,
     #[cfg(feature = "oauth")]
     pub oauth_config: crate::config::OAuthConfig,
+    #[cfg(feature = "magic-link")]
+    pub magic_link_config: crate::config::MagicLinkConfig,
 }
 
 impl YAuthState {
@@ -37,5 +40,26 @@ impl YAuthState {
             }
         }
         EventResponse::Continue
+    }
+
+    /// Write an audit log entry (best-effort, never fails the caller).
+    pub async fn write_audit_log(
+        &self,
+        user_id: Option<Uuid>,
+        event_type: &str,
+        metadata: Option<serde_json::Value>,
+        ip_address: Option<String>,
+    ) {
+        let entry = yauth_entity::audit_log::ActiveModel {
+            id: Set(Uuid::new_v4()),
+            user_id: Set(user_id),
+            event_type: Set(event_type.to_string()),
+            metadata: Set(metadata),
+            ip_address: Set(ip_address),
+            created_at: Set(chrono::Utc::now().fixed_offset()),
+        };
+        if let Err(e) = entry.insert(&self.db).await {
+            tracing::error!("Failed to write audit log: {}", e);
+        }
     }
 }

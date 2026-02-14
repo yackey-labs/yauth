@@ -14,9 +14,10 @@ mfa = ["yauth-entity/mfa", "yauth-migration/mfa", "dep:totp-rs"]
 oauth = ["yauth-entity/oauth", "yauth-migration/oauth", "dep:oauth2"]
 bearer = ["yauth-entity/bearer", "yauth-migration/bearer", "dep:jsonwebtoken"]
 api-key = ["yauth-entity/api-key", "yauth-migration/api-key"]
+magic-link = ["yauth-entity/magic-link", "yauth-migration/magic-link"]
 admin = []
 telemetry = ["dep:tracing-opentelemetry", "dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:opentelemetry-semantic-conventions"]
-full = ["email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "admin", "telemetry"]
+full = ["email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link", "admin", "telemetry"]
 
 [dependencies]
 yauth-entity = { workspace = true }

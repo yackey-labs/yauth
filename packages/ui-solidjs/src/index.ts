@@ -10,3 +10,4 @@ export { ResetPasswordForm } from "./components/reset-password-form";
 export { VerifyEmail } from "./components/verify-email";
 export { ChangePasswordForm } from "./components/change-password-form";
 export { ProfileSettings } from "./components/profile-settings";
+export { MagicLinkForm } from "./components/magic-link-form";

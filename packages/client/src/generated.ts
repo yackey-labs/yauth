@@ -16,6 +16,9 @@ import type { ForgotPasswordRequest } from "../../../crates/yauth/bindings/Forgo
 import type { ListSessionsQuery } from "../../../crates/yauth/bindings/ListSessionsQuery";
 import type { ListUsersQuery } from "../../../crates/yauth/bindings/ListUsersQuery";
 import type { LoginRequest } from "../../../crates/yauth/bindings/LoginRequest";
+import type { MagicLinkMessageResponse } from "../../../crates/yauth/bindings/MagicLinkMessageResponse";
+import type { MagicLinkSendRequest } from "../../../crates/yauth/bindings/MagicLinkSendRequest";
+import type { MagicLinkVerifyRequest } from "../../../crates/yauth/bindings/MagicLinkVerifyRequest";
 import type { MessageResponse } from "../../../crates/yauth/bindings/MessageResponse";
 import type { MfaAuthResponse } from "../../../crates/yauth/bindings/MfaAuthResponse";
 import type { MfaMessageResponse } from "../../../crates/yauth/bindings/MfaMessageResponse";
@@ -215,6 +218,16 @@ export function createYAuthClient(options: YAuthClientOptions) {
 					auth: true,
 					body,
 				}),
+		},
+
+		magicLink: {
+			send: (body: MagicLinkSendRequest) =>
+				request<MagicLinkMessageResponse>("/magic-link/send", {
+					method: "POST",
+					body,
+				}),
+			verify: (body: MagicLinkVerifyRequest) =>
+				request<void>("/magic-link/verify", { method: "POST", body }),
 		},
 
 		mfa: {

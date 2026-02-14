@@ -127,6 +127,19 @@ pub fn api_key_routes() -> RouteCollection {
     }
 }
 
+/// Magic link plugin routes.
+#[cfg(feature = "magic-link")]
+pub fn magic_link_routes() -> RouteCollection {
+    api_routes! {
+        @group magicLink
+
+        send: POST "/magic-link/send"
+            body: MagicLinkSendRequest -> MagicLinkMessageResponse;
+        verify: POST "/magic-link/verify"
+            body: MagicLinkVerifyRequest;
+    }
+}
+
 /// Admin plugin routes.
 #[cfg(feature = "admin")]
 pub fn admin_routes() -> RouteCollection {
@@ -173,6 +186,9 @@ pub fn all_route_meta() -> RouteCollection {
 
     #[cfg(feature = "api-key")]
     routes.extend(api_key_routes());
+
+    #[cfg(feature = "magic-link")]
+    routes.extend(magic_link_routes());
 
     #[cfg(feature = "admin")]
     routes.extend(admin_routes());

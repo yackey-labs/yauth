@@ -46,6 +46,13 @@ pub enum AuthEvent {
     UserUnbanned {
         user_id: Uuid,
     },
+    MagicLinkSent {
+        email: String,
+    },
+    MagicLinkVerified {
+        user_id: Uuid,
+        is_new_user: bool,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -176,6 +183,13 @@ mod tests {
             },
             AuthEvent::UserUnbanned {
                 user_id: Uuid::nil(),
+            },
+            AuthEvent::MagicLinkSent {
+                email: "a@b.c".into(),
+            },
+            AuthEvent::MagicLinkVerified {
+                user_id: Uuid::nil(),
+                is_new_user: true,
             },
         ];
         for event in &events {

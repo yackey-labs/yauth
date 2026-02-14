@@ -85,6 +85,46 @@ impl EmailService {
         Ok(())
     }
 
+    pub fn send_magic_link_email(&self, to: &str, token: &str) -> Result<(), String> {
+        let magic_url = format!(
+            "{}/auth/magic-link/verify?token={}",
+            self.app_url, token
+        );
+
+        let body = format!(
+            r#"<!DOCTYPE html>
+<html>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+  <h2 style="color: #1a1a1a;">Sign in to your account</h2>
+  <p style="color: #4a4a4a; line-height: 1.6;">
+    Click the button below to sign in. This link will expire in 5 minutes.
+  </p>
+  <div style="margin: 30px 0;">
+    <a href="{magic_url}" style="background-color: #18181b; color: #fafafa; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: 500;">
+      Sign In
+    </a>
+  </div>
+  <p style="color: #6a6a6a; font-size: 14px;">
+    Or copy and paste this link: <br/>
+    <a href="{magic_url}" style="color: #18181b;">{magic_url}</a>
+  </p>
+  <p style="color: #9a9a9a; font-size: 12px; margin-top: 40px;">
+    If you didn't request this link, you can safely ignore this email.
+  </p>
+</body>
+</html>"#
+        );
+
+        self.send(to, "Sign in to your account", body)?;
+
+        info!(
+            event = "magic_link_email_sent",
+            to = to,
+            "Magic link email sent"
+        );
+        Ok(())
+    }
+
     pub fn send_password_reset_email(&self, to: &str, token: &str) -> Result<(), String> {
         let reset_url = format!("{}/reset-password?token={}", self.app_url, token);
 

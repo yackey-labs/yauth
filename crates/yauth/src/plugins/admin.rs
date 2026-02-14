@@ -17,6 +17,7 @@ use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::auth::{crypto, session};
+use crate::error::{ApiError, api_err};
 use crate::middleware::{AuthUser, require_admin};
 use crate::plugin::{PluginContext, YAuthPlugin};
 use crate::state::YAuthState;
@@ -87,12 +88,6 @@ pub struct BanRequest {
 // Helpers
 // ---------------------------------------------------------------------------
 
-type ApiError = (StatusCode, Json<serde_json::Value>);
-
-fn err(status: StatusCode, msg: &str) -> ApiError {
-    (status, Json(serde_json::json!({ "error": msg })))
-}
-
 fn paginate_params(page: Option<u64>, per_page: Option<u64>) -> (u64, u64) {
     let per_page = per_page.unwrap_or(50).clamp(1, 100);
     let page = page.unwrap_or(1).max(1);
@@ -126,13 +121,13 @@ async fn list_users(
 
     let total = paginator.num_items().await.map_err(|e| {
         tracing::error!("DB error counting users: {}", e);
-        err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
     })?;
 
     // SeaORM pages are 0-indexed
     let users = paginator.fetch_page(page - 1).await.map_err(|e| {
         tracing::error!("DB error listing users: {}", e);
-        err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
     })?;
 
     Ok(Json(serde_json::json!({
@@ -157,9 +152,9 @@ async fn get_user(
         .await
         .map_err(|e| {
             tracing::error!("DB error fetching user: {}", e);
-            err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?
-        .ok_or_else(|| err(StatusCode::NOT_FOUND, "User not found"))?;
+        .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "User not found"))?;
 
     Ok(Json(serde_json::json!(user)))
 }
@@ -179,9 +174,9 @@ async fn update_user(
         .await
         .map_err(|e| {
             tracing::error!("DB error fetching user: {}", e);
-            err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?
-        .ok_or_else(|| err(StatusCode::NOT_FOUND, "User not found"))?;
+        .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "User not found"))?;
 
     let mut active: yauth_entity::users::ActiveModel = user.into();
 
@@ -199,7 +194,7 @@ async fn update_user(
 
     let updated = active.update(&state.db).await.map_err(|e| {
         tracing::error!("DB error updating user: {}", e);
-        err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
     })?;
 
     info!(
@@ -208,6 +203,13 @@ async fn update_user(
         target_id = %id,
         "Admin updated user"
     );
+
+    state.write_audit_log(
+        Some(admin.id),
+        "admin_update_user",
+        Some(serde_json::json!({ "target_user_id": id })),
+        None,
+    ).await;
 
     Ok(Json(serde_json::json!(updated)))
 }
@@ -222,7 +224,7 @@ async fn delete_user(
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
     if admin.id == id {
-        return Err(err(StatusCode::BAD_REQUEST, "Cannot delete yourself"));
+        return Err(api_err(StatusCode::BAD_REQUEST, "Cannot delete yourself"));
     }
 
     let user = yauth_entity::users::Entity::find_by_id(id)
@@ -230,16 +232,16 @@ async fn delete_user(
         .await
         .map_err(|e| {
             tracing::error!("DB error fetching user: {}", e);
-            err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?
-        .ok_or_else(|| err(StatusCode::NOT_FOUND, "User not found"))?;
+        .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "User not found"))?;
 
     yauth_entity::users::Entity::delete_by_id(user.id)
         .exec(&state.db)
         .await
         .map_err(|e| {
             tracing::error!("DB error deleting user: {}", e);
-            err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?;
 
     info!(
@@ -248,6 +250,13 @@ async fn delete_user(
         target_id = %id,
         "Admin deleted user"
     );
+
+    state.write_audit_log(
+        Some(admin.id),
+        "admin_delete_user",
+        Some(serde_json::json!({ "target_user_id": id })),
+        None,
+    ).await;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -263,7 +272,7 @@ async fn ban_user(
     Json(input): Json<BanRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     if admin.id == id {
-        return Err(err(StatusCode::BAD_REQUEST, "Cannot ban yourself"));
+        return Err(api_err(StatusCode::BAD_REQUEST, "Cannot ban yourself"));
     }
 
     let user = yauth_entity::users::Entity::find_by_id(id)
@@ -271,14 +280,14 @@ async fn ban_user(
         .await
         .map_err(|e| {
             tracing::error!("DB error fetching user: {}", e);
-            err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?
-        .ok_or_else(|| err(StatusCode::NOT_FOUND, "User not found"))?;
+        .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "User not found"))?;
 
     let banned_until = match input.until {
         Some(ref ts) => {
             let parsed = chrono::DateTime::parse_from_rfc3339(ts).map_err(|_| {
-                err(
+                api_err(
                     StatusCode::BAD_REQUEST,
                     "Invalid 'until' timestamp, expected RFC 3339 format",
                 )
@@ -296,7 +305,7 @@ async fn ban_user(
 
     let updated = active.update(&state.db).await.map_err(|e| {
         tracing::error!("DB error banning user: {}", e);
-        err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
     })?;
 
     // Delete all active sessions for the banned user
@@ -312,6 +321,13 @@ async fn ban_user(
         reason = ?input.reason,
         "Admin banned user"
     );
+
+    state.write_audit_log(
+        Some(admin.id),
+        "admin_ban_user",
+        Some(serde_json::json!({ "target_user_id": id, "reason": input.reason })),
+        None,
+    ).await;
 
     Ok(Json(serde_json::json!(updated)))
 }
@@ -330,9 +346,9 @@ async fn unban_user(
         .await
         .map_err(|e| {
             tracing::error!("DB error fetching user: {}", e);
-            err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?
-        .ok_or_else(|| err(StatusCode::NOT_FOUND, "User not found"))?;
+        .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "User not found"))?;
 
     let mut active: yauth_entity::users::ActiveModel = user.into();
     active.banned = Set(false);
@@ -342,7 +358,7 @@ async fn unban_user(
 
     let updated = active.update(&state.db).await.map_err(|e| {
         tracing::error!("DB error unbanning user: {}", e);
-        err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
     })?;
 
     info!(
@@ -351,6 +367,13 @@ async fn unban_user(
         target_id = %id,
         "Admin unbanned user"
     );
+
+    state.write_audit_log(
+        Some(admin.id),
+        "admin_unban_user",
+        Some(serde_json::json!({ "target_user_id": id })),
+        None,
+    ).await;
 
     Ok(Json(serde_json::json!(updated)))
 }
@@ -365,7 +388,7 @@ async fn impersonate_user(
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
     if admin.id == id {
-        return Err(err(StatusCode::BAD_REQUEST, "Cannot impersonate yourself"));
+        return Err(api_err(StatusCode::BAD_REQUEST, "Cannot impersonate yourself"));
     }
 
     // Verify target user exists
@@ -374,9 +397,9 @@ async fn impersonate_user(
         .await
         .map_err(|e| {
             tracing::error!("DB error fetching user: {}", e);
-            err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?
-        .ok_or_else(|| err(StatusCode::NOT_FOUND, "User not found"))?;
+        .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "User not found"))?;
 
     // Create a temporary session for the target user (max 1 hour)
     let token = crypto::generate_token();
@@ -397,7 +420,7 @@ async fn impersonate_user(
 
     session_model.insert(&state.db).await.map_err(|e| {
         tracing::error!("DB error creating impersonation session: {}", e);
-        err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
     })?;
 
     // Write audit log entry
@@ -416,7 +439,7 @@ async fn impersonate_user(
 
     audit_entry.insert(&state.db).await.map_err(|e| {
         tracing::error!("DB error writing audit log: {}", e);
-        err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
     })?;
 
     warn!(
@@ -451,12 +474,12 @@ async fn list_sessions(
 
     let total = paginator.num_items().await.map_err(|e| {
         tracing::error!("DB error counting sessions: {}", e);
-        err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
     })?;
 
     let sessions = paginator.fetch_page(page - 1).await.map_err(|e| {
         tracing::error!("DB error listing sessions: {}", e);
-        err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
     })?;
 
     Ok(Json(serde_json::json!({
@@ -481,16 +504,16 @@ async fn delete_session(
         .await
         .map_err(|e| {
             tracing::error!("DB error fetching session: {}", e);
-            err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?
-        .ok_or_else(|| err(StatusCode::NOT_FOUND, "Session not found"))?;
+        .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "Session not found"))?;
 
     yauth_entity::sessions::Entity::delete_by_id(session.id)
         .exec(&state.db)
         .await
         .map_err(|e| {
             tracing::error!("DB error deleting session: {}", e);
-            err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?;
 
     info!(
@@ -500,6 +523,13 @@ async fn delete_session(
         session_user_id = %session.user_id,
         "Admin deleted session"
     );
+
+    state.write_audit_log(
+        Some(admin.id),
+        "admin_delete_session",
+        Some(serde_json::json!({ "session_id": id, "session_user_id": session.user_id })),
+        None,
+    ).await;
 
     Ok(StatusCode::NO_CONTENT)
 }

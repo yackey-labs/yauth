@@ -247,6 +247,27 @@ function createClient(opts: YAuthClientOptions) {
 				}),
 		},
 
+		/** Magic link (passwordless email login) */
+		magicLink: {
+			send: (email: string) =>
+				request<{ message: string }>("/magic-link/send", {
+					method: "POST",
+					body: { email },
+				}),
+
+			verify: (token: string) =>
+				request<{
+					user_id: string;
+					email: string;
+					display_name: string | null;
+					email_verified: boolean;
+					is_new_user: boolean;
+				}>("/magic-link/verify", {
+					method: "POST",
+					body: { token },
+				}),
+		},
+
 		/** Bearer token operations (for mobile/CLI/MCP) */
 		bearer: {
 			getToken: (email: string, password: string) =>

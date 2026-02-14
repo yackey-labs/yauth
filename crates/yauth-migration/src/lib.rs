@@ -20,6 +20,9 @@ mod m20250101_000006_bearer;
 #[cfg(feature = "api-key")]
 mod m20250101_000007_api_key;
 
+#[cfg(feature = "magic-link")]
+mod m20250101_000008_magic_link;
+
 pub struct Migrator;
 
 #[async_trait::async_trait]
@@ -49,6 +52,9 @@ impl MigratorTrait for Migrator {
 
         #[cfg(feature = "api-key")]
         migrations.push(Box::new(m20250101_000007_api_key::Migration));
+
+        #[cfg(feature = "magic-link")]
+        migrations.push(Box::new(m20250101_000008_magic_link::Migration));
 
         migrations
     }

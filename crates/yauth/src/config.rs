@@ -116,6 +116,26 @@ pub struct OAuthProviderConfig {
     pub scopes: Vec<String>,
 }
 
+#[cfg(feature = "magic-link")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MagicLinkConfig {
+    #[serde(with = "duration_secs")]
+    pub link_ttl: Duration,
+    pub allow_signup: bool,
+    pub default_role: Option<String>,
+}
+
+#[cfg(feature = "magic-link")]
+impl Default for MagicLinkConfig {
+    fn default() -> Self {
+        Self {
+            link_ttl: Duration::from_secs(5 * 60),
+            allow_signup: true,
+            default_role: None,
+        }
+    }
+}
+
 #[cfg(feature = "bearer")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BearerConfig {

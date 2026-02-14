@@ -100,20 +100,7 @@ impl YAuthPlugin for PasskeyPlugin {
     }
 }
 
-fn session_set_cookie(state: &YAuthState, token: &str) -> String {
-    let max_age = state.config.session_ttl.as_secs();
-    let mut cookie = format!(
-        "{}={}; HttpOnly; SameSite=Lax; Path=/; Max-Age={}",
-        state.config.session_cookie_name, token, max_age
-    );
-    if state.config.secure_cookies {
-        cookie.push_str("; Secure");
-    }
-    if let Some(ref domain) = state.config.cookie_domain {
-        cookie.push_str(&format!("; Domain={}", domain));
-    }
-    cookie
-}
+use crate::auth::session::session_set_cookie;
 
 // --- Registration ---
 
@@ -260,10 +247,11 @@ async fn register_finish(
     })?;
 
     let now = chrono::Utc::now().fixed_offset();
+    let passkey_name = input.name;
     let cred = yauth_entity::webauthn_credentials::ActiveModel {
         id: Set(Uuid::new_v4()),
         user_id: Set(auth_user.id),
-        name: Set(input.name),
+        name: Set(passkey_name.clone()),
         aaguid: Set(None),
         device_name: Set(None),
         credential: Set(credential_json),
@@ -280,6 +268,13 @@ async fn register_finish(
     })?;
 
     info!(event = "passkey_registered", user_id = %auth_user.id, "Passkey registered");
+
+    state.write_audit_log(
+        Some(auth_user.id),
+        "passkey_registered",
+        Some(serde_json::json!({ "name": passkey_name })),
+        None,
+    ).await;
 
     Ok(StatusCode::CREATED)
 }
@@ -618,6 +613,13 @@ async fn login_finish(
 
     info!(event = "passkey_login_success", user_id = %user.id, email = %user.email, "Passkey login successful");
 
+    state.write_audit_log(
+        Some(user.id),
+        "login_succeeded",
+        Some(serde_json::json!({ "method": "passkey" })),
+        None,
+    ).await;
+
     Ok((
         [(SET_COOKIE, session_set_cookie(&state, &token))],
         Json(serde_json::json!({
@@ -715,6 +717,13 @@ async fn delete_passkey(
         })?;
 
     info!(event = "passkey_deleted", user_id = %auth_user.id, passkey_id = %id, "Passkey deleted");
+
+    state.write_audit_log(
+        Some(auth_user.id),
+        "passkey_deleted",
+        Some(serde_json::json!({ "passkey_id": id })),
+        None,
+    ).await;
 
     Ok(StatusCode::NO_CONTENT)
 }

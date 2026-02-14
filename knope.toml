@@ -45,17 +45,17 @@ shell = true
 # Publish Cargo crates (order matters: entity → migration → yauth)
 [[workflows.steps]]
 type = "Command"
-command = "cargo publish -p yauth-entity --registry yauth --no-verify"
+command = "cargo publish -p yauth-entity --registry yauth --no-verify --allow-dirty"
 shell = true
 
 [[workflows.steps]]
 type = "Command"
-command = "cargo publish -p yauth-migration --registry yauth --no-verify"
+command = "cargo publish -p yauth-migration --registry yauth --no-verify --allow-dirty"
 shell = true
 
 [[workflows.steps]]
 type = "Command"
-command = "cargo publish -p yauth --registry yauth --no-verify"
+command = "cargo publish -p yauth --registry yauth --no-verify --allow-dirty"
 shell = true
 
 # Publish npm packages

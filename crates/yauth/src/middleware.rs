@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 use uuid::Uuid;
 
+use crate::error::api_err;
 use crate::state::YAuthState;
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -47,7 +48,8 @@ pub async fn auth_middleware(
                 match lookup_user(&state, session_user.user_id, AuthMethod::Session).await {
                     Ok(auth_user) => {
                         if auth_user.banned {
-                            return (StatusCode::FORBIDDEN, "Account suspended").into_response();
+                            return api_err(StatusCode::FORBIDDEN, "Account suspended")
+                                .into_response();
                         }
                         req.extensions_mut().insert(auth_user);
                         return next.run(req).await;
@@ -95,7 +97,7 @@ pub async fn auth_middleware(
     // Suppress unused variable warnings when features are disabled
     let _ = &headers;
 
-    (StatusCode::UNAUTHORIZED, "Authentication required").into_response()
+    api_err(StatusCode::UNAUTHORIZED, "Authentication required").into_response()
 }
 
 async fn lookup_user(
@@ -124,9 +126,9 @@ pub async fn require_admin(req: Request, next: Next) -> Response {
         if user.role == "admin" {
             return next.run(req).await;
         }
-        return (StatusCode::FORBIDDEN, "Admin access required").into_response();
+        return api_err(StatusCode::FORBIDDEN, "Admin access required").into_response();
     }
-    (StatusCode::UNAUTHORIZED, "Authentication required").into_response()
+    api_err(StatusCode::UNAUTHORIZED, "Authentication required").into_response()
 }
 
 #[cfg(test)]

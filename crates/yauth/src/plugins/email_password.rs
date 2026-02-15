@@ -12,7 +12,7 @@ use tracing::{info, warn};
 use ts_rs::TS;
 use uuid::Uuid;
 
-use crate::auth::{crypto, hibp, password, session};
+use crate::auth::{crypto, hibp, input, password, session};
 use crate::middleware::AuthUser;
 use crate::plugin::{AuthEvent, EventResponse, PluginContext, YAuthPlugin};
 use crate::state::YAuthState;
@@ -120,17 +120,22 @@ async fn register(
         return Err(err(StatusCode::TOO_MANY_REQUESTS, "Too many requests"));
     }
 
-    let email = input.email.trim().to_lowercase();
-    if email.is_empty() || input.password.is_empty() {
+    let email = input::sanitize(&input.email).to_lowercase();
+    let password = input::sanitize(&input.password);
+    if email.is_empty() || password.is_empty() {
         return Err(err(
             StatusCode::BAD_REQUEST,
             "Email and password are required",
         ));
     }
 
+    if !input::is_valid_email(&email) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid email address"));
+    }
+
     // Use config min password length
     let ep_config = &state.email_password_config;
-    if input.password.len() < ep_config.min_password_length {
+    if password.len() < ep_config.min_password_length {
         return Err(err(
             StatusCode::BAD_REQUEST,
             &format!(
@@ -142,7 +147,7 @@ async fn register(
 
     // Check HaveIBeenPwned for breached passwords
     if ep_config.hibp_check
-        && let Some(breach_msg) = hibp::validate_password_not_breached(&input.password).await
+        && let Some(breach_msg) = hibp::validate_password_not_breached(&password).await
     {
         warn!(event = "register_breached_password", email = %email, "Breached password rejected");
         return Err(err(StatusCode::BAD_REQUEST, &breach_msg));
@@ -163,7 +168,7 @@ async fn register(
         return Err(err(StatusCode::CONFLICT, "Registration failed"));
     }
 
-    let password_hash = password::hash_password(&input.password).map_err(|e| {
+    let password_hash = password::hash_password(&password).map_err(|e| {
         tracing::error!("Password hash error: {}", e);
         err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
     })?;
@@ -181,7 +186,7 @@ async fn register(
     let user = yauth_entity::users::ActiveModel {
         id: Set(user_id),
         email: Set(email.clone()),
-        display_name: Set(input.display_name.map(|n| n.trim().to_string())),
+        display_name: Set(input.display_name.map(|n| input::sanitize(&n))),
         email_verified: Set(!ep_config.require_email_verification),
         role: Set(role),
         banned: Set(false),
@@ -265,7 +270,8 @@ async fn login(
 ) -> Result<Response, (StatusCode, Json<serde_json::Value>)> {
     let err = |status: StatusCode, msg: &str| (status, Json(serde_json::json!({ "error": msg })));
 
-    let email = input.email.trim().to_lowercase();
+    let email = input::sanitize(&input.email).to_lowercase();
+    let password_input = input::sanitize(&input.password);
 
     // Rate limit login attempts per email
     if !state.rate_limiter.check(&format!("login:{}", email)).await {
@@ -301,7 +307,7 @@ async fn login(
         None => (None, state.dummy_hash.clone()),
     };
 
-    let valid = password::verify_password(&input.password, &hash).unwrap_or(false);
+    let valid = password::verify_password(&password_input, &hash).unwrap_or(false);
 
     match (user_opt, valid) {
         (Some(u), true) => {
@@ -406,7 +412,7 @@ async fn verify_email(
 ) -> Result<Json<MessageResponse>, (StatusCode, Json<serde_json::Value>)> {
     let err = |status: StatusCode, msg: &str| (status, Json(serde_json::json!({ "error": msg })));
 
-    let token = input.token.trim();
+    let token = input::sanitize(&input.token);
     if token.is_empty() {
         return Err(err(
             StatusCode::BAD_REQUEST,
@@ -414,7 +420,7 @@ async fn verify_email(
         ));
     }
 
-    let token_hash = crypto::hash_token(token);
+    let token_hash = crypto::hash_token(&token);
 
     // Find the verification token
     let verification = yauth_entity::email_verifications::Entity::find()
@@ -491,7 +497,7 @@ async fn resend_verification(
 ) -> Result<Json<MessageResponse>, (StatusCode, Json<serde_json::Value>)> {
     let err = |status: StatusCode, msg: &str| (status, Json(serde_json::json!({ "error": msg })));
 
-    let email = input.email.trim().to_lowercase();
+    let email = input::sanitize(&input.email).to_lowercase();
 
     // Rate limit
     if !state.rate_limiter.check(&format!("resend:{}", email)).await {
@@ -564,7 +570,7 @@ async fn forgot_password(
 ) -> Result<Json<MessageResponse>, (StatusCode, Json<serde_json::Value>)> {
     let err = |status: StatusCode, msg: &str| (status, Json(serde_json::json!({ "error": msg })));
 
-    let email = input.email.trim().to_lowercase();
+    let email = input::sanitize(&input.email).to_lowercase();
 
     // Rate limit
     if !state.rate_limiter.check(&format!("forgot:{}", email)).await {
@@ -647,13 +653,15 @@ async fn reset_password(
 ) -> Result<Json<MessageResponse>, (StatusCode, Json<serde_json::Value>)> {
     let err = |status: StatusCode, msg: &str| (status, Json(serde_json::json!({ "error": msg })));
 
-    let token = input.token.trim();
+    let token = input::sanitize(&input.token);
     if token.is_empty() {
         return Err(err(StatusCode::BAD_REQUEST, "Reset token is required"));
     }
 
+    let reset_password = input::sanitize(&input.password);
+
     let ep_config = &state.email_password_config;
-    if input.password.len() < ep_config.min_password_length {
+    if reset_password.len() < ep_config.min_password_length {
         return Err(err(
             StatusCode::BAD_REQUEST,
             &format!(
@@ -665,7 +673,7 @@ async fn reset_password(
 
     // Check HaveIBeenPwned for breached passwords
     if ep_config.hibp_check
-        && let Some(breach_msg) = hibp::validate_password_not_breached(&input.password).await
+        && let Some(breach_msg) = hibp::validate_password_not_breached(&reset_password).await
     {
         warn!(
             event = "reset_breached_password",
@@ -674,7 +682,7 @@ async fn reset_password(
         return Err(err(StatusCode::BAD_REQUEST, &breach_msg));
     }
 
-    let token_hash = crypto::hash_token(token);
+    let token_hash = crypto::hash_token(&token);
 
     // Find the reset token
     let reset = yauth_entity::password_resets::Entity::find()
@@ -702,7 +710,7 @@ async fn reset_password(
     }
 
     // Hash new password
-    let new_hash = password::hash_password(&input.password).map_err(|e| {
+    let new_hash = password::hash_password(&reset_password).map_err(|e| {
         tracing::error!("Password hash error: {}", e);
         err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
     })?;
@@ -802,10 +810,13 @@ async fn change_password(
         return Err(err(StatusCode::TOO_MANY_REQUESTS, "Too many requests"));
     }
 
+    let current_password = input::sanitize(&input.current_password);
+    let new_password = input::sanitize(&input.new_password);
+
     let ep_config = &state.email_password_config;
 
     // Validate new password length
-    if input.new_password.len() < ep_config.min_password_length {
+    if new_password.len() < ep_config.min_password_length {
         return Err(err(
             StatusCode::BAD_REQUEST,
             &format!(
@@ -830,7 +841,7 @@ async fn change_password(
         .unwrap_or(&state.dummy_hash);
 
     // Verify current password (timing-safe)
-    let valid = password::verify_password(&input.current_password, current_hash).unwrap_or(false);
+    let valid = password::verify_password(&current_password, current_hash).unwrap_or(false);
     if !valid || pwd_record.is_none() {
         warn!(
             event = "change_password_wrong_current",
@@ -845,7 +856,7 @@ async fn change_password(
 
     // HIBP check on new password
     if ep_config.hibp_check
-        && let Some(breach_msg) = hibp::validate_password_not_breached(&input.new_password).await
+        && let Some(breach_msg) = hibp::validate_password_not_breached(&new_password).await
     {
         warn!(
             event = "change_password_breached",
@@ -856,7 +867,7 @@ async fn change_password(
     }
 
     // Hash new password
-    let new_hash = password::hash_password(&input.new_password).map_err(|e| {
+    let new_hash = password::hash_password(&new_password).map_err(|e| {
         tracing::error!("Password hash error: {}", e);
         err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
     })?;

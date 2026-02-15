@@ -1,3 +1,9 @@
+## 0.1.26 (2026-02-15)
+
+### Fixes
+
+- sanitize inputs, validate emails, and return consistent JSON errors
+
 ## 0.1.25 (2026-02-14)
 
 ### Features

@@ -1,3 +1,9 @@
+## 0.1.28 (2026-02-26)
+
+### Fixes
+
+- resolve clippy collapsible-if and unnecessary-unwrap
+
 ## 0.1.27 (2026-02-26)
 
 ### Fixes

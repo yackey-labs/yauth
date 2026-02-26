@@ -336,6 +336,56 @@ async fn fetch_userinfo(
     })
 }
 
+/// Fetch the user's primary verified email from a provider's emails endpoint.
+/// Returns the first verified+primary email, or first verified email as fallback.
+async fn fetch_primary_email(emails_url: &str, access_token: &str) -> Result<String, ApiError> {
+    let http_client = reqwest::Client::new();
+    let resp = http_client
+        .get(emails_url)
+        .bearer_auth(access_token)
+        .header("Accept", "application/json")
+        .header("User-Agent", "yauth")
+        .send()
+        .await
+        .map_err(|e| {
+            tracing::warn!("Failed to fetch emails endpoint: {}", e);
+            api_err(
+                StatusCode::BAD_GATEWAY,
+                "Failed to fetch emails from provider",
+            )
+        })?;
+
+    if !resp.status().is_success() {
+        return Err(api_err(
+            StatusCode::BAD_GATEWAY,
+            "Emails endpoint returned error",
+        ));
+    }
+
+    let emails: Vec<serde_json::Value> = resp.json().await.map_err(|e| {
+        tracing::warn!("Failed to parse emails JSON: {}", e);
+        api_err(StatusCode::BAD_GATEWAY, "Invalid emails response")
+    })?;
+
+    // Prefer primary+verified, then any verified
+    let primary = emails.iter().find(|e| {
+        e.get("primary").and_then(|v| v.as_bool()).unwrap_or(false)
+            && e.get("verified").and_then(|v| v.as_bool()).unwrap_or(false)
+    });
+    let verified = emails
+        .iter()
+        .find(|e| e.get("verified").and_then(|v| v.as_bool()).unwrap_or(false));
+
+    primary
+        .or(verified)
+        .and_then(|e| {
+            e.get("email")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
+        .ok_or_else(|| api_err(StatusCode::BAD_GATEWAY, "No verified email found"))
+}
+
 /// Core callback logic shared by GET and POST handlers.
 /// Returns `(user_id, email, display_name, email_verified, session_token, redirect_url)`.
 async fn handle_callback(
@@ -382,7 +432,17 @@ async fn handle_callback(
 
     // 5. Fetch user info from provider
     let userinfo_json = fetch_userinfo(provider_config, &access_token).await?;
-    let userinfo = parse_userinfo(provider, &userinfo_json)?;
+    let mut userinfo = parse_userinfo(provider, &userinfo_json)?;
+
+    // 5b. If email is missing and an emails_url is configured, try fetching from there.
+    //     GitHub's /user endpoint returns null email when set to private; /user/emails has the actual emails.
+    if userinfo.email.is_none() {
+        if let Some(ref emails_url) = provider_config.emails_url {
+            if let Ok(email) = fetch_primary_email(emails_url, &access_token).await {
+                userinfo.email = Some(email);
+            }
+        }
+    }
 
     // 6. Check if this is an account-linking callback
     //    We encode `link:<user_id>` in the redirect_url field for linking flows

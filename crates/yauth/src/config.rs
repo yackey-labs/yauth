@@ -118,6 +118,10 @@ pub struct OAuthProviderConfig {
     pub token_url: String,
     pub userinfo_url: String,
     pub scopes: Vec<String>,
+    /// Optional URL to fetch user emails (e.g. GitHub's /user/emails).
+    /// Used as fallback when the userinfo endpoint doesn't return an email.
+    #[serde(default)]
+    pub emails_url: Option<String>,
 }
 
 #[cfg(feature = "magic-link")]

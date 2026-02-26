@@ -23,6 +23,9 @@ mod m20250101_000007_api_key;
 #[cfg(feature = "magic-link")]
 mod m20250101_000008_magic_link;
 
+#[cfg(feature = "oauth")]
+mod m20250101_000009_oauth_token_refresh;
+
 pub struct Migrator;
 
 #[async_trait::async_trait]
@@ -55,6 +58,9 @@ impl MigratorTrait for Migrator {
 
         #[cfg(feature = "magic-link")]
         migrations.push(Box::new(m20250101_000008_magic_link::Migration));
+
+        #[cfg(feature = "oauth")]
+        migrations.push(Box::new(m20250101_000009_oauth_token_refresh::Migration));
 
         migrations
     }

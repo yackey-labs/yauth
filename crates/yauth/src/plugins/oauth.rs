@@ -8,7 +8,7 @@ use axum::{
 use oauth2::basic::BasicClient;
 use oauth2::{
     AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, EndpointNotSet, EndpointSet,
-    RedirectUrl, Scope, TokenResponse, TokenUrl,
+    RedirectUrl, RefreshToken, Scope, TokenResponse, TokenUrl,
 };
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 use serde::{Deserialize, Serialize};
@@ -429,6 +429,9 @@ async fn handle_callback(
 
     let access_token = token_result.access_token().secret().clone();
     let refresh_token = token_result.refresh_token().map(|t| t.secret().clone());
+    let expires_at = token_result
+        .expires_in()
+        .map(|d| (chrono::Utc::now() + chrono::Duration::seconds(d.as_secs() as i64)).fixed_offset());
 
     // 5. Fetch user info from provider
     let userinfo_json = fetch_userinfo(provider_config, &access_token).await?;
@@ -476,6 +479,8 @@ async fn handle_callback(
             access_token_enc: Set(Some(access_token)),
             refresh_token_enc: Set(refresh_token),
             created_at: Set(now),
+            expires_at: Set(expires_at),
+            updated_at: Set(now),
         };
 
         oauth_account.insert(&state.db).await.map_err(|e| {
@@ -542,6 +547,8 @@ async fn handle_callback(
         let mut active: yauth_entity::oauth_accounts::ActiveModel = account.clone().into();
         active.access_token_enc = Set(Some(access_token));
         active.refresh_token_enc = Set(refresh_token);
+        active.expires_at = Set(expires_at);
+        active.updated_at = Set(chrono::Utc::now().fixed_offset());
         active.update(&state.db).await.map_err(|e| {
             tracing::error!("Failed to update OAuth tokens: {}", e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
@@ -637,6 +644,8 @@ async fn handle_callback(
             access_token_enc: Set(Some(access_token)),
             refresh_token_enc: Set(refresh_token),
             created_at: Set(now),
+            expires_at: Set(expires_at),
+            updated_at: Set(now),
         };
 
         oauth_account.insert(&state.db).await.map_err(|e| {
@@ -679,6 +688,108 @@ async fn handle_callback(
         token,
         stored_state.redirect_url,
     ))
+}
+
+// ---------------------------------------------------------------------------
+// Token refresh
+// ---------------------------------------------------------------------------
+
+/// Refresh an OAuth access token if it is expired or about to expire.
+///
+/// Returns the current (or refreshed) access token. If the token has no
+/// known expiry (`expires_at` is None) or is still valid for more than 5
+/// minutes, it is returned as-is. Otherwise, the refresh token is used to
+/// obtain a new access token from the provider.
+pub async fn refresh_oauth_token(
+    state: &YAuthState,
+    account: &yauth_entity::oauth_accounts::Model,
+) -> Result<String, ApiError> {
+    let access_token = account.access_token_enc.as_deref().ok_or_else(|| {
+        api_err(StatusCode::UNAUTHORIZED, "No access token available")
+    })?;
+
+    // If no expiry is known, or token is still valid for >5 minutes, return as-is
+    let now = chrono::Utc::now().fixed_offset();
+    let buffer = chrono::Duration::minutes(5);
+    if let Some(expires_at) = account.expires_at {
+        if expires_at > now + buffer {
+            return Ok(access_token.to_string());
+        }
+    } else {
+        // No expiry info — assume token is still valid
+        return Ok(access_token.to_string());
+    }
+
+    // Token is expired or about to expire — refresh it
+    let refresh_token_str = account.refresh_token_enc.as_deref().ok_or_else(|| {
+        api_err(
+            StatusCode::UNAUTHORIZED,
+            "Token expired and no refresh token available. Please re-connect your account.",
+        )
+    })?;
+
+    let provider_config = find_provider_config(state, &account.provider)?;
+
+    // build_oauth_client needs a redirect_uri (required by type) but it's unused for refresh
+    let redirect_uri = format!(
+        "{}/oauth/{}/callback",
+        state.config.base_url.trim_end_matches('/'),
+        account.provider
+    );
+    let client = build_oauth_client(provider_config, &redirect_uri)?;
+
+    let http_client = reqwest::ClientBuilder::new()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| {
+            tracing::error!("Failed to build HTTP client for token refresh: {}", e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
+
+    let token_result = client
+        .exchange_refresh_token(&RefreshToken::new(refresh_token_str.to_string()))
+        .request_async(&http_client)
+        .await
+        .map_err(|e| {
+            tracing::error!(
+                event = "oauth_token_refresh_error",
+                provider = %account.provider,
+                error = %e,
+                "OAuth token refresh failed"
+            );
+            api_err(
+                StatusCode::UNAUTHORIZED,
+                "Token refresh failed. Please re-connect your account.",
+            )
+        })?;
+
+    let new_access_token = token_result.access_token().secret().clone();
+    let new_refresh_token = token_result.refresh_token().map(|t| t.secret().clone());
+    let new_expires_at = token_result
+        .expires_in()
+        .map(|d| (chrono::Utc::now() + chrono::Duration::seconds(d.as_secs() as i64)).fixed_offset());
+
+    // Update the DB row with new tokens
+    let mut active: yauth_entity::oauth_accounts::ActiveModel = account.clone().into();
+    active.access_token_enc = Set(Some(new_access_token.clone()));
+    if let Some(rt) = new_refresh_token {
+        active.refresh_token_enc = Set(Some(rt));
+    }
+    active.expires_at = Set(new_expires_at);
+    active.updated_at = Set(chrono::Utc::now().fixed_offset());
+    active.update(&state.db).await.map_err(|e| {
+        tracing::error!("Failed to update refreshed OAuth tokens: {}", e);
+        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+    })?;
+
+    info!(
+        event = "oauth_token_refreshed",
+        provider = %account.provider,
+        user_id = %account.user_id,
+        "OAuth token refreshed successfully"
+    );
+
+    Ok(new_access_token)
 }
 
 // ---------------------------------------------------------------------------

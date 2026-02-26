@@ -436,12 +436,8 @@ async fn handle_callback(
 
     // 5b. If email is missing and an emails_url is configured, try fetching from there.
     //     GitHub's /user endpoint returns null email when set to private; /user/emails has the actual emails.
-    if userinfo.email.is_none() {
-        if let Some(ref emails_url) = provider_config.emails_url {
-            if let Ok(email) = fetch_primary_email(emails_url, &access_token).await {
-                userinfo.email = Some(email);
-            }
-        }
+    if let (None, Some(emails_url)) = (&userinfo.email, &provider_config.emails_url) {
+        userinfo.email = fetch_primary_email(emails_url, &access_token).await.ok();
     }
 
     // 6. Check if this is an account-linking callback

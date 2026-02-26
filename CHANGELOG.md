@@ -1,3 +1,9 @@
+## 0.1.27 (2026-02-26)
+
+### Fixes
+
+- fetch email from emails endpoint when userinfo returns null
+
 ## 0.1.26 (2026-02-15)
 
 ### Fixes

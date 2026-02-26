@@ -1,3 +1,9 @@
+## 0.1.29 (2026-02-26)
+
+### Features
+
+- add token refresh support with expires_at tracking
+
 ## 0.1.28 (2026-02-26)
 
 ### Fixes

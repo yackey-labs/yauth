@@ -12,6 +12,8 @@ pub struct Model {
     pub access_token_enc: Option<String>,
     pub refresh_token_enc: Option<String>,
     pub created_at: DateTimeWithTimeZone,
+    pub expires_at: Option<DateTimeWithTimeZone>,
+    pub updated_at: DateTimeWithTimeZone,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

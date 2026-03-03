@@ -429,9 +429,9 @@ async fn handle_callback(
 
     let access_token = token_result.access_token().secret().clone();
     let refresh_token = token_result.refresh_token().map(|t| t.secret().clone());
-    let expires_at = token_result
-        .expires_in()
-        .map(|d| (chrono::Utc::now() + chrono::Duration::seconds(d.as_secs() as i64)).fixed_offset());
+    let expires_at = token_result.expires_in().map(|d| {
+        (chrono::Utc::now() + chrono::Duration::seconds(d.as_secs() as i64)).fixed_offset()
+    });
 
     // 5. Fetch user info from provider
     let userinfo_json = fetch_userinfo(provider_config, &access_token).await?;
@@ -704,9 +704,10 @@ pub async fn refresh_oauth_token(
     state: &YAuthState,
     account: &yauth_entity::oauth_accounts::Model,
 ) -> Result<String, ApiError> {
-    let access_token = account.access_token_enc.as_deref().ok_or_else(|| {
-        api_err(StatusCode::UNAUTHORIZED, "No access token available")
-    })?;
+    let access_token = account
+        .access_token_enc
+        .as_deref()
+        .ok_or_else(|| api_err(StatusCode::UNAUTHORIZED, "No access token available"))?;
 
     // If no expiry is known, or token is still valid for >5 minutes, return as-is
     let now = chrono::Utc::now().fixed_offset();
@@ -765,9 +766,9 @@ pub async fn refresh_oauth_token(
 
     let new_access_token = token_result.access_token().secret().clone();
     let new_refresh_token = token_result.refresh_token().map(|t| t.secret().clone());
-    let new_expires_at = token_result
-        .expires_in()
-        .map(|d| (chrono::Utc::now() + chrono::Duration::seconds(d.as_secs() as i64)).fixed_offset());
+    let new_expires_at = token_result.expires_in().map(|d| {
+        (chrono::Utc::now() + chrono::Duration::seconds(d.as_secs() as i64)).fixed_offset()
+    });
 
     // Update the DB row with new tokens
     let mut active: yauth_entity::oauth_accounts::ActiveModel = account.clone().into();

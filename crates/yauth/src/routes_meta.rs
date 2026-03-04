@@ -174,7 +174,7 @@ pub fn oauth2_server_routes() -> RouteCollection {
         authorize: GET "/authorize";
         authorizeConsent: POST "/authorize";
         token: POST "/token";
-        register: POST "/register";
+        register: POST "/oauth/register";
     }
 }
 

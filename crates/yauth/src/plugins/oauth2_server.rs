@@ -44,7 +44,7 @@ impl YAuthPlugin for OAuth2ServerPlugin {
                 .route("/.well-known/oauth-authorization-server", get(as_metadata))
                 .route("/authorize", get(authorize_get).post(authorize_post))
                 .route("/token", post(token_authorization_code))
-                .route("/register", post(dynamic_client_registration)),
+                .route("/oauth/register", post(dynamic_client_registration)),
         )
     }
 
@@ -75,7 +75,7 @@ async fn as_metadata(State(state): State<YAuthState>) -> Json<AuthorizationServe
     let issuer = &config.issuer;
 
     let registration_endpoint = if config.allow_dynamic_registration {
-        Some(format!("{}/register", issuer))
+        Some(format!("{}/oauth/register", issuer))
     } else {
         None
     };

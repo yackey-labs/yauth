@@ -94,7 +94,7 @@ async fn as_metadata(State(state): State<YAuthState>) -> Json<AuthorizationServe
 }
 
 // ---------------------------------------------------------------------------
-// Authorization Endpoint (GET /authorize)
+// Authorization Endpoint (GET /oauth/authorize)
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
@@ -110,7 +110,7 @@ pub struct AuthorizeParams {
     pub code_challenge_method: String,
 }
 
-/// GET /authorize — returns JSON describing what the user needs to consent to.
+/// GET /oauth/authorize — returns JSON describing what the user needs to consent to.
 /// In a real browser flow, this would render a consent page. For MCP clients,
 /// the response tells the client what to display. If the user is already
 /// authenticated (session cookie) and has already consented, we redirect
@@ -153,7 +153,7 @@ async fn authorize_get(
     .into_response()
 }
 
-/// POST /authorize — user submits consent decision. Requires authentication.
+/// POST /oauth/authorize — user submits consent decision. Requires authentication.
 /// If approved, generates an authorization code and redirects to the client's
 /// redirect_uri with the code.
 async fn authorize_post(
@@ -291,7 +291,7 @@ pub struct AuthorizeConsentRequest {
 }
 
 // ---------------------------------------------------------------------------
-// Token Endpoint — authorization_code grant (POST /token)
+// Token Endpoint — authorization_code grant (POST /oauth/token)
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]

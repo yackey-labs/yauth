@@ -144,6 +144,34 @@ impl Default for MagicLinkConfig {
     }
 }
 
+#[cfg(feature = "oauth2-server")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OAuth2ServerConfig {
+    /// Issuer URL for the authorization server (used in AS metadata).
+    pub issuer: String,
+    /// Authorization code TTL (default: 60 seconds per spec recommendation).
+    #[serde(with = "duration_secs")]
+    pub authorization_code_ttl: Duration,
+    /// Available scopes that clients can request.
+    #[serde(default)]
+    pub scopes_supported: Vec<String>,
+    /// Whether to allow dynamic client registration (POST /register).
+    #[serde(default)]
+    pub allow_dynamic_registration: bool,
+}
+
+#[cfg(feature = "oauth2-server")]
+impl Default for OAuth2ServerConfig {
+    fn default() -> Self {
+        Self {
+            issuer: "http://localhost:3000".into(),
+            authorization_code_ttl: Duration::from_secs(60),
+            scopes_supported: vec![],
+            allow_dynamic_registration: true,
+        }
+    }
+}
+
 #[cfg(feature = "bearer")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BearerConfig {
@@ -152,6 +180,9 @@ pub struct BearerConfig {
     pub access_token_ttl: Duration,
     #[serde(with = "duration_secs")]
     pub refresh_token_ttl: Duration,
+    /// Optional audience claim for JWT tokens (resource server URL per RFC 8707).
+    #[serde(default)]
+    pub audience: Option<String>,
 }
 
 #[cfg(test)]

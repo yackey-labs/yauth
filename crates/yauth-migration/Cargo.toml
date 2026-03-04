@@ -15,7 +15,8 @@ oauth = []
 bearer = []
 api-key = []
 magic-link = []
-full = ["email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link"]
+oauth2-server = []
+full = ["email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link", "oauth2-server"]
 
 [dependencies]
 sea-orm-migration = { workspace = true }

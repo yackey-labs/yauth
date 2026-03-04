@@ -59,6 +59,10 @@ struct Claims {
     exp: usize,
     iat: usize,
     jti: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    aud: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scope: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -70,6 +74,9 @@ struct Claims {
 pub struct TokenRequest {
     pub email: String,
     pub password: String,
+    /// Optional space-separated OAuth2 scopes (e.g. "read:runs write:runs").
+    #[serde(default)]
+    pub scope: Option<String>,
 }
 
 #[derive(Deserialize, TS)]
@@ -97,9 +104,20 @@ pub struct TokenResponse {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// Create a JWT for use by the OAuth2 server plugin. This is the public-facing
+/// version of `create_jwt` that can be called from other plugins.
+pub fn create_jwt_with_audience(
+    user: &yauth_entity::users::Model,
+    config: &BearerConfig,
+    scope: Option<&str>,
+) -> Result<(String, String), ApiError> {
+    create_jwt(user, config, scope)
+}
+
 fn create_jwt(
     user: &yauth_entity::users::Model,
     config: &BearerConfig,
+    scope: Option<&str>,
 ) -> Result<(String, String), ApiError> {
     let now = Utc::now();
     let jti = Uuid::new_v4().to_string();
@@ -113,6 +131,8 @@ fn create_jwt(
         exp,
         iat,
         jti: jti.clone(),
+        aud: config.audience.clone(),
+        scope: scope.map(|s| s.to_string()),
     };
 
     let token = encode(
@@ -247,8 +267,9 @@ async fn create_token(
 
             let config = &state.bearer_config;
 
-            // Create JWT access token
-            let (access_token, _jti) = create_jwt(u, config)?;
+            // Create JWT access token with optional scope
+            let scope_str = input.scope.as_deref();
+            let (access_token, _jti) = create_jwt(u, config, scope_str)?;
 
             // Create refresh token with a new family
             let family_id = Uuid::new_v4();
@@ -387,8 +408,8 @@ async fn refresh_token(
 
     let config = &state.bearer_config;
 
-    // Create new JWT access token
-    let (access_token, _jti) = create_jwt(&user, config)?;
+    // Create new JWT access token (no scope on refresh — client should request new token for scope)
+    let (access_token, _jti) = create_jwt(&user, config, None)?;
 
     // Create new refresh token in the same family
     let new_refresh =
@@ -488,6 +509,14 @@ pub async fn validate_jwt(token: &str, state: &YAuthState) -> Result<AuthUser, S
     let mut validation = Validation::new(Algorithm::HS256);
     validation.validate_exp = true;
 
+    // Validate audience claim if configured
+    if let Some(ref expected_aud) = config.audience {
+        validation.set_audience(&[expected_aud]);
+    } else {
+        // Don't require aud when not configured (backward-compatible)
+        validation.validate_aud = false;
+    }
+
     let token_data = decode::<Claims>(
         token,
         &DecodingKey::from_secret(config.jwt_secret.as_bytes()),
@@ -501,6 +530,12 @@ pub async fn validate_jwt(token: &str, state: &YAuthState) -> Result<AuthUser, S
         .sub
         .parse()
         .map_err(|_| "Invalid user ID in JWT".to_string())?;
+
+    // Parse scopes from the space-separated scope claim
+    let scopes = claims
+        .scope
+        .as_deref()
+        .map(|s| s.split_whitespace().map(String::from).collect());
 
     // Look up user in DB to ensure they still exist and aren't banned
     let user = yauth_entity::users::Entity::find_by_id(user_id)
@@ -521,5 +556,6 @@ pub async fn validate_jwt(token: &str, state: &YAuthState) -> Result<AuthUser, S
         role: user.role,
         banned: user.banned,
         auth_method: AuthMethod::Bearer,
+        scopes,
     })
 }

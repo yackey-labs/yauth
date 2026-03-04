@@ -51,6 +51,12 @@ pub enum Relation {
     #[cfg(feature = "bearer")]
     #[sea_orm(has_many = "super::refresh_tokens::Entity")]
     RefreshTokens,
+    #[cfg(feature = "oauth2-server")]
+    #[sea_orm(has_many = "super::authorization_codes::Entity")]
+    AuthorizationCodes,
+    #[cfg(feature = "oauth2-server")]
+    #[sea_orm(has_many = "super::consents::Entity")]
+    Consents,
 }
 
 impl Related<super::sessions::Entity> for Entity {
@@ -125,6 +131,20 @@ impl Related<super::api_keys::Entity> for Entity {
 impl Related<super::refresh_tokens::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::RefreshTokens.def()
+    }
+}
+
+#[cfg(feature = "oauth2-server")]
+impl Related<super::authorization_codes::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::AuthorizationCodes.def()
+    }
+}
+
+#[cfg(feature = "oauth2-server")]
+impl Related<super::consents::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::Consents.def()
     }
 }
 

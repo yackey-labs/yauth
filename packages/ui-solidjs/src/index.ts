@@ -11,3 +11,4 @@ export { VerifyEmail } from "./components/verify-email";
 export { ChangePasswordForm } from "./components/change-password-form";
 export { ProfileSettings } from "./components/profile-settings";
 export { MagicLinkForm } from "./components/magic-link-form";
+export { ConsentScreen } from "./components/consent-screen";

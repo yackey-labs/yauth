@@ -297,6 +297,12 @@ pub async fn validate_api_key(key: &str, state: &YAuthState) -> Result<AuthUser,
         return Err("Account suspended".to_string());
     }
 
+    // Wire API key scopes into AuthUser
+    let scopes: Option<Vec<String>> = api_key
+        .scopes
+        .as_ref()
+        .and_then(|v| serde_json::from_value(v.clone()).ok());
+
     Ok(AuthUser {
         id: user.id,
         email: user.email,
@@ -305,5 +311,6 @@ pub async fn validate_api_key(key: &str, state: &YAuthState) -> Result<AuthUser,
         role: user.role,
         banned: user.banned,
         auth_method: AuthMethod::ApiKey,
+        scopes,
     })
 }

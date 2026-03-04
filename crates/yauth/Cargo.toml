@@ -16,8 +16,9 @@ bearer = ["yauth-entity/bearer", "yauth-migration/bearer", "dep:jsonwebtoken"]
 api-key = ["yauth-entity/api-key", "yauth-migration/api-key"]
 magic-link = ["yauth-entity/magic-link", "yauth-migration/magic-link"]
 admin = []
+oauth2-server = ["yauth-entity/oauth2-server", "yauth-migration/oauth2-server", "dep:url", "dep:base64"]
 telemetry = ["dep:tracing-opentelemetry", "dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:opentelemetry-semantic-conventions"]
-full = ["email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link", "admin", "telemetry"]
+full = ["email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link", "admin", "oauth2-server", "telemetry"]
 
 [dependencies]
 yauth-entity = { workspace = true }
@@ -62,6 +63,10 @@ totp-rs = { workspace = true, optional = true }
 oauth2 = { workspace = true, optional = true }
 jsonwebtoken = { workspace = true, optional = true }
 
+# Feature-gated: OAuth2 Server
+url = { version = "2", optional = true }
+base64 = { version = "0.22", optional = true }
+
 tracing-opentelemetry = { workspace = true, optional = true }
 opentelemetry = { workspace = true, optional = true }
 opentelemetry_sdk = { workspace = true, optional = true }
@@ -71,3 +76,5 @@ opentelemetry-semantic-conventions = { workspace = true, optional = true }
 [dev-dependencies]
 totp-rs = { workspace = true }
 uuid = { workspace = true }
+base64 = "0.22"
+url = "2"

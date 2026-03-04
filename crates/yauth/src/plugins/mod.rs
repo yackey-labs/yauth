@@ -22,6 +22,9 @@ pub mod magic_link;
 #[cfg(feature = "admin")]
 pub mod admin;
 
+#[cfg(feature = "oauth2-server")]
+pub mod oauth2_server;
+
 use axum::{
     Extension, Json, Router,
     http::StatusCode,

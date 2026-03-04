@@ -155,11 +155,24 @@ async fn main() {
         jwt_secret,
         access_token_ttl: Duration::from_secs(15 * 60), // 15 minutes
         refresh_token_ttl: Duration::from_secs(30 * 24 * 3600), // 30 days
+        audience: None,
     })
     // API key authentication (X-Api-Key header)
     .with_api_key()
     // Admin user management endpoints
     .with_admin()
+    // OAuth2 Authorization Server (for MCP auth)
+    .with_oauth2_server(yauth::config::OAuth2ServerConfig {
+        issuer: base_url.clone(),
+        authorization_code_ttl: Duration::from_secs(60),
+        scopes_supported: vec![
+            "read:runs".into(),
+            "write:runs".into(),
+            "read:milestones".into(),
+            "write:milestones".into(),
+        ],
+        allow_dynamic_registration: true,
+    })
     .build();
 
     // -----------------------------------------------------------------------

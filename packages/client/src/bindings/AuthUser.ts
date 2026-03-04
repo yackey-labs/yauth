@@ -9,4 +9,8 @@ export type AuthUser = {
 	role: string;
 	banned: boolean;
 	auth_method: AuthMethod;
+	/**
+	 * Scopes granted to this token (from JWT `scope` claim). None means unrestricted.
+	 */
+	scopes?: Array<string> | null;
 };

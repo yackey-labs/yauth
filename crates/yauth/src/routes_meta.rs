@@ -164,6 +164,20 @@ pub fn admin_routes() -> RouteCollection {
     }
 }
 
+/// OAuth2 Authorization Server plugin routes.
+#[cfg(feature = "oauth2-server")]
+pub fn oauth2_server_routes() -> RouteCollection {
+    api_routes! {
+        @group oauth2Server
+
+        metadata: GET "/.well-known/oauth-authorization-server";
+        authorize: GET "/authorize";
+        authorizeConsent: POST "/authorize";
+        token: POST "/token";
+        register: POST "/register";
+    }
+}
+
 /// Aggregate all route metadata, respecting feature gates.
 #[allow(unused_mut)]
 pub fn all_route_meta() -> RouteCollection {
@@ -192,6 +206,9 @@ pub fn all_route_meta() -> RouteCollection {
 
     #[cfg(feature = "admin")]
     routes.extend(admin_routes());
+
+    #[cfg(feature = "oauth2-server")]
+    routes.extend(oauth2_server_routes());
 
     routes
 }

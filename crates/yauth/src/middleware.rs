@@ -23,6 +23,10 @@ pub struct AuthUser {
     pub role: String,
     pub banned: bool,
     pub auth_method: AuthMethod,
+    /// Scopes granted to this token (from JWT `scope` claim). None means unrestricted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub scopes: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -118,7 +122,38 @@ async fn lookup_user(
         role: user.role,
         banned: user.banned,
         auth_method: method,
+        scopes: None,
     })
+}
+
+/// Create a scope-checking middleware layer. Returns 403 with `insufficient_scope` error
+/// if the authenticated user's token doesn't include the required scope.
+/// Tokens without scopes (None) are treated as unrestricted for backward compatibility.
+pub fn require_scope(
+    scope: &'static str,
+) -> impl Fn(Request, Next) -> std::pin::Pin<Box<dyn std::future::Future<Output = Response> + Send>>
++ Clone {
+    move |req: Request, next: Next| {
+        Box::pin(async move {
+            if let Some(user) = req.extensions().get::<AuthUser>() {
+                // If scopes is None, the token is unrestricted (backward-compatible)
+                if let Some(ref scopes) = user.scopes
+                    && !scopes.iter().any(|s| s == scope)
+                {
+                    return (
+                        StatusCode::FORBIDDEN,
+                        axum::Json(serde_json::json!({
+                            "error": "insufficient_scope",
+                            "error_description": format!("Required scope: {}", scope)
+                        })),
+                    )
+                        .into_response();
+                }
+                return next.run(req).await;
+            }
+            api_err(StatusCode::UNAUTHORIZED, "Authentication required").into_response()
+        })
+    }
 }
 
 pub async fn require_admin(req: Request, next: Next) -> Response {
@@ -144,6 +179,7 @@ mod tests {
             role: "user".into(),
             banned: false,
             auth_method: AuthMethod::Session,
+            scopes: None,
         }
     }
 

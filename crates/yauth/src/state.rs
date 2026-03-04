@@ -26,6 +26,8 @@ pub struct YAuthState {
     pub oauth_config: crate::config::OAuthConfig,
     #[cfg(feature = "magic-link")]
     pub magic_link_config: crate::config::MagicLinkConfig,
+    #[cfg(feature = "oauth2-server")]
+    pub oauth2_server_config: crate::config::OAuth2ServerConfig,
 }
 
 impl YAuthState {

@@ -89,6 +89,8 @@ pub struct YAuthBuilder {
     bearer_config: Option<config::BearerConfig>,
     #[cfg(feature = "magic-link")]
     magic_link_config: Option<config::MagicLinkConfig>,
+    #[cfg(feature = "oauth2-server")]
+    oauth2_server_config: Option<config::OAuth2ServerConfig>,
 }
 
 impl YAuthBuilder {
@@ -110,6 +112,8 @@ impl YAuthBuilder {
             bearer_config: None,
             #[cfg(feature = "magic-link")]
             magic_link_config: None,
+            #[cfg(feature = "oauth2-server")]
+            oauth2_server_config: None,
         }
     }
 
@@ -146,6 +150,12 @@ impl YAuthBuilder {
     #[cfg(feature = "magic-link")]
     pub fn with_magic_link(mut self, config: config::MagicLinkConfig) -> Self {
         self.magic_link_config = Some(config);
+        self
+    }
+
+    #[cfg(feature = "oauth2-server")]
+    pub fn with_oauth2_server(mut self, config: config::OAuth2ServerConfig) -> Self {
+        self.oauth2_server_config = Some(config);
         self
     }
 
@@ -243,6 +253,7 @@ impl YAuthBuilder {
                     jwt_secret: String::new(),
                     access_token_ttl: std::time::Duration::from_secs(900),
                     refresh_token_ttl: std::time::Duration::from_secs(30 * 24 * 3600),
+                    audience: None,
                 }),
             #[cfg(feature = "mfa")]
             mfa_config: self.mfa_config.clone().unwrap_or_default(),
@@ -255,6 +266,8 @@ impl YAuthBuilder {
                 }),
             #[cfg(feature = "magic-link")]
             magic_link_config: self.magic_link_config.clone().unwrap_or_default(),
+            #[cfg(feature = "oauth2-server")]
+            oauth2_server_config: self.oauth2_server_config.clone().unwrap_or_default(),
         };
 
         #[cfg(feature = "passkey")]
@@ -292,6 +305,14 @@ impl YAuthBuilder {
             self.plugins
                 .push(Box::new(plugins::magic_link::MagicLinkPlugin::new(
                     ml_config,
+                )));
+        }
+
+        #[cfg(feature = "oauth2-server")]
+        if let Some(o2s_config) = self.oauth2_server_config {
+            self.plugins
+                .push(Box::new(plugins::oauth2_server::OAuth2ServerPlugin::new(
+                    o2s_config,
                 )));
         }
 

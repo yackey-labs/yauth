@@ -30,3 +30,10 @@ pub mod refresh_tokens;
 
 #[cfg(feature = "magic-link")]
 pub mod magic_links;
+
+#[cfg(feature = "oauth2-server")]
+pub mod authorization_codes;
+#[cfg(feature = "oauth2-server")]
+pub mod consents;
+#[cfg(feature = "oauth2-server")]
+pub mod oauth2_clients;

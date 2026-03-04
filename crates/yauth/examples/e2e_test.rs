@@ -1050,7 +1050,7 @@ async fn main() {
 
     // 6b. Dynamic Client Registration
     let res = anon
-        .post(format!("{}/register", oauth2_api))
+        .post(format!("{}/oauth/register", oauth2_api))
         .json(&serde_json::json!({
             "redirect_uris": ["http://localhost:8080/callback"],
             "client_name": "Test MCP Client",
@@ -1078,7 +1078,7 @@ async fn main() {
 
     let res = anon
         .get(format!(
-            "{}/authorize?response_type=code&client_id={}&redirect_uri={}&code_challenge={}&code_challenge_method=S256&scope=read:runs&state={}",
+            "{}/oauth/authorize?response_type=code&client_id={}&redirect_uri={}&code_challenge={}&code_challenge_method=S256&scope=read:runs&state={}",
             oauth2_api,
             oauth2_client_id,
             "http://localhost:8080/callback",
@@ -1114,7 +1114,7 @@ async fn main() {
 
     // Submit consent approval
     let res = oauth2_authed
-        .post(format!("{}/authorize", oauth2_api))
+        .post(format!("{}/oauth/authorize", oauth2_api))
         .json(&serde_json::json!({
             "client_id": oauth2_client_id,
             "redirect_uri": "http://localhost:8080/callback",
@@ -1154,7 +1154,7 @@ async fn main() {
 
     // 6e. Exchange authorization code for tokens (POST /token)
     let res = anon
-        .post(format!("{}/token", oauth2_api))
+        .post(format!("{}/oauth/token", oauth2_api))
         .json(&serde_json::json!({
             "grant_type": "authorization_code",
             "code": auth_code,
@@ -1188,7 +1188,7 @@ async fn main() {
 
     // 6g. Refresh the OAuth2 token
     let res = anon
-        .post(format!("{}/token", oauth2_api))
+        .post(format!("{}/oauth/token", oauth2_api))
         .json(&serde_json::json!({
             "grant_type": "refresh_token",
             "refresh_token": oauth2_refresh_token
@@ -1208,7 +1208,7 @@ async fn main() {
 
     // 6h. Authorization code replay fails
     let res = anon
-        .post(format!("{}/token", oauth2_api))
+        .post(format!("{}/oauth/token", oauth2_api))
         .json(&serde_json::json!({
             "grant_type": "authorization_code",
             "code": auth_code,
@@ -1227,7 +1227,7 @@ async fn main() {
     // 6i. Wrong PKCE verifier fails
     // Get a new auth code first
     let res = oauth2_authed
-        .post(format!("{}/authorize", oauth2_api))
+        .post(format!("{}/oauth/authorize", oauth2_api))
         .json(&serde_json::json!({
             "client_id": oauth2_client_id,
             "redirect_uri": "http://localhost:8080/callback",
@@ -1251,7 +1251,7 @@ async fn main() {
         .to_string();
 
     let res = anon
-        .post(format!("{}/token", oauth2_api))
+        .post(format!("{}/oauth/token", oauth2_api))
         .json(&serde_json::json!({
             "grant_type": "authorization_code",
             "code": new_auth_code,
@@ -1283,7 +1283,7 @@ async fn main() {
         .await
         .unwrap();
     let res = deny_client
-        .post(format!("{}/authorize", oauth2_api))
+        .post(format!("{}/oauth/authorize", oauth2_api))
         .json(&serde_json::json!({
             "client_id": oauth2_client_id,
             "redirect_uri": "http://localhost:8080/callback",

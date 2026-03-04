@@ -171,9 +171,9 @@ pub fn oauth2_server_routes() -> RouteCollection {
         @group oauth2Server
 
         metadata: GET "/.well-known/oauth-authorization-server";
-        authorize: GET "/authorize";
-        authorizeConsent: POST "/authorize";
-        token: POST "/token";
+        authorize: GET "/oauth/authorize";
+        authorizeConsent: POST "/oauth/authorize";
+        token: POST "/oauth/token";
         register: POST "/oauth/register";
     }
 }

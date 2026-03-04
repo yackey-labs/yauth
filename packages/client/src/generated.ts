@@ -288,6 +288,15 @@ export function createYAuthClient(options: YAuthClientOptions) {
 				}),
 		},
 
+		oauth2Server: {
+			metadata: () => request<void>("/.well-known/oauth-authorization-server"),
+			authorize: () => request<void>("/oauth/authorize"),
+			authorizeConsent: () =>
+				request<void>("/oauth/authorize", { method: "POST" }),
+			token: () => request<void>("/oauth/token", { method: "POST" }),
+			register: () => request<void>("/oauth/register", { method: "POST" }),
+		},
+
 		passkey: {
 			loginBegin: (body: PasskeyLoginBeginRequest) =>
 				request<void>("/passkey/login/begin", { method: "POST", body }),

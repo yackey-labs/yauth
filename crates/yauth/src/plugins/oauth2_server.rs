@@ -42,8 +42,8 @@ impl YAuthPlugin for OAuth2ServerPlugin {
         Some(
             Router::new()
                 .route("/.well-known/oauth-authorization-server", get(as_metadata))
-                .route("/authorize", get(authorize_get).post(authorize_post))
-                .route("/token", post(token_authorization_code))
+                .route("/oauth/authorize", get(authorize_get).post(authorize_post))
+                .route("/oauth/token", post(token_authorization_code))
                 .route("/oauth/register", post(dynamic_client_registration)),
         )
     }
@@ -82,8 +82,8 @@ async fn as_metadata(State(state): State<YAuthState>) -> Json<AuthorizationServe
 
     Json(AuthorizationServerMetadata {
         issuer: issuer.clone(),
-        authorization_endpoint: format!("{}/authorize", issuer),
-        token_endpoint: format!("{}/token", issuer),
+        authorization_endpoint: format!("{}/oauth/authorize", issuer),
+        token_endpoint: format!("{}/oauth/token", issuer),
         registration_endpoint,
         scopes_supported: config.scopes_supported.clone(),
         response_types_supported: vec!["code".into()],
@@ -148,7 +148,7 @@ async fn authorize_get(
         "code_challenge": params.code_challenge,
         "code_challenge_method": params.code_challenge_method,
         "login_endpoint": format!("{}/login", state.config.base_url),
-        "consent_endpoint": format!("{}/authorize", state.config.base_url),
+        "consent_endpoint": format!("{}/oauth/authorize", state.config.base_url),
     }))
     .into_response()
 }

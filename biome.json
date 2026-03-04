@@ -7,7 +7,7 @@
 	},
 	"files": {
 		"ignoreUnknown": true,
-		"ignore": ["node_modules", "dist", "build", "*.gen.ts"]
+		"ignore": ["node_modules", "dist", "build", "*.gen.ts", "**/bindings"]
 	},
 	"formatter": {
 		"enabled": true,

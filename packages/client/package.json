@@ -1,6 +1,6 @@
 {
 	"name": "@yauth/client",
-	"version": "0.1.29",
+	"version": "0.1.30",
 	"type": "module",
 	"main": "dist/index.js",
 	"module": "dist/index.js",
@@ -18,7 +18,7 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@yauth/shared": "0.1.29"
+		"@yauth/shared": "0.1.30"
 	},
 	"devDependencies": {
 		"typescript": "^5.7.2"

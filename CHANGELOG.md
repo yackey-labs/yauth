@@ -1,3 +1,9 @@
+## 0.1.30 (2026-03-04)
+
+### Features
+
+- implement OAuth2 Authorization Server plugin with JWT support (#4)
+
 ## 0.1.29 (2026-02-26)
 
 ### Features

@@ -1,3 +1,9 @@
+## 0.1.37 (2026-03-05)
+
+### Fixes
+
+- accept form-urlencoded POST for OAuth token endpoint (RFC 6749)
+
 ## 0.1.36 (2026-03-05)
 
 ### Fixes

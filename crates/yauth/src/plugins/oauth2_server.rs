@@ -201,13 +201,37 @@ async fn authorize_get(
 
 /// POST /oauth/authorize — user submits consent decision. Requires authentication.
 /// If approved, generates an authorization code and redirects to the client's
-/// redirect_uri with the code.
+/// redirect_uri with the code. Accepts both JSON and form-urlencoded bodies
+/// (form submission from consent UI avoids CORS issues with cross-origin redirects).
 async fn authorize_post(
     State(state): State<YAuthState>,
     jar: axum_extra::extract::cookie::CookieJar,
     headers: axum::http::HeaderMap,
-    Json(input): Json<AuthorizeConsentRequest>,
+    body: axum::body::Bytes,
 ) -> Response {
+    let content_type = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    let input: AuthorizeConsentRequest = if content_type.contains("application/json") {
+        match serde_json::from_slice(&body) {
+            Ok(v) => v,
+            Err(e) => {
+                return api_err(StatusCode::BAD_REQUEST, &format!("Invalid JSON: {e}"))
+                    .into_response();
+            }
+        }
+    } else {
+        // application/x-www-form-urlencoded (or fallback)
+        match serde_urlencoded::from_bytes(&body) {
+            Ok(v) => v,
+            Err(e) => {
+                return api_err(StatusCode::BAD_REQUEST, &format!("Invalid form data: {e}"))
+                    .into_response();
+            }
+        }
+    };
     // Authenticate the user via session cookie or bearer token
     let auth_user = match authenticate_user(&state, &jar, &headers).await {
         Ok(u) => u,
@@ -321,6 +345,37 @@ async fn authorize_post(
     Redirect::to(redirect_url.as_str()).into_response()
 }
 
+fn deserialize_bool_or_string<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de;
+
+    struct BoolOrString;
+
+    impl<'de> de::Visitor<'de> for BoolOrString {
+        type Value = bool;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a boolean or a string \"true\"/\"false\"")
+        }
+
+        fn visit_bool<E: de::Error>(self, v: bool) -> Result<bool, E> {
+            Ok(v)
+        }
+
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<bool, E> {
+            match v {
+                "true" => Ok(true),
+                "false" => Ok(false),
+                _ => Err(E::invalid_value(de::Unexpected::Str(v), &self)),
+            }
+        }
+    }
+
+    deserializer.deserialize_any(BoolOrString)
+}
+
 #[derive(Deserialize)]
 pub struct AuthorizeConsentRequest {
     pub client_id: String,
@@ -333,6 +388,8 @@ pub struct AuthorizeConsentRequest {
     #[serde(default)]
     pub state: Option<String>,
     /// Whether the user approved the authorization request.
+    /// Accepts both native bool (JSON) and string "true"/"false" (form data).
+    #[serde(deserialize_with = "deserialize_bool_or_string")]
     pub approved: bool,
 }
 

@@ -1,3 +1,9 @@
+## 0.1.36 (2026-03-05)
+
+### Fixes
+
+- accept form-urlencoded POST for OAuth authorize consent
+
 ## 0.1.35 (2026-03-05)
 
 ### Features

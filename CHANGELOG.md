@@ -1,3 +1,9 @@
+## 0.1.34 (2026-03-05)
+
+### Features
+
+- add Device Authorization Grant (RFC 8628) for headless OAuth flows
+
 ## 0.1.33 (2026-03-05)
 
 ### Fixes

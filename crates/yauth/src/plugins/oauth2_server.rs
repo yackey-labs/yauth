@@ -101,7 +101,10 @@ async fn as_metadata(State(state): State<YAuthState>) -> Json<AuthorizationServe
 pub struct AuthorizeParams {
     pub response_type: String,
     pub client_id: String,
-    pub redirect_uri: String,
+    /// Optional per RFC 6749 §3.1.2.3 — when omitted, defaults to the
+    /// client's single registered redirect URI.
+    #[serde(default)]
+    pub redirect_uri: Option<String>,
     #[serde(default)]
     pub scope: Option<String>,
     #[serde(default)]
@@ -130,10 +133,11 @@ async fn authorize_get(
         Err(e) => return e.into_response(),
     };
 
-    // Validate redirect_uri against registered URIs
-    if let Err(e) = validate_redirect_uri(&client, &params.redirect_uri) {
-        return e.into_response();
-    }
+    // Resolve redirect_uri: use provided value, or default to client's single registered URI
+    let redirect_uri = match resolve_redirect_uri(&client, params.redirect_uri.as_deref()) {
+        Ok(uri) => uri,
+        Err(e) => return e.into_response(),
+    };
 
     // Return a JSON response describing the authorization request.
     // The consent UI (or MCP client browser popup) uses this to display
@@ -142,7 +146,7 @@ async fn authorize_get(
         "type": "authorization_request",
         "client_id": client.client_id,
         "client_name": client.client_name,
-        "redirect_uri": params.redirect_uri,
+        "redirect_uri": redirect_uri,
         "scope": params.scope,
         "state": params.state,
         "code_challenge": params.code_challenge,
@@ -933,26 +937,49 @@ async fn lookup_client(
         .ok_or_else(|| api_err(StatusCode::BAD_REQUEST, "Unknown client_id"))
 }
 
-fn validate_redirect_uri(
+/// Resolve redirect_uri: if provided, validate against registered URIs.
+/// If omitted, default to the client's single registered URI (RFC 6749 §3.1.2.3).
+fn resolve_redirect_uri(
     client: &yauth_entity::oauth2_clients::Model,
-    redirect_uri: &str,
-) -> Result<(), ApiError> {
+    redirect_uri: Option<&str>,
+) -> Result<String, ApiError> {
     let empty = vec![];
-    let registered_uris = client
+    let registered_uris: Vec<&str> = client
         .redirect_uris
         .as_array()
         .unwrap_or(&empty)
         .iter()
         .filter_map(|v| v.as_str())
-        .collect::<Vec<_>>();
+        .collect();
 
-    if !registered_uris.contains(&redirect_uri) {
-        return Err(api_err(
-            StatusCode::BAD_REQUEST,
-            "redirect_uri does not match any registered URIs",
-        ));
+    match redirect_uri {
+        Some(uri) => {
+            if !registered_uris.contains(&uri) {
+                return Err(api_err(
+                    StatusCode::BAD_REQUEST,
+                    "redirect_uri does not match any registered URIs",
+                ));
+            }
+            Ok(uri.to_string())
+        }
+        None => {
+            if registered_uris.len() == 1 {
+                Ok(registered_uris[0].to_string())
+            } else {
+                Err(api_err(
+                    StatusCode::BAD_REQUEST,
+                    "redirect_uri is required when multiple URIs are registered",
+                ))
+            }
+        }
     }
-    Ok(())
+}
+
+fn validate_redirect_uri(
+    client: &yauth_entity::oauth2_clients::Model,
+    redirect_uri: &str,
+) -> Result<(), ApiError> {
+    resolve_redirect_uri(client, Some(redirect_uri)).map(|_| ())
 }
 
 /// Authenticate a user from the request (session cookie or bearer token).
@@ -1133,7 +1160,7 @@ mod tests {
         let params = AuthorizeParams {
             response_type: "token".into(),
             client_id: "test".into(),
-            redirect_uri: "http://localhost".into(),
+            redirect_uri: Some("http://localhost".into()),
             scope: None,
             state: None,
             code_challenge: "abc".into(),
@@ -1147,7 +1174,7 @@ mod tests {
         let params = AuthorizeParams {
             response_type: "code".into(),
             client_id: "test".into(),
-            redirect_uri: "http://localhost".into(),
+            redirect_uri: Some("http://localhost".into()),
             scope: None,
             state: None,
             code_challenge: "abc".into(),
@@ -1161,7 +1188,7 @@ mod tests {
         let params = AuthorizeParams {
             response_type: "code".into(),
             client_id: "test".into(),
-            redirect_uri: "http://localhost".into(),
+            redirect_uri: Some("http://localhost".into()),
             scope: Some("read write".into()),
             state: Some("xyz".into()),
             code_challenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM".into(),

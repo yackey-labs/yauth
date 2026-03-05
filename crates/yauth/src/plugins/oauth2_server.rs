@@ -47,7 +47,10 @@ impl YAuthPlugin for OAuth2ServerPlugin {
                 .route("/oauth/token", post(token_endpoint))
                 .route("/oauth/register", post(dynamic_client_registration))
                 .route("/oauth/device/code", post(device_authorization))
-                .route("/oauth/device", get(device_verify_get).post(device_verify_post)),
+                .route(
+                    "/oauth/device",
+                    get(device_verify_get).post(device_verify_post),
+                ),
         )
     }
 
@@ -160,12 +163,9 @@ async fn authorize_get(
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v.contains("application/json"));
 
-    if !wants_json
-        && let Some(ref consent_url) = state.oauth2_server_config.consent_ui_url
-    {
-        let mut url = url::Url::parse(consent_url).unwrap_or_else(|_| {
-            url::Url::parse("http://localhost").unwrap()
-        });
+    if !wants_json && let Some(ref consent_url) = state.oauth2_server_config.consent_ui_url {
+        let mut url = url::Url::parse(consent_url)
+            .unwrap_or_else(|_| url::Url::parse("http://localhost").unwrap());
         url.query_pairs_mut()
             .append_pair("client_id", &params.client_id)
             .append_pair("redirect_uri", &redirect_uri)
@@ -1020,9 +1020,7 @@ fn generate_user_code() -> String {
 }
 
 /// Generate a unique user code, retrying on collision with pending codes.
-async fn generate_unique_user_code(
-    db: &sea_orm::DatabaseConnection,
-) -> Result<String, ApiError> {
+async fn generate_unique_user_code(db: &sea_orm::DatabaseConnection) -> Result<String, ApiError> {
     for _ in 0..10 {
         let code = generate_user_code();
         let existing = yauth_entity::device_codes::Entity::find()
@@ -1189,16 +1187,12 @@ async fn device_verify_get(
                     .flatten();
 
                 let client_name = client.and_then(|c| c.client_name);
-                let scope = dc
-                    .scopes
-                    .as_ref()
-                    .and_then(|v| v.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|s| s.as_str())
-                            .collect::<Vec<_>>()
-                            .join(" ")
-                    });
+                let scope = dc.scopes.as_ref().and_then(|v| v.as_array()).map(|arr| {
+                    arr.iter()
+                        .filter_map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                });
 
                 return Json(serde_json::json!({
                     "type": "device_verification",

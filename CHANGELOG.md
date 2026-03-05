@@ -1,3 +1,11 @@
+## 0.1.33 (2026-03-05)
+
+### Fixes
+
+- make redirect_uri optional in authorize endpoint per RFC 6749
+- retrigger release with correct Forgejo release history
+- align all package versions to 0.1.32 for knope release
+
 ## 0.1.32 (2026-03-04)
 
 ### Fixes

@@ -6,6 +6,7 @@ use axum::{
     routing::{get, post},
 };
 use chrono::Utc;
+use rand::Rng;
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -43,8 +44,10 @@ impl YAuthPlugin for OAuth2ServerPlugin {
             Router::new()
                 .route("/.well-known/oauth-authorization-server", get(as_metadata))
                 .route("/oauth/authorize", get(authorize_get).post(authorize_post))
-                .route("/oauth/token", post(token_authorization_code))
-                .route("/oauth/register", post(dynamic_client_registration)),
+                .route("/oauth/token", post(token_endpoint))
+                .route("/oauth/register", post(dynamic_client_registration))
+                .route("/oauth/device/code", post(device_authorization))
+                .route("/oauth/device", get(device_verify_get).post(device_verify_post)),
         )
     }
 
@@ -62,7 +65,10 @@ struct AuthorizationServerMetadata {
     issuer: String,
     authorization_endpoint: String,
     token_endpoint: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     registration_endpoint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    device_authorization_endpoint: Option<String>,
     scopes_supported: Vec<String>,
     response_types_supported: Vec<String>,
     grant_types_supported: Vec<String>,
@@ -80,14 +86,21 @@ async fn as_metadata(State(state): State<YAuthState>) -> Json<AuthorizationServe
         None
     };
 
+    let device_authorization_endpoint = Some(format!("{}/oauth/device/code", issuer));
+
     Json(AuthorizationServerMetadata {
         issuer: issuer.clone(),
         authorization_endpoint: format!("{}/oauth/authorize", issuer),
         token_endpoint: format!("{}/oauth/token", issuer),
         registration_endpoint,
+        device_authorization_endpoint,
         scopes_supported: config.scopes_supported.clone(),
         response_types_supported: vec!["code".into()],
-        grant_types_supported: vec!["authorization_code".into(), "refresh_token".into()],
+        grant_types_supported: vec![
+            "authorization_code".into(),
+            "refresh_token".into(),
+            "urn:ietf:params:oauth:grant-type:device_code".into(),
+        ],
         token_endpoint_auth_methods_supported: vec!["none".into(), "client_secret_post".into()],
         code_challenge_methods_supported: vec!["S256".into()],
     })
@@ -313,6 +326,9 @@ pub struct TokenCodeRequest {
     // refresh_token fields
     #[serde(default)]
     pub refresh_token: Option<String>,
+    // device_code fields
+    #[serde(default)]
+    pub device_code: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -325,7 +341,7 @@ struct OAuth2TokenResponse {
     scope: Option<String>,
 }
 
-async fn token_authorization_code(
+async fn token_endpoint(
     State(state): State<YAuthState>,
     Json(input): Json<TokenCodeRequest>,
 ) -> Response {
@@ -338,6 +354,12 @@ async fn token_authorization_code(
             Ok(resp) => resp.into_response(),
             Err(e) => e,
         },
+        "urn:ietf:params:oauth:grant-type:device_code" => {
+            match handle_device_code_grant(&state, &input).await {
+                Ok(resp) => resp.into_response(),
+                Err(e) => e,
+            }
+        }
         _ => oauth2_error(
             StatusCode::BAD_REQUEST,
             "unsupported_grant_type",
@@ -866,6 +888,614 @@ async fn dynamic_client_registration(
 }
 
 // ---------------------------------------------------------------------------
+// Device Authorization Grant (RFC 8628)
+// ---------------------------------------------------------------------------
+
+/// Characters for user codes — ambiguity-free (no 0/O/1/I/L).
+const USER_CODE_ALPHABET: &[u8] = b"ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+
+/// Generate an 8-character user code formatted as XXXX-XXXX.
+fn generate_user_code() -> String {
+    let mut rng = rand::thread_rng();
+    let chars: String = (0..8)
+        .map(|_| USER_CODE_ALPHABET[rng.gen_range(0..USER_CODE_ALPHABET.len())] as char)
+        .collect();
+    format!("{}-{}", &chars[..4], &chars[4..])
+}
+
+/// Generate a unique user code, retrying on collision with pending codes.
+async fn generate_unique_user_code(
+    db: &sea_orm::DatabaseConnection,
+) -> Result<String, ApiError> {
+    for _ in 0..10 {
+        let code = generate_user_code();
+        let existing = yauth_entity::device_codes::Entity::find()
+            .filter(yauth_entity::device_codes::Column::UserCode.eq(&code))
+            .filter(yauth_entity::device_codes::Column::Status.eq("pending"))
+            .one(db)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error checking user code uniqueness: {}", e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?;
+        if existing.is_none() {
+            return Ok(code);
+        }
+    }
+    Err(api_err(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Failed to generate unique user code",
+    ))
+}
+
+#[derive(Deserialize)]
+pub struct DeviceAuthorizationRequest {
+    pub client_id: String,
+    #[serde(default)]
+    pub scope: Option<String>,
+}
+
+#[derive(Serialize)]
+struct DeviceAuthorizationResponse {
+    device_code: String,
+    user_code: String,
+    verification_uri: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    verification_uri_complete: Option<String>,
+    expires_in: u64,
+    interval: u32,
+}
+
+/// POST /oauth/device/code — Client requests device + user codes.
+async fn device_authorization(
+    State(state): State<YAuthState>,
+    Json(input): Json<DeviceAuthorizationRequest>,
+) -> Response {
+    // Verify client exists
+    if let Err(e) = lookup_client(&state, &input.client_id).await {
+        return e.into_response();
+    }
+
+    let config = &state.oauth2_server_config;
+    let interval = config.device_poll_interval;
+    let ttl = config.device_code_ttl;
+
+    // Generate codes
+    let user_code = match generate_unique_user_code(&state.db).await {
+        Ok(c) => c,
+        Err(e) => return e.into_response(),
+    };
+
+    let raw_device_code = crypto::generate_token();
+    let device_code_hash = crypto::hash_token(&raw_device_code);
+
+    let now = Utc::now().fixed_offset();
+    let expires_at = (Utc::now()
+        + chrono::Duration::from_std(ttl).unwrap_or(chrono::Duration::seconds(600)))
+    .fixed_offset();
+
+    let scopes_json = input
+        .scope
+        .as_ref()
+        .map(|s| serde_json::json!(s.split_whitespace().collect::<Vec<_>>()));
+
+    let device_code = yauth_entity::device_codes::ActiveModel {
+        id: Set(Uuid::new_v4()),
+        device_code_hash: Set(device_code_hash),
+        user_code: Set(user_code.clone()),
+        client_id: Set(input.client_id.clone()),
+        scopes: Set(scopes_json),
+        user_id: Set(None),
+        status: Set("pending".into()),
+        interval: Set(interval as i32),
+        expires_at: Set(expires_at),
+        last_polled_at: Set(None),
+        created_at: Set(now),
+    };
+
+    if let Err(e) = device_code.insert(&state.db).await {
+        tracing::error!("Failed to store device code: {}", e);
+        return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
+    }
+
+    let verification_uri = config
+        .device_verification_uri
+        .clone()
+        .unwrap_or_else(|| format!("{}/oauth/device", config.issuer));
+
+    let verification_uri_complete = Some(format!("{}?user_code={}", verification_uri, user_code));
+
+    info!(
+        event = "device_authorization_initiated",
+        client_id = %input.client_id,
+        "Device authorization flow initiated"
+    );
+
+    state
+        .write_audit_log(
+            None,
+            "device_authorization_initiated",
+            Some(serde_json::json!({
+                "client_id": input.client_id,
+            })),
+            None,
+        )
+        .await;
+
+    Json(DeviceAuthorizationResponse {
+        device_code: raw_device_code,
+        user_code,
+        verification_uri,
+        verification_uri_complete,
+        expires_in: ttl.as_secs(),
+        interval,
+    })
+    .into_response()
+}
+
+#[derive(Deserialize)]
+pub struct DeviceVerifyQuery {
+    #[serde(default)]
+    pub user_code: Option<String>,
+}
+
+/// GET /oauth/device — Returns JSON for the SPA consent page.
+async fn device_verify_get(
+    State(state): State<YAuthState>,
+    Query(query): Query<DeviceVerifyQuery>,
+) -> Response {
+    // If a user_code is provided, look up the pending device code
+    if let Some(ref code) = query.user_code {
+        let stored = yauth_entity::device_codes::Entity::find()
+            .filter(yauth_entity::device_codes::Column::UserCode.eq(code))
+            .filter(yauth_entity::device_codes::Column::Status.eq("pending"))
+            .one(&state.db)
+            .await;
+
+        match stored {
+            Ok(Some(dc)) => {
+                let now = Utc::now().fixed_offset();
+                if dc.expires_at < now {
+                    return Json(serde_json::json!({
+                        "type": "device_verification",
+                        "error": "expired_token",
+                        "error_description": "This device code has expired"
+                    }))
+                    .into_response();
+                }
+
+                // Look up client name
+                let client = yauth_entity::oauth2_clients::Entity::find()
+                    .filter(yauth_entity::oauth2_clients::Column::ClientId.eq(&dc.client_id))
+                    .one(&state.db)
+                    .await
+                    .ok()
+                    .flatten();
+
+                let client_name = client.and_then(|c| c.client_name);
+                let scope = dc
+                    .scopes
+                    .as_ref()
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|s| s.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    });
+
+                return Json(serde_json::json!({
+                    "type": "device_verification",
+                    "user_code": dc.user_code,
+                    "client_id": dc.client_id,
+                    "client_name": client_name,
+                    "scope": scope,
+                    "login_endpoint": format!("{}/login", state.config.base_url),
+                    "approve_endpoint": format!("{}/oauth/device", state.config.base_url),
+                }))
+                .into_response();
+            }
+            Ok(None) => {
+                return Json(serde_json::json!({
+                    "type": "device_verification",
+                    "error": "invalid_code",
+                    "error_description": "Invalid or already used user code"
+                }))
+                .into_response();
+            }
+            Err(e) => {
+                tracing::error!("DB error looking up device code: {}", e);
+                return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+                    .into_response();
+            }
+        }
+    }
+
+    // No user_code — return a prompt for the user to enter one
+    Json(serde_json::json!({
+        "type": "device_verification",
+        "message": "Enter the code displayed on your device",
+        "approve_endpoint": format!("{}/oauth/device", state.config.base_url),
+    }))
+    .into_response()
+}
+
+#[derive(Deserialize)]
+pub struct DeviceVerifyRequest {
+    pub user_code: String,
+    pub approved: bool,
+}
+
+/// POST /oauth/device — User approves or denies the device authorization.
+/// Requires authentication (session cookie or bearer token).
+async fn device_verify_post(
+    State(state): State<YAuthState>,
+    jar: axum_extra::extract::cookie::CookieJar,
+    headers: axum::http::HeaderMap,
+    Json(input): Json<DeviceVerifyRequest>,
+) -> Response {
+    // Authenticate the user
+    let auth_user = match authenticate_user(&state, &jar, &headers).await {
+        Ok(u) => u,
+        Err(_) => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({
+                    "error": "login_required",
+                    "error_description": "User must be authenticated to approve device authorization"
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    // Find the pending device code by user_code
+    let stored = yauth_entity::device_codes::Entity::find()
+        .filter(yauth_entity::device_codes::Column::UserCode.eq(&input.user_code))
+        .filter(yauth_entity::device_codes::Column::Status.eq("pending"))
+        .one(&state.db)
+        .await;
+
+    let dc = match stored {
+        Ok(Some(dc)) => dc,
+        Ok(None) => {
+            return oauth2_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "Invalid or already used user code",
+            );
+        }
+        Err(e) => {
+            tracing::error!("DB error: {}", e);
+            return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
+        }
+    };
+
+    // Check expiration
+    let now = Utc::now().fixed_offset();
+    if dc.expires_at < now {
+        return oauth2_error(
+            StatusCode::BAD_REQUEST,
+            "expired_token",
+            "Device code has expired",
+        );
+    }
+
+    let new_status = if input.approved { "approved" } else { "denied" };
+
+    let mut active: yauth_entity::device_codes::ActiveModel = dc.into();
+    active.status = Set(new_status.into());
+    if input.approved {
+        active.user_id = Set(Some(auth_user.id));
+    }
+    if let Err(e) = active.update(&state.db).await {
+        tracing::error!("Failed to update device code status: {}", e);
+        return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
+    }
+
+    info!(
+        event = "device_authorization_decision",
+        user_id = %auth_user.id,
+        approved = input.approved,
+        "User {} device authorization", if input.approved { "approved" } else { "denied" }
+    );
+
+    state
+        .write_audit_log(
+            Some(auth_user.id),
+            if input.approved {
+                "device_authorization_approved"
+            } else {
+                "device_authorization_denied"
+            },
+            Some(serde_json::json!({
+                "user_code": input.user_code,
+            })),
+            None,
+        )
+        .await;
+
+    Json(serde_json::json!({
+        "status": new_status,
+        "message": if input.approved { "Device authorized successfully" } else { "Device authorization denied" }
+    }))
+    .into_response()
+}
+
+/// Handle the device_code grant type at the token endpoint.
+#[allow(unused_variables, clippy::needless_return)]
+async fn handle_device_code_grant(
+    state: &YAuthState,
+    input: &TokenCodeRequest,
+) -> Result<impl IntoResponse, Response> {
+    let device_code_raw = input.device_code.as_deref().ok_or_else(|| {
+        oauth2_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "Missing 'device_code' parameter",
+        )
+    })?;
+    let client_id = input.client_id.as_deref().ok_or_else(|| {
+        oauth2_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "Missing 'client_id' parameter",
+        )
+    })?;
+
+    // Verify client exists
+    let _client = lookup_client(state, client_id)
+        .await
+        .map_err(|e| e.into_response())?;
+
+    // Find device code
+    let device_code_hash = crypto::hash_token(device_code_raw);
+    let stored = yauth_entity::device_codes::Entity::find()
+        .filter(yauth_entity::device_codes::Column::DeviceCodeHash.eq(&device_code_hash))
+        .one(&state.db)
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error: {}", e);
+            oauth2_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "Internal error",
+            )
+        })?
+        .ok_or_else(|| {
+            oauth2_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_grant",
+                "Invalid device code",
+            )
+        })?;
+
+    // Validate client_id matches
+    if stored.client_id != client_id {
+        return Err(oauth2_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_grant",
+            "Client ID mismatch",
+        ));
+    }
+
+    // Check expiration
+    let now = Utc::now().fixed_offset();
+    if stored.expires_at < now {
+        return Err(oauth2_error(
+            StatusCode::BAD_REQUEST,
+            "expired_token",
+            "Device code has expired",
+        ));
+    }
+
+    // Enforce polling interval (RFC 8628 §3.5)
+    if let Some(last_polled) = stored.last_polled_at {
+        let elapsed = now.signed_duration_since(last_polled);
+        if elapsed.num_seconds() < stored.interval as i64 {
+            // Too fast — increment interval by 5s
+            let mut active: yauth_entity::device_codes::ActiveModel = stored.clone().into();
+            active.interval = Set(stored.interval + 5);
+            active.last_polled_at = Set(Some(now));
+            let _ = active.update(&state.db).await;
+            return Err(oauth2_error(
+                StatusCode::BAD_REQUEST,
+                "slow_down",
+                "Polling too frequently, slow down",
+            ));
+        }
+    }
+
+    // Update last_polled_at
+    let current_status = stored.status.clone();
+    let mut active: yauth_entity::device_codes::ActiveModel = stored.clone().into();
+    active.last_polled_at = Set(Some(now));
+    let _ = active.update(&state.db).await;
+
+    match current_status.as_str() {
+        "pending" => {
+            return Err(oauth2_error(
+                StatusCode::BAD_REQUEST,
+                "authorization_pending",
+                "The authorization request is still pending",
+            ));
+        }
+        "denied" => {
+            return Err(oauth2_error(
+                StatusCode::BAD_REQUEST,
+                "access_denied",
+                "The user denied the authorization request",
+            ));
+        }
+        "used" => {
+            return Err(oauth2_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_grant",
+                "Device code has already been used",
+            ));
+        }
+        "approved" => {
+            // Continue to issue tokens below
+        }
+        _ => {
+            return Err(oauth2_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "Unknown device code status",
+            ));
+        }
+    }
+
+    // Mark as used
+    // Re-fetch to get fresh state after last_polled_at update
+    let stored = yauth_entity::device_codes::Entity::find()
+        .filter(yauth_entity::device_codes::Column::DeviceCodeHash.eq(&device_code_hash))
+        .one(&state.db)
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error: {}", e);
+            oauth2_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "Internal error",
+            )
+        })?
+        .ok_or_else(|| {
+            oauth2_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "Device code disappeared",
+            )
+        })?;
+
+    let user_id = stored.user_id.ok_or_else(|| {
+        oauth2_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "server_error",
+            "Approved device code has no user_id",
+        )
+    })?;
+
+    let mut active: yauth_entity::device_codes::ActiveModel = stored.clone().into();
+    active.status = Set("used".into());
+    active.update(&state.db).await.map_err(|e| {
+        tracing::error!("Failed to mark device code as used: {}", e);
+        oauth2_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "server_error",
+            "Internal error",
+        )
+    })?;
+
+    // Look up user
+    let user = yauth_entity::users::Entity::find_by_id(user_id)
+        .one(&state.db)
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error: {}", e);
+            oauth2_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "Internal error",
+            )
+        })?
+        .ok_or_else(|| oauth2_error(StatusCode::BAD_REQUEST, "invalid_grant", "User not found"))?;
+
+    if user.banned {
+        return Err(oauth2_error(
+            StatusCode::FORBIDDEN,
+            "access_denied",
+            "Account suspended",
+        ));
+    }
+
+    // Parse scopes
+    let scope_str = stored
+        .scopes
+        .as_ref()
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join(" ")
+        });
+
+    // Issue tokens
+    #[cfg(feature = "bearer")]
+    {
+        let bearer_config = &state.bearer_config;
+
+        let (access_token, _jti) = crate::plugins::bearer::create_jwt_with_audience(
+            &user,
+            bearer_config,
+            scope_str.as_deref(),
+        )
+        .map_err(|_| {
+            oauth2_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "Failed to create token",
+            )
+        })?;
+
+        let family_id = Uuid::new_v4();
+        let refresh_token = create_refresh_token_for_oauth2(
+            &state.db,
+            user.id,
+            family_id,
+            bearer_config.refresh_token_ttl,
+        )
+        .await
+        .map_err(|_| {
+            oauth2_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "Failed to create refresh token",
+            )
+        })?;
+
+        let expires_in = bearer_config.access_token_ttl.as_secs();
+
+        info!(
+            event = "oauth2_token_issued",
+            user_id = %user.id,
+            client_id = %client_id,
+            "OAuth2 access token issued via device_code grant"
+        );
+
+        state
+            .write_audit_log(
+                Some(user.id),
+                "oauth2_token_issued",
+                Some(serde_json::json!({
+                    "client_id": client_id,
+                    "grant_type": "device_code",
+                })),
+                None,
+            )
+            .await;
+
+        return Ok(Json(OAuth2TokenResponse {
+            access_token,
+            token_type: "Bearer".into(),
+            expires_in,
+            refresh_token,
+            scope: scope_str,
+        }));
+    }
+
+    #[cfg(not(feature = "bearer"))]
+    {
+        Err::<Json<OAuth2TokenResponse>, _>(oauth2_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "server_error",
+            "Bearer feature is required for OAuth2 token issuance",
+        ))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -1195,5 +1825,56 @@ mod tests {
             code_challenge_method: "S256".into(),
         };
         assert!(validate_authorize_params(&params).is_ok());
+    }
+
+    #[test]
+    fn user_code_format_is_xxxx_dash_xxxx() {
+        let code = generate_user_code();
+        assert_eq!(code.len(), 9); // 4 + 1 + 4
+        assert_eq!(&code[4..5], "-");
+    }
+
+    #[test]
+    fn user_code_uses_only_ambiguity_free_chars() {
+        for _ in 0..100 {
+            let code = generate_user_code();
+            for ch in code.chars() {
+                if ch == '-' {
+                    continue;
+                }
+                assert!(
+                    USER_CODE_ALPHABET.contains(&(ch as u8)),
+                    "Unexpected character '{}' in user code",
+                    ch
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn user_code_excludes_ambiguous_chars() {
+        // Run many iterations to check no 0, O, 1, I, L appear
+        let ambiguous = b"0O1IL";
+        for _ in 0..1000 {
+            let code = generate_user_code();
+            for ch in code.bytes() {
+                if ch == b'-' {
+                    continue;
+                }
+                assert!(
+                    !ambiguous.contains(&ch),
+                    "Ambiguous character '{}' in user code",
+                    ch as char
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn user_codes_are_unique() {
+        let codes: std::collections::HashSet<String> =
+            (0..100).map(|_| generate_user_code()).collect();
+        // With 30^8 space, 100 codes should all be unique
+        assert_eq!(codes.len(), 100);
     }
 }

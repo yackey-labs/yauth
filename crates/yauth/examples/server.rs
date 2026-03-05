@@ -172,6 +172,7 @@ async fn main() {
             "write:milestones".into(),
         ],
         allow_dynamic_registration: true,
+        ..Default::default()
     })
     .build();
 

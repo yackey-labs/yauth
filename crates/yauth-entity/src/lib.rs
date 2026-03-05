@@ -36,4 +36,6 @@ pub mod authorization_codes;
 #[cfg(feature = "oauth2-server")]
 pub mod consents;
 #[cfg(feature = "oauth2-server")]
+pub mod device_codes;
+#[cfg(feature = "oauth2-server")]
 pub mod oauth2_clients;

@@ -295,6 +295,10 @@ export function createYAuthClient(options: YAuthClientOptions) {
 				request<void>("/oauth/authorize", { method: "POST" }),
 			token: () => request<void>("/oauth/token", { method: "POST" }),
 			register: () => request<void>("/oauth/register", { method: "POST" }),
+			deviceAuthorize: () =>
+				request<void>("/oauth/device/code", { method: "POST" }),
+			deviceVerify: () => request<void>("/oauth/device"),
+			deviceApprove: () => request<void>("/oauth/device", { method: "POST" }),
 		},
 
 		passkey: {

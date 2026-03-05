@@ -175,6 +175,9 @@ pub fn oauth2_server_routes() -> RouteCollection {
         authorizeConsent: POST "/oauth/authorize";
         token: POST "/oauth/token";
         register: POST "/oauth/register";
+        deviceAuthorize: POST "/oauth/device/code";
+        deviceVerify: GET "/oauth/device";
+        deviceApprove: POST "/oauth/device";
     }
 }
 

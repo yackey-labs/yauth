@@ -28,6 +28,8 @@ mod m20250101_000009_oauth_token_refresh;
 
 #[cfg(feature = "oauth2-server")]
 mod m20250101_000010_oauth2_server;
+#[cfg(feature = "oauth2-server")]
+mod m20250101_000011_device_authorization;
 
 pub struct Migrator;
 
@@ -67,6 +69,9 @@ impl MigratorTrait for Migrator {
 
         #[cfg(feature = "oauth2-server")]
         migrations.push(Box::new(m20250101_000010_oauth2_server::Migration));
+
+        #[cfg(feature = "oauth2-server")]
+        migrations.push(Box::new(m20250101_000011_device_authorization::Migration));
 
         migrations
     }

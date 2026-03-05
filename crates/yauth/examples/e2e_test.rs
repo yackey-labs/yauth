@@ -1467,6 +1467,7 @@ async fn start_server_with_oauth2(db: DatabaseConnection) -> u16 {
             "read:milestones".into(),
         ],
         allow_dynamic_registration: true,
+        ..Default::default()
     })
     .build();
 

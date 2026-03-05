@@ -158,6 +158,25 @@ pub struct OAuth2ServerConfig {
     /// Whether to allow dynamic client registration (POST /register).
     #[serde(default)]
     pub allow_dynamic_registration: bool,
+    /// Device code TTL (default: 600 seconds / 10 minutes per RFC 8628).
+    #[serde(default = "default_device_code_ttl", with = "duration_secs")]
+    pub device_code_ttl: Duration,
+    /// Minimum polling interval in seconds for device code grant (default: 5).
+    #[serde(default = "default_device_poll_interval")]
+    pub device_poll_interval: u32,
+    /// Verification URI for device authorization. Defaults to `{issuer}/oauth/device`.
+    #[serde(default)]
+    pub device_verification_uri: Option<String>,
+}
+
+#[cfg(feature = "oauth2-server")]
+fn default_device_code_ttl() -> Duration {
+    Duration::from_secs(600)
+}
+
+#[cfg(feature = "oauth2-server")]
+fn default_device_poll_interval() -> u32 {
+    5
 }
 
 #[cfg(feature = "oauth2-server")]
@@ -168,6 +187,9 @@ impl Default for OAuth2ServerConfig {
             authorization_code_ttl: Duration::from_secs(60),
             scopes_supported: vec![],
             allow_dynamic_registration: true,
+            device_code_ttl: Duration::from_secs(600),
+            device_poll_interval: 5,
+            device_verification_uri: None,
         }
     }
 }

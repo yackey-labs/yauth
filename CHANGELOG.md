@@ -1,3 +1,17 @@
+## 0.1.32 (2026-03-04)
+
+### Fixes
+
+- ignore ts-rs bindings in biome strict lint
+- update doc comments to reflect /oauth/ route namespace
+- revert version numbers to let knope manage releases
+
+## 0.1.31 (2026-03-04)
+
+### Fixes
+
+- namespace all oauth2-server routes under /oauth/ to avoid collisions
+
 ## 0.1.30 (2026-03-04)
 
 ### Features

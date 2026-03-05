@@ -429,8 +429,38 @@ struct OAuth2TokenResponse {
 
 async fn token_endpoint(
     State(state): State<YAuthState>,
-    Json(input): Json<TokenCodeRequest>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
 ) -> Response {
+    let content_type = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    let input: TokenCodeRequest = if content_type.contains("application/json") {
+        match serde_json::from_slice(&body) {
+            Ok(v) => v,
+            Err(e) => {
+                return oauth2_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_request",
+                    &format!("Invalid JSON: {e}"),
+                );
+            }
+        }
+    } else {
+        // application/x-www-form-urlencoded per RFC 6749 §4.1.3
+        match serde_urlencoded::from_bytes(&body) {
+            Ok(v) => v,
+            Err(e) => {
+                return oauth2_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_request",
+                    &format!("Invalid form data: {e}"),
+                );
+            }
+        }
+    };
     match input.grant_type.as_str() {
         "authorization_code" => match handle_authorization_code_grant(&state, &input).await {
             Ok(resp) => resp.into_response(),

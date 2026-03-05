@@ -1,3 +1,9 @@
+## 0.1.35 (2026-03-05)
+
+### Features
+
+- add consent_ui_url config for browser-based OAuth authorize redirect
+
 ## 0.1.34 (2026-03-05)
 
 ### Features

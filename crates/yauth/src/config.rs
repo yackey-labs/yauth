@@ -167,6 +167,10 @@ pub struct OAuth2ServerConfig {
     /// Verification URI for device authorization. Defaults to `{issuer}/oauth/device`.
     #[serde(default)]
     pub device_verification_uri: Option<String>,
+    /// URL of the consent UI page. When set, GET /oauth/authorize redirects here
+    /// with all query params forwarded. When None, returns JSON (API-only mode).
+    #[serde(default)]
+    pub consent_ui_url: Option<String>,
 }
 
 #[cfg(feature = "oauth2-server")]
@@ -190,6 +194,7 @@ impl Default for OAuth2ServerConfig {
             device_code_ttl: Duration::from_secs(600),
             device_poll_interval: 5,
             device_verification_uri: None,
+            consent_ui_url: None,
         }
     }
 }

@@ -133,6 +133,7 @@ pub struct AuthorizeParams {
 /// immediately with the authorization code.
 async fn authorize_get(
     State(state): State<YAuthState>,
+    headers: axum::http::HeaderMap,
     Query(params): Query<AuthorizeParams>,
 ) -> Response {
     // Validate request parameters
@@ -151,6 +152,34 @@ async fn authorize_get(
         Ok(uri) => uri,
         Err(e) => return e.into_response(),
     };
+
+    // If a consent UI URL is configured and the request is from a browser
+    // (not an API client requesting JSON), redirect to the consent UI.
+    let wants_json = headers
+        .get(axum::http::header::ACCEPT)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.contains("application/json"));
+
+    if !wants_json
+        && let Some(ref consent_url) = state.oauth2_server_config.consent_ui_url
+    {
+        let mut url = url::Url::parse(consent_url).unwrap_or_else(|_| {
+            url::Url::parse("http://localhost").unwrap()
+        });
+        url.query_pairs_mut()
+            .append_pair("client_id", &params.client_id)
+            .append_pair("redirect_uri", &redirect_uri)
+            .append_pair("response_type", &params.response_type)
+            .append_pair("code_challenge", &params.code_challenge)
+            .append_pair("code_challenge_method", &params.code_challenge_method);
+        if let Some(ref scope) = params.scope {
+            url.query_pairs_mut().append_pair("scope", scope);
+        }
+        if let Some(ref state_param) = params.state {
+            url.query_pairs_mut().append_pair("state", state_param);
+        }
+        return Redirect::to(url.as_str()).into_response();
+    }
 
     // Return a JSON response describing the authorization request.
     // The consent UI (or MCP client browser popup) uses this to display

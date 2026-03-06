@@ -20,7 +20,10 @@
 			"types": "./src/aaguid.ts"
 		}
 	},
-	"files": ["dist", "src"],
+	"files": [
+		"dist",
+		"src"
+	],
 	"scripts": {
 		"build": "bun build src/index.ts --outdir dist --target bun",
 		"typecheck": "tsc --noEmit"

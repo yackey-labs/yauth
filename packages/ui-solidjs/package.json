@@ -12,7 +12,10 @@
 			"default": "./src/index.ts"
 		}
 	},
-	"files": ["dist", "src"],
+	"files": [
+		"dist",
+		"src"
+	],
 	"scripts": {
 		"build": "vite build",
 		"typecheck": "tsc --noEmit"

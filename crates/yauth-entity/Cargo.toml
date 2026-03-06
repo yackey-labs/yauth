@@ -16,7 +16,10 @@ bearer = []
 api-key = []
 magic-link = []
 oauth2-server = []
-full = ["email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link", "oauth2-server"]
+account-lockout = []
+webhooks = []
+oidc = []
+full = ["email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link", "oauth2-server", "account-lockout", "webhooks", "oidc"]
 
 [dependencies]
 sea-orm = { workspace = true }

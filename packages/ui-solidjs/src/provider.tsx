@@ -1,9 +1,9 @@
 import type { YAuthClient } from "@yauth/client";
 import type { AuthUser } from "@yauth/shared";
 import {
-	type ParentComponent,
 	createContext,
 	createResource,
+	type ParentComponent,
 	useContext,
 } from "solid-js";
 

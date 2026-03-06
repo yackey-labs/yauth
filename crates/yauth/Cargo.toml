@@ -17,8 +17,11 @@ api-key = ["yauth-entity/api-key", "yauth-migration/api-key"]
 magic-link = ["yauth-entity/magic-link", "yauth-migration/magic-link"]
 admin = []
 oauth2-server = ["yauth-entity/oauth2-server", "yauth-migration/oauth2-server", "dep:url", "dep:base64", "dep:serde_urlencoded"]
+account-lockout = ["yauth-entity/account-lockout", "yauth-migration/account-lockout"]
+webhooks = ["yauth-entity/webhooks", "yauth-migration/webhooks", "dep:hmac"]
+oidc = ["bearer", "oauth2-server", "yauth-entity/oidc", "yauth-migration/oidc"]
 telemetry = ["dep:tracing-opentelemetry", "dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:opentelemetry-semantic-conventions"]
-full = ["email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link", "admin", "oauth2-server", "telemetry"]
+full = ["email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link", "admin", "oauth2-server", "account-lockout", "webhooks", "oidc", "telemetry"]
 
 [dependencies]
 yauth-entity = { workspace = true }
@@ -67,6 +70,9 @@ jsonwebtoken = { workspace = true, optional = true }
 url = { version = "2", optional = true }
 base64 = { version = "0.22", optional = true }
 serde_urlencoded = { version = "0.7", optional = true }
+
+# Feature-gated: Webhooks
+hmac = { version = "0.12", optional = true }
 
 tracing-opentelemetry = { workspace = true, optional = true }
 opentelemetry = { workspace = true, optional = true }

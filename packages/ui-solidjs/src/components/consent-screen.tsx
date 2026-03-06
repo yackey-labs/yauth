@@ -1,4 +1,4 @@
-import { type Component, For, createSignal } from "solid-js";
+import { type Component, createSignal, For } from "solid-js";
 import { Show } from "solid-js/web";
 
 export interface ConsentScreenProps {

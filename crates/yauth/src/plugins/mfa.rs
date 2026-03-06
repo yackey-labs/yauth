@@ -606,7 +606,7 @@ async fn verify_mfa(
     // MFA passed — delete the pending session and create a real session
     state.challenge_store.delete(&key).await.ok();
 
-    let (token, _session_id) = session::create_session(&state.db, user_id, None, None)
+    let (token, _session_id) = session::create_session(&state.db, user_id, None, None, state.config.session_ttl)
         .await
         .map_err(|e| {
             tracing::error!("Failed to create session: {}", e);
@@ -629,7 +629,7 @@ async fn verify_mfa(
         .await;
 
     Ok((
-        [(SET_COOKIE, session_set_cookie(&state, &token))],
+        [(SET_COOKIE, session_set_cookie(&state, &token, state.config.session_ttl))],
         Json(MfaAuthResponse {
             user_id: user.id.to_string(),
             email: user.email.clone(),

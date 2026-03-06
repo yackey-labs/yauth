@@ -3,5 +3,7 @@ pub mod email;
 pub mod hibp;
 pub mod input;
 pub mod password;
+#[cfg(feature = "email-password")]
+pub mod password_policy;
 pub mod rate_limit;
 pub mod session;

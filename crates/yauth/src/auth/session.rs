@@ -1,4 +1,4 @@
-use chrono::{Duration, Utc};
+use chrono::Utc;
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -6,10 +6,11 @@ use uuid::Uuid;
 use sea_orm::DatabaseConnection;
 
 use super::crypto;
+use crate::config::BindingAction;
 use crate::state::YAuthState;
 
-pub fn session_set_cookie(state: &YAuthState, token: &str) -> String {
-    let max_age = state.config.session_ttl.as_secs();
+pub fn session_set_cookie(state: &YAuthState, token: &str, ttl: std::time::Duration) -> String {
+    let max_age = ttl.as_secs();
     let mut cookie = format!(
         "{}={}; HttpOnly; SameSite=Lax; Path=/; Max-Age={}",
         state.config.session_cookie_name, token, max_age
@@ -34,13 +35,16 @@ pub async fn create_session(
     user_id: Uuid,
     ip_address: Option<String>,
     user_agent: Option<String>,
+    ttl: std::time::Duration,
 ) -> Result<(String, Uuid), sea_orm::DbErr> {
     let token = crypto::generate_token();
     let token_hash = crypto::hash_token(&token);
     let session_id = Uuid::new_v4();
 
     let now = Utc::now().fixed_offset();
-    let expires_at = (Utc::now() + Duration::days(7)).fixed_offset();
+    let expires_at = (Utc::now()
+        + chrono::Duration::from_std(ttl).unwrap_or(chrono::Duration::days(7)))
+    .fixed_offset();
 
     let session = yauth_entity::sessions::ActiveModel {
         id: Set(session_id),
@@ -56,32 +60,76 @@ pub async fn create_session(
     Ok((token, session_id))
 }
 
+/// Validate a session token and optionally check session binding (IP/UA).
+/// Returns `Ok(None)` for expired or invalid sessions, and `Err` on DB errors
+/// or binding violations with `Invalidate` action.
 pub async fn validate_session(
-    db: &DatabaseConnection,
+    state: &YAuthState,
     token: &str,
+    request_ip: Option<&str>,
+    request_ua: Option<&str>,
 ) -> Result<Option<SessionUser>, sea_orm::DbErr> {
     let token_hash = crypto::hash_token(token);
 
     let session = yauth_entity::sessions::Entity::find()
         .filter(yauth_entity::sessions::Column::TokenHash.eq(&token_hash))
-        .one(db)
+        .one(&state.db)
         .await?;
 
     match session {
         Some(s) => {
             let now = Utc::now().fixed_offset();
             if s.expires_at < now {
-                // Session expired — clean it up
                 yauth_entity::sessions::Entity::delete_by_id(s.id)
-                    .exec(db)
+                    .exec(&state.db)
                     .await?;
-                Ok(None)
-            } else {
-                Ok(Some(SessionUser {
-                    user_id: s.user_id,
-                    session_id: s.id,
-                }))
+                return Ok(None);
             }
+
+            let binding = &state.config.session_binding;
+
+            // Check IP binding
+            if binding.bind_ip
+                && let (Some(session_ip), Some(req_ip)) = (&s.ip_address, request_ip)
+                && session_ip != req_ip
+            {
+                tracing::warn!(
+                    event = "session_binding_ip_mismatch",
+                    session_id = %s.id,
+                    session_ip = %session_ip,
+                    request_ip = %req_ip,
+                    "Session IP mismatch"
+                );
+                if binding.ip_mismatch_action == BindingAction::Invalidate {
+                    yauth_entity::sessions::Entity::delete_by_id(s.id)
+                        .exec(&state.db)
+                        .await?;
+                    return Ok(None);
+                }
+            }
+
+            // Check User-Agent binding
+            if binding.bind_user_agent
+                && let (Some(session_ua), Some(req_ua)) = (&s.user_agent, request_ua)
+                && session_ua != req_ua
+            {
+                tracing::warn!(
+                    event = "session_binding_ua_mismatch",
+                    session_id = %s.id,
+                    "Session User-Agent mismatch"
+                );
+                if binding.ua_mismatch_action == BindingAction::Invalidate {
+                    yauth_entity::sessions::Entity::delete_by_id(s.id)
+                        .exec(&state.db)
+                        .await?;
+                    return Ok(None);
+                }
+            }
+
+            Ok(Some(SessionUser {
+                user_id: s.user_id,
+                session_id: s.id,
+            }))
         }
         None => Ok(None),
     }

@@ -44,10 +44,33 @@ pub async fn auth_middleware(
     mut req: Request,
     next: Next,
 ) -> Response {
+    // Extract client fingerprint for session binding
+    let request_ip = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.split(',').next().unwrap_or("").trim().to_string())
+        .or_else(|| {
+            headers
+                .get("x-real-ip")
+                .and_then(|v| v.to_str().ok())
+                .map(|v| v.to_string())
+        });
+    let request_ua = headers
+        .get("user-agent")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.to_string());
+
     // Try session cookie first
     if let Some(cookie) = jar.get(&state.config.session_cookie_name) {
         let token = cookie.value();
-        match crate::auth::session::validate_session(&state.db, token).await {
+        match crate::auth::session::validate_session(
+            &state,
+            token,
+            request_ip.as_deref(),
+            request_ua.as_deref(),
+        )
+        .await
+        {
             Ok(Some(session_user)) => {
                 match lookup_user(&state, session_user.user_id, AuthMethod::Session).await {
                     Ok(auth_user) => {

@@ -591,7 +591,7 @@ async fn login_finish(
     // Update last_used_at for credentials (best-effort)
     let _ = update_credential_last_used(&state, user_id).await;
 
-    let (token, _session_id) = session::create_session(&state.db, user_id, None, None)
+    let (token, _session_id) = session::create_session(&state.db, user_id, None, None, state.config.session_ttl)
         .await
         .map_err(|e| {
             tracing::error!("Failed to create session: {}", e);
@@ -625,7 +625,7 @@ async fn login_finish(
         .await;
 
     Ok((
-        [(SET_COOKIE, session_set_cookie(&state, &token))],
+        [(SET_COOKIE, session_set_cookie(&state, &token, state.config.session_ttl))],
         Json(serde_json::json!({
             "user_id": user.id.to_string(),
             "email": user.email,

@@ -316,7 +316,7 @@ async fn verify_magic_link(
 
     // Create session
     let (session_token, _session_id) =
-        session::create_session(&state.db, user_model.id, None, None)
+        session::create_session(&state.db, user_model.id, None, None, state.config.session_ttl)
             .await
             .map_err(|e| {
                 tracing::error!("Failed to create session: {}", e);
@@ -344,7 +344,7 @@ async fn verify_magic_link(
     );
 
     Ok((
-        [(SET_COOKIE, session_set_cookie(&state, &session_token))],
+        [(SET_COOKIE, session_set_cookie(&state, &session_token, state.config.session_ttl))],
         Json(serde_json::json!({
             "user_id": user_model.id.to_string(),
             "email": user_model.email,

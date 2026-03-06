@@ -12,7 +12,7 @@ use tracing::{info, warn};
 use ts_rs::TS;
 use uuid::Uuid;
 
-use crate::auth::{crypto, hibp, input, password, session};
+use crate::auth::{crypto, hibp, input, password, password_policy, session};
 use crate::middleware::AuthUser;
 use crate::plugin::{AuthEvent, EventResponse, PluginContext, YAuthPlugin};
 use crate::state::YAuthState;
@@ -68,6 +68,9 @@ pub struct RegisterRequest {
 pub struct LoginRequest {
     pub email: String,
     pub password: String,
+    /// When true and `remember_me_ttl` is configured, uses a longer session TTL.
+    #[serde(default)]
+    pub remember_me: Option<bool>,
 }
 
 #[derive(Serialize, TS)]
@@ -143,6 +146,12 @@ async fn register(
                 ep_config.min_password_length
             ),
         ));
+    }
+
+    // Password policy validation
+    let violations = password_policy::validate(&password, &ep_config.password_policy);
+    if !violations.is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, &violations.join("; ")));
     }
 
     // Check HaveIBeenPwned for breached passwords
@@ -362,12 +371,22 @@ async fn login(
                     Err(err(status_code, &message))
                 }
                 EventResponse::Continue => {
-                    let (token, _session_id) = session::create_session(&state.db, u.id, None, None)
-                        .await
-                        .map_err(|e| {
-                            tracing::error!("Failed to create session: {}", e);
-                            err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-                        })?;
+                    let session_ttl = if input.remember_me.unwrap_or(false) {
+                        state
+                            .config
+                            .remember_me_ttl
+                            .map(|d| d.as_duration())
+                            .unwrap_or(state.config.session_ttl)
+                    } else {
+                        state.config.session_ttl
+                    };
+                    let (token, _session_id) =
+                        session::create_session(&state.db, u.id, None, None, session_ttl)
+                            .await
+                            .map_err(|e| {
+                                tracing::error!("Failed to create session: {}", e);
+                                err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+                            })?;
 
                     info!(event = "login_success", email = %u.email, user_id = %u.id, "User logged in");
 
@@ -381,7 +400,7 @@ async fn login(
                         .await;
 
                     Ok((
-                        [(SET_COOKIE, session_set_cookie(&state, &token))],
+                        [(SET_COOKIE, session_set_cookie(&state, &token, session_ttl))],
                         Json(serde_json::json!({
                             "user_id": u.id.to_string(),
                             "email": u.email,
@@ -671,6 +690,12 @@ async fn reset_password(
         ));
     }
 
+    // Password policy validation
+    let violations = password_policy::validate(&reset_password, &ep_config.password_policy);
+    if !violations.is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, &violations.join("; ")));
+    }
+
     // Check HaveIBeenPwned for breached passwords
     if ep_config.hibp_check
         && let Some(breach_msg) = hibp::validate_password_not_breached(&reset_password).await
@@ -824,6 +849,12 @@ async fn change_password(
                 ep_config.min_password_length
             ),
         ));
+    }
+
+    // Password policy validation
+    let violations = password_policy::validate(&new_password, &ep_config.password_policy);
+    if !violations.is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, &violations.join("; ")));
     }
 
     // Lookup current password hash (use dummy hash if not found for timing safety)

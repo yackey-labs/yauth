@@ -14,6 +14,15 @@ pub struct YAuthConfig {
     /// When true, the first registered user automatically gets the "admin" role.
     #[serde(default)]
     pub auto_admin_first_user: bool,
+    /// Optional "remember me" session TTL. When set, login endpoints accept a
+    /// `remember_me` flag and use this longer TTL instead of `session_ttl`.
+    /// Use when you want short default sessions (e.g., 24h) with opt-in long sessions (e.g., 30d).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remember_me_ttl: Option<DurationSecs>,
+    /// Session binding configuration. Use when you need to detect session hijacking
+    /// by binding sessions to client IP and/or User-Agent.
+    #[serde(default)]
+    pub session_binding: SessionBindingConfig,
 }
 
 impl Default for YAuthConfig {
@@ -27,8 +36,67 @@ impl Default for YAuthConfig {
             trusted_origins: vec!["http://localhost:3000".into()],
             smtp: None,
             auto_admin_first_user: false,
+            remember_me_ttl: None,
+            session_binding: SessionBindingConfig::default(),
         }
     }
+}
+
+/// A Duration wrapper that serializes as seconds. Use for optional duration config fields.
+#[derive(Debug, Clone, Copy)]
+pub struct DurationSecs(pub Duration);
+
+impl DurationSecs {
+    pub fn as_duration(&self) -> Duration {
+        self.0
+    }
+}
+
+impl Serialize for DurationSecs {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_u64(self.0.as_secs())
+    }
+}
+
+impl<'de> Deserialize<'de> for DurationSecs {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let secs = u64::deserialize(deserializer)?;
+        Ok(DurationSecs(Duration::from_secs(secs)))
+    }
+}
+
+/// Session binding — detect session hijacking by checking IP and/or User-Agent.
+/// Use `Warn` to log mismatches without disrupting users, or `Invalidate` to
+/// force re-authentication when the client fingerprint changes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionBindingConfig {
+    pub bind_ip: bool,
+    pub bind_user_agent: bool,
+    #[serde(default = "default_binding_action")]
+    pub ip_mismatch_action: BindingAction,
+    #[serde(default = "default_binding_action")]
+    pub ua_mismatch_action: BindingAction,
+}
+
+fn default_binding_action() -> BindingAction {
+    BindingAction::Warn
+}
+
+impl Default for SessionBindingConfig {
+    fn default() -> Self {
+        Self {
+            bind_ip: false,
+            bind_user_agent: false,
+            ip_mismatch_action: BindingAction::Warn,
+            ua_mismatch_action: BindingAction::Warn,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum BindingAction {
+    Warn,
+    Invalidate,
 }
 
 mod duration_secs {
@@ -64,6 +132,8 @@ pub struct EmailPasswordConfig {
     pub min_password_length: usize,
     pub require_email_verification: bool,
     pub hibp_check: bool,
+    #[serde(default)]
+    pub password_policy: PasswordPolicyConfig,
 }
 
 #[cfg(feature = "email-password")]
@@ -73,6 +143,38 @@ impl Default for EmailPasswordConfig {
             min_password_length: 8,
             require_email_verification: true,
             hibp_check: true,
+            password_policy: PasswordPolicyConfig::default(),
+        }
+    }
+}
+
+/// Password policy configuration for enforcing password complexity requirements.
+/// Use when you need stricter password rules beyond minimum length and HIBP checking.
+#[cfg(feature = "email-password")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PasswordPolicyConfig {
+    pub max_length: usize,
+    pub require_uppercase: bool,
+    pub require_lowercase: bool,
+    pub require_digit: bool,
+    pub require_special: bool,
+    /// Reject common passwords (top 10,000 from SecLists).
+    pub disallow_common_passwords: bool,
+    /// Number of previous passwords to remember and prevent reuse. 0 = disabled.
+    pub password_history_count: u32,
+}
+
+#[cfg(feature = "email-password")]
+impl Default for PasswordPolicyConfig {
+    fn default() -> Self {
+        Self {
+            max_length: 128,
+            require_uppercase: false,
+            require_lowercase: false,
+            require_digit: false,
+            require_special: false,
+            disallow_common_passwords: true,
+            password_history_count: 0,
         }
     }
 }
@@ -210,6 +312,104 @@ pub struct BearerConfig {
     /// Optional audience claim for JWT tokens (resource server URL per RFC 8707).
     #[serde(default)]
     pub audience: Option<String>,
+}
+
+/// Account lockout configuration for brute-force protection.
+/// Use when you need persistent per-account lockout beyond rate limiting.
+/// Rate limiting is per-IP/operation; lockout is per-account across all IPs.
+#[cfg(feature = "account-lockout")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AccountLockoutConfig {
+    /// Number of failed attempts before locking the account.
+    pub max_failed_attempts: u32,
+    /// Base lockout duration in seconds.
+    #[serde(with = "duration_secs")]
+    pub lockout_duration: Duration,
+    /// Double the lockout duration on each subsequent lockout.
+    pub exponential_backoff: bool,
+    /// Maximum lockout duration in seconds (cap for exponential backoff).
+    #[serde(with = "duration_secs")]
+    pub max_lockout_duration: Duration,
+    /// Window in seconds to count failed attempts.
+    #[serde(with = "duration_secs")]
+    pub attempt_window: Duration,
+    /// Automatically unlock accounts after the lockout duration expires.
+    pub auto_unlock: bool,
+}
+
+#[cfg(feature = "account-lockout")]
+impl Default for AccountLockoutConfig {
+    fn default() -> Self {
+        Self {
+            max_failed_attempts: 5,
+            lockout_duration: Duration::from_secs(300),
+            exponential_backoff: true,
+            max_lockout_duration: Duration::from_secs(86400),
+            attempt_window: Duration::from_secs(900),
+            auto_unlock: true,
+        }
+    }
+}
+
+/// Webhook configuration for receiving HTTP callbacks on auth events.
+/// Use when external systems need real-time notifications of auth events
+/// (user registered, login, ban, etc.) without polling.
+#[cfg(feature = "webhooks")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebhookConfig {
+    pub max_retries: u32,
+    #[serde(with = "duration_secs")]
+    pub retry_delay: Duration,
+    #[serde(with = "duration_secs")]
+    pub timeout: Duration,
+    pub max_webhooks: usize,
+}
+
+#[cfg(feature = "webhooks")]
+impl Default for WebhookConfig {
+    fn default() -> Self {
+        Self {
+            max_retries: 3,
+            retry_delay: Duration::from_secs(30),
+            timeout: Duration::from_secs(10),
+            max_webhooks: 10,
+        }
+    }
+}
+
+/// OIDC configuration for running yauth as a full OpenID Connect Provider.
+/// Use when you need id_token issuance, `/.well-known/openid-configuration`,
+/// and `/userinfo` endpoint — making yauth a standards-compliant identity provider.
+/// Requires both `bearer` (for JWT signing) and `oauth2-server` (for authorization flows).
+#[cfg(feature = "oidc")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OidcConfig {
+    pub issuer: String,
+    #[serde(with = "duration_secs")]
+    pub id_token_ttl: Duration,
+    #[serde(default = "default_oidc_claims")]
+    pub claims_supported: Vec<String>,
+}
+
+#[cfg(feature = "oidc")]
+fn default_oidc_claims() -> Vec<String> {
+    vec![
+        "sub".into(),
+        "email".into(),
+        "email_verified".into(),
+        "name".into(),
+    ]
+}
+
+#[cfg(feature = "oidc")]
+impl Default for OidcConfig {
+    fn default() -> Self {
+        Self {
+            issuer: "http://localhost:3000".into(),
+            id_token_ttl: Duration::from_secs(3600),
+            claims_supported: default_oidc_claims(),
+        }
+    }
 }
 
 #[cfg(test)]

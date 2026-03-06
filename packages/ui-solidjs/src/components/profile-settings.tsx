@@ -1,4 +1,4 @@
-import { type Component, For, createResource, createSignal } from "solid-js";
+import { type Component, createResource, createSignal, For } from "solid-js";
 import { Show } from "solid-js/web";
 import { useYAuth } from "../provider";
 

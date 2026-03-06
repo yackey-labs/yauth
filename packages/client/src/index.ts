@@ -1,6 +1,6 @@
 import type { AuthUser } from "@yauth/shared";
 
-export type { AuthUser, AuthSession } from "@yauth/shared";
+export type { AuthSession, AuthUser } from "@yauth/shared";
 
 export interface YAuthClientOptions {
 	/** Base URL for auth endpoints (e.g., '/api/auth' or 'https://api.example.com/api/auth') */

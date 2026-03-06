@@ -1721,7 +1721,7 @@ async fn authenticate_user(
     if let Some(cookie) = jar.get(&state.config.session_cookie_name) {
         let token = cookie.value();
         if let Ok(Some(session_user)) =
-            crate::auth::session::validate_session(&state.db, token).await
+            crate::auth::session::validate_session(state, token, None, None).await
         {
             if let Ok(Some(user)) = yauth_entity::users::Entity::find_by_id(session_user.user_id)
                 .one(&state.db)

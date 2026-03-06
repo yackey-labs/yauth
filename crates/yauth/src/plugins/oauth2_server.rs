@@ -21,6 +21,38 @@ use crate::plugin::{PluginContext, YAuthPlugin};
 use crate::state::YAuthState;
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Maximum request body size for OAuth endpoints (16 KB).
+const MAX_OAUTH_BODY: usize = 16 * 1024;
+
+/// Parse a request body as JSON or form-urlencoded based on Content-Type.
+/// Returns `Err(message)` on unsupported content type or parse failure.
+fn parse_json_or_form<T: serde::de::DeserializeOwned>(
+    headers: &axum::http::HeaderMap,
+    body: &axum::body::Bytes,
+) -> Result<T, String> {
+    if body.len() > MAX_OAUTH_BODY {
+        return Err("Request body too large".to_string());
+    }
+
+    let content_type = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    if content_type.contains("application/json") {
+        serde_json::from_slice(body).map_err(|e| format!("Invalid JSON: {e}"))
+    } else if content_type.contains("application/x-www-form-urlencoded") || content_type.is_empty()
+    {
+        serde_urlencoded::from_bytes(body).map_err(|e| format!("Invalid form data: {e}"))
+    } else {
+        Err("Content-Type must be application/json or application/x-www-form-urlencoded".to_string())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Plugin
 // ---------------------------------------------------------------------------
 
@@ -209,28 +241,9 @@ async fn authorize_post(
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> Response {
-    let content_type = headers
-        .get(axum::http::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-
-    let input: AuthorizeConsentRequest = if content_type.contains("application/json") {
-        match serde_json::from_slice(&body) {
-            Ok(v) => v,
-            Err(e) => {
-                return api_err(StatusCode::BAD_REQUEST, &format!("Invalid JSON: {e}"))
-                    .into_response();
-            }
-        }
-    } else {
-        // application/x-www-form-urlencoded (or fallback)
-        match serde_urlencoded::from_bytes(&body) {
-            Ok(v) => v,
-            Err(e) => {
-                return api_err(StatusCode::BAD_REQUEST, &format!("Invalid form data: {e}"))
-                    .into_response();
-            }
-        }
+    let input: AuthorizeConsentRequest = match parse_json_or_form(&headers, &body) {
+        Ok(v) => v,
+        Err(msg) => return api_err(StatusCode::BAD_REQUEST, &msg).into_response(),
     };
     // Authenticate the user via session cookie or bearer token
     let auth_user = match authenticate_user(&state, &jar, &headers).await {
@@ -432,34 +445,9 @@ async fn token_endpoint(
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> Response {
-    let content_type = headers
-        .get(axum::http::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-
-    let input: TokenCodeRequest = if content_type.contains("application/json") {
-        match serde_json::from_slice(&body) {
-            Ok(v) => v,
-            Err(e) => {
-                return oauth2_error(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_request",
-                    &format!("Invalid JSON: {e}"),
-                );
-            }
-        }
-    } else {
-        // application/x-www-form-urlencoded per RFC 6749 §4.1.3
-        match serde_urlencoded::from_bytes(&body) {
-            Ok(v) => v,
-            Err(e) => {
-                return oauth2_error(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_request",
-                    &format!("Invalid form data: {e}"),
-                );
-            }
-        }
+    let input: TokenCodeRequest = match parse_json_or_form(&headers, &body) {
+        Ok(v) => v,
+        Err(msg) => return oauth2_error(StatusCode::BAD_REQUEST, "invalid_request", &msg),
     };
     match input.grant_type.as_str() {
         "authorization_code" => match handle_authorization_code_grant(&state, &input).await {

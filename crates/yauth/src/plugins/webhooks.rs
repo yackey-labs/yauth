@@ -638,3 +638,200 @@ async fn test_webhook(
         "response_body": response_body,
     })))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugin::AuthEvent;
+
+    #[test]
+    fn compute_signature_known_input() {
+        // Pre-computed HMAC-SHA256 of "hello" with key "secret"
+        let sig = compute_signature("secret", "hello");
+        assert_eq!(
+            sig,
+            "88aab3ede8d3adf94d26ab90d3bafd4a2083070c3bcce9c014ee04a443847c0b"
+        );
+    }
+
+    #[test]
+    fn compute_signature_different_body_produces_different_signature() {
+        let sig1 = compute_signature("secret", "body-a");
+        let sig2 = compute_signature("secret", "body-b");
+        assert_ne!(sig1, sig2);
+    }
+
+    #[test]
+    fn compute_signature_different_secret_produces_different_signature() {
+        let sig1 = compute_signature("secret-1", "same-body");
+        let sig2 = compute_signature("secret-2", "same-body");
+        assert_ne!(sig1, sig2);
+    }
+
+    #[test]
+    fn truncate_response_short_body_returned_as_is() {
+        let body = "short response";
+        assert_eq!(truncate_response(body), body);
+    }
+
+    #[test]
+    fn truncate_response_exact_4096_returned_as_is() {
+        let body = "x".repeat(4096);
+        assert_eq!(truncate_response(&body), body);
+    }
+
+    #[test]
+    fn truncate_response_long_body_is_truncated() {
+        let body = "y".repeat(5000);
+        let result = truncate_response(&body);
+        assert!(result.ends_with("...(truncated)"));
+        assert_eq!(result.len(), 4096 + "...(truncated)".len());
+        assert!(result.starts_with(&"y".repeat(4096)));
+    }
+
+    #[test]
+    fn event_type_name_all_variants() {
+        let uid = Uuid::new_v4();
+        let sid = Uuid::new_v4();
+
+        let cases: Vec<(AuthEvent, &str)> = vec![
+            (
+                AuthEvent::UserRegistered {
+                    user_id: uid,
+                    email: "a@b.com".into(),
+                },
+                "user.registered",
+            ),
+            (
+                AuthEvent::LoginSucceeded {
+                    user_id: uid,
+                    method: "email".into(),
+                },
+                "login.succeeded",
+            ),
+            (
+                AuthEvent::LoginFailed {
+                    email: "a@b.com".into(),
+                    method: "email".into(),
+                    reason: "bad password".into(),
+                },
+                "login.failed",
+            ),
+            (
+                AuthEvent::SessionCreated {
+                    user_id: uid,
+                    session_id: sid,
+                },
+                "session.created",
+            ),
+            (
+                AuthEvent::Logout {
+                    user_id: uid,
+                    session_id: sid,
+                },
+                "logout",
+            ),
+            (
+                AuthEvent::PasswordChanged { user_id: uid },
+                "password.changed",
+            ),
+            (AuthEvent::EmailVerified { user_id: uid }, "email.verified"),
+            (
+                AuthEvent::MfaEnabled {
+                    user_id: uid,
+                    method: "totp".into(),
+                },
+                "mfa.enabled",
+            ),
+            (
+                AuthEvent::MfaDisabled {
+                    user_id: uid,
+                    method: "totp".into(),
+                },
+                "mfa.disabled",
+            ),
+            (AuthEvent::UserBanned { user_id: uid }, "user.banned"),
+            (AuthEvent::UserUnbanned { user_id: uid }, "user.unbanned"),
+            (
+                AuthEvent::MagicLinkSent {
+                    email: "a@b.com".into(),
+                },
+                "magic_link.sent",
+            ),
+            (
+                AuthEvent::MagicLinkVerified {
+                    user_id: uid,
+                    is_new_user: false,
+                },
+                "magic_link.verified",
+            ),
+        ];
+
+        for (event, expected) in cases {
+            assert_eq!(
+                event_type_name(&event),
+                expected,
+                "Mismatch for event: {:?}",
+                event
+            );
+        }
+    }
+
+    #[cfg(feature = "account-lockout")]
+    #[test]
+    fn event_type_name_account_lockout_variants() {
+        let uid = Uuid::new_v4();
+        assert_eq!(
+            event_type_name(&AuthEvent::AccountLocked {
+                user_id: uid,
+                email: "a@b.com".into(),
+                locked_until: None,
+            }),
+            "account.locked"
+        );
+        assert_eq!(
+            event_type_name(&AuthEvent::AccountUnlocked {
+                user_id: uid,
+                method: "admin".into(),
+            }),
+            "account.unlocked"
+        );
+    }
+
+    #[test]
+    fn webhook_response_from_model() {
+        let now = Utc::now().fixed_offset();
+        let id = Uuid::new_v4();
+        let model = yauth_entity::webhooks::Model {
+            id,
+            url: "https://example.com/hook".to_string(),
+            secret: "supersecret".to_string(),
+            events: serde_json::json!(["user.registered", "login.succeeded"]),
+            active: true,
+            created_at: now,
+            updated_at: now,
+        };
+
+        let resp: WebhookResponse = model.into();
+        assert_eq!(resp.id, id.to_string());
+        assert_eq!(resp.url, "https://example.com/hook");
+        assert_eq!(resp.events, vec!["user.registered", "login.succeeded"]);
+        assert!(resp.active);
+        assert_eq!(resp.created_at, now.to_rfc3339());
+        assert_eq!(resp.updated_at, now.to_rfc3339());
+    }
+
+    #[test]
+    fn create_webhook_request_deserialization() {
+        let json = r#"{"url":"https://example.com/hook","events":["user.registered","*"]}"#;
+        let req: CreateWebhookRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.url, "https://example.com/hook");
+        assert_eq!(req.events, vec!["user.registered", "*"]);
+        assert!(req.secret.is_none());
+
+        let json_with_secret =
+            r#"{"url":"https://example.com","events":["login.succeeded"],"secret":"mysecret"}"#;
+        let req2: CreateWebhookRequest = serde_json::from_str(json_with_secret).unwrap();
+        assert_eq!(req2.secret.as_deref(), Some("mysecret"));
+    }
+}

@@ -463,4 +463,158 @@ mod tests {
         assert_eq!(config.issuer, "YAuth");
         assert_eq!(config.backup_code_count, 10);
     }
+
+    // --- Session Binding Config ---
+
+    #[test]
+    fn session_binding_config_defaults() {
+        let config = SessionBindingConfig::default();
+        assert!(!config.bind_ip);
+        assert!(!config.bind_user_agent);
+        assert_eq!(config.ip_mismatch_action, BindingAction::Warn);
+        assert_eq!(config.ua_mismatch_action, BindingAction::Warn);
+    }
+
+    #[test]
+    fn session_binding_config_serialization_roundtrip() {
+        let config = SessionBindingConfig {
+            bind_ip: true,
+            bind_user_agent: true,
+            ip_mismatch_action: BindingAction::Invalidate,
+            ua_mismatch_action: BindingAction::Warn,
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        let parsed: SessionBindingConfig = serde_json::from_str(&json).unwrap();
+        assert!(parsed.bind_ip);
+        assert!(parsed.bind_user_agent);
+        assert_eq!(parsed.ip_mismatch_action, BindingAction::Invalidate);
+        assert_eq!(parsed.ua_mismatch_action, BindingAction::Warn);
+    }
+
+    #[test]
+    fn binding_action_equality() {
+        assert_ne!(BindingAction::Warn, BindingAction::Invalidate);
+        assert_eq!(BindingAction::Warn, BindingAction::Warn);
+        assert_eq!(BindingAction::Invalidate, BindingAction::Invalidate);
+    }
+
+    // --- DurationSecs / Remember Me ---
+
+    #[test]
+    fn duration_secs_serialization() {
+        let ds = DurationSecs(Duration::from_secs(2592000));
+        let json = serde_json::to_string(&ds).unwrap();
+        assert_eq!(json, "2592000");
+    }
+
+    #[test]
+    fn duration_secs_deserialization() {
+        let ds: DurationSecs = serde_json::from_str("2592000").unwrap();
+        assert_eq!(ds.0, Duration::from_secs(2592000));
+    }
+
+    #[test]
+    fn duration_secs_as_duration() {
+        let ds = DurationSecs(Duration::from_secs(42));
+        assert_eq!(ds.as_duration(), Duration::from_secs(42));
+    }
+
+    #[test]
+    fn yauth_config_with_remember_me_ttl_roundtrip() {
+        let config = YAuthConfig {
+            remember_me_ttl: Some(DurationSecs(Duration::from_secs(2592000))),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("2592000"));
+        let parsed: YAuthConfig = serde_json::from_str(&json).unwrap();
+        let ttl = parsed
+            .remember_me_ttl
+            .expect("remember_me_ttl should be Some");
+        assert_eq!(ttl.0, Duration::from_secs(2592000));
+    }
+
+    #[test]
+    fn yauth_config_remember_me_ttl_none_omitted() {
+        let config = YAuthConfig {
+            remember_me_ttl: None,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(!json.contains("remember_me_ttl"));
+    }
+
+    // --- Password Policy Config ---
+
+    #[cfg(feature = "email-password")]
+    #[test]
+    fn password_policy_config_defaults() {
+        let config = PasswordPolicyConfig::default();
+        assert_eq!(config.max_length, 128);
+        assert!(!config.require_uppercase);
+        assert!(!config.require_lowercase);
+        assert!(!config.require_digit);
+        assert!(!config.require_special);
+        assert!(config.disallow_common_passwords);
+        assert_eq!(config.password_history_count, 0);
+    }
+
+    // --- Account Lockout Config ---
+
+    #[cfg(feature = "account-lockout")]
+    #[test]
+    fn account_lockout_config_defaults() {
+        let config = AccountLockoutConfig::default();
+        assert_eq!(config.max_failed_attempts, 5);
+        assert_eq!(config.lockout_duration, Duration::from_secs(300));
+        assert!(config.exponential_backoff);
+        assert_eq!(config.max_lockout_duration, Duration::from_secs(86400));
+        assert_eq!(config.attempt_window, Duration::from_secs(900));
+        assert!(config.auto_unlock);
+    }
+
+    #[cfg(feature = "account-lockout")]
+    #[test]
+    fn account_lockout_config_serialization_roundtrip() {
+        let config = AccountLockoutConfig::default();
+        let json = serde_json::to_string(&config).unwrap();
+        let parsed: AccountLockoutConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.max_failed_attempts, config.max_failed_attempts);
+        assert_eq!(parsed.lockout_duration, config.lockout_duration);
+        assert_eq!(parsed.exponential_backoff, config.exponential_backoff);
+        assert_eq!(parsed.max_lockout_duration, config.max_lockout_duration);
+        assert_eq!(parsed.attempt_window, config.attempt_window);
+        assert_eq!(parsed.auto_unlock, config.auto_unlock);
+    }
+
+    // --- Webhook Config ---
+
+    #[cfg(feature = "webhooks")]
+    #[test]
+    fn webhook_config_defaults() {
+        let config = WebhookConfig::default();
+        assert_eq!(config.max_retries, 3);
+        assert_eq!(config.retry_delay, Duration::from_secs(30));
+        assert_eq!(config.timeout, Duration::from_secs(10));
+        assert_eq!(config.max_webhooks, 10);
+    }
+
+    // --- OIDC Config ---
+
+    #[cfg(feature = "oidc")]
+    #[test]
+    fn oidc_config_defaults() {
+        let config = OidcConfig::default();
+        assert_eq!(config.issuer, "http://localhost:3000");
+        assert_eq!(config.id_token_ttl, Duration::from_secs(3600));
+        assert!(config.claims_supported.contains(&"sub".to_string()));
+        assert!(config.claims_supported.contains(&"email".to_string()));
+        assert!(
+            config
+                .claims_supported
+                .contains(&"email_verified".to_string())
+        );
+        assert!(config.claims_supported.contains(&"name".to_string()));
+        assert_eq!(config.claims_supported.len(), 4);
+    }
 }

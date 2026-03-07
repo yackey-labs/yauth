@@ -2469,4 +2469,90 @@ mod tests {
         // With 30^8 space, 100 codes should all be unique
         assert_eq!(codes.len(), 100);
     }
+
+    #[test]
+    fn introspect_response_inactive_has_false_active_and_none_fields() {
+        let resp = IntrospectResponse::inactive();
+        assert!(!resp.active);
+        assert!(resp.sub.is_none());
+        assert!(resp.client_id.is_none());
+        assert!(resp.scope.is_none());
+        assert!(resp.exp.is_none());
+        assert!(resp.iat.is_none());
+        assert!(resp.token_type.is_none());
+
+        // Verify JSON serialization omits None fields
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json, serde_json::json!({"active": false}));
+    }
+
+    #[test]
+    fn introspect_request_deserialization_json() {
+        let json = r#"{"token":"abc123","token_type_hint":"access_token","client_id":"myapp","client_secret":"s3cret"}"#;
+        let req: IntrospectRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.token, "abc123");
+        assert_eq!(req.token_type_hint.as_deref(), Some("access_token"));
+        assert_eq!(req.client_id.as_deref(), Some("myapp"));
+        assert_eq!(req.client_secret.as_deref(), Some("s3cret"));
+    }
+
+    #[test]
+    fn introspect_request_deserialization_json_minimal() {
+        let json = r#"{"token":"xyz"}"#;
+        let req: IntrospectRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.token, "xyz");
+        assert!(req.token_type_hint.is_none());
+        assert!(req.client_id.is_none());
+        assert!(req.client_secret.is_none());
+    }
+
+    #[test]
+    fn introspect_request_deserialization_form_urlencoded() {
+        let form = "token=abc123&token_type_hint=access_token&client_id=myapp&client_secret=s3cret";
+        let req: IntrospectRequest = serde_urlencoded::from_str(form).unwrap();
+        assert_eq!(req.token, "abc123");
+        assert_eq!(req.token_type_hint.as_deref(), Some("access_token"));
+        assert_eq!(req.client_id.as_deref(), Some("myapp"));
+        assert_eq!(req.client_secret.as_deref(), Some("s3cret"));
+    }
+
+    #[test]
+    fn introspect_request_deserialization_form_urlencoded_minimal() {
+        let form = "token=xyz";
+        let req: IntrospectRequest = serde_urlencoded::from_str(form).unwrap();
+        assert_eq!(req.token, "xyz");
+        assert!(req.token_type_hint.is_none());
+        assert!(req.client_id.is_none());
+        assert!(req.client_secret.is_none());
+    }
+
+    #[test]
+    fn revoke_token_request_deserialization_json() {
+        let json = r#"{"token":"tok_abc","token_type_hint":"refresh_token","client_id":"app1","client_secret":"sec"}"#;
+        let req: RevokeTokenRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.token, "tok_abc");
+        assert_eq!(req.token_type_hint.as_deref(), Some("refresh_token"));
+        assert_eq!(req.client_id.as_deref(), Some("app1"));
+        assert_eq!(req.client_secret.as_deref(), Some("sec"));
+    }
+
+    #[test]
+    fn revoke_token_request_deserialization_json_minimal() {
+        let json = r#"{"token":"tok_xyz"}"#;
+        let req: RevokeTokenRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.token, "tok_xyz");
+        assert!(req.token_type_hint.is_none());
+        assert!(req.client_id.is_none());
+        assert!(req.client_secret.is_none());
+    }
+
+    #[test]
+    fn revoke_token_request_deserialization_form_urlencoded() {
+        let form = "token=tok_abc&token_type_hint=refresh_token&client_id=app1&client_secret=sec";
+        let req: RevokeTokenRequest = serde_urlencoded::from_str(form).unwrap();
+        assert_eq!(req.token, "tok_abc");
+        assert_eq!(req.token_type_hint.as_deref(), Some("refresh_token"));
+        assert_eq!(req.client_id.as_deref(), Some("app1"));
+        assert_eq!(req.client_secret.as_deref(), Some("sec"));
+    }
 }

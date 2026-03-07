@@ -149,9 +149,15 @@ pub fn generate_id_token(
 
 #[cfg(test)]
 mod tests {
+    use super::UserInfoResponse;
+
+    // -----------------------------------------------------------------------
+    // UserInfoResponse serialization
+    // -----------------------------------------------------------------------
+
     #[test]
     fn userinfo_response_serializes() {
-        let resp = super::UserInfoResponse {
+        let resp = UserInfoResponse {
             sub: "test-id".into(),
             email: "test@example.com".into(),
             email_verified: true,
@@ -160,5 +166,223 @@ mod tests {
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains("test@example.com"));
         assert!(json.contains("Test User"));
+    }
+
+    #[test]
+    fn userinfo_response_omits_name_when_none() {
+        let resp = UserInfoResponse {
+            sub: "user-42".into(),
+            email: "noname@example.com".into(),
+            email_verified: false,
+            name: None,
+        };
+        let val: serde_json::Value = serde_json::to_value(&resp).unwrap();
+        let obj = val.as_object().expect("should be a JSON object");
+        assert!(
+            !obj.contains_key("name"),
+            "name key should be omitted when None, got: {:?}",
+            obj
+        );
+        assert_eq!(val["sub"], "user-42");
+        assert_eq!(val["email"], "noname@example.com");
+        assert_eq!(val["email_verified"], false);
+    }
+
+    #[test]
+    fn userinfo_response_includes_all_fields_when_name_present() {
+        let resp = UserInfoResponse {
+            sub: "abc-123".into(),
+            email: "full@example.com".into(),
+            email_verified: true,
+            name: Some("Full Name".into()),
+        };
+        let val: serde_json::Value = serde_json::to_value(&resp).unwrap();
+        assert_eq!(val["sub"], "abc-123");
+        assert_eq!(val["email"], "full@example.com");
+        assert_eq!(val["email_verified"], true);
+        assert_eq!(val["name"], "Full Name");
+    }
+
+    // -----------------------------------------------------------------------
+    // generate_id_token logic tests
+    //
+    // We cannot construct a full YAuthState without a database connection, so
+    // we replicate the JWT encoding logic from generate_id_token and verify
+    // that the approach produces correct, decodable tokens with the expected
+    // claims. This validates the encoding path, claim construction, nonce
+    // handling, and TTL behaviour.
+    // -----------------------------------------------------------------------
+
+    /// Helper: encode an id_token the same way generate_id_token does.
+    fn encode_id_token(
+        issuer: &str,
+        sub: &str,
+        client_id: &str,
+        email: &str,
+        email_verified: bool,
+        display_name: Option<&str>,
+        nonce: Option<&str>,
+        ttl_secs: i64,
+        jwt_secret: &str,
+    ) -> String {
+        let now = chrono::Utc::now();
+        let exp = (now + chrono::Duration::seconds(ttl_secs)).timestamp() as usize;
+        let iat = now.timestamp() as usize;
+
+        let mut claims = serde_json::json!({
+            "iss": issuer,
+            "sub": sub,
+            "aud": client_id,
+            "exp": exp,
+            "iat": iat,
+            "email": email,
+            "email_verified": email_verified,
+            "name": display_name,
+        });
+        if let Some(n) = nonce {
+            claims["nonce"] = serde_json::Value::String(n.to_string());
+        }
+
+        let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
+        let key = jsonwebtoken::EncodingKey::from_secret(jwt_secret.as_bytes());
+        jsonwebtoken::encode(&header, &claims, &key).expect("JWT encoding should not fail")
+    }
+
+    /// Decode an id_token using the same secret, returning the claims as a JSON value.
+    fn decode_claims(token: &str, jwt_secret: &str) -> serde_json::Value {
+        let key = jsonwebtoken::DecodingKey::from_secret(jwt_secret.as_bytes());
+        let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256);
+        validation.validate_aud = false; // we check aud manually
+        let data = jsonwebtoken::decode::<serde_json::Value>(token, &key, &validation)
+            .expect("JWT decoding should not fail");
+        data.claims
+    }
+
+    #[test]
+    fn id_token_with_nonce_has_correct_claims() {
+        let secret = "test-secret-key-for-unit-tests";
+        let issuer = "https://auth.example.com";
+        let sub = "550e8400-e29b-41d4-a716-446655440000";
+        let client_id = "my-client";
+        let email = "user@example.com";
+        let nonce_val = "random-nonce-abc123";
+
+        let token = encode_id_token(
+            issuer,
+            sub,
+            client_id,
+            email,
+            true,
+            Some("Test User"),
+            Some(nonce_val),
+            3600,
+            secret,
+        );
+
+        let claims = decode_claims(&token, secret);
+
+        assert_eq!(claims["iss"], issuer);
+        assert_eq!(claims["sub"], sub);
+        assert_eq!(claims["aud"], client_id);
+        assert_eq!(claims["email"], email);
+        assert_eq!(claims["email_verified"], true);
+        assert_eq!(claims["name"], "Test User");
+        assert_eq!(claims["nonce"], nonce_val);
+        assert!(claims["exp"].is_number(), "exp should be a number");
+        assert!(claims["iat"].is_number(), "iat should be a number");
+    }
+
+    #[test]
+    fn id_token_without_nonce_omits_nonce_claim() {
+        let secret = "another-test-secret";
+        let token = encode_id_token(
+            "https://auth.example.com",
+            "user-id-1",
+            "client-1",
+            "no-nonce@example.com",
+            false,
+            None,
+            None, // no nonce
+            3600,
+            secret,
+        );
+
+        let claims = decode_claims(&token, secret);
+
+        assert!(
+            claims.get("nonce").is_none(),
+            "nonce claim must NOT be present when nonce is None, got: {:?}",
+            claims
+        );
+        // Other claims should still be present
+        assert_eq!(claims["sub"], "user-id-1");
+        assert_eq!(claims["email"], "no-nonce@example.com");
+        assert_eq!(claims["email_verified"], false);
+    }
+
+    #[test]
+    fn id_token_exp_is_in_the_future() {
+        let secret = "exp-test-secret";
+        let ttl_secs = 7200;
+
+        let token = encode_id_token(
+            "https://auth.example.com",
+            "user-exp",
+            "client-exp",
+            "exp@example.com",
+            true,
+            None,
+            None,
+            ttl_secs,
+            secret,
+        );
+
+        let claims = decode_claims(&token, secret);
+
+        let exp = claims["exp"].as_i64().expect("exp should be an integer");
+        let iat = claims["iat"].as_i64().expect("iat should be an integer");
+        let now = chrono::Utc::now().timestamp();
+
+        assert!(exp > now, "exp ({}) should be after now ({})", exp, now);
+        assert!(
+            exp >= iat + ttl_secs,
+            "exp ({}) should be at least iat ({}) + ttl ({})",
+            exp,
+            iat,
+            ttl_secs
+        );
+        // Verify exp is not absurdly far in the future (within ttl + 5s tolerance)
+        assert!(
+            exp <= iat + ttl_secs + 5,
+            "exp ({}) should be within 5s of iat ({}) + ttl ({})",
+            exp,
+            iat,
+            ttl_secs
+        );
+    }
+
+    #[test]
+    fn id_token_iss_matches_configured_issuer() {
+        let secret = "iss-test-secret";
+        let issuer = "https://my-custom-issuer.example.org";
+
+        let token = encode_id_token(
+            issuer,
+            "user-iss",
+            "client-iss",
+            "iss@example.com",
+            true,
+            None,
+            None,
+            3600,
+            secret,
+        );
+
+        let claims = decode_claims(&token, secret);
+        assert_eq!(
+            claims["iss"].as_str().unwrap(),
+            issuer,
+            "iss claim must match the configured issuer"
+        );
     }
 }

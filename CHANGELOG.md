@@ -1,3 +1,9 @@
+## 0.1.39 (2026-03-07)
+
+### Features
+
+- add status plugin for listing enabled auth plugins
+
 ## 0.1.38 (2026-03-07)
 
 ### Features

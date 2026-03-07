@@ -1,3 +1,9 @@
+## 0.1.41 (2026-03-07)
+
+### Fixes
+
+- add nonce column migration for authorization_codes
+
 ## 0.1.40 (2026-03-07)
 
 ### Fixes

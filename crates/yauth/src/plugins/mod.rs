@@ -25,6 +25,15 @@ pub mod admin;
 #[cfg(feature = "oauth2-server")]
 pub mod oauth2_server;
 
+#[cfg(feature = "account-lockout")]
+pub mod account_lockout;
+
+#[cfg(feature = "webhooks")]
+pub mod webhooks;
+
+#[cfg(feature = "oidc")]
+pub mod oidc;
+
 use axum::{
     Extension, Json, Router,
     http::StatusCode,

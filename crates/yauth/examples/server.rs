@@ -139,7 +139,7 @@ async fn main() {
         min_password_length: 8,
         require_email_verification: true,
         hibp_check: true, // Check passwords against Have I Been Pwned
-            ..Default::default()
+        ..Default::default()
     })
     // WebAuthn passkey authentication
     .with_passkey(yauth::config::PasskeyConfig {

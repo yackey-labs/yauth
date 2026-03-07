@@ -91,6 +91,12 @@ pub struct YAuthBuilder {
     magic_link_config: Option<config::MagicLinkConfig>,
     #[cfg(feature = "oauth2-server")]
     oauth2_server_config: Option<config::OAuth2ServerConfig>,
+    #[cfg(feature = "account-lockout")]
+    account_lockout_config: Option<config::AccountLockoutConfig>,
+    #[cfg(feature = "webhooks")]
+    webhook_config: Option<config::WebhookConfig>,
+    #[cfg(feature = "oidc")]
+    oidc_config: Option<config::OidcConfig>,
 }
 
 impl YAuthBuilder {
@@ -114,6 +120,12 @@ impl YAuthBuilder {
             magic_link_config: None,
             #[cfg(feature = "oauth2-server")]
             oauth2_server_config: None,
+            #[cfg(feature = "account-lockout")]
+            account_lockout_config: None,
+            #[cfg(feature = "webhooks")]
+            webhook_config: None,
+            #[cfg(feature = "oidc")]
+            oidc_config: None,
         }
     }
 
@@ -156,6 +168,24 @@ impl YAuthBuilder {
     #[cfg(feature = "oauth2-server")]
     pub fn with_oauth2_server(mut self, config: config::OAuth2ServerConfig) -> Self {
         self.oauth2_server_config = Some(config);
+        self
+    }
+
+    #[cfg(feature = "account-lockout")]
+    pub fn with_account_lockout(mut self, config: config::AccountLockoutConfig) -> Self {
+        self.account_lockout_config = Some(config);
+        self
+    }
+
+    #[cfg(feature = "webhooks")]
+    pub fn with_webhooks(mut self, config: config::WebhookConfig) -> Self {
+        self.webhook_config = Some(config);
+        self
+    }
+
+    #[cfg(feature = "oidc")]
+    pub fn with_oidc(mut self, config: config::OidcConfig) -> Self {
+        self.oidc_config = Some(config);
         self
     }
 
@@ -221,7 +251,15 @@ impl YAuthBuilder {
             )
         });
 
-        // Build the plugins list before constructing state
+        // Build the plugins list before constructing state.
+        // Account lockout must be registered BEFORE email-password so it
+        // intercepts LoginSucceeded/LoginFailed events first.
+        #[cfg(feature = "account-lockout")]
+        if self.account_lockout_config.is_some() {
+            self.plugins
+                .insert(0, Box::new(plugins::account_lockout::AccountLockoutPlugin));
+        }
+
         #[cfg(feature = "email-password")]
         if let Some(ref ep_config) = self.email_password_config {
             self.plugins.insert(
@@ -268,6 +306,10 @@ impl YAuthBuilder {
             magic_link_config: self.magic_link_config.clone().unwrap_or_default(),
             #[cfg(feature = "oauth2-server")]
             oauth2_server_config: self.oauth2_server_config.clone().unwrap_or_default(),
+            #[cfg(feature = "account-lockout")]
+            account_lockout_config: self.account_lockout_config.clone().unwrap_or_default(),
+            #[cfg(feature = "oidc")]
+            oidc_config: self.oidc_config.clone().unwrap_or_default(),
         };
 
         #[cfg(feature = "passkey")]
@@ -314,6 +356,18 @@ impl YAuthBuilder {
                 .push(Box::new(plugins::oauth2_server::OAuth2ServerPlugin::new(
                     o2s_config,
                 )));
+        }
+
+        #[cfg(feature = "webhooks")]
+        if let Some(wh_config) = self.webhook_config {
+            self.plugins
+                .push(Box::new(plugins::webhooks::WebhookPlugin::new(wh_config)));
+        }
+
+        #[cfg(feature = "oidc")]
+        if let Some(oidc_config) = self.oidc_config {
+            self.plugins
+                .push(Box::new(plugins::oidc::OidcPlugin::new(oidc_config)));
         }
 
         // Now set the real plugins on state

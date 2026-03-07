@@ -158,4 +158,34 @@ impl EmailService {
         );
         Ok(())
     }
+
+    pub fn send_unlock_email(&self, to: &str, unlock_url: &str) -> Result<(), String> {
+        let body = format!(
+            r#"<!DOCTYPE html>
+<html>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+  <h2 style="color: #1a1a1a;">Unlock your account</h2>
+  <p style="color: #4a4a4a; line-height: 1.6;">
+    Your account has been locked due to too many failed login attempts.
+    Click the button below to unlock your account.
+  </p>
+  <div style="margin: 30px 0;">
+    <a href="{unlock_url}" style="background-color: #18181b; color: #fafafa; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: 500;">
+      Unlock Account
+    </a>
+  </div>
+  <p style="color: #6a6a6a; font-size: 14px;">
+    Or copy and paste this link: <br/>
+    <a href="{unlock_url}" style="color: #18181b;">{unlock_url}</a>
+  </p>
+  <p style="color: #9a9a9a; font-size: 12px; margin-top: 40px;">
+    This link expires in 1 hour. If you didn't request this, you can safely ignore this email.
+  </p>
+</body>
+</html>"#
+        );
+
+        self.send(to, "Unlock your account", body)?;
+        Ok(())
+    }
 }

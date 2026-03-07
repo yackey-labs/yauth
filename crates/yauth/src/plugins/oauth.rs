@@ -498,12 +498,13 @@ async fn handle_callback(
             })?
             .ok_or_else(|| api_err(StatusCode::INTERNAL_SERVER_ERROR, "User not found"))?;
 
-        let (token, _session_id) = session::create_session(&state.db, user.id, None, None, state.config.session_ttl)
-            .await
-            .map_err(|e| {
-                tracing::error!("Failed to create session: {}", e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
+        let (token, _session_id) =
+            session::create_session(&state.db, user.id, None, None, state.config.session_ttl)
+                .await
+                .map_err(|e| {
+                    tracing::error!("Failed to create session: {}", e);
+                    api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+                })?;
 
         info!(
             event = "oauth_account_linked",
@@ -673,12 +674,13 @@ async fn handle_callback(
     };
 
     // 8. Create session
-    let (token, _session_id) = session::create_session(&state.db, user_id, None, None, state.config.session_ttl)
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to create session: {}", e);
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
+    let (token, _session_id) =
+        session::create_session(&state.db, user_id, None, None, state.config.session_ttl)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to create session: {}", e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?;
 
     Ok((
         user_id.to_string(),
@@ -890,7 +892,10 @@ async fn callback_get(
         let separator = if url.contains('?') { '&' } else { '?' };
         let redirect_with_session = format!("{}{}authenticated=true", url, separator);
         return Ok((
-            [(SET_COOKIE, session_set_cookie(&state, &token, state.config.session_ttl))],
+            [(
+                SET_COOKIE,
+                session_set_cookie(&state, &token, state.config.session_ttl),
+            )],
             Redirect::temporary(&redirect_with_session),
         )
             .into_response());
@@ -898,7 +903,10 @@ async fn callback_get(
 
     // Default: return JSON with session cookie
     Ok((
-        [(SET_COOKIE, session_set_cookie(&state, &token, state.config.session_ttl))],
+        [(
+            SET_COOKIE,
+            session_set_cookie(&state, &token, state.config.session_ttl),
+        )],
         Json(OAuthAuthResponse {
             user_id,
             email,
@@ -919,7 +927,10 @@ async fn callback_post(
         handle_callback(&state, &provider, &body.code, &body.state).await?;
 
     Ok((
-        [(SET_COOKIE, session_set_cookie(&state, &token, state.config.session_ttl))],
+        [(
+            SET_COOKIE,
+            session_set_cookie(&state, &token, state.config.session_ttl),
+        )],
         Json(OAuthAuthResponse {
             user_id,
             email,

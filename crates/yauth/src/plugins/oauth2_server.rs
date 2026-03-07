@@ -48,7 +48,10 @@ fn parse_json_or_form<T: serde::de::DeserializeOwned>(
     {
         serde_urlencoded::from_bytes(body).map_err(|e| format!("Invalid form data: {e}"))
     } else {
-        Err("Content-Type must be application/json or application/x-www-form-urlencoded".to_string())
+        Err(
+            "Content-Type must be application/json or application/x-www-form-urlencoded"
+                .to_string(),
+        )
     }
 }
 
@@ -77,6 +80,8 @@ impl YAuthPlugin for OAuth2ServerPlugin {
                 .route("/.well-known/oauth-authorization-server", get(as_metadata))
                 .route("/oauth/authorize", get(authorize_get).post(authorize_post))
                 .route("/oauth/token", post(token_endpoint))
+                .route("/oauth/introspect", post(introspect_endpoint))
+                .route("/oauth/revoke", post(revoke_endpoint))
                 .route("/oauth/register", post(dynamic_client_registration))
                 .route("/oauth/device/code", post(device_authorization))
                 .route(
@@ -104,6 +109,8 @@ struct AuthorizationServerMetadata {
     registration_endpoint: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     device_authorization_endpoint: Option<String>,
+    introspection_endpoint: String,
+    revocation_endpoint: String,
     scopes_supported: Vec<String>,
     response_types_supported: Vec<String>,
     grant_types_supported: Vec<String>,
@@ -129,11 +136,14 @@ async fn as_metadata(State(state): State<YAuthState>) -> Json<AuthorizationServe
         token_endpoint: format!("{}/oauth/token", issuer),
         registration_endpoint,
         device_authorization_endpoint,
+        introspection_endpoint: format!("{}/oauth/introspect", issuer),
+        revocation_endpoint: format!("{}/oauth/revoke", issuer),
         scopes_supported: config.scopes_supported.clone(),
         response_types_supported: vec!["code".into()],
         grant_types_supported: vec![
             "authorization_code".into(),
             "refresh_token".into(),
+            "client_credentials".into(),
             "urn:ietf:params:oauth:grant-type:device_code".into(),
         ],
         token_endpoint_auth_methods_supported: vec!["none".into(), "client_secret_post".into()],
@@ -316,6 +326,7 @@ async fn authorize_post(
         redirect_uri: Set(input.redirect_uri.clone()),
         code_challenge: Set(input.code_challenge.clone()),
         code_challenge_method: Set(input.code_challenge_method.clone()),
+        nonce: Set(None),
         expires_at: Set(expires_at),
         used: Set(false),
         created_at: Set(now),
@@ -428,6 +439,11 @@ pub struct TokenCodeRequest {
     // device_code fields
     #[serde(default)]
     pub device_code: Option<String>,
+    // client_credentials fields
+    #[serde(default)]
+    pub client_secret: Option<String>,
+    #[serde(default)]
+    pub scope: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -438,6 +454,77 @@ struct OAuth2TokenResponse {
     refresh_token: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     scope: Option<String>,
+}
+
+/// Token response for client_credentials grant (no refresh token per RFC).
+#[derive(Serialize)]
+struct OAuth2ClientCredentialsTokenResponse {
+    access_token: String,
+    token_type: String,
+    expires_in: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scope: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Introspection (RFC 7662)
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct IntrospectRequest {
+    token: String,
+    #[serde(default)]
+    token_type_hint: Option<String>,
+    #[serde(default)]
+    client_id: Option<String>,
+    #[serde(default)]
+    client_secret: Option<String>,
+}
+
+#[derive(Serialize)]
+struct IntrospectResponse {
+    active: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sub: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    client_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scope: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    exp: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    iat: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    token_type: Option<String>,
+}
+
+impl IntrospectResponse {
+    fn inactive() -> Self {
+        Self {
+            active: false,
+            sub: None,
+            client_id: None,
+            scope: None,
+            exp: None,
+            iat: None,
+            token_type: None,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Revocation (RFC 7009)
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct RevokeTokenRequest {
+    token: String,
+    #[serde(default)]
+    token_type_hint: Option<String>,
+    #[serde(default)]
+    client_id: Option<String>,
+    #[serde(default)]
+    client_secret: Option<String>,
 }
 
 async fn token_endpoint(
@@ -464,6 +551,10 @@ async fn token_endpoint(
                 Err(e) => e,
             }
         }
+        "client_credentials" => match handle_client_credentials_grant(&state, &input).await {
+            Ok(resp) => resp.into_response(),
+            Err(e) => e,
+        },
         _ => oauth2_error(
             StatusCode::BAD_REQUEST,
             "unsupported_grant_type",
@@ -1590,6 +1681,409 @@ async fn handle_device_code_grant(
             "server_error",
             "Bearer feature is required for OAuth2 token issuance",
         ))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Token Introspection (RFC 7662) — POST /oauth/introspect
+// ---------------------------------------------------------------------------
+
+async fn introspect_endpoint(
+    State(state): State<YAuthState>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let input: IntrospectRequest = match parse_json_or_form(&headers, &body) {
+        Ok(v) => v,
+        Err(msg) => return oauth2_error(StatusCode::BAD_REQUEST, "invalid_request", &msg),
+    };
+
+    // Client authentication
+    if let Err(e) = authenticate_client(
+        &state,
+        input.client_id.as_deref(),
+        input.client_secret.as_deref(),
+    )
+    .await
+    {
+        return e;
+    }
+
+    let token = input.token.trim();
+    if token.is_empty() {
+        return Json(IntrospectResponse::inactive()).into_response();
+    }
+
+    // Determine token type to check. Default order: access_token first, then refresh_token.
+    let hints = match input.token_type_hint.as_deref() {
+        Some("refresh_token") => vec!["refresh_token", "access_token"],
+        _ => vec!["access_token", "refresh_token"],
+    };
+
+    for hint in hints {
+        match hint {
+            "access_token" => {
+                #[cfg(feature = "bearer")]
+                {
+                    let config = &state.bearer_config;
+                    let mut validation =
+                        jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256);
+                    validation.validate_exp = true;
+                    if let Some(ref expected_aud) = config.audience {
+                        validation.set_audience(&[expected_aud]);
+                    } else {
+                        validation.validate_aud = false;
+                    }
+
+                    if let Ok(token_data) = jsonwebtoken::decode::<serde_json::Value>(
+                        token,
+                        &jsonwebtoken::DecodingKey::from_secret(config.jwt_secret.as_bytes()),
+                        &validation,
+                    ) {
+                        let claims = &token_data.claims;
+                        return Json(IntrospectResponse {
+                            active: true,
+                            sub: claims.get("sub").and_then(|v| v.as_str()).map(String::from),
+                            client_id: claims.get("aud").and_then(|v| v.as_str()).map(String::from),
+                            scope: claims
+                                .get("scope")
+                                .and_then(|v| v.as_str())
+                                .map(String::from),
+                            exp: claims.get("exp").and_then(|v| v.as_u64()),
+                            iat: claims.get("iat").and_then(|v| v.as_u64()),
+                            token_type: Some("access_token".into()),
+                        })
+                        .into_response();
+                    }
+                }
+            }
+            "refresh_token" => {
+                let token_hash = crypto::hash_token(token);
+                if let Ok(Some(stored)) = yauth_entity::refresh_tokens::Entity::find()
+                    .filter(yauth_entity::refresh_tokens::Column::TokenHash.eq(&token_hash))
+                    .one(&state.db)
+                    .await
+                    && !stored.revoked
+                    && stored.expires_at > Utc::now().fixed_offset()
+                {
+                    return Json(IntrospectResponse {
+                        active: true,
+                        sub: Some(stored.user_id.to_string()),
+                        client_id: None,
+                        scope: None,
+                        exp: Some(stored.expires_at.timestamp() as u64),
+                        iat: Some(stored.created_at.timestamp() as u64),
+                        token_type: Some("refresh_token".into()),
+                    })
+                    .into_response();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Invalid or expired token — return inactive per RFC 7662
+    Json(IntrospectResponse::inactive()).into_response()
+}
+
+// ---------------------------------------------------------------------------
+// Token Revocation (RFC 7009) — POST /oauth/revoke
+// ---------------------------------------------------------------------------
+
+async fn revoke_endpoint(
+    State(state): State<YAuthState>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let input: RevokeTokenRequest = match parse_json_or_form(&headers, &body) {
+        Ok(v) => v,
+        // RFC 7009: always return 200
+        Err(_) => return StatusCode::OK.into_response(),
+    };
+
+    // Client authentication
+    if let Err(e) = authenticate_client(
+        &state,
+        input.client_id.as_deref(),
+        input.client_secret.as_deref(),
+    )
+    .await
+    {
+        return e;
+    }
+
+    let token = input.token.trim();
+    if token.is_empty() {
+        return StatusCode::OK.into_response();
+    }
+
+    // Determine token type to try revoking. Default order: refresh_token first.
+    let hints = match input.token_type_hint.as_deref() {
+        Some("access_token") => vec!["access_token", "refresh_token"],
+        _ => vec!["refresh_token", "access_token"],
+    };
+
+    for hint in &hints {
+        match *hint {
+            "refresh_token" => {
+                let token_hash = crypto::hash_token(token);
+                if let Ok(Some(stored)) = yauth_entity::refresh_tokens::Entity::find()
+                    .filter(yauth_entity::refresh_tokens::Column::TokenHash.eq(&token_hash))
+                    .one(&state.db)
+                    .await
+                {
+                    // Revoke this token and its entire family
+                    #[cfg(feature = "bearer")]
+                    revoke_family(&state.db, stored.family_id).await;
+
+                    #[cfg(not(feature = "bearer"))]
+                    {
+                        if !stored.revoked {
+                            let mut active: yauth_entity::refresh_tokens::ActiveModel =
+                                stored.into();
+                            active.revoked = Set(true);
+                            let _ = active.update(&state.db).await;
+                        }
+                    }
+
+                    info!(
+                        event = "oauth2_token_revoked",
+                        token_type = "refresh_token",
+                        "OAuth2 refresh token revoked"
+                    );
+                    return StatusCode::OK.into_response();
+                }
+            }
+            "access_token" => {
+                // Stateless JWTs cannot be revoked — just return 200 OK per RFC 7009
+                // We still check if it looks like a valid JWT to match the hint
+            }
+            _ => {}
+        }
+    }
+
+    // Per RFC 7009, always return 200 OK even for invalid tokens
+    StatusCode::OK.into_response()
+}
+
+// ---------------------------------------------------------------------------
+// Client Credentials Grant (RFC 6749 §4.4) — via token_endpoint
+// ---------------------------------------------------------------------------
+
+#[allow(unused_variables, clippy::needless_return)]
+async fn handle_client_credentials_grant(
+    state: &YAuthState,
+    input: &TokenCodeRequest,
+) -> Result<impl IntoResponse, Response> {
+    let client_id = input.client_id.as_deref().ok_or_else(|| {
+        oauth2_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "Missing 'client_id' parameter",
+        )
+    })?;
+    let client_secret = input.client_secret.as_deref().ok_or_else(|| {
+        oauth2_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "Missing 'client_secret' parameter",
+        )
+    })?;
+
+    // Look up client
+    let client = lookup_client(state, client_id)
+        .await
+        .map_err(|e| e.into_response())?;
+
+    // Authenticate client secret
+    let secret_hash = client.client_secret_hash.as_deref().ok_or_else(|| {
+        oauth2_error(
+            StatusCode::UNAUTHORIZED,
+            "invalid_client",
+            "Client authentication failed",
+        )
+    })?;
+
+    if !crypto::constant_time_eq(
+        crypto::hash_token(client_secret).as_bytes(),
+        secret_hash.as_bytes(),
+    ) {
+        warn!(
+            event = "oauth2_client_auth_failed",
+            client_id = %client_id,
+            "Client credentials authentication failed"
+        );
+        return Err(oauth2_error(
+            StatusCode::UNAUTHORIZED,
+            "invalid_client",
+            "Client authentication failed",
+        ));
+    }
+
+    // Verify client has "client_credentials" in its grant_types
+    let empty_arr = vec![];
+    let grant_types = client
+        .grant_types
+        .as_array()
+        .unwrap_or(&empty_arr)
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect::<Vec<_>>();
+
+    if !grant_types.contains(&"client_credentials") {
+        return Err(oauth2_error(
+            StatusCode::BAD_REQUEST,
+            "unauthorized_client",
+            "Client is not authorized for the client_credentials grant type",
+        ));
+    }
+
+    // Verify requested scopes are a subset of client's registered scopes
+    let registered_scopes: Vec<&str> = client
+        .scopes
+        .as_ref()
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|s| s.as_str()).collect())
+        .unwrap_or_default();
+
+    let requested_scope = input.scope.as_deref();
+    if let Some(scope_str) = requested_scope {
+        for s in scope_str.split_whitespace() {
+            if !registered_scopes.contains(&s) {
+                return Err(oauth2_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_scope",
+                    &format!("Scope '{}' is not registered for this client", s),
+                ));
+            }
+        }
+    }
+
+    // Effective scope is only what was explicitly requested (don't auto-grant all scopes)
+    let effective_scope = requested_scope;
+
+    // Issue a JWT access token with sub = client_id (not a user ID)
+    #[cfg(feature = "bearer")]
+    {
+        let bearer_config = &state.bearer_config;
+        let now = Utc::now();
+        let exp = (now + bearer_config.access_token_ttl).timestamp() as usize;
+        let iat = now.timestamp() as usize;
+        let jti = Uuid::new_v4().to_string();
+
+        #[derive(Serialize)]
+        struct ClientCredentialsClaims {
+            sub: String,
+            exp: usize,
+            iat: usize,
+            jti: String,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            aud: Option<String>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            scope: Option<String>,
+            client_id: String,
+        }
+
+        let claims = ClientCredentialsClaims {
+            sub: client_id.to_string(),
+            exp,
+            iat,
+            jti,
+            aud: bearer_config.audience.clone(),
+            scope: effective_scope.map(String::from),
+            client_id: client_id.to_string(),
+        };
+
+        let access_token = jsonwebtoken::encode(
+            &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256),
+            &claims,
+            &jsonwebtoken::EncodingKey::from_secret(bearer_config.jwt_secret.as_bytes()),
+        )
+        .map_err(|e| {
+            tracing::error!("JWT encoding error: {}", e);
+            oauth2_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "Failed to create token",
+            )
+        })?;
+
+        let expires_in = bearer_config.access_token_ttl.as_secs();
+
+        info!(
+            event = "oauth2_token_issued",
+            client_id = %client_id,
+            "OAuth2 access token issued via client_credentials grant"
+        );
+
+        state
+            .write_audit_log(
+                None,
+                "oauth2_token_issued",
+                Some(serde_json::json!({
+                    "client_id": client_id,
+                    "grant_type": "client_credentials",
+                    "scope": effective_scope,
+                })),
+                None,
+            )
+            .await;
+
+        return Ok(Json(OAuth2ClientCredentialsTokenResponse {
+            access_token,
+            token_type: "Bearer".into(),
+            expires_in,
+            scope: effective_scope.map(String::from),
+        }));
+    }
+
+    #[cfg(not(feature = "bearer"))]
+    {
+        Err::<Json<OAuth2ClientCredentialsTokenResponse>, _>(oauth2_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "server_error",
+            "Bearer feature is required for client_credentials grant",
+        ))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Client Authentication Helper
+// ---------------------------------------------------------------------------
+
+/// Authenticate a client by client_id + client_secret from the request body.
+/// If client_id/client_secret are provided, validates them.
+/// If neither is provided, succeeds (public client or no auth required).
+async fn authenticate_client(
+    state: &YAuthState,
+    client_id: Option<&str>,
+    client_secret: Option<&str>,
+) -> Result<(), Response> {
+    match (client_id, client_secret) {
+        (Some(cid), Some(secret)) => {
+            let client = lookup_client(state, cid)
+                .await
+                .map_err(|e| e.into_response())?;
+
+            if let Some(ref hash) = client.client_secret_hash
+                && !crypto::constant_time_eq(crypto::hash_token(secret).as_bytes(), hash.as_bytes())
+            {
+                return Err(oauth2_error(
+                    StatusCode::UNAUTHORIZED,
+                    "invalid_client",
+                    "Client authentication failed",
+                ));
+            }
+            Ok(())
+        }
+        (Some(cid), None) => {
+            // Client ID provided but no secret — verify client exists (public client)
+            let _client = lookup_client(state, cid)
+                .await
+                .map_err(|e| e.into_response())?;
+            Ok(())
+        }
+        _ => Ok(()),
     }
 }
 

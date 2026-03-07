@@ -31,6 +31,15 @@ mod m20250101_000010_oauth2_server;
 #[cfg(feature = "oauth2-server")]
 mod m20250101_000011_device_authorization;
 
+#[cfg(feature = "account-lockout")]
+mod m20250101_000012_account_lockout;
+
+#[cfg(feature = "webhooks")]
+mod m20250101_000014_webhooks;
+
+#[cfg(feature = "oidc")]
+mod m20250101_000015_oidc;
+
 pub struct Migrator;
 
 #[async_trait::async_trait]
@@ -72,6 +81,15 @@ impl MigratorTrait for Migrator {
 
         #[cfg(feature = "oauth2-server")]
         migrations.push(Box::new(m20250101_000011_device_authorization::Migration));
+
+        #[cfg(feature = "account-lockout")]
+        migrations.push(Box::new(m20250101_000012_account_lockout::Migration));
+
+        #[cfg(feature = "webhooks")]
+        migrations.push(Box::new(m20250101_000014_webhooks::Migration));
+
+        #[cfg(feature = "oidc")]
+        migrations.push(Box::new(m20250101_000015_oidc::Migration));
 
         migrations
     }

@@ -420,7 +420,22 @@ async fn login(
                 Some(serde_json::json!({ "email": email, "method": "email-password", "reason": "invalid_credentials" })),
                 None,
             ).await;
-            Err(err(StatusCode::UNAUTHORIZED, "Invalid email or password"))
+
+            // Emit LoginFailed event for plugins (e.g., account lockout)
+            let event_response = state.emit_event(&AuthEvent::LoginFailed {
+                email: email.clone(),
+                method: "email-password".to_string(),
+                reason: "invalid_credentials".to_string(),
+            });
+
+            match event_response {
+                EventResponse::Block { status, message } => {
+                    let status_code =
+                        StatusCode::from_u16(status).unwrap_or(StatusCode::UNAUTHORIZED);
+                    Err(err(status_code, &message))
+                }
+                _ => Err(err(StatusCode::UNAUTHORIZED, "Invalid email or password")),
+            }
         }
     }
 }

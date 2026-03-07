@@ -28,6 +28,10 @@ pub struct YAuthState {
     pub magic_link_config: crate::config::MagicLinkConfig,
     #[cfg(feature = "oauth2-server")]
     pub oauth2_server_config: crate::config::OAuth2ServerConfig,
+    #[cfg(feature = "account-lockout")]
+    pub account_lockout_config: crate::config::AccountLockoutConfig,
+    #[cfg(feature = "oidc")]
+    pub oidc_config: crate::config::OidcConfig,
 }
 
 impl YAuthState {

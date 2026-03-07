@@ -591,15 +591,16 @@ async fn login_finish(
     // Update last_used_at for credentials (best-effort)
     let _ = update_credential_last_used(&state, user_id).await;
 
-    let (token, _session_id) = session::create_session(&state.db, user_id, None, None, state.config.session_ttl)
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to create session: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Internal error".to_string(),
-            )
-        })?;
+    let (token, _session_id) =
+        session::create_session(&state.db, user_id, None, None, state.config.session_ttl)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to create session: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal error".to_string(),
+                )
+            })?;
 
     let user = yauth_entity::users::Entity::find_by_id(user_id)
         .one(&state.db)
@@ -625,7 +626,10 @@ async fn login_finish(
         .await;
 
     Ok((
-        [(SET_COOKIE, session_set_cookie(&state, &token, state.config.session_ttl))],
+        [(
+            SET_COOKIE,
+            session_set_cookie(&state, &token, state.config.session_ttl),
+        )],
         Json(serde_json::json!({
             "user_id": user.id.to_string(),
             "email": user.email,

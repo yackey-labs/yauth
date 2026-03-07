@@ -174,10 +174,58 @@ pub fn oauth2_server_routes() -> RouteCollection {
         authorize: GET "/oauth/authorize";
         authorizeConsent: POST "/oauth/authorize";
         token: POST "/oauth/token";
+        introspect: POST "/oauth/introspect";
+        revoke: POST "/oauth/revoke";
         register: POST "/oauth/register";
         deviceAuthorize: POST "/oauth/device/code";
         deviceVerify: GET "/oauth/device";
         deviceApprove: POST "/oauth/device";
+    }
+}
+
+/// Webhooks plugin routes.
+#[cfg(feature = "webhooks")]
+pub fn webhook_routes() -> RouteCollection {
+    api_routes! {
+        @group webhooks
+
+        create: POST "/webhooks" [auth]
+            body: CreateWebhookRequest -> WebhookResponse;
+        list: GET "/webhooks" [auth]
+            -> WebhookResponse;
+        get: GET "/webhooks/{id}" [auth]
+            -> WebhookDetailResponse;
+        update: PUT "/webhooks/{id}" [auth]
+            body: UpdateWebhookRequest -> WebhookResponse;
+        delete: DELETE "/webhooks/{id}" [auth];
+        test: POST "/webhooks/{id}/test" [auth];
+    }
+}
+
+/// Account lockout plugin routes.
+#[cfg(feature = "account-lockout")]
+pub fn account_lockout_routes() -> RouteCollection {
+    api_routes! {
+        @group accountLockout
+
+        requestUnlock: POST "/account/request-unlock"
+            body: RequestUnlockRequest -> AccountLockoutMessageResponse;
+        unlock: POST "/account/unlock"
+            body: UnlockAccountRequest -> AccountLockoutMessageResponse;
+        adminUnlock: POST "/admin/users/{id}/unlock" [auth]
+            -> AccountLockoutMessageResponse;
+    }
+}
+
+/// OIDC plugin routes.
+#[cfg(feature = "oidc")]
+pub fn oidc_routes() -> RouteCollection {
+    api_routes! {
+        @group oidc
+
+        openidConfiguration: GET "/.well-known/openid-configuration";
+        jwks: GET "/.well-known/jwks.json";
+        userinfo: GET "/userinfo" [auth];
     }
 }
 
@@ -212,6 +260,15 @@ pub fn all_route_meta() -> RouteCollection {
 
     #[cfg(feature = "oauth2-server")]
     routes.extend(oauth2_server_routes());
+
+    #[cfg(feature = "webhooks")]
+    routes.extend(webhook_routes());
+
+    #[cfg(feature = "account-lockout")]
+    routes.extend(account_lockout_routes());
+
+    #[cfg(feature = "oidc")]
+    routes.extend(oidc_routes());
 
     routes
 }

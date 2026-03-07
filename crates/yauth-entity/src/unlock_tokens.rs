@@ -2,23 +2,14 @@ use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
-#[sea_orm(table_name = "yauth_authorization_codes")]
+#[sea_orm(table_name = "yauth_unlock_tokens")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub id: Uuid,
-    #[sea_orm(unique)]
-    pub code_hash: String,
-    pub client_id: String,
     pub user_id: Uuid,
-    #[sea_orm(column_type = "Json", nullable)]
-    pub scopes: Option<serde_json::Value>,
-    pub redirect_uri: String,
-    pub code_challenge: String,
-    pub code_challenge_method: String,
+    #[sea_orm(unique)]
+    pub token_hash: String,
     pub expires_at: DateTimeWithTimeZone,
-    pub used: bool,
-    /// OIDC nonce — stored when `openid` scope is requested with a nonce parameter.
-    pub nonce: Option<String>,
     pub created_at: DateTimeWithTimeZone,
 }
 

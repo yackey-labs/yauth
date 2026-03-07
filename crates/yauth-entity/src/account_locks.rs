@@ -2,24 +2,19 @@ use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
-#[sea_orm(table_name = "yauth_authorization_codes")]
+#[sea_orm(table_name = "yauth_account_locks")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub id: Uuid,
     #[sea_orm(unique)]
-    pub code_hash: String,
-    pub client_id: String,
     pub user_id: Uuid,
-    #[sea_orm(column_type = "Json", nullable)]
-    pub scopes: Option<serde_json::Value>,
-    pub redirect_uri: String,
-    pub code_challenge: String,
-    pub code_challenge_method: String,
-    pub expires_at: DateTimeWithTimeZone,
-    pub used: bool,
-    /// OIDC nonce — stored when `openid` scope is requested with a nonce parameter.
-    pub nonce: Option<String>,
+    pub failed_count: i32,
+    pub locked_until: Option<DateTimeWithTimeZone>,
+    /// How many times this account has been locked (for exponential backoff).
+    pub lock_count: i32,
+    pub locked_reason: Option<String>,
     pub created_at: DateTimeWithTimeZone,
+    pub updated_at: DateTimeWithTimeZone,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

@@ -6,19 +6,22 @@ Every feature is behind a **feature flag** — enable only what you need.
 
 ## Features
 
-| Feature | Description |
-|---------|-------------|
-| `email-password` | Registration, login, email verification, forgot/reset/change password, HIBP breach checking |
-| `passkey` | WebAuthn registration and passwordless login |
-| `mfa` | TOTP setup/verify with backup codes; intercepts login flow via event system |
-| `oauth` | OAuth2 client — multi-provider linking, account management |
-| `bearer` | JWT access/refresh tokens with token family tracking (reuse detection) |
-| `api-key` | Scoped API key generation with optional expiration |
-| `magic-link` | Passwordless email login with optional signup |
-| `admin` | User management, ban/unban, session management, impersonation |
-| `oauth2-server` | Full OAuth2 authorization server (authorization code + PKCE, device flow, dynamic client registration, refresh tokens) |
-| `telemetry` | OpenTelemetry tracing bridge |
-| `full` | All of the above |
+| Feature | Description | When to use |
+|---------|-------------|-------------|
+| `email-password` | Registration, login, email verification, forgot/reset/change password, HIBP breach checking, configurable password policy | Default auth for most apps |
+| `passkey` | WebAuthn registration and passwordless login | When you want passwordless/biometric login |
+| `mfa` | TOTP setup/verify with backup codes; intercepts login flow via event system | When you need 2FA for sensitive accounts |
+| `oauth` | OAuth2 client — multi-provider linking (Google, GitHub, etc.) | When users should sign in with external providers |
+| `bearer` | JWT access/refresh tokens with token family tracking (reuse detection) | When API clients need stateless auth tokens |
+| `api-key` | Scoped API key generation with optional expiration | When third-party integrations or scripts need long-lived credentials |
+| `magic-link` | Passwordless email login with optional signup | When you want frictionless email-based auth |
+| `admin` | User management, ban/unban, session management, impersonation | When you need a back-office admin panel |
+| `oauth2-server` | Full OAuth2 authorization server (authorization code + PKCE, device flow, client credentials, dynamic registration, token introspection + revocation) | When yauth is the identity provider for other apps |
+| `account-lockout` | Brute-force protection with exponential backoff, unlock via email or admin | When you need per-account lockout beyond IP rate limiting |
+| `webhooks` | HMAC-signed HTTP callbacks on auth events with retry + delivery history | When external systems need real-time auth event notifications |
+| `oidc` | OpenID Connect Provider — id_token issuance, OIDC discovery, JWKS, /userinfo | When downstream apps need OIDC-compliant SSO |
+| `telemetry` | OpenTelemetry tracing bridge | When you need distributed tracing |
+| `full` | All of the above | Development/testing |
 
 Only `email-password` is enabled by default.
 
@@ -40,12 +43,27 @@ let yauth = YAuthBuilder::new(db, YAuthConfig {
     base_url: "https://myapp.example.com".into(),
     session_ttl: Duration::from_secs(7 * 24 * 3600),
     secure_cookies: true,
+    // Optional: "remember me" sessions (30 days)
+    remember_me_ttl: Some(DurationSecs(Duration::from_secs(30 * 24 * 3600))),
+    // Optional: bind sessions to IP/UA for hijacking detection
+    session_binding: SessionBindingConfig {
+        bind_ip: true,
+        bind_user_agent: true,
+        ip_mismatch_action: BindingAction::Warn,
+        ua_mismatch_action: BindingAction::Invalidate,
+    },
     ..Default::default()
 })
 .with_email_password(EmailPasswordConfig {
     min_password_length: 10,
     require_email_verification: true,
     hibp_check: true,
+    password_policy: PasswordPolicyConfig {
+        require_uppercase: true,
+        require_digit: true,
+        disallow_common_passwords: true,
+        ..Default::default()
+    },
 })
 .with_passkey(PasskeyConfig {
     rp_id: "myapp.example.com".into(),
@@ -68,7 +86,7 @@ Plugins implement the `YAuthPlugin` trait:
 
 - `public_routes()` — unauthenticated endpoints (login, register, etc.)
 - `protected_routes()` — endpoints behind auth middleware
-- `on_event()` — react to auth events (e.g., MFA intercepts login)
+- `on_event()` — react to auth events (e.g., MFA intercepts login, account lockout blocks login)
 
 Custom plugins can be added via `builder.with_plugin(Box::new(MyPlugin))`.
 
@@ -91,8 +109,75 @@ All auth operations emit an `AuthEvent`:
 - `MfaEnabled`, `MfaDisabled`
 - `UserBanned`, `UserUnbanned`
 - `MagicLinkSent`, `MagicLinkVerified`
+- `AccountLocked`, `AccountUnlocked`
+- `WebhookDelivered`
 
 Plugins respond with `Continue`, `RequireMfa { pending_session_id }`, or `Block { status, message }`.
+
+## Configuration Guide
+
+### Session Binding
+
+Detects session hijacking by binding sessions to client IP and/or User-Agent. Configure in `YAuthConfig`:
+
+- `bind_ip: true` — track client IP at session creation
+- `bind_user_agent: true` — track User-Agent at session creation
+- `BindingAction::Warn` — log mismatch but allow access
+- `BindingAction::Invalidate` — destroy session on mismatch (forces re-auth)
+
+**When to use:** Enable `Warn` by default; use `Invalidate` for high-security applications. Note that `bind_ip` may cause issues with mobile users or VPN changes.
+
+### Remember Me
+
+Set `remember_me_ttl` on `YAuthConfig` to enable longer sessions when users opt in. The login request accepts a `remember_me: true` field.
+
+**When to use:** When you want short default sessions (e.g., 24h) with opt-in long sessions (e.g., 30d) via a "keep me logged in" checkbox.
+
+### Password Policy
+
+Configure `PasswordPolicyConfig` on `EmailPasswordConfig`:
+
+- `require_uppercase`, `require_lowercase`, `require_digit`, `require_special` — character class requirements
+- `max_length` — maximum password length (default: 128)
+- `disallow_common_passwords` — reject top common passwords
+- `password_history_count` — prevent reuse of last N passwords (0 = disabled)
+
+**When to use:** When regulatory compliance or security policy requires specific password complexity rules beyond minimum length + HIBP checking.
+
+### Account Lockout
+
+Configure `AccountLockoutConfig`:
+
+- `max_failed_attempts` — threshold before lockout (default: 5)
+- `lockout_duration` — base lockout time (default: 5 minutes)
+- `exponential_backoff` — double duration on each lockout
+- `max_lockout_duration` — cap for backoff (default: 24 hours)
+- `auto_unlock` — auto-unlock after duration expires
+
+**When to use:** When you need per-account brute-force protection that works across IPs. Rate limiting is per-IP; account lockout is per-account. Use both together for defense in depth.
+
+### Webhooks
+
+Configure `WebhookConfig`:
+
+- `max_retries` — retry failed deliveries (default: 3)
+- `retry_delay` — delay between retries (default: 30s)
+- `timeout` — HTTP timeout per delivery (default: 10s)
+- `max_webhooks` — limit per user (default: 10)
+
+Payloads are signed with HMAC-SHA256 via the `X-Webhook-Signature` header. Admin routes at `/webhooks` manage webhook CRUD.
+
+**When to use:** When external systems (Slack bots, CRMs, analytics) need real-time notifications of auth events without polling.
+
+### OIDC
+
+Configure `OidcConfig`:
+
+- `issuer` — OIDC issuer URL (must match `iss` claim)
+- `id_token_ttl` — id_token expiry (default: 1 hour)
+- `claims_supported` — advertised claims (default: sub, email, email_verified, name)
+
+**When to use:** When yauth is the identity provider and downstream apps need OIDC-compliant SSO. Automatically enables `bearer` + `oauth2-server`.
 
 ## API Routes
 
@@ -109,7 +194,7 @@ Plugins respond with `Continue`, `RequireMfa { pending_session_id }`, or `Block 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | POST | `/register` | No | Register with email + password |
-| POST | `/login` | No | Authenticate |
+| POST | `/login` | No | Authenticate (supports `remember_me` flag) |
 | POST | `/verify-email` | No | Verify email token |
 | POST | `/resend-verification` | No | Resend verification email |
 | POST | `/forgot-password` | No | Request password reset |
@@ -194,12 +279,41 @@ All admin routes require `role = "admin"`.
 | GET | `/.well-known/oauth-authorization-server` | Authorization server metadata (RFC 8414) |
 | GET | `/oauth/authorize` | Authorization endpoint (JSON or redirect to consent UI) |
 | POST | `/oauth/authorize` | Consent submission (JSON or form-urlencoded) |
-| POST | `/oauth/token` | Token endpoint (JSON or form-urlencoded, per RFC 6749) |
+| POST | `/oauth/token` | Token endpoint — authorization_code, refresh_token, client_credentials (RFC 6749) |
+| POST | `/oauth/introspect` | Token introspection (RFC 7662) |
+| POST | `/oauth/revoke` | Token revocation (RFC 7009) |
 | POST | `/oauth/register` | Dynamic client registration (RFC 7591) |
 | POST | `/oauth/device/code` | Device authorization request (RFC 8628) |
 | GET/POST | `/oauth/device` | Device verification |
 
-Supported grant types: `authorization_code` (with PKCE S256), `refresh_token`, `urn:ietf:params:oauth:grant-type:device_code`.
+Supported grant types: `authorization_code` (with PKCE S256), `refresh_token`, `client_credentials`, `urn:ietf:params:oauth:grant-type:device_code`.
+
+### Account Lockout
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| POST | `/account/request-unlock` | No | Request unlock email |
+| POST | `/account/unlock` | No | Unlock account with token |
+| POST | `/admin/users/{id}/unlock` | Yes (admin) | Admin force-unlock |
+
+### Webhooks
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| POST | `/webhooks` | Yes | Create webhook |
+| GET | `/webhooks` | Yes | List webhooks |
+| GET | `/webhooks/{id}` | Yes | Get webhook with delivery history |
+| PUT | `/webhooks/{id}` | Yes | Update webhook |
+| DELETE | `/webhooks/{id}` | Yes | Delete webhook |
+| POST | `/webhooks/{id}/test` | Yes | Send test delivery |
+
+### OIDC
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/.well-known/openid-configuration` | No | OIDC discovery document |
+| GET | `/.well-known/jwks.json` | No | JSON Web Key Set |
+| GET/POST | `/userinfo` | Yes | OIDC UserInfo endpoint |
 
 ## TypeScript Packages
 
@@ -214,13 +328,13 @@ const auth = createClient({ baseUrl: "https://myapp.example.com/auth" });
 
 // Email/password
 await auth.emailPassword.register({ email, password });
-const { user } = await auth.emailPassword.login({ email, password });
+const { user } = await auth.emailPassword.login({ email, password, remember_me: true });
 
 // Session
 const { user } = await auth.getSession();
 await auth.logout();
 
-// Passkey, MFA, OAuth, bearer, API keys, magic link, admin, OAuth2 server
+// Webhooks, account lockout, OIDC, OAuth2 server, passkey, MFA, etc.
 // — all available as namespaced methods on the client
 ```
 
@@ -244,13 +358,18 @@ Pre-built SolidJS components:
 
 - **Argon2id** password hashing with timing-safe dummy hash on failed lookups
 - **HaveIBeenPwned** k-anonymity password breach checking (fail-open)
+- **Password policy** — configurable complexity, common password rejection, history tracking
 - **Rate limiting** per operation (login, register, forgot-password, magic-link)
+- **Account lockout** — per-account brute-force protection with exponential backoff
+- **Session binding** — optional IP + User-Agent binding for hijacking detection
 - **Session tokens** stored as SHA-256 hashes
 - **JWT refresh token family tracking** — automatic revocation on reuse detection
 - **CSRF protection** — HttpOnly + SameSite=Lax cookies; bearer/API key via headers
 - **Email enumeration prevention** — consistent responses for non-existent accounts
 - **Audit logging** — all auth events written to `yauth_audit_log` table
 - **WebAuthn challenge TTL** — 5-minute expiry with credential exclusion
+- **Webhook signing** — HMAC-SHA256 signatures for payload integrity
+- **PKCE S256** — required for all OAuth2 authorization code flows
 
 ## Database
 

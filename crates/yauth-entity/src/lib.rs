@@ -39,3 +39,16 @@ pub mod consents;
 pub mod device_codes;
 #[cfg(feature = "oauth2-server")]
 pub mod oauth2_clients;
+
+#[cfg(feature = "account-lockout")]
+pub mod account_locks;
+#[cfg(feature = "account-lockout")]
+pub mod unlock_tokens;
+
+#[cfg(feature = "webhooks")]
+pub mod webhook_deliveries;
+#[cfg(feature = "webhooks")]
+pub mod webhooks;
+
+#[cfg(feature = "oidc")]
+pub mod oidc_nonces;

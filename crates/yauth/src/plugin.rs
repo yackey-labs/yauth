@@ -53,6 +53,17 @@ pub enum AuthEvent {
         user_id: Uuid,
         is_new_user: bool,
     },
+    #[cfg(feature = "account-lockout")]
+    AccountLocked {
+        user_id: Uuid,
+        email: String,
+        locked_until: Option<String>,
+    },
+    #[cfg(feature = "account-lockout")]
+    AccountUnlocked {
+        user_id: Uuid,
+        method: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -190,6 +201,17 @@ mod tests {
             AuthEvent::MagicLinkVerified {
                 user_id: Uuid::nil(),
                 is_new_user: true,
+            },
+            #[cfg(feature = "account-lockout")]
+            AuthEvent::AccountLocked {
+                user_id: Uuid::nil(),
+                email: "a@b.c".into(),
+                locked_until: Some("2025-01-01T00:00:00Z".into()),
+            },
+            #[cfg(feature = "account-lockout")]
+            AuthEvent::AccountUnlocked {
+                user_id: Uuid::nil(),
+                method: "admin".into(),
             },
         ];
         for event in &events {

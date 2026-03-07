@@ -1339,7 +1339,7 @@ async fn start_server(db: DatabaseConnection) -> u16 {
         min_password_length: 8,
         require_email_verification: true,
         hibp_check: false,
-            ..Default::default()
+        ..Default::default()
     })
     .with_bearer(yauth::config::BearerConfig {
         jwt_secret: "test-jwt-secret-at-least-32-chars-long!!".into(),
@@ -1392,7 +1392,7 @@ async fn start_server_with_audience(db: DatabaseConnection, audience: &str) -> u
         min_password_length: 8,
         require_email_verification: true,
         hibp_check: false,
-            ..Default::default()
+        ..Default::default()
     })
     .with_bearer(yauth::config::BearerConfig {
         jwt_secret: "test-jwt-secret-at-least-32-chars-long!!".into(),
@@ -1456,7 +1456,7 @@ async fn start_server_with_oauth2(db: DatabaseConnection) -> u16 {
         min_password_length: 8,
         require_email_verification: true,
         hibp_check: false,
-            ..Default::default()
+        ..Default::default()
     })
     .with_bearer(yauth::config::BearerConfig {
         jwt_secret: "test-jwt-secret-at-least-32-chars-long!!".into(),

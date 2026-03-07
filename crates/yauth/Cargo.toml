@@ -7,7 +7,9 @@ repository.workspace = true
 publish = ["yauth"]
 
 [features]
-default = ["email-password"]
+default = ["seaorm", "email-password"]
+seaorm = ["dep:sea-orm", "dep:sea-orm-migration", "yauth-entity/seaorm", "yauth-migration/seaorm"]
+diesel-async = ["dep:diesel", "dep:diesel-async-crate", "dep:futures-util", "yauth-entity/diesel-async", "yauth-migration/diesel-async"]
 email-password = ["yauth-entity/email-password", "yauth-migration/email-password"]
 passkey = ["yauth-entity/passkey", "yauth-migration/passkey", "dep:webauthn-rs", "dep:webauthn-rs-proto"]
 mfa = ["yauth-entity/mfa", "yauth-migration/mfa", "dep:totp-rs"]
@@ -22,7 +24,7 @@ account-lockout = ["yauth-entity/account-lockout", "yauth-migration/account-lock
 webhooks = ["yauth-entity/webhooks", "yauth-migration/webhooks", "dep:hmac"]
 oidc = ["bearer", "oauth2-server", "yauth-entity/oidc", "yauth-migration/oidc"]
 telemetry = ["dep:tracing-opentelemetry", "dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:opentelemetry-semantic-conventions"]
-full = ["email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link", "admin", "status", "oauth2-server", "account-lockout", "webhooks", "oidc", "telemetry"]
+full = ["seaorm", "email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link", "admin", "status", "oauth2-server", "account-lockout", "webhooks", "oidc", "telemetry"]
 
 [dependencies]
 yauth-entity = { workspace = true }
@@ -34,8 +36,13 @@ tokio = { workspace = true }
 tower = { workspace = true }
 tower-http = { workspace = true }
 
-sea-orm = { workspace = true }
-sea-orm-migration = { workspace = true }
+sea-orm = { workspace = true, optional = true }
+sea-orm-migration = { workspace = true, optional = true }
+
+# Diesel (optional alternative to SeaORM)
+diesel = { workspace = true, optional = true }
+diesel-async-crate = { version = "0.5", features = ["postgres", "deadpool"], optional = true, package = "diesel-async" }
+futures-util = { version = "0.3", optional = true }
 
 serde = { workspace = true }
 serde_json = { workspace = true }

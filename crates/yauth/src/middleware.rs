@@ -5,7 +5,6 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use axum_extra::extract::cookie::CookieJar;
-use sea_orm::EntityTrait;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 use uuid::Uuid;
@@ -23,7 +22,6 @@ pub struct AuthUser {
     pub role: String,
     pub banned: bool,
     pub auth_method: AuthMethod,
-    /// Scopes granted to this token (from JWT `scope` claim). None means unrestricted.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(default)]
     pub scopes: Option<Vec<String>>,
@@ -44,7 +42,6 @@ pub async fn auth_middleware(
     mut req: Request,
     next: Next,
 ) -> Response {
-    // Extract client fingerprint for session binding
     let request_ip = headers
         .get("x-forwarded-for")
         .and_then(|v| v.to_str().ok())
@@ -94,7 +91,6 @@ pub async fn auth_middleware(
     }
 
     // Try Bearer token
-    // Note: nested ifs are intentional — collapsing causes type inference failures (E0282)
     #[cfg(feature = "bearer")]
     #[allow(clippy::collapsible_if)]
     if let Some(auth_header) = headers.get("authorization") {
@@ -121,21 +117,23 @@ pub async fn auth_middleware(
         }
     }
 
-    // Suppress unused variable warnings when features are disabled
     let _ = &headers;
 
     api_err(StatusCode::UNAUTHORIZED, "Authentication required").into_response()
 }
 
+#[cfg(feature = "seaorm")]
 async fn lookup_user(
     state: &YAuthState,
     user_id: Uuid,
     method: AuthMethod,
-) -> Result<AuthUser, sea_orm::DbErr> {
+) -> Result<AuthUser, String> {
+    use sea_orm::EntityTrait;
     let user = yauth_entity::users::Entity::find_by_id(user_id)
         .one(&state.db)
-        .await?
-        .ok_or(sea_orm::DbErr::RecordNotFound("User not found".into()))?;
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "User not found".to_string())?;
 
     Ok(AuthUser {
         id: user.id,
@@ -149,9 +147,54 @@ async fn lookup_user(
     })
 }
 
-/// Create a scope-checking middleware layer. Returns 403 with `insufficient_scope` error
-/// if the authenticated user's token doesn't include the required scope.
-/// Tokens without scopes (None) are treated as unrestricted for backward compatibility.
+#[cfg(feature = "diesel-async")]
+async fn lookup_user(
+    state: &YAuthState,
+    user_id: Uuid,
+    method: AuthMethod,
+) -> Result<AuthUser, String> {
+    use diesel::result::OptionalExtension;
+    use diesel_async_crate::RunQueryDsl;
+
+    #[derive(diesel::QueryableByName)]
+    struct UserRow {
+        #[diesel(sql_type = diesel::sql_types::Uuid)]
+        id: Uuid,
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        email: String,
+        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+        display_name: Option<String>,
+        #[diesel(sql_type = diesel::sql_types::Bool)]
+        email_verified: bool,
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        role: String,
+        #[diesel(sql_type = diesel::sql_types::Bool)]
+        banned: bool,
+    }
+
+    let mut conn = state.db.get().await.map_err(|e| e.to_string())?;
+    let user: UserRow = diesel::sql_query(
+        "SELECT id, email, display_name, email_verified, role, banned FROM yauth_users WHERE id = $1",
+    )
+    .bind::<diesel::sql_types::Uuid, _>(user_id)
+    .get_result(&mut conn)
+    .await
+    .optional()
+    .map_err(|e| e.to_string())?
+    .ok_or_else(|| "User not found".to_string())?;
+
+    Ok(AuthUser {
+        id: user.id,
+        email: user.email,
+        display_name: user.display_name,
+        email_verified: user.email_verified,
+        role: user.role,
+        banned: user.banned,
+        auth_method: method,
+        scopes: None,
+    })
+}
+
 pub fn require_scope(
     scope: &'static str,
 ) -> impl Fn(Request, Next) -> std::pin::Pin<Box<dyn std::future::Future<Output = Response> + Send>>
@@ -159,7 +202,6 @@ pub fn require_scope(
     move |req: Request, next: Next| {
         Box::pin(async move {
             if let Some(user) = req.extensions().get::<AuthUser>() {
-                // If scopes is None, the token is unrestricted (backward-compatible)
                 if let Some(ref scopes) = user.scopes
                     && !scopes.iter().any(|s| s == scope)
                 {

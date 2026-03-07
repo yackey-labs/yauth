@@ -1,54 +1,60 @@
+#[cfg(feature = "seaorm")]
 pub mod audit_log;
+#[cfg(feature = "seaorm")]
 pub mod sessions;
+#[cfg(feature = "seaorm")]
 pub mod users;
 
-#[cfg(feature = "email-password")]
+#[cfg(all(feature = "seaorm", feature = "email-password"))]
 pub mod email_verifications;
-#[cfg(feature = "email-password")]
+#[cfg(all(feature = "seaorm", feature = "email-password"))]
 pub mod password_resets;
-#[cfg(feature = "email-password")]
+#[cfg(all(feature = "seaorm", feature = "email-password"))]
 pub mod passwords;
 
-#[cfg(feature = "passkey")]
+#[cfg(all(feature = "seaorm", feature = "passkey"))]
 pub mod webauthn_credentials;
 
-#[cfg(feature = "mfa")]
+#[cfg(all(feature = "seaorm", feature = "mfa"))]
 pub mod backup_codes;
-#[cfg(feature = "mfa")]
+#[cfg(all(feature = "seaorm", feature = "mfa"))]
 pub mod totp_secrets;
 
-#[cfg(feature = "oauth")]
+#[cfg(all(feature = "seaorm", feature = "oauth"))]
 pub mod oauth_accounts;
-#[cfg(feature = "oauth")]
+#[cfg(all(feature = "seaorm", feature = "oauth"))]
 pub mod oauth_states;
 
-#[cfg(feature = "api-key")]
+#[cfg(all(feature = "seaorm", feature = "api-key"))]
 pub mod api_keys;
 
-#[cfg(feature = "bearer")]
+#[cfg(all(feature = "seaorm", feature = "bearer"))]
 pub mod refresh_tokens;
 
-#[cfg(feature = "magic-link")]
+#[cfg(all(feature = "seaorm", feature = "magic-link"))]
 pub mod magic_links;
 
-#[cfg(feature = "oauth2-server")]
+#[cfg(all(feature = "seaorm", feature = "oauth2-server"))]
 pub mod authorization_codes;
-#[cfg(feature = "oauth2-server")]
+#[cfg(all(feature = "seaorm", feature = "oauth2-server"))]
 pub mod consents;
-#[cfg(feature = "oauth2-server")]
+#[cfg(all(feature = "seaorm", feature = "oauth2-server"))]
 pub mod device_codes;
-#[cfg(feature = "oauth2-server")]
+#[cfg(all(feature = "seaorm", feature = "oauth2-server"))]
 pub mod oauth2_clients;
 
-#[cfg(feature = "account-lockout")]
+#[cfg(all(feature = "seaorm", feature = "account-lockout"))]
 pub mod account_locks;
-#[cfg(feature = "account-lockout")]
+#[cfg(all(feature = "seaorm", feature = "account-lockout"))]
 pub mod unlock_tokens;
 
-#[cfg(feature = "webhooks")]
+#[cfg(all(feature = "seaorm", feature = "webhooks"))]
 pub mod webhook_deliveries;
-#[cfg(feature = "webhooks")]
+#[cfg(all(feature = "seaorm", feature = "webhooks"))]
 pub mod webhooks;
 
-#[cfg(feature = "oidc")]
+#[cfg(all(feature = "seaorm", feature = "oidc"))]
 pub mod oidc_nonces;
+
+#[cfg(feature = "diesel-async")]
+pub mod diesel;

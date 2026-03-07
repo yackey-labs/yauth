@@ -1,3 +1,10 @@
+## 0.1.38 (2026-03-07)
+
+### Features
+
+- add password policy, remember me, session binding, and config scaffolding
+- add account lockout, webhooks, OIDC, token introspection/revocation, client credentials
+
 ## 0.1.37 (2026-03-05)
 
 ### Fixes

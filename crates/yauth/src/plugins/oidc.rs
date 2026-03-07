@@ -110,6 +110,45 @@ async fn userinfo(Extension(user): Extension<AuthUser>) -> impl IntoResponse {
     })
 }
 
+/// Encode an OIDC id_token JWT from individual claim values.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn encode_id_token_jwt(
+    issuer: &str,
+    sub: &str,
+    client_id: &str,
+    email: &str,
+    email_verified: bool,
+    display_name: Option<&str>,
+    nonce: Option<&str>,
+    id_token_ttl: std::time::Duration,
+    jwt_secret: &str,
+) -> Result<String, String> {
+    let now = chrono::Utc::now();
+    let exp = (now + id_token_ttl).timestamp() as usize;
+    let iat = now.timestamp() as usize;
+
+    let mut claims = serde_json::json!({
+        "iss": issuer,
+        "sub": sub,
+        "aud": client_id,
+        "exp": exp,
+        "iat": iat,
+        "email": email,
+        "email_verified": email_verified,
+        "name": display_name,
+    });
+    // OIDC Core §3.1.3.7: nonce MUST NOT be included when absent from the request
+    if let Some(n) = nonce {
+        claims["nonce"] = serde_json::Value::String(n.to_string());
+    }
+
+    let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
+    let key = jsonwebtoken::EncodingKey::from_secret(jwt_secret.as_bytes());
+
+    jsonwebtoken::encode(&header, &claims, &key)
+        .map_err(|e| format!("Failed to encode id_token: {}", e))
+}
+
 /// Generate an OIDC id_token for the given user. Called from the oauth2_server
 /// token endpoint when the `openid` scope is present.
 pub fn generate_id_token(
@@ -118,33 +157,17 @@ pub fn generate_id_token(
     client_id: &str,
     nonce: Option<&str>,
 ) -> Result<String, String> {
-    let oidc = &state.oidc_config;
-    let bearer = &state.bearer_config;
-
-    let now = chrono::Utc::now();
-    let exp = (now + oidc.id_token_ttl).timestamp() as usize;
-    let iat = now.timestamp() as usize;
-
-    let mut claims = serde_json::json!({
-        "iss": oidc.issuer,
-        "sub": user.id.to_string(),
-        "aud": client_id,
-        "exp": exp,
-        "iat": iat,
-        "email": user.email,
-        "email_verified": user.email_verified,
-        "name": user.display_name,
-    });
-    // OIDC Core §3.1.3.7: nonce MUST NOT be included when absent from the request
-    if let Some(n) = nonce {
-        claims["nonce"] = serde_json::Value::String(n.to_string());
-    }
-
-    let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
-    let key = jsonwebtoken::EncodingKey::from_secret(bearer.jwt_secret.as_bytes());
-
-    jsonwebtoken::encode(&header, &claims, &key)
-        .map_err(|e| format!("Failed to encode id_token: {}", e))
+    encode_id_token_jwt(
+        &state.oidc_config.issuer,
+        &user.id.to_string(),
+        client_id,
+        &user.email,
+        user.email_verified,
+        user.display_name.as_deref(),
+        nonce,
+        state.oidc_config.id_token_ttl,
+        &state.bearer_config.jwt_secret,
+    )
 }
 
 #[cfg(test)]
@@ -204,16 +227,12 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // generate_id_token logic tests
+    // generate_id_token / encode_id_token_jwt tests
     //
-    // We cannot construct a full YAuthState without a database connection, so
-    // we replicate the JWT encoding logic from generate_id_token and verify
-    // that the approach produces correct, decodable tokens with the expected
-    // claims. This validates the encoding path, claim construction, nonce
-    // handling, and TTL behaviour.
+    // These test the extracted `encode_id_token_jwt` function directly,
+    // which is the same code path used by `generate_id_token`.
     // -----------------------------------------------------------------------
 
-    /// Helper: encode an id_token the same way generate_id_token does.
     fn encode_id_token(
         issuer: &str,
         sub: &str,
@@ -225,27 +244,18 @@ mod tests {
         ttl_secs: i64,
         jwt_secret: &str,
     ) -> String {
-        let now = chrono::Utc::now();
-        let exp = (now + chrono::Duration::seconds(ttl_secs)).timestamp() as usize;
-        let iat = now.timestamp() as usize;
-
-        let mut claims = serde_json::json!({
-            "iss": issuer,
-            "sub": sub,
-            "aud": client_id,
-            "exp": exp,
-            "iat": iat,
-            "email": email,
-            "email_verified": email_verified,
-            "name": display_name,
-        });
-        if let Some(n) = nonce {
-            claims["nonce"] = serde_json::Value::String(n.to_string());
-        }
-
-        let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
-        let key = jsonwebtoken::EncodingKey::from_secret(jwt_secret.as_bytes());
-        jsonwebtoken::encode(&header, &claims, &key).expect("JWT encoding should not fail")
+        super::encode_id_token_jwt(
+            issuer,
+            sub,
+            client_id,
+            email,
+            email_verified,
+            display_name,
+            nonce,
+            std::time::Duration::from_secs(ttl_secs as u64),
+            jwt_secret,
+        )
+        .expect("JWT encoding should not fail")
     }
 
     /// Decode an id_token using the same secret, returning the claims as a JSON value.

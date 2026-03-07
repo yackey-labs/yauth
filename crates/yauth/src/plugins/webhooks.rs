@@ -686,13 +686,13 @@ mod tests {
         let result = truncate_response(&body);
         assert!(result.ends_with("...(truncated)"));
         assert_eq!(result.len(), 4096 + "...(truncated)".len());
-        assert!(result.starts_with(&"y".repeat(4096)));
+        assert!(result.starts_with(&body[..4096]));
     }
 
     #[test]
     fn event_type_name_all_variants() {
-        let uid = Uuid::new_v4();
-        let sid = Uuid::new_v4();
+        let uid = Uuid::nil();
+        let sid = Uuid::nil();
 
         let cases: Vec<(AuthEvent, &str)> = vec![
             (

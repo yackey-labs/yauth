@@ -201,6 +201,12 @@ impl YAuthBuilder {
         self
     }
 
+    #[cfg(feature = "status")]
+    pub fn with_status(mut self) -> Self {
+        self.plugins.push(Box::new(plugins::status::StatusPlugin));
+        self
+    }
+
     pub fn with_store_backend(mut self, backend: StoreBackend) -> Self {
         self.store_backend = backend;
         self

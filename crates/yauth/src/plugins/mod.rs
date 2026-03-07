@@ -34,6 +34,9 @@ pub mod webhooks;
 #[cfg(feature = "oidc")]
 pub mod oidc;
 
+#[cfg(feature = "status")]
+pub mod status;
+
 use axum::{
     Extension, Json, Router,
     http::StatusCode,

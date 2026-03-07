@@ -16,6 +16,7 @@ Every feature is behind a **feature flag** — enable only what you need.
 | `api-key` | Scoped API key generation with optional expiration | When third-party integrations or scripts need long-lived credentials |
 | `magic-link` | Passwordless email login with optional signup | When you want frictionless email-based auth |
 | `admin` | User management, ban/unban, session management, impersonation | When you need a back-office admin panel |
+| `status` | Protected endpoint listing enabled plugins | When you want a settings/admin page to show active auth features |
 | `oauth2-server` | Full OAuth2 authorization server (authorization code + PKCE, device flow, client credentials, dynamic registration, token introspection + revocation) | When yauth is the identity provider for other apps |
 | `account-lockout` | Brute-force protection with exponential backoff, unlock via email or admin | When you need per-account lockout beyond IP rate limiting |
 | `webhooks` | HMAC-signed HTTP callbacks on auth events with retry + delivery history | When external systems need real-time auth event notifications |
@@ -255,6 +256,12 @@ Configure `OidcConfig`:
 |--------|------|------|-------------|
 | POST | `/magic-link/send` | No | Send magic link email |
 | POST | `/magic-link/verify` | No | Verify magic link token |
+
+### Status
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/status` | Yes | List enabled plugin names |
 
 ### Admin
 

@@ -1,6 +1,6 @@
 {
 	"name": "@yauth/client",
-	"version": "0.1.39",
+	"version": "0.1.40",
 	"type": "module",
 	"main": "dist/index.js",
 	"module": "dist/index.js",
@@ -22,7 +22,7 @@
 		"test": "bun test"
 	},
 	"dependencies": {
-		"@yauth/shared": "0.1.39"
+		"@yauth/shared": "0.1.40"
 	},
 	"devDependencies": {
 		"typescript": "^5.7.2"

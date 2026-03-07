@@ -1,3 +1,9 @@
+## 0.1.40 (2026-03-07)
+
+### Fixes
+
+- resolve TypeScript typecheck errors in client test suite (#7)
+
 ## 0.1.39 (2026-03-07)
 
 ### Features

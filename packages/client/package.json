@@ -18,7 +18,8 @@
 	],
 	"scripts": {
 		"build": "bun build src/index.ts --outdir dist --target browser",
-		"typecheck": "tsc --noEmit"
+		"typecheck": "tsc --noEmit",
+		"test": "bun test"
 	},
 	"dependencies": {
 		"@yauth/shared": "0.1.38"

@@ -11,6 +11,7 @@
 		"lint:fix": "biome check --write .",
 		"format": "biome format --write .",
 		"typecheck": "bun run --filter '*' typecheck",
+		"test": "bun run --filter '*' test",
 		"validate": "bun run lint:fix && bun run typecheck && bun run build",
 		"validate:ci": "bun run lint && bun run typecheck && bun run build && bun run generate:check",
 		"generate": "TS_RS_EXPORT_DIR=$PWD/packages/client/src/bindings cargo test --features full -- export_bindings --nocapture && cargo test --features full -- generate_ts_client --exact --nocapture",

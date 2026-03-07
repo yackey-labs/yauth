@@ -31,6 +31,9 @@ mod m20250101_000010_oauth2_server;
 #[cfg(feature = "oauth2-server")]
 mod m20250101_000011_device_authorization;
 
+#[cfg(feature = "oauth2-server")]
+mod m20250101_000013_oauth2_auth_code_nonce;
+
 #[cfg(feature = "account-lockout")]
 mod m20250101_000012_account_lockout;
 
@@ -81,6 +84,9 @@ impl MigratorTrait for Migrator {
 
         #[cfg(feature = "oauth2-server")]
         migrations.push(Box::new(m20250101_000011_device_authorization::Migration));
+
+        #[cfg(feature = "oauth2-server")]
+        migrations.push(Box::new(m20250101_000013_oauth2_auth_code_nonce::Migration));
 
         #[cfg(feature = "account-lockout")]
         migrations.push(Box::new(m20250101_000012_account_lockout::Migration));

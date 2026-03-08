@@ -977,6 +977,8 @@ struct OAuth2TokenResponse {
     refresh_token: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     scope: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id_token: Option<String>,
 }
 
 /// Token response for client_credentials grant (no refresh token per RFC).
@@ -1141,6 +1143,7 @@ async fn handle_authorization_code_grant(
         code_challenge_method: String,
         expires_at: chrono::NaiveDateTime,
         used: bool,
+        nonce: Option<String>,
     }
 
     #[cfg(feature = "seaorm")]
@@ -1179,6 +1182,7 @@ async fn handle_authorization_code_grant(
             code_challenge_method: row.code_challenge_method,
             expires_at: row.expires_at.naive_utc(),
             used: row.used,
+            nonce: row.nonce,
         }
     };
     #[cfg(feature = "diesel-async")]
@@ -1222,6 +1226,7 @@ async fn handle_authorization_code_grant(
             code_challenge_method: row.code_challenge_method,
             expires_at: row.expires_at,
             used: row.used,
+            nonce: row.nonce,
         }
     };
 
@@ -1429,6 +1434,13 @@ async fn handle_authorization_code_grant(
                 .join(" ")
         });
 
+    // Check whether the openid scope was requested (for OIDC id_token)
+    #[allow(unused_variables)]
+    let has_openid_scope = scope_str
+        .as_deref()
+        .map(|s| s.split_whitespace().any(|sc| sc == "openid"))
+        .unwrap_or(false);
+
     // Issue tokens using the bearer config (requires bearer feature)
     #[cfg(all(feature = "bearer", feature = "seaorm"))]
     {
@@ -1498,12 +1510,38 @@ async fn handle_authorization_code_grant(
             )
             .await;
 
+        // Generate OIDC id_token when openid scope is present
+        #[cfg(feature = "oidc")]
+        let id_token = if has_openid_scope {
+            Some(
+                crate::plugins::oidc::generate_id_token(
+                    &user_model,
+                    state,
+                    client_id,
+                    stored_code.nonce.as_deref(),
+                )
+                .map_err(|e| {
+                    tracing::error!("Failed to generate id_token: {}", e);
+                    oauth2_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "server_error",
+                        "Failed to generate id_token",
+                    )
+                })?,
+            )
+        } else {
+            None
+        };
+        #[cfg(not(feature = "oidc"))]
+        let id_token: Option<String> = None;
+
         return Ok(Json(OAuth2TokenResponse {
             access_token,
             token_type: "Bearer".into(),
             expires_in,
             refresh_token,
             scope: scope_str,
+            id_token,
         }));
     }
 
@@ -1574,12 +1612,41 @@ async fn handle_authorization_code_grant(
             )
             .await;
 
+        // Generate OIDC id_token when openid scope is present
+        #[cfg(feature = "oidc")]
+        let id_token = if has_openid_scope {
+            Some(
+                crate::plugins::oidc::generate_id_token_from_fields(
+                    &user.id,
+                    &user.email,
+                    user.email_verified,
+                    user.display_name.as_deref(),
+                    state,
+                    client_id,
+                    stored_code.nonce.as_deref(),
+                )
+                .map_err(|e| {
+                    tracing::error!("Failed to generate id_token: {}", e);
+                    oauth2_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "server_error",
+                        "Failed to generate id_token",
+                    )
+                })?,
+            )
+        } else {
+            None
+        };
+        #[cfg(not(feature = "oidc"))]
+        let id_token: Option<String> = None;
+
         return Ok(Json(OAuth2TokenResponse {
             access_token,
             token_type: "Bearer".into(),
             expires_in,
             refresh_token,
             scope: scope_str,
+            id_token,
         }));
     }
 
@@ -1941,6 +2008,7 @@ async fn handle_oauth2_refresh_token(
             expires_in,
             refresh_token: new_refresh,
             scope: None,
+            id_token: None,
         }));
     }
 
@@ -3080,6 +3148,7 @@ async fn handle_device_code_grant(
             expires_in,
             refresh_token,
             scope: scope_str,
+            id_token: None,
         }));
     }
 
@@ -3156,6 +3225,7 @@ async fn handle_device_code_grant(
             expires_in,
             refresh_token,
             scope: scope_str,
+            id_token: None,
         }));
     }
 

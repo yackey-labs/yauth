@@ -1,3 +1,9 @@
+## 0.1.45 (2026-03-08)
+
+### Fixes
+
+- use correct token format and clean up release workflow
+
 ## 0.1.44 (2026-03-08)
 
 ### Fixes

@@ -7,6 +7,7 @@ use axum::{
 };
 use chrono::Utc;
 use rand::Rng;
+#[cfg(feature = "seaorm")]
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -19,6 +20,498 @@ use crate::error::{ApiError, api_err};
 use crate::middleware::AuthUser;
 use crate::plugin::{PluginContext, YAuthPlugin};
 use crate::state::YAuthState;
+
+// ---------------------------------------------------------------------------
+// Diesel-async helpers
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "diesel-async")]
+mod diesel_db {
+    use diesel::result::OptionalExtension;
+    use diesel_async_crate::RunQueryDsl;
+    use uuid::Uuid;
+
+    type Conn = diesel_async_crate::AsyncPgConnection;
+    type DbResult<T> = Result<T, String>;
+
+    // -- QueryableByName row types --
+
+    #[derive(diesel::QueryableByName, Clone)]
+    #[allow(dead_code)]
+    pub struct ClientRow {
+        #[diesel(sql_type = diesel::sql_types::Uuid)]
+        pub id: Uuid,
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        pub client_id: String,
+        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+        pub client_secret_hash: Option<String>,
+        #[diesel(sql_type = diesel::sql_types::Jsonb)]
+        pub redirect_uris: serde_json::Value,
+        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+        pub client_name: Option<String>,
+        #[diesel(sql_type = diesel::sql_types::Jsonb)]
+        pub grant_types: serde_json::Value,
+        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Jsonb>)]
+        pub scopes: Option<serde_json::Value>,
+        #[diesel(sql_type = diesel::sql_types::Bool)]
+        pub is_public: bool,
+        #[diesel(sql_type = diesel::sql_types::Timestamptz)]
+        pub created_at: chrono::NaiveDateTime,
+    }
+
+    #[derive(diesel::QueryableByName, Clone)]
+    #[allow(dead_code)]
+    pub struct AuthCodeRow {
+        #[diesel(sql_type = diesel::sql_types::Uuid)]
+        pub id: Uuid,
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        pub code_hash: String,
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        pub client_id: String,
+        #[diesel(sql_type = diesel::sql_types::Uuid)]
+        pub user_id: Uuid,
+        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Jsonb>)]
+        pub scopes: Option<serde_json::Value>,
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        pub redirect_uri: String,
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        pub code_challenge: String,
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        pub code_challenge_method: String,
+        #[diesel(sql_type = diesel::sql_types::Timestamptz)]
+        pub expires_at: chrono::NaiveDateTime,
+        #[diesel(sql_type = diesel::sql_types::Bool)]
+        pub used: bool,
+        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+        pub nonce: Option<String>,
+        #[diesel(sql_type = diesel::sql_types::Timestamptz)]
+        pub created_at: chrono::NaiveDateTime,
+    }
+
+    #[derive(diesel::QueryableByName, Clone)]
+    #[allow(dead_code)]
+    pub struct ConsentRow {
+        #[diesel(sql_type = diesel::sql_types::Uuid)]
+        pub id: Uuid,
+        #[diesel(sql_type = diesel::sql_types::Uuid)]
+        pub user_id: Uuid,
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        pub client_id: String,
+        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Jsonb>)]
+        pub scopes: Option<serde_json::Value>,
+        #[diesel(sql_type = diesel::sql_types::Timestamptz)]
+        pub created_at: chrono::NaiveDateTime,
+    }
+
+    #[derive(diesel::QueryableByName, Clone)]
+    #[allow(dead_code)]
+    pub struct DeviceCodeRow {
+        #[diesel(sql_type = diesel::sql_types::Uuid)]
+        pub id: Uuid,
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        pub device_code_hash: String,
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        pub user_code: String,
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        pub client_id: String,
+        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Jsonb>)]
+        pub scopes: Option<serde_json::Value>,
+        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Uuid>)]
+        pub user_id: Option<Uuid>,
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        pub status: String,
+        #[diesel(sql_type = diesel::sql_types::Int4)]
+        pub interval: i32,
+        #[diesel(sql_type = diesel::sql_types::Timestamptz)]
+        pub expires_at: chrono::NaiveDateTime,
+        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Timestamptz>)]
+        pub last_polled_at: Option<chrono::NaiveDateTime>,
+        #[diesel(sql_type = diesel::sql_types::Timestamptz)]
+        pub created_at: chrono::NaiveDateTime,
+    }
+
+    #[derive(diesel::QueryableByName, Clone)]
+    #[allow(dead_code)]
+    pub struct UserRow {
+        #[diesel(sql_type = diesel::sql_types::Uuid)]
+        pub id: Uuid,
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        pub email: String,
+        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+        pub display_name: Option<String>,
+        #[diesel(sql_type = diesel::sql_types::Bool)]
+        pub email_verified: bool,
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        pub role: String,
+        #[diesel(sql_type = diesel::sql_types::Bool)]
+        pub banned: bool,
+    }
+
+    #[derive(diesel::QueryableByName, Clone)]
+    #[allow(dead_code)]
+    pub struct RefreshTokenRow {
+        #[diesel(sql_type = diesel::sql_types::Uuid)]
+        pub id: Uuid,
+        #[diesel(sql_type = diesel::sql_types::Uuid)]
+        pub user_id: Uuid,
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        pub token_hash: String,
+        #[diesel(sql_type = diesel::sql_types::Uuid)]
+        pub family_id: Uuid,
+        #[diesel(sql_type = diesel::sql_types::Timestamptz)]
+        pub expires_at: chrono::NaiveDateTime,
+        #[diesel(sql_type = diesel::sql_types::Bool)]
+        pub revoked: bool,
+        #[diesel(sql_type = diesel::sql_types::Timestamptz)]
+        pub created_at: chrono::NaiveDateTime,
+    }
+
+    #[derive(diesel::QueryableByName, Clone)]
+    #[allow(dead_code)]
+    pub struct CountRow {
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        pub cnt: i64,
+    }
+
+    // -- Client operations --
+
+    pub async fn find_client_by_client_id(
+        conn: &mut Conn,
+        client_id: &str,
+    ) -> DbResult<Option<ClientRow>> {
+        diesel::sql_query(
+            "SELECT id, client_id, client_secret_hash, redirect_uris, client_name, grant_types, scopes, is_public, created_at FROM yauth_oauth2_clients WHERE client_id = $1",
+        )
+        .bind::<diesel::sql_types::Text, _>(client_id)
+        .get_result(conn)
+        .await
+        .optional()
+        .map_err(|e| e.to_string())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn insert_client(
+        conn: &mut Conn,
+        id: Uuid,
+        client_id: &str,
+        client_secret_hash: Option<&str>,
+        redirect_uris: &serde_json::Value,
+        client_name: Option<&str>,
+        grant_types: &serde_json::Value,
+        scopes: Option<&serde_json::Value>,
+        is_public: bool,
+        created_at: chrono::DateTime<chrono::FixedOffset>,
+    ) -> DbResult<()> {
+        diesel::sql_query(
+            "INSERT INTO yauth_oauth2_clients (id, client_id, client_secret_hash, redirect_uris, client_name, grant_types, scopes, is_public, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(id)
+        .bind::<diesel::sql_types::Text, _>(client_id)
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(client_secret_hash)
+        .bind::<diesel::sql_types::Jsonb, _>(redirect_uris)
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(client_name)
+        .bind::<diesel::sql_types::Jsonb, _>(grant_types)
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Jsonb>, _>(scopes)
+        .bind::<diesel::sql_types::Bool, _>(is_public)
+        .bind::<diesel::sql_types::Timestamptz, _>(created_at)
+        .execute(conn)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    // -- Authorization code operations --
+
+    pub async fn find_auth_code_by_hash(
+        conn: &mut Conn,
+        code_hash: &str,
+    ) -> DbResult<Option<AuthCodeRow>> {
+        diesel::sql_query(
+            "SELECT id, code_hash, client_id, user_id, scopes, redirect_uri, code_challenge, code_challenge_method, expires_at, used, nonce, created_at FROM yauth_authorization_codes WHERE code_hash = $1",
+        )
+        .bind::<diesel::sql_types::Text, _>(code_hash)
+        .get_result(conn)
+        .await
+        .optional()
+        .map_err(|e| e.to_string())
+    }
+
+    pub async fn mark_auth_code_used(conn: &mut Conn, id: Uuid) -> DbResult<()> {
+        diesel::sql_query("UPDATE yauth_authorization_codes SET used = true WHERE id = $1")
+            .bind::<diesel::sql_types::Uuid, _>(id)
+            .execute(conn)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn insert_auth_code(
+        conn: &mut Conn,
+        id: Uuid,
+        code_hash: &str,
+        client_id: &str,
+        user_id: Uuid,
+        scopes: Option<&serde_json::Value>,
+        redirect_uri: &str,
+        code_challenge: &str,
+        code_challenge_method: &str,
+        expires_at: chrono::DateTime<chrono::FixedOffset>,
+        created_at: chrono::DateTime<chrono::FixedOffset>,
+    ) -> DbResult<()> {
+        diesel::sql_query(
+            "INSERT INTO yauth_authorization_codes (id, code_hash, client_id, user_id, scopes, redirect_uri, code_challenge, code_challenge_method, nonce, expires_at, used, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, $9, false, $10)",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(id)
+        .bind::<diesel::sql_types::Text, _>(code_hash)
+        .bind::<diesel::sql_types::Text, _>(client_id)
+        .bind::<diesel::sql_types::Uuid, _>(user_id)
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Jsonb>, _>(scopes)
+        .bind::<diesel::sql_types::Text, _>(redirect_uri)
+        .bind::<diesel::sql_types::Text, _>(code_challenge)
+        .bind::<diesel::sql_types::Text, _>(code_challenge_method)
+        .bind::<diesel::sql_types::Timestamptz, _>(expires_at)
+        .bind::<diesel::sql_types::Timestamptz, _>(created_at)
+        .execute(conn)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    // -- Consent operations --
+
+    pub async fn find_consent(
+        conn: &mut Conn,
+        user_id: Uuid,
+        client_id: &str,
+    ) -> DbResult<Option<ConsentRow>> {
+        diesel::sql_query(
+            "SELECT id, user_id, client_id, scopes, created_at FROM yauth_consents WHERE user_id = $1 AND client_id = $2",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(user_id)
+        .bind::<diesel::sql_types::Text, _>(client_id)
+        .get_result(conn)
+        .await
+        .optional()
+        .map_err(|e| e.to_string())
+    }
+
+    pub async fn update_consent(
+        conn: &mut Conn,
+        id: Uuid,
+        scopes: Option<&serde_json::Value>,
+        created_at: chrono::DateTime<chrono::FixedOffset>,
+    ) -> DbResult<()> {
+        diesel::sql_query("UPDATE yauth_consents SET scopes = $1, created_at = $2 WHERE id = $3")
+            .bind::<diesel::sql_types::Nullable<diesel::sql_types::Jsonb>, _>(scopes)
+            .bind::<diesel::sql_types::Timestamptz, _>(created_at)
+            .bind::<diesel::sql_types::Uuid, _>(id)
+            .execute(conn)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub async fn insert_consent(
+        conn: &mut Conn,
+        id: Uuid,
+        user_id: Uuid,
+        client_id: &str,
+        scopes: Option<&serde_json::Value>,
+        created_at: chrono::DateTime<chrono::FixedOffset>,
+    ) -> DbResult<()> {
+        diesel::sql_query(
+            "INSERT INTO yauth_consents (id, user_id, client_id, scopes, created_at) VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(id)
+        .bind::<diesel::sql_types::Uuid, _>(user_id)
+        .bind::<diesel::sql_types::Text, _>(client_id)
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Jsonb>, _>(scopes)
+        .bind::<diesel::sql_types::Timestamptz, _>(created_at)
+        .execute(conn)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    // -- Device code operations --
+
+    pub async fn find_device_code_by_user_code_pending(
+        conn: &mut Conn,
+        user_code: &str,
+    ) -> DbResult<Option<DeviceCodeRow>> {
+        diesel::sql_query(
+            "SELECT id, device_code_hash, user_code, client_id, scopes, user_id, status, interval, expires_at, last_polled_at, created_at FROM yauth_device_codes WHERE user_code = $1 AND status = 'pending'",
+        )
+        .bind::<diesel::sql_types::Text, _>(user_code)
+        .get_result(conn)
+        .await
+        .optional()
+        .map_err(|e| e.to_string())
+    }
+
+    pub async fn find_device_code_by_hash(
+        conn: &mut Conn,
+        device_code_hash: &str,
+    ) -> DbResult<Option<DeviceCodeRow>> {
+        diesel::sql_query(
+            "SELECT id, device_code_hash, user_code, client_id, scopes, user_id, status, interval, expires_at, last_polled_at, created_at FROM yauth_device_codes WHERE device_code_hash = $1",
+        )
+        .bind::<diesel::sql_types::Text, _>(device_code_hash)
+        .get_result(conn)
+        .await
+        .optional()
+        .map_err(|e| e.to_string())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn insert_device_code(
+        conn: &mut Conn,
+        id: Uuid,
+        device_code_hash: &str,
+        user_code: &str,
+        client_id: &str,
+        scopes: Option<&serde_json::Value>,
+        interval: i32,
+        expires_at: chrono::DateTime<chrono::FixedOffset>,
+        created_at: chrono::DateTime<chrono::FixedOffset>,
+    ) -> DbResult<()> {
+        diesel::sql_query(
+            "INSERT INTO yauth_device_codes (id, device_code_hash, user_code, client_id, scopes, user_id, status, interval, expires_at, last_polled_at, created_at) VALUES ($1, $2, $3, $4, $5, NULL, 'pending', $6, $7, NULL, $8)",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(id)
+        .bind::<diesel::sql_types::Text, _>(device_code_hash)
+        .bind::<diesel::sql_types::Text, _>(user_code)
+        .bind::<diesel::sql_types::Text, _>(client_id)
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Jsonb>, _>(scopes)
+        .bind::<diesel::sql_types::Int4, _>(interval)
+        .bind::<diesel::sql_types::Timestamptz, _>(expires_at)
+        .bind::<diesel::sql_types::Timestamptz, _>(created_at)
+        .execute(conn)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub async fn update_device_code_status(
+        conn: &mut Conn,
+        id: Uuid,
+        status: &str,
+        user_id: Option<Uuid>,
+    ) -> DbResult<()> {
+        diesel::sql_query("UPDATE yauth_device_codes SET status = $1, user_id = $2 WHERE id = $3")
+            .bind::<diesel::sql_types::Text, _>(status)
+            .bind::<diesel::sql_types::Nullable<diesel::sql_types::Uuid>, _>(user_id)
+            .bind::<diesel::sql_types::Uuid, _>(id)
+            .execute(conn)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub async fn update_device_code_polled(
+        conn: &mut Conn,
+        id: Uuid,
+        last_polled_at: chrono::DateTime<chrono::FixedOffset>,
+    ) -> DbResult<()> {
+        diesel::sql_query("UPDATE yauth_device_codes SET last_polled_at = $1 WHERE id = $2")
+            .bind::<diesel::sql_types::Timestamptz, _>(last_polled_at)
+            .bind::<diesel::sql_types::Uuid, _>(id)
+            .execute(conn)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub async fn update_device_code_slow_down(
+        conn: &mut Conn,
+        id: Uuid,
+        new_interval: i32,
+        last_polled_at: chrono::DateTime<chrono::FixedOffset>,
+    ) -> DbResult<()> {
+        diesel::sql_query(
+            "UPDATE yauth_device_codes SET interval = $1, last_polled_at = $2 WHERE id = $3",
+        )
+        .bind::<diesel::sql_types::Int4, _>(new_interval)
+        .bind::<diesel::sql_types::Timestamptz, _>(last_polled_at)
+        .bind::<diesel::sql_types::Uuid, _>(id)
+        .execute(conn)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    // -- User operations --
+
+    pub async fn find_user_by_id(conn: &mut Conn, id: Uuid) -> DbResult<Option<UserRow>> {
+        diesel::sql_query(
+            "SELECT id, email, display_name, email_verified, role, banned FROM yauth_users WHERE id = $1",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(id)
+        .get_result(conn)
+        .await
+        .optional()
+        .map_err(|e| e.to_string())
+    }
+
+    // -- Refresh token operations --
+
+    pub async fn find_refresh_token_by_hash(
+        conn: &mut Conn,
+        token_hash: &str,
+    ) -> DbResult<Option<RefreshTokenRow>> {
+        diesel::sql_query(
+            "SELECT id, user_id, token_hash, family_id, expires_at, revoked, created_at FROM yauth_refresh_tokens WHERE token_hash = $1",
+        )
+        .bind::<diesel::sql_types::Text, _>(token_hash)
+        .get_result(conn)
+        .await
+        .optional()
+        .map_err(|e| e.to_string())
+    }
+
+    pub async fn insert_refresh_token(
+        conn: &mut Conn,
+        id: Uuid,
+        user_id: Uuid,
+        token_hash: &str,
+        family_id: Uuid,
+        expires_at: chrono::DateTime<chrono::FixedOffset>,
+        created_at: chrono::DateTime<chrono::FixedOffset>,
+    ) -> DbResult<()> {
+        diesel::sql_query(
+            "INSERT INTO yauth_refresh_tokens (id, user_id, token_hash, family_id, expires_at, revoked, created_at) VALUES ($1, $2, $3, $4, $5, false, $6)",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(id)
+        .bind::<diesel::sql_types::Uuid, _>(user_id)
+        .bind::<diesel::sql_types::Text, _>(token_hash)
+        .bind::<diesel::sql_types::Uuid, _>(family_id)
+        .bind::<diesel::sql_types::Timestamptz, _>(expires_at)
+        .bind::<diesel::sql_types::Timestamptz, _>(created_at)
+        .execute(conn)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub async fn revoke_refresh_token(conn: &mut Conn, id: Uuid) -> DbResult<()> {
+        diesel::sql_query("UPDATE yauth_refresh_tokens SET revoked = true WHERE id = $1")
+            .bind::<diesel::sql_types::Uuid, _>(id)
+            .execute(conn)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub async fn revoke_family(conn: &mut Conn, family_id: Uuid) -> DbResult<()> {
+        diesel::sql_query("UPDATE yauth_refresh_tokens SET revoked = true WHERE family_id = $1")
+            .bind::<diesel::sql_types::Uuid, _>(family_id)
+            .execute(conn)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -317,24 +810,55 @@ async fn authorize_post(
             .unwrap_or(chrono::Duration::seconds(60)))
     .fixed_offset();
 
-    let auth_code = yauth_entity::authorization_codes::ActiveModel {
-        id: Set(Uuid::new_v4()),
-        code_hash: Set(code_hash),
-        client_id: Set(input.client_id.clone()),
-        user_id: Set(auth_user.id),
-        scopes: Set(scopes_json),
-        redirect_uri: Set(input.redirect_uri.clone()),
-        code_challenge: Set(input.code_challenge.clone()),
-        code_challenge_method: Set(input.code_challenge_method.clone()),
-        nonce: Set(None),
-        expires_at: Set(expires_at),
-        used: Set(false),
-        created_at: Set(now),
-    };
+    #[cfg(feature = "seaorm")]
+    {
+        let auth_code = yauth_entity::authorization_codes::ActiveModel {
+            id: Set(Uuid::new_v4()),
+            code_hash: Set(code_hash),
+            client_id: Set(input.client_id.clone()),
+            user_id: Set(auth_user.id),
+            scopes: Set(scopes_json.clone()),
+            redirect_uri: Set(input.redirect_uri.clone()),
+            code_challenge: Set(input.code_challenge.clone()),
+            code_challenge_method: Set(input.code_challenge_method.clone()),
+            nonce: Set(None),
+            expires_at: Set(expires_at),
+            used: Set(false),
+            created_at: Set(now),
+        };
 
-    if let Err(e) = auth_code.insert(&state.db).await {
-        tracing::error!("Failed to store authorization code: {}", e);
-        return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
+        if let Err(e) = auth_code.insert(&state.db).await {
+            tracing::error!("Failed to store authorization code: {}", e);
+            return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
+        }
+    }
+    #[cfg(feature = "diesel-async")]
+    {
+        let mut conn = match state.db.get().await {
+            Ok(c) => c,
+            Err(_) => {
+                return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+                    .into_response();
+            }
+        };
+        if let Err(e) = diesel_db::insert_auth_code(
+            &mut conn,
+            Uuid::new_v4(),
+            &code_hash,
+            &input.client_id,
+            auth_user.id,
+            scopes_json.as_ref(),
+            &input.redirect_uri,
+            &input.code_challenge,
+            &input.code_challenge_method,
+            expires_at,
+            now,
+        )
+        .await
+        {
+            tracing::error!("Failed to store authorization code: {}", e);
+            return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
+        }
     }
 
     info!(
@@ -454,6 +978,8 @@ struct OAuth2TokenResponse {
     refresh_token: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     scope: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id_token: Option<String>,
 }
 
 /// Token response for client_credentials grant (no refresh token per RFC).
@@ -604,29 +1130,106 @@ async fn handle_authorization_code_grant(
 
     // Find authorization code
     let code_hash = crypto::hash_token(code);
-    let stored_code = yauth_entity::authorization_codes::Entity::find()
-        .filter(yauth_entity::authorization_codes::Column::CodeHash.eq(&code_hash))
-        .one(&state.db)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error: {}", e);
+
+    // Cross-backend stored code info
+    #[allow(dead_code)]
+    struct StoredCode {
+        id: Uuid,
+        code_hash: String,
+        client_id: String,
+        user_id: Uuid,
+        scopes: Option<serde_json::Value>,
+        redirect_uri: String,
+        code_challenge: String,
+        code_challenge_method: String,
+        expires_at: chrono::NaiveDateTime,
+        used: bool,
+        nonce: Option<String>,
+    }
+
+    #[cfg(feature = "seaorm")]
+    let stored_code = {
+        let row = yauth_entity::authorization_codes::Entity::find()
+            .filter(yauth_entity::authorization_codes::Column::CodeHash.eq(&code_hash))
+            .one(&state.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                oauth2_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "Internal error",
+                )
+            })?
+            .ok_or_else(|| {
+                warn!(
+                    event = "oauth2_invalid_code",
+                    "Authorization code not found"
+                );
+                oauth2_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_grant",
+                    "Invalid authorization code",
+                )
+            })?;
+        StoredCode {
+            id: row.id,
+            code_hash: row.code_hash,
+            client_id: row.client_id,
+            user_id: row.user_id,
+            scopes: row.scopes,
+            redirect_uri: row.redirect_uri,
+            code_challenge: row.code_challenge,
+            code_challenge_method: row.code_challenge_method,
+            expires_at: row.expires_at.naive_utc(),
+            used: row.used,
+            nonce: row.nonce,
+        }
+    };
+    #[cfg(feature = "diesel-async")]
+    let stored_code = {
+        let mut conn = state.db.get().await.map_err(|_| {
             oauth2_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "server_error",
                 "Internal error",
             )
-        })?
-        .ok_or_else(|| {
-            warn!(
-                event = "oauth2_invalid_code",
-                "Authorization code not found"
-            );
-            oauth2_error(
-                StatusCode::BAD_REQUEST,
-                "invalid_grant",
-                "Invalid authorization code",
-            )
         })?;
+        let row = diesel_db::find_auth_code_by_hash(&mut conn, &code_hash)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                oauth2_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "Internal error",
+                )
+            })?
+            .ok_or_else(|| {
+                warn!(
+                    event = "oauth2_invalid_code",
+                    "Authorization code not found"
+                );
+                oauth2_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_grant",
+                    "Invalid authorization code",
+                )
+            })?;
+        StoredCode {
+            id: row.id,
+            code_hash: row.code_hash,
+            client_id: row.client_id,
+            user_id: row.user_id,
+            scopes: row.scopes,
+            redirect_uri: row.redirect_uri,
+            code_challenge: row.code_challenge,
+            code_challenge_method: row.code_challenge_method,
+            expires_at: row.expires_at,
+            used: row.used,
+            nonce: row.nonce,
+        }
+    };
 
     // Check if code was already used
     if stored_code.used {
@@ -644,8 +1247,8 @@ async fn handle_authorization_code_grant(
     }
 
     // Check expiration
-    let now = Utc::now().fixed_offset();
-    if stored_code.expires_at < now {
+    let now_naive = Utc::now().naive_utc();
+    if stored_code.expires_at < now_naive {
         warn!(event = "oauth2_code_expired", "Authorization code expired");
         return Err(oauth2_error(
             StatusCode::BAD_REQUEST,
@@ -692,30 +1295,125 @@ async fn handle_authorization_code_grant(
     }
 
     // Mark code as used
-    let mut active: yauth_entity::authorization_codes::ActiveModel = stored_code.clone().into();
-    active.used = Set(true);
-    active.update(&state.db).await.map_err(|e| {
-        tracing::error!("Failed to mark auth code as used: {}", e);
-        oauth2_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "server_error",
-            "Internal error",
-        )
-    })?;
-
-    // Look up user
-    let user = yauth_entity::users::Entity::find_by_id(stored_code.user_id)
-        .one(&state.db)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error: {}", e);
+    #[cfg(feature = "seaorm")]
+    {
+        let found = yauth_entity::authorization_codes::Entity::find_by_id(stored_code.id)
+            .one(&state.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                oauth2_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "Internal error",
+                )
+            })?
+            .ok_or_else(|| {
+                oauth2_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "Internal error",
+                )
+            })?;
+        let mut active: yauth_entity::authorization_codes::ActiveModel = found.into();
+        active.used = Set(true);
+        active.update(&state.db).await.map_err(|e| {
+            tracing::error!("Failed to mark auth code as used: {}", e);
             oauth2_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "server_error",
                 "Internal error",
             )
-        })?
-        .ok_or_else(|| oauth2_error(StatusCode::BAD_REQUEST, "invalid_grant", "User not found"))?;
+        })?;
+    }
+    #[cfg(feature = "diesel-async")]
+    {
+        let mut conn = state.db.get().await.map_err(|_| {
+            oauth2_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "Internal error",
+            )
+        })?;
+        diesel_db::mark_auth_code_used(&mut conn, stored_code.id)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to mark auth code as used: {}", e);
+                oauth2_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "Internal error",
+                )
+            })?;
+    }
+
+    // Look up user — common struct for cross-backend
+    #[allow(dead_code)]
+    struct AuthCodeUser {
+        id: Uuid,
+        email: String,
+        display_name: Option<String>,
+        email_verified: bool,
+        role: String,
+        banned: bool,
+    }
+
+    #[cfg(feature = "seaorm")]
+    let user = {
+        let u = yauth_entity::users::Entity::find_by_id(stored_code.user_id)
+            .one(&state.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                oauth2_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "Internal error",
+                )
+            })?
+            .ok_or_else(|| {
+                oauth2_error(StatusCode::BAD_REQUEST, "invalid_grant", "User not found")
+            })?;
+        AuthCodeUser {
+            id: u.id,
+            email: u.email,
+            display_name: u.display_name,
+            email_verified: u.email_verified,
+            role: u.role,
+            banned: u.banned,
+        }
+    };
+    #[cfg(feature = "diesel-async")]
+    let user = {
+        let mut conn = state.db.get().await.map_err(|_| {
+            oauth2_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "Internal error",
+            )
+        })?;
+        let u = diesel_db::find_user_by_id(&mut conn, stored_code.user_id)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                oauth2_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "Internal error",
+                )
+            })?
+            .ok_or_else(|| {
+                oauth2_error(StatusCode::BAD_REQUEST, "invalid_grant", "User not found")
+            })?;
+        AuthCodeUser {
+            id: u.id,
+            email: u.email,
+            display_name: u.display_name,
+            email_verified: u.email_verified,
+            role: u.role,
+            banned: u.banned,
+        }
+    };
 
     if user.banned {
         return Err(oauth2_error(
@@ -737,13 +1435,34 @@ async fn handle_authorization_code_grant(
                 .join(" ")
         });
 
+    // Check whether the openid scope was requested (for OIDC id_token)
+    #[allow(unused_variables)]
+    let has_openid_scope = scope_str
+        .as_deref()
+        .map(|s| s.split_whitespace().any(|sc| sc == "openid"))
+        .unwrap_or(false);
+
     // Issue tokens using the bearer config (requires bearer feature)
-    #[cfg(feature = "bearer")]
+    #[cfg(all(feature = "bearer", feature = "seaorm"))]
     {
         let bearer_config = &state.bearer_config;
 
+        // Reconstruct users::Model for create_jwt_with_audience
+        let user_model = yauth_entity::users::Model {
+            id: user.id,
+            email: user.email.clone(),
+            display_name: user.display_name.clone(),
+            email_verified: user.email_verified,
+            role: user.role.clone(),
+            banned: user.banned,
+            banned_reason: None,
+            banned_until: None,
+            created_at: Utc::now().fixed_offset(),
+            updated_at: Utc::now().fixed_offset(),
+        };
+
         let (access_token, _jti) = crate::plugins::bearer::create_jwt_with_audience(
-            &user,
+            &user_model,
             bearer_config,
             scope_str.as_deref(),
         )
@@ -792,17 +1511,149 @@ async fn handle_authorization_code_grant(
             )
             .await;
 
+        // Generate OIDC id_token when openid scope is present
+        #[cfg(feature = "oidc")]
+        let id_token = if has_openid_scope {
+            Some(
+                crate::plugins::oidc::generate_id_token(
+                    &user_model,
+                    state,
+                    client_id,
+                    stored_code.nonce.as_deref(),
+                )
+                .map_err(|e| {
+                    tracing::error!("Failed to generate id_token: {}", e);
+                    oauth2_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "server_error",
+                        "Failed to generate id_token",
+                    )
+                })?,
+            )
+        } else {
+            None
+        };
+        #[cfg(not(feature = "oidc"))]
+        let id_token: Option<String> = None;
+
         return Ok(Json(OAuth2TokenResponse {
             access_token,
             token_type: "Bearer".into(),
             expires_in,
             refresh_token,
             scope: scope_str,
+            id_token,
+        }));
+    }
+
+    #[cfg(all(feature = "bearer", feature = "diesel-async"))]
+    {
+        let bearer_config = &state.bearer_config;
+
+        let jwt_user = crate::plugins::bearer::JwtUser {
+            id: user.id,
+            email: user.email.clone(),
+            role: user.role.clone(),
+        };
+
+        let (access_token, _jti) = crate::plugins::bearer::create_jwt_with_audience_from_fields(
+            &jwt_user,
+            bearer_config,
+            scope_str.as_deref(),
+        )
+        .map_err(|_| {
+            oauth2_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "Failed to create token",
+            )
+        })?;
+
+        let family_id = Uuid::new_v4();
+        let mut conn = state.db.get().await.map_err(|_| {
+            oauth2_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "Internal error",
+            )
+        })?;
+        let refresh_token = create_refresh_token_for_oauth2_diesel(
+            &mut conn,
+            user.id,
+            family_id,
+            bearer_config.refresh_token_ttl,
+        )
+        .await
+        .map_err(|_| {
+            oauth2_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "Failed to create refresh token",
+            )
+        })?;
+
+        let expires_in = bearer_config.access_token_ttl.as_secs();
+
+        info!(
+            event = "oauth2_token_issued",
+            user_id = %user.id,
+            client_id = %client_id,
+            "OAuth2 access token issued via authorization_code grant"
+        );
+
+        state
+            .write_audit_log(
+                Some(user.id),
+                "oauth2_token_issued",
+                Some(serde_json::json!({
+                    "client_id": client_id,
+                    "grant_type": "authorization_code",
+                })),
+                None,
+            )
+            .await;
+
+        // Generate OIDC id_token when openid scope is present
+        #[cfg(feature = "oidc")]
+        let id_token = if has_openid_scope {
+            Some(
+                crate::plugins::oidc::generate_id_token_from_fields(
+                    &user.id,
+                    &user.email,
+                    user.email_verified,
+                    user.display_name.as_deref(),
+                    state,
+                    client_id,
+                    stored_code.nonce.as_deref(),
+                )
+                .map_err(|e| {
+                    tracing::error!("Failed to generate id_token: {}", e);
+                    oauth2_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "server_error",
+                        "Failed to generate id_token",
+                    )
+                })?,
+            )
+        } else {
+            None
+        };
+        #[cfg(not(feature = "oidc"))]
+        let id_token: Option<String> = None;
+
+        return Ok(Json(OAuth2TokenResponse {
+            access_token,
+            token_type: "Bearer".into(),
+            expires_in,
+            refresh_token,
+            scope: scope_str,
+            id_token,
         }));
     }
 
     #[cfg(not(feature = "bearer"))]
     {
+        let _ = user;
         Err::<Json<OAuth2TokenResponse>, _>(oauth2_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "server_error",
@@ -828,26 +1679,79 @@ async fn handle_oauth2_refresh_token(
     {
         let token_hash = crypto::hash_token(refresh_token_raw);
 
+        // Cross-backend stored refresh token info
+        struct StoredRefresh {
+            id: Uuid,
+            user_id: Uuid,
+            family_id: Uuid,
+            expires_at: chrono::NaiveDateTime,
+            revoked: bool,
+        }
+
         // Find the refresh token
-        let stored = yauth_entity::refresh_tokens::Entity::find()
-            .filter(yauth_entity::refresh_tokens::Column::TokenHash.eq(&token_hash))
-            .one(&state.db)
-            .await
-            .map_err(|e| {
-                tracing::error!("DB error: {}", e);
+        #[cfg(feature = "seaorm")]
+        let stored = {
+            let row = yauth_entity::refresh_tokens::Entity::find()
+                .filter(yauth_entity::refresh_tokens::Column::TokenHash.eq(&token_hash))
+                .one(&state.db)
+                .await
+                .map_err(|e| {
+                    tracing::error!("DB error: {}", e);
+                    oauth2_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "server_error",
+                        "Internal error",
+                    )
+                })?
+                .ok_or_else(|| {
+                    oauth2_error(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_grant",
+                        "Invalid refresh token",
+                    )
+                })?;
+            StoredRefresh {
+                id: row.id,
+                user_id: row.user_id,
+                family_id: row.family_id,
+                expires_at: row.expires_at.naive_utc(),
+                revoked: row.revoked,
+            }
+        };
+        #[cfg(feature = "diesel-async")]
+        let stored = {
+            let mut conn = state.db.get().await.map_err(|_| {
                 oauth2_error(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "server_error",
                     "Internal error",
                 )
-            })?
-            .ok_or_else(|| {
-                oauth2_error(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_grant",
-                    "Invalid refresh token",
-                )
             })?;
+            let row = diesel_db::find_refresh_token_by_hash(&mut conn, &token_hash)
+                .await
+                .map_err(|e| {
+                    tracing::error!("DB error: {}", e);
+                    oauth2_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "server_error",
+                        "Internal error",
+                    )
+                })?
+                .ok_or_else(|| {
+                    oauth2_error(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_grant",
+                        "Invalid refresh token",
+                    )
+                })?;
+            StoredRefresh {
+                id: row.id,
+                user_id: row.user_id,
+                family_id: row.family_id,
+                expires_at: row.expires_at,
+                revoked: row.revoked,
+            }
+        };
 
         if stored.revoked {
             warn!(
@@ -855,7 +1759,15 @@ async fn handle_oauth2_refresh_token(
                 family_id = %stored.family_id,
                 "Refresh token reuse detected — revoking family"
             );
+            #[cfg(feature = "seaorm")]
             revoke_family(&state.db, stored.family_id).await;
+            #[cfg(feature = "diesel-async")]
+            {
+                let mut conn = state.db.get().await.ok();
+                if let Some(ref mut conn) = conn {
+                    let _ = diesel_db::revoke_family(conn, stored.family_id).await;
+                }
+            }
             return Err(oauth2_error(
                 StatusCode::BAD_REQUEST,
                 "invalid_grant",
@@ -863,8 +1775,8 @@ async fn handle_oauth2_refresh_token(
             ));
         }
 
-        let now = Utc::now().fixed_offset();
-        if stored.expires_at < now {
+        let now_naive = Utc::now().naive_utc();
+        if stored.expires_at < now_naive {
             return Err(oauth2_error(
                 StatusCode::BAD_REQUEST,
                 "invalid_grant",
@@ -875,32 +1787,125 @@ async fn handle_oauth2_refresh_token(
         // Revoke old token
         let family_id = stored.family_id;
         let user_id = stored.user_id;
-        let mut active: yauth_entity::refresh_tokens::ActiveModel = stored.into();
-        active.revoked = Set(true);
-        active.update(&state.db).await.map_err(|e| {
-            tracing::error!("Failed to revoke old refresh token: {}", e);
-            oauth2_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "server_error",
-                "Internal error",
-            )
-        })?;
-
-        // Look up user
-        let user = yauth_entity::users::Entity::find_by_id(user_id)
-            .one(&state.db)
-            .await
-            .map_err(|e| {
-                tracing::error!("DB error: {}", e);
+        #[cfg(feature = "seaorm")]
+        {
+            let found = yauth_entity::refresh_tokens::Entity::find_by_id(stored.id)
+                .one(&state.db)
+                .await
+                .map_err(|e| {
+                    tracing::error!("DB error: {}", e);
+                    oauth2_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "server_error",
+                        "Internal error",
+                    )
+                })?
+                .ok_or_else(|| {
+                    oauth2_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "server_error",
+                        "Internal error",
+                    )
+                })?;
+            let mut active: yauth_entity::refresh_tokens::ActiveModel = found.into();
+            active.revoked = Set(true);
+            active.update(&state.db).await.map_err(|e| {
+                tracing::error!("Failed to revoke old refresh token: {}", e);
                 oauth2_error(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "server_error",
                     "Internal error",
                 )
-            })?
-            .ok_or_else(|| {
-                oauth2_error(StatusCode::BAD_REQUEST, "invalid_grant", "User not found")
             })?;
+        }
+        #[cfg(feature = "diesel-async")]
+        {
+            let mut conn = state.db.get().await.map_err(|_| {
+                oauth2_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "Internal error",
+                )
+            })?;
+            diesel_db::revoke_refresh_token(&mut conn, stored.id)
+                .await
+                .map_err(|e| {
+                    tracing::error!("Failed to revoke old refresh token: {}", e);
+                    oauth2_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "server_error",
+                        "Internal error",
+                    )
+                })?;
+        }
+
+        // Look up user — common struct
+        #[allow(dead_code)]
+        struct RefreshUser {
+            id: Uuid,
+            email: String,
+            display_name: Option<String>,
+            email_verified: bool,
+            role: String,
+            banned: bool,
+        }
+
+        #[cfg(feature = "seaorm")]
+        let user = {
+            let u = yauth_entity::users::Entity::find_by_id(user_id)
+                .one(&state.db)
+                .await
+                .map_err(|e| {
+                    tracing::error!("DB error: {}", e);
+                    oauth2_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "server_error",
+                        "Internal error",
+                    )
+                })?
+                .ok_or_else(|| {
+                    oauth2_error(StatusCode::BAD_REQUEST, "invalid_grant", "User not found")
+                })?;
+            RefreshUser {
+                id: u.id,
+                email: u.email,
+                display_name: u.display_name,
+                email_verified: u.email_verified,
+                role: u.role,
+                banned: u.banned,
+            }
+        };
+        #[cfg(feature = "diesel-async")]
+        let user = {
+            let mut conn = state.db.get().await.map_err(|_| {
+                oauth2_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "Internal error",
+                )
+            })?;
+            let u = diesel_db::find_user_by_id(&mut conn, user_id)
+                .await
+                .map_err(|e| {
+                    tracing::error!("DB error: {}", e);
+                    oauth2_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "server_error",
+                        "Internal error",
+                    )
+                })?
+                .ok_or_else(|| {
+                    oauth2_error(StatusCode::BAD_REQUEST, "invalid_grant", "User not found")
+                })?;
+            RefreshUser {
+                id: u.id,
+                email: u.email,
+                display_name: u.display_name,
+                email_verified: u.email_verified,
+                role: u.role,
+                banned: u.banned,
+            }
+        };
 
         if user.banned {
             return Err(oauth2_error(
@@ -911,17 +1916,52 @@ async fn handle_oauth2_refresh_token(
         }
 
         let bearer_config = &state.bearer_config;
-        let (access_token, _jti) =
-            crate::plugins::bearer::create_jwt_with_audience(&user, bearer_config, None).map_err(
-                |_| {
+
+        #[cfg(feature = "seaorm")]
+        let (access_token, _jti) = {
+            let user_model = yauth_entity::users::Model {
+                id: user.id,
+                email: user.email.clone(),
+                display_name: user.display_name.clone(),
+                email_verified: user.email_verified,
+                role: user.role.clone(),
+                banned: user.banned,
+                banned_reason: None,
+                banned_until: None,
+                created_at: Utc::now().fixed_offset(),
+                updated_at: Utc::now().fixed_offset(),
+            };
+            crate::plugins::bearer::create_jwt_with_audience(&user_model, bearer_config, None)
+                .map_err(|_| {
                     oauth2_error(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         "server_error",
                         "Failed to create token",
                     )
-                },
-            )?;
+                })?
+        };
+        #[cfg(feature = "diesel-async")]
+        let (access_token, _jti) = {
+            let jwt_user = crate::plugins::bearer::JwtUser {
+                id: user.id,
+                email: user.email.clone(),
+                role: user.role.clone(),
+            };
+            crate::plugins::bearer::create_jwt_with_audience_from_fields(
+                &jwt_user,
+                bearer_config,
+                None,
+            )
+            .map_err(|_| {
+                oauth2_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "Failed to create token",
+                )
+            })?
+        };
 
+        #[cfg(feature = "seaorm")]
         let new_refresh = create_refresh_token_for_oauth2(
             &state.db,
             user.id,
@@ -936,6 +1976,30 @@ async fn handle_oauth2_refresh_token(
                 "Failed to create refresh token",
             )
         })?;
+        #[cfg(feature = "diesel-async")]
+        let new_refresh = {
+            let mut conn = state.db.get().await.map_err(|_| {
+                oauth2_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "Internal error",
+                )
+            })?;
+            create_refresh_token_for_oauth2_diesel(
+                &mut conn,
+                user.id,
+                family_id,
+                bearer_config.refresh_token_ttl,
+            )
+            .await
+            .map_err(|_| {
+                oauth2_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "Failed to create refresh token",
+                )
+            })?
+        };
 
         let expires_in = bearer_config.access_token_ttl.as_secs();
 
@@ -945,6 +2009,7 @@ async fn handle_oauth2_refresh_token(
             expires_in,
             refresh_token: new_refresh,
             scope: None,
+            id_token: None,
         }));
     }
 
@@ -1042,25 +2107,59 @@ async fn dynamic_client_registration(
 
     let now = Utc::now().fixed_offset();
 
-    let client = yauth_entity::oauth2_clients::ActiveModel {
-        id: Set(Uuid::new_v4()),
-        client_id: Set(client_id.clone()),
-        client_secret_hash: Set(client_secret_hash),
-        redirect_uris: Set(serde_json::json!(input.redirect_uris)),
-        client_name: Set(input.client_name.clone()),
-        grant_types: Set(serde_json::json!(grant_types)),
-        scopes: Set(scopes_json),
-        is_public: Set(is_public),
-        created_at: Set(now),
-    };
+    let redirect_uris_json = serde_json::json!(input.redirect_uris);
+    let grant_types_json = serde_json::json!(grant_types);
 
-    client.insert(&state.db).await.map_err(|e| {
-        tracing::error!("Failed to register client: {}", e);
-        api_err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Failed to register client",
+    #[cfg(feature = "seaorm")]
+    {
+        let client = yauth_entity::oauth2_clients::ActiveModel {
+            id: Set(Uuid::new_v4()),
+            client_id: Set(client_id.clone()),
+            client_secret_hash: Set(client_secret_hash.clone()),
+            redirect_uris: Set(redirect_uris_json),
+            client_name: Set(input.client_name.clone()),
+            grant_types: Set(grant_types_json),
+            scopes: Set(scopes_json),
+            is_public: Set(is_public),
+            created_at: Set(now),
+        };
+
+        client.insert(&state.db).await.map_err(|e| {
+            tracing::error!("Failed to register client: {}", e);
+            api_err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to register client",
+            )
+        })?;
+    }
+    #[cfg(feature = "diesel-async")]
+    {
+        let mut conn = state
+            .db
+            .get()
+            .await
+            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
+        diesel_db::insert_client(
+            &mut conn,
+            Uuid::new_v4(),
+            &client_id,
+            client_secret_hash.as_deref(),
+            &redirect_uris_json,
+            input.client_name.as_deref(),
+            &grant_types_json,
+            scopes_json.as_ref(),
+            is_public,
+            now,
         )
-    })?;
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to register client: {}", e);
+            api_err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to register client",
+            )
+        })?;
+    }
 
     info!(
         event = "oauth2_client_registered",
@@ -1099,6 +2198,7 @@ fn generate_user_code() -> String {
 }
 
 /// Generate a unique user code, retrying on collision with pending codes.
+#[cfg(feature = "seaorm")]
 async fn generate_unique_user_code(db: &sea_orm::DatabaseConnection) -> Result<String, ApiError> {
     for _ in 0..10 {
         let code = generate_user_code();
@@ -1106,6 +2206,29 @@ async fn generate_unique_user_code(db: &sea_orm::DatabaseConnection) -> Result<S
             .filter(yauth_entity::device_codes::Column::UserCode.eq(&code))
             .filter(yauth_entity::device_codes::Column::Status.eq("pending"))
             .one(db)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error checking user code uniqueness: {}", e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?;
+        if existing.is_none() {
+            return Ok(code);
+        }
+    }
+    Err(api_err(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Failed to generate unique user code",
+    ))
+}
+
+/// Generate a unique user code, retrying on collision with pending codes.
+#[cfg(feature = "diesel-async")]
+async fn generate_unique_user_code_diesel(
+    conn: &mut diesel_async_crate::AsyncPgConnection,
+) -> Result<String, ApiError> {
+    for _ in 0..10 {
+        let code = generate_user_code();
+        let existing = diesel_db::find_device_code_by_user_code_pending(conn, &code)
             .await
             .map_err(|e| {
                 tracing::error!("DB error checking user code uniqueness: {}", e);
@@ -1154,7 +2277,21 @@ async fn device_authorization(
     let ttl = config.device_code_ttl;
 
     // Generate codes
+    #[cfg(feature = "diesel-async")]
+    let mut conn = match state.db.get().await {
+        Ok(c) => c,
+        Err(_) => {
+            return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
+        }
+    };
+
+    #[cfg(feature = "seaorm")]
     let user_code = match generate_unique_user_code(&state.db).await {
+        Ok(c) => c,
+        Err(e) => return e.into_response(),
+    };
+    #[cfg(feature = "diesel-async")]
+    let user_code = match generate_unique_user_code_diesel(&mut conn).await {
         Ok(c) => c,
         Err(e) => return e.into_response(),
     };
@@ -1172,23 +2309,45 @@ async fn device_authorization(
         .as_ref()
         .map(|s| serde_json::json!(s.split_whitespace().collect::<Vec<_>>()));
 
-    let device_code = yauth_entity::device_codes::ActiveModel {
-        id: Set(Uuid::new_v4()),
-        device_code_hash: Set(device_code_hash),
-        user_code: Set(user_code.clone()),
-        client_id: Set(input.client_id.clone()),
-        scopes: Set(scopes_json),
-        user_id: Set(None),
-        status: Set("pending".into()),
-        interval: Set(interval as i32),
-        expires_at: Set(expires_at),
-        last_polled_at: Set(None),
-        created_at: Set(now),
-    };
+    #[cfg(feature = "seaorm")]
+    {
+        let device_code = yauth_entity::device_codes::ActiveModel {
+            id: Set(Uuid::new_v4()),
+            device_code_hash: Set(device_code_hash),
+            user_code: Set(user_code.clone()),
+            client_id: Set(input.client_id.clone()),
+            scopes: Set(scopes_json),
+            user_id: Set(None),
+            status: Set("pending".into()),
+            interval: Set(interval as i32),
+            expires_at: Set(expires_at),
+            last_polled_at: Set(None),
+            created_at: Set(now),
+        };
 
-    if let Err(e) = device_code.insert(&state.db).await {
-        tracing::error!("Failed to store device code: {}", e);
-        return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
+        if let Err(e) = device_code.insert(&state.db).await {
+            tracing::error!("Failed to store device code: {}", e);
+            return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
+        }
+    }
+    #[cfg(feature = "diesel-async")]
+    {
+        if let Err(e) = diesel_db::insert_device_code(
+            &mut conn,
+            Uuid::new_v4(),
+            &device_code_hash,
+            &user_code,
+            &input.client_id,
+            scopes_json.as_ref(),
+            interval as i32,
+            expires_at,
+            now,
+        )
+        .await
+        {
+            tracing::error!("Failed to store device code: {}", e);
+            return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
+        }
     }
 
     let verification_uri = config
@@ -1239,16 +2398,56 @@ async fn device_verify_get(
 ) -> Response {
     // If a user_code is provided, look up the pending device code
     if let Some(ref code) = query.user_code {
-        let stored = yauth_entity::device_codes::Entity::find()
-            .filter(yauth_entity::device_codes::Column::UserCode.eq(code))
-            .filter(yauth_entity::device_codes::Column::Status.eq("pending"))
-            .one(&state.db)
-            .await;
+        // Common struct for cross-backend device code data
+        struct DcInfo {
+            user_code: String,
+            client_id: String,
+            scopes: Option<serde_json::Value>,
+            expires_at: chrono::NaiveDateTime,
+        }
 
-        match stored {
+        #[cfg(feature = "seaorm")]
+        let dc_result: Result<Option<DcInfo>, String> = {
+            yauth_entity::device_codes::Entity::find()
+                .filter(yauth_entity::device_codes::Column::UserCode.eq(code))
+                .filter(yauth_entity::device_codes::Column::Status.eq("pending"))
+                .one(&state.db)
+                .await
+                .map(|opt| {
+                    opt.map(|dc| DcInfo {
+                        user_code: dc.user_code,
+                        client_id: dc.client_id,
+                        scopes: dc.scopes,
+                        expires_at: dc.expires_at.naive_utc(),
+                    })
+                })
+                .map_err(|e| e.to_string())
+        };
+        #[cfg(feature = "diesel-async")]
+        let dc_result: Result<Option<DcInfo>, String> = {
+            let mut conn = match state.db.get().await {
+                Ok(c) => c,
+                Err(_) => {
+                    return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+                        .into_response();
+                }
+            };
+            diesel_db::find_device_code_by_user_code_pending(&mut conn, code)
+                .await
+                .map(|opt| {
+                    opt.map(|dc| DcInfo {
+                        user_code: dc.user_code,
+                        client_id: dc.client_id,
+                        scopes: dc.scopes,
+                        expires_at: dc.expires_at,
+                    })
+                })
+        };
+
+        match dc_result {
             Ok(Some(dc)) => {
-                let now = Utc::now().fixed_offset();
-                if dc.expires_at < now {
+                let now_naive = Utc::now().naive_utc();
+                if dc.expires_at < now_naive {
                     return Json(serde_json::json!({
                         "type": "device_verification",
                         "error": "expired_token",
@@ -1258,14 +2457,32 @@ async fn device_verify_get(
                 }
 
                 // Look up client name
-                let client = yauth_entity::oauth2_clients::Entity::find()
-                    .filter(yauth_entity::oauth2_clients::Column::ClientId.eq(&dc.client_id))
-                    .one(&state.db)
-                    .await
-                    .ok()
-                    .flatten();
+                #[cfg(feature = "seaorm")]
+                let client_name = {
+                    let client = yauth_entity::oauth2_clients::Entity::find()
+                        .filter(yauth_entity::oauth2_clients::Column::ClientId.eq(&dc.client_id))
+                        .one(&state.db)
+                        .await
+                        .ok()
+                        .flatten();
+                    client.and_then(|c| c.client_name)
+                };
+                #[cfg(feature = "diesel-async")]
+                let client_name = {
+                    let mut conn = match state.db.get().await {
+                        Ok(c) => c,
+                        Err(_) => {
+                            return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+                                .into_response();
+                        }
+                    };
+                    diesel_db::find_client_by_client_id(&mut conn, &dc.client_id)
+                        .await
+                        .ok()
+                        .flatten()
+                        .and_then(|c| c.client_name)
+                };
 
-                let client_name = client.and_then(|c| c.client_name);
                 let scope = dc.scopes.as_ref().and_then(|v| v.as_array()).map(|arr| {
                     arr.iter()
                         .filter_map(|s| s.as_str())
@@ -1339,30 +2556,70 @@ async fn device_verify_post(
     };
 
     // Find the pending device code by user_code
-    let stored = yauth_entity::device_codes::Entity::find()
-        .filter(yauth_entity::device_codes::Column::UserCode.eq(&input.user_code))
-        .filter(yauth_entity::device_codes::Column::Status.eq("pending"))
-        .one(&state.db)
-        .await;
+    struct DcInfo {
+        id: Uuid,
+        expires_at: chrono::NaiveDateTime,
+    }
 
-    let dc = match stored {
-        Ok(Some(dc)) => dc,
-        Ok(None) => {
-            return oauth2_error(
-                StatusCode::BAD_REQUEST,
-                "invalid_request",
-                "Invalid or already used user code",
-            );
+    #[cfg(feature = "seaorm")]
+    let dc = {
+        let stored = yauth_entity::device_codes::Entity::find()
+            .filter(yauth_entity::device_codes::Column::UserCode.eq(&input.user_code))
+            .filter(yauth_entity::device_codes::Column::Status.eq("pending"))
+            .one(&state.db)
+            .await;
+
+        match stored {
+            Ok(Some(dc)) => DcInfo {
+                id: dc.id,
+                expires_at: dc.expires_at.naive_utc(),
+            },
+            Ok(None) => {
+                return oauth2_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_request",
+                    "Invalid or already used user code",
+                );
+            }
+            Err(e) => {
+                tracing::error!("DB error: {}", e);
+                return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+                    .into_response();
+            }
         }
-        Err(e) => {
-            tracing::error!("DB error: {}", e);
-            return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
+    };
+    #[cfg(feature = "diesel-async")]
+    let dc = {
+        let mut conn = match state.db.get().await {
+            Ok(c) => c,
+            Err(_) => {
+                return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+                    .into_response();
+            }
+        };
+        match diesel_db::find_device_code_by_user_code_pending(&mut conn, &input.user_code).await {
+            Ok(Some(dc)) => DcInfo {
+                id: dc.id,
+                expires_at: dc.expires_at,
+            },
+            Ok(None) => {
+                return oauth2_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_request",
+                    "Invalid or already used user code",
+                );
+            }
+            Err(e) => {
+                tracing::error!("DB error: {}", e);
+                return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+                    .into_response();
+            }
         }
     };
 
     // Check expiration
-    let now = Utc::now().fixed_offset();
-    if dc.expires_at < now {
+    let now_naive = Utc::now().naive_utc();
+    if dc.expires_at < now_naive {
         return oauth2_error(
             StatusCode::BAD_REQUEST,
             "expired_token",
@@ -1372,14 +2629,45 @@ async fn device_verify_post(
 
     let new_status = if input.approved { "approved" } else { "denied" };
 
-    let mut active: yauth_entity::device_codes::ActiveModel = dc.into();
-    active.status = Set(new_status.into());
-    if input.approved {
-        active.user_id = Set(Some(auth_user.id));
+    #[cfg(feature = "seaorm")]
+    {
+        // Re-fetch for SeaORM active model
+        let stored = yauth_entity::device_codes::Entity::find_by_id(dc.id)
+            .one(&state.db)
+            .await;
+        if let Ok(Some(stored)) = stored {
+            let mut active: yauth_entity::device_codes::ActiveModel = stored.into();
+            active.status = Set(new_status.into());
+            if input.approved {
+                active.user_id = Set(Some(auth_user.id));
+            }
+            if let Err(e) = active.update(&state.db).await {
+                tracing::error!("Failed to update device code status: {}", e);
+                return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+                    .into_response();
+            }
+        }
     }
-    if let Err(e) = active.update(&state.db).await {
-        tracing::error!("Failed to update device code status: {}", e);
-        return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
+    #[cfg(feature = "diesel-async")]
+    {
+        let mut conn = match state.db.get().await {
+            Ok(c) => c,
+            Err(_) => {
+                return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+                    .into_response();
+            }
+        };
+        let user_id = if input.approved {
+            Some(auth_user.id)
+        } else {
+            None
+        };
+        if let Err(e) =
+            diesel_db::update_device_code_status(&mut conn, dc.id, new_status, user_id).await
+        {
+            tracing::error!("Failed to update device code status: {}", e);
+            return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
+        }
     }
 
     info!(
@@ -1439,25 +2727,88 @@ async fn handle_device_code_grant(
 
     // Find device code
     let device_code_hash = crypto::hash_token(device_code_raw);
-    let stored = yauth_entity::device_codes::Entity::find()
-        .filter(yauth_entity::device_codes::Column::DeviceCodeHash.eq(&device_code_hash))
-        .one(&state.db)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error: {}", e);
+
+    // Cross-backend device code info
+    struct StoredDc {
+        id: Uuid,
+        client_id: String,
+        scopes: Option<serde_json::Value>,
+        user_id: Option<Uuid>,
+        status: String,
+        interval: i32,
+        expires_at: chrono::NaiveDateTime,
+        last_polled_at: Option<chrono::NaiveDateTime>,
+    }
+
+    #[cfg(feature = "seaorm")]
+    let stored = {
+        let row = yauth_entity::device_codes::Entity::find()
+            .filter(yauth_entity::device_codes::Column::DeviceCodeHash.eq(&device_code_hash))
+            .one(&state.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                oauth2_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "Internal error",
+                )
+            })?
+            .ok_or_else(|| {
+                oauth2_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_grant",
+                    "Invalid device code",
+                )
+            })?;
+        StoredDc {
+            id: row.id,
+            client_id: row.client_id,
+            scopes: row.scopes,
+            user_id: row.user_id,
+            status: row.status,
+            interval: row.interval,
+            expires_at: row.expires_at.naive_utc(),
+            last_polled_at: row.last_polled_at.map(|t| t.naive_utc()),
+        }
+    };
+    #[cfg(feature = "diesel-async")]
+    let stored = {
+        let mut conn = state.db.get().await.map_err(|_| {
             oauth2_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "server_error",
                 "Internal error",
             )
-        })?
-        .ok_or_else(|| {
-            oauth2_error(
-                StatusCode::BAD_REQUEST,
-                "invalid_grant",
-                "Invalid device code",
-            )
         })?;
+        let row = diesel_db::find_device_code_by_hash(&mut conn, &device_code_hash)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                oauth2_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "Internal error",
+                )
+            })?
+            .ok_or_else(|| {
+                oauth2_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_grant",
+                    "Invalid device code",
+                )
+            })?;
+        StoredDc {
+            id: row.id,
+            client_id: row.client_id,
+            scopes: row.scopes,
+            user_id: row.user_id,
+            status: row.status,
+            interval: row.interval,
+            expires_at: row.expires_at,
+            last_polled_at: row.last_polled_at,
+        }
+    };
 
     // Validate client_id matches
     if stored.client_id != client_id {
@@ -1470,7 +2821,8 @@ async fn handle_device_code_grant(
 
     // Check expiration
     let now = Utc::now().fixed_offset();
-    if stored.expires_at < now {
+    let now_naive = now.naive_utc();
+    if stored.expires_at < now_naive {
         return Err(oauth2_error(
             StatusCode::BAD_REQUEST,
             "expired_token",
@@ -1480,13 +2832,36 @@ async fn handle_device_code_grant(
 
     // Enforce polling interval (RFC 8628 §3.5)
     if let Some(last_polled) = stored.last_polled_at {
-        let elapsed = now.signed_duration_since(last_polled);
+        let elapsed = now_naive.signed_duration_since(last_polled);
         if elapsed.num_seconds() < stored.interval as i64 {
             // Too fast — increment interval by 5s
-            let mut active: yauth_entity::device_codes::ActiveModel = stored.clone().into();
-            active.interval = Set(stored.interval + 5);
-            active.last_polled_at = Set(Some(now));
-            let _ = active.update(&state.db).await;
+            #[cfg(feature = "seaorm")]
+            {
+                let row = yauth_entity::device_codes::Entity::find_by_id(stored.id)
+                    .one(&state.db)
+                    .await
+                    .ok()
+                    .flatten();
+                if let Some(row) = row {
+                    let mut active: yauth_entity::device_codes::ActiveModel = row.into();
+                    active.interval = Set(stored.interval + 5);
+                    active.last_polled_at = Set(Some(now));
+                    let _ = active.update(&state.db).await;
+                }
+            }
+            #[cfg(feature = "diesel-async")]
+            {
+                let mut conn = state.db.get().await.ok();
+                if let Some(ref mut conn) = conn {
+                    let _ = diesel_db::update_device_code_slow_down(
+                        conn,
+                        stored.id,
+                        stored.interval + 5,
+                        now,
+                    )
+                    .await;
+                }
+            }
             return Err(oauth2_error(
                 StatusCode::BAD_REQUEST,
                 "slow_down",
@@ -1497,9 +2872,26 @@ async fn handle_device_code_grant(
 
     // Update last_polled_at
     let current_status = stored.status.clone();
-    let mut active: yauth_entity::device_codes::ActiveModel = stored.clone().into();
-    active.last_polled_at = Set(Some(now));
-    let _ = active.update(&state.db).await;
+    #[cfg(feature = "seaorm")]
+    {
+        let row = yauth_entity::device_codes::Entity::find_by_id(stored.id)
+            .one(&state.db)
+            .await
+            .ok()
+            .flatten();
+        if let Some(row) = row {
+            let mut active: yauth_entity::device_codes::ActiveModel = row.into();
+            active.last_polled_at = Set(Some(now));
+            let _ = active.update(&state.db).await;
+        }
+    }
+    #[cfg(feature = "diesel-async")]
+    {
+        let mut conn = state.db.get().await.ok();
+        if let Some(ref mut conn) = conn {
+            let _ = diesel_db::update_device_code_polled(conn, stored.id, now).await;
+        }
+    }
 
     match current_status.as_str() {
         "pending" => {
@@ -1535,28 +2927,7 @@ async fn handle_device_code_grant(
         }
     }
 
-    // Mark as used
-    // Re-fetch to get fresh state after last_polled_at update
-    let stored = yauth_entity::device_codes::Entity::find()
-        .filter(yauth_entity::device_codes::Column::DeviceCodeHash.eq(&device_code_hash))
-        .one(&state.db)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error: {}", e);
-            oauth2_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "server_error",
-                "Internal error",
-            )
-        })?
-        .ok_or_else(|| {
-            oauth2_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "server_error",
-                "Device code disappeared",
-            )
-        })?;
-
+    // Get user_id from the stored device code
     let user_id = stored.user_id.ok_or_else(|| {
         oauth2_error(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1565,30 +2936,126 @@ async fn handle_device_code_grant(
         )
     })?;
 
-    let mut active: yauth_entity::device_codes::ActiveModel = stored.clone().into();
-    active.status = Set("used".into());
-    active.update(&state.db).await.map_err(|e| {
-        tracing::error!("Failed to mark device code as used: {}", e);
-        oauth2_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "server_error",
-            "Internal error",
-        )
-    })?;
-
-    // Look up user
-    let user = yauth_entity::users::Entity::find_by_id(user_id)
-        .one(&state.db)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error: {}", e);
+    // Mark as used
+    #[cfg(feature = "seaorm")]
+    {
+        let row = yauth_entity::device_codes::Entity::find_by_id(stored.id)
+            .one(&state.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                oauth2_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "Internal error",
+                )
+            })?
+            .ok_or_else(|| {
+                oauth2_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "Device code disappeared",
+                )
+            })?;
+        let mut active: yauth_entity::device_codes::ActiveModel = row.into();
+        active.status = Set("used".into());
+        active.update(&state.db).await.map_err(|e| {
+            tracing::error!("Failed to mark device code as used: {}", e);
             oauth2_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "server_error",
                 "Internal error",
             )
-        })?
-        .ok_or_else(|| oauth2_error(StatusCode::BAD_REQUEST, "invalid_grant", "User not found"))?;
+        })?;
+    }
+    #[cfg(feature = "diesel-async")]
+    {
+        let mut conn = state.db.get().await.map_err(|_| {
+            oauth2_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "Internal error",
+            )
+        })?;
+        diesel_db::update_device_code_status(&mut conn, stored.id, "used", stored.user_id)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to mark device code as used: {}", e);
+                oauth2_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "Internal error",
+                )
+            })?;
+    }
+
+    // Look up user — common struct for cross-backend
+    #[allow(dead_code)]
+    struct DeviceCodeUser {
+        id: Uuid,
+        email: String,
+        display_name: Option<String>,
+        email_verified: bool,
+        role: String,
+        banned: bool,
+    }
+
+    #[cfg(feature = "seaorm")]
+    let user = {
+        let u = yauth_entity::users::Entity::find_by_id(user_id)
+            .one(&state.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                oauth2_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "Internal error",
+                )
+            })?
+            .ok_or_else(|| {
+                oauth2_error(StatusCode::BAD_REQUEST, "invalid_grant", "User not found")
+            })?;
+        DeviceCodeUser {
+            id: u.id,
+            email: u.email,
+            display_name: u.display_name,
+            email_verified: u.email_verified,
+            role: u.role,
+            banned: u.banned,
+        }
+    };
+    #[cfg(feature = "diesel-async")]
+    let user = {
+        let mut conn = state.db.get().await.map_err(|_| {
+            oauth2_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "Internal error",
+            )
+        })?;
+        let u = diesel_db::find_user_by_id(&mut conn, user_id)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                oauth2_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "Internal error",
+                )
+            })?
+            .ok_or_else(|| {
+                oauth2_error(StatusCode::BAD_REQUEST, "invalid_grant", "User not found")
+            })?;
+        DeviceCodeUser {
+            id: u.id,
+            email: u.email,
+            display_name: u.display_name,
+            email_verified: u.email_verified,
+            role: u.role,
+            banned: u.banned,
+        }
+    };
 
     if user.banned {
         return Err(oauth2_error(
@@ -1611,12 +3078,25 @@ async fn handle_device_code_grant(
         });
 
     // Issue tokens
-    #[cfg(feature = "bearer")]
+    #[cfg(all(feature = "bearer", feature = "seaorm"))]
     {
         let bearer_config = &state.bearer_config;
 
+        let user_model = yauth_entity::users::Model {
+            id: user.id,
+            email: user.email.clone(),
+            display_name: user.display_name.clone(),
+            email_verified: user.email_verified,
+            role: user.role.clone(),
+            banned: user.banned,
+            banned_reason: None,
+            banned_until: None,
+            created_at: Utc::now().fixed_offset(),
+            updated_at: Utc::now().fixed_offset(),
+        };
+
         let (access_token, _jti) = crate::plugins::bearer::create_jwt_with_audience(
-            &user,
+            &user_model,
             bearer_config,
             scope_str.as_deref(),
         )
@@ -1671,11 +3151,90 @@ async fn handle_device_code_grant(
             expires_in,
             refresh_token,
             scope: scope_str,
+            id_token: None,
+        }));
+    }
+
+    #[cfg(all(feature = "bearer", feature = "diesel-async"))]
+    {
+        let bearer_config = &state.bearer_config;
+
+        let jwt_user = crate::plugins::bearer::JwtUser {
+            id: user.id,
+            email: user.email.clone(),
+            role: user.role.clone(),
+        };
+
+        let (access_token, _jti) = crate::plugins::bearer::create_jwt_with_audience_from_fields(
+            &jwt_user,
+            bearer_config,
+            scope_str.as_deref(),
+        )
+        .map_err(|_| {
+            oauth2_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "Failed to create token",
+            )
+        })?;
+
+        let family_id = Uuid::new_v4();
+        let mut conn = state.db.get().await.map_err(|_| {
+            oauth2_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "Internal error",
+            )
+        })?;
+        let refresh_token = create_refresh_token_for_oauth2_diesel(
+            &mut conn,
+            user.id,
+            family_id,
+            bearer_config.refresh_token_ttl,
+        )
+        .await
+        .map_err(|_| {
+            oauth2_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "Failed to create refresh token",
+            )
+        })?;
+
+        let expires_in = bearer_config.access_token_ttl.as_secs();
+
+        info!(
+            event = "oauth2_token_issued",
+            user_id = %user.id,
+            client_id = %client_id,
+            "OAuth2 access token issued via device_code grant"
+        );
+
+        state
+            .write_audit_log(
+                Some(user.id),
+                "oauth2_token_issued",
+                Some(serde_json::json!({
+                    "client_id": client_id,
+                    "grant_type": "device_code",
+                })),
+                None,
+            )
+            .await;
+
+        return Ok(Json(OAuth2TokenResponse {
+            access_token,
+            token_type: "Bearer".into(),
+            expires_in,
+            refresh_token,
+            scope: scope_str,
+            id_token: None,
         }));
     }
 
     #[cfg(not(feature = "bearer"))]
     {
+        let _ = user;
         Err::<Json<OAuth2TokenResponse>, _>(oauth2_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "server_error",
@@ -1759,20 +3318,61 @@ async fn introspect_endpoint(
             }
             "refresh_token" => {
                 let token_hash = crypto::hash_token(token);
-                if let Ok(Some(stored)) = yauth_entity::refresh_tokens::Entity::find()
-                    .filter(yauth_entity::refresh_tokens::Column::TokenHash.eq(&token_hash))
-                    .one(&state.db)
-                    .await
+
+                // Cross-backend: find refresh token and check active
+                struct RefreshInfo {
+                    user_id: Uuid,
+                    expires_at: chrono::NaiveDateTime,
+                    created_at: chrono::NaiveDateTime,
+                    revoked: bool,
+                }
+
+                #[cfg(feature = "seaorm")]
+                let rt_opt: Option<RefreshInfo> = {
+                    yauth_entity::refresh_tokens::Entity::find()
+                        .filter(yauth_entity::refresh_tokens::Column::TokenHash.eq(&token_hash))
+                        .one(&state.db)
+                        .await
+                        .ok()
+                        .flatten()
+                        .map(|s| RefreshInfo {
+                            user_id: s.user_id,
+                            expires_at: s.expires_at.naive_utc(),
+                            created_at: s.created_at.naive_utc(),
+                            revoked: s.revoked,
+                        })
+                };
+                #[cfg(feature = "diesel-async")]
+                let rt_opt: Option<RefreshInfo> = {
+                    let mut conn = match state.db.get().await {
+                        Ok(c) => c,
+                        Err(_) => {
+                            continue;
+                        }
+                    };
+                    diesel_db::find_refresh_token_by_hash(&mut conn, &token_hash)
+                        .await
+                        .ok()
+                        .flatten()
+                        .map(|s| RefreshInfo {
+                            user_id: s.user_id,
+                            expires_at: s.expires_at,
+                            created_at: s.created_at,
+                            revoked: s.revoked,
+                        })
+                };
+
+                if let Some(stored) = rt_opt
                     && !stored.revoked
-                    && stored.expires_at > Utc::now().fixed_offset()
+                    && stored.expires_at > Utc::now().naive_utc()
                 {
                     return Json(IntrospectResponse {
                         active: true,
                         sub: Some(stored.user_id.to_string()),
                         client_id: None,
                         scope: None,
-                        exp: Some(stored.expires_at.timestamp() as u64),
-                        iat: Some(stored.created_at.timestamp() as u64),
+                        exp: Some(stored.expires_at.and_utc().timestamp() as u64),
+                        iat: Some(stored.created_at.and_utc().timestamp() as u64),
                         token_type: Some("refresh_token".into()),
                     })
                     .into_response();
@@ -1827,22 +3427,83 @@ async fn revoke_endpoint(
         match *hint {
             "refresh_token" => {
                 let token_hash = crypto::hash_token(token);
-                if let Ok(Some(stored)) = yauth_entity::refresh_tokens::Entity::find()
-                    .filter(yauth_entity::refresh_tokens::Column::TokenHash.eq(&token_hash))
-                    .one(&state.db)
-                    .await
-                {
+
+                #[allow(dead_code)]
+                struct RevokeInfo {
+                    id: Uuid,
+                    family_id: Uuid,
+                    revoked: bool,
+                }
+
+                #[cfg(feature = "seaorm")]
+                let rt_opt: Option<RevokeInfo> = {
+                    yauth_entity::refresh_tokens::Entity::find()
+                        .filter(yauth_entity::refresh_tokens::Column::TokenHash.eq(&token_hash))
+                        .one(&state.db)
+                        .await
+                        .ok()
+                        .flatten()
+                        .map(|s| RevokeInfo {
+                            id: s.id,
+                            family_id: s.family_id,
+                            revoked: s.revoked,
+                        })
+                };
+                #[cfg(feature = "diesel-async")]
+                let rt_opt: Option<RevokeInfo> = {
+                    let mut conn = match state.db.get().await {
+                        Ok(c) => c,
+                        Err(_) => {
+                            continue;
+                        }
+                    };
+                    diesel_db::find_refresh_token_by_hash(&mut conn, &token_hash)
+                        .await
+                        .ok()
+                        .flatten()
+                        .map(|s| RevokeInfo {
+                            id: s.id,
+                            family_id: s.family_id,
+                            revoked: s.revoked,
+                        })
+                };
+
+                if let Some(stored) = rt_opt {
                     // Revoke this token and its entire family
-                    #[cfg(feature = "bearer")]
+                    #[cfg(all(feature = "bearer", feature = "seaorm"))]
                     revoke_family(&state.db, stored.family_id).await;
+
+                    #[cfg(all(feature = "bearer", feature = "diesel-async"))]
+                    {
+                        let mut conn = state.db.get().await.ok();
+                        if let Some(ref mut conn) = conn {
+                            let _ = diesel_db::revoke_family(conn, stored.family_id).await;
+                        }
+                    }
 
                     #[cfg(not(feature = "bearer"))]
                     {
                         if !stored.revoked {
-                            let mut active: yauth_entity::refresh_tokens::ActiveModel =
-                                stored.into();
-                            active.revoked = Set(true);
-                            let _ = active.update(&state.db).await;
+                            #[cfg(feature = "seaorm")]
+                            {
+                                if let Ok(Some(found)) =
+                                    yauth_entity::refresh_tokens::Entity::find_by_id(stored.id)
+                                        .one(&state.db)
+                                        .await
+                                {
+                                    let mut active: yauth_entity::refresh_tokens::ActiveModel =
+                                        found.into();
+                                    active.revoked = Set(true);
+                                    let _ = active.update(&state.db).await;
+                                }
+                            }
+                            #[cfg(feature = "diesel-async")]
+                            {
+                                let mut conn = state.db.get().await.ok();
+                                if let Some(ref mut conn) = conn {
+                                    let _ = diesel_db::revoke_refresh_token(conn, stored.id).await;
+                                }
+                            }
                         }
                     }
 
@@ -2144,25 +3805,70 @@ fn validate_authorize_params_from_consent(input: &AuthorizeConsentRequest) -> Re
     Ok(())
 }
 
-async fn lookup_client(
-    state: &YAuthState,
-    client_id: &str,
-) -> Result<yauth_entity::oauth2_clients::Model, ApiError> {
-    yauth_entity::oauth2_clients::Entity::find()
-        .filter(yauth_entity::oauth2_clients::Column::ClientId.eq(client_id))
-        .one(&state.db)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error looking up client: {}", e);
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?
-        .ok_or_else(|| api_err(StatusCode::BAD_REQUEST, "Unknown client_id"))
+/// Common client info struct used by both SeaORM and Diesel backends.
+struct ClientInfo {
+    client_id: String,
+    client_secret_hash: Option<String>,
+    redirect_uris: serde_json::Value,
+    client_name: Option<String>,
+    grant_types: serde_json::Value,
+    scopes: Option<serde_json::Value>,
+    #[allow(dead_code)]
+    is_public: bool,
+}
+
+async fn lookup_client(state: &YAuthState, client_id: &str) -> Result<ClientInfo, ApiError> {
+    #[cfg(feature = "seaorm")]
+    {
+        let m = yauth_entity::oauth2_clients::Entity::find()
+            .filter(yauth_entity::oauth2_clients::Column::ClientId.eq(client_id))
+            .one(&state.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error looking up client: {}", e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?
+            .ok_or_else(|| api_err(StatusCode::BAD_REQUEST, "Unknown client_id"))?;
+        Ok(ClientInfo {
+            client_id: m.client_id,
+            client_secret_hash: m.client_secret_hash,
+            redirect_uris: m.redirect_uris,
+            client_name: m.client_name,
+            grant_types: m.grant_types,
+            scopes: m.scopes,
+            is_public: m.is_public,
+        })
+    }
+    #[cfg(feature = "diesel-async")]
+    {
+        let mut conn = state
+            .db
+            .get()
+            .await
+            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
+        let m = diesel_db::find_client_by_client_id(&mut conn, client_id)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error looking up client: {}", e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?
+            .ok_or_else(|| api_err(StatusCode::BAD_REQUEST, "Unknown client_id"))?;
+        Ok(ClientInfo {
+            client_id: m.client_id,
+            client_secret_hash: m.client_secret_hash,
+            redirect_uris: m.redirect_uris,
+            client_name: m.client_name,
+            grant_types: m.grant_types,
+            scopes: m.scopes,
+            is_public: m.is_public,
+        })
+    }
 }
 
 /// Resolve redirect_uri: if provided, validate against registered URIs.
 /// If omitted, default to the client's single registered URI (RFC 6749 §3.1.2.3).
 fn resolve_redirect_uri(
-    client: &yauth_entity::oauth2_clients::Model,
+    client: &ClientInfo,
     redirect_uri: Option<&str>,
 ) -> Result<String, ApiError> {
     let empty = vec![];
@@ -2197,10 +3903,7 @@ fn resolve_redirect_uri(
     }
 }
 
-fn validate_redirect_uri(
-    client: &yauth_entity::oauth2_clients::Model,
-    redirect_uri: &str,
-) -> Result<(), ApiError> {
+fn validate_redirect_uri(client: &ClientInfo, redirect_uri: &str) -> Result<(), ApiError> {
     resolve_redirect_uri(client, Some(redirect_uri)).map(|_| ())
 }
 
@@ -2217,6 +3920,7 @@ async fn authenticate_user(
         if let Ok(Some(session_user)) =
             crate::auth::session::validate_session(state, token, None, None).await
         {
+            #[cfg(feature = "seaorm")]
             if let Ok(Some(user)) = yauth_entity::users::Entity::find_by_id(session_user.user_id)
                 .one(&state.db)
                 .await
@@ -2232,6 +3936,29 @@ async fn authenticate_user(
                         auth_method: crate::middleware::AuthMethod::Session,
                         scopes: None,
                     });
+                }
+            }
+            #[cfg(feature = "diesel-async")]
+            {
+                let mut conn = match state.db.get().await {
+                    Ok(c) => c,
+                    Err(_) => return Err(()),
+                };
+                if let Ok(Some(user)) =
+                    diesel_db::find_user_by_id(&mut conn, session_user.user_id).await
+                {
+                    if !user.banned {
+                        return Ok(AuthUser {
+                            id: user.id,
+                            email: user.email,
+                            display_name: user.display_name,
+                            email_verified: user.email_verified,
+                            role: user.role,
+                            banned: user.banned,
+                            auth_method: crate::middleware::AuthMethod::Session,
+                            scopes: None,
+                        });
+                    }
                 }
             }
         }
@@ -2260,39 +3987,77 @@ async fn save_consent(
     client_id: &str,
     scopes: Option<serde_json::Value>,
 ) {
-    // Check if consent already exists and update, or create new
-    let existing = yauth_entity::consents::Entity::find()
-        .filter(yauth_entity::consents::Column::UserId.eq(user_id))
-        .filter(yauth_entity::consents::Column::ClientId.eq(client_id))
-        .one(&state.db)
-        .await;
+    #[cfg(feature = "seaorm")]
+    {
+        // Check if consent already exists and update, or create new
+        let existing = yauth_entity::consents::Entity::find()
+            .filter(yauth_entity::consents::Column::UserId.eq(user_id))
+            .filter(yauth_entity::consents::Column::ClientId.eq(client_id))
+            .one(&state.db)
+            .await;
 
-    match existing {
-        Ok(Some(existing)) => {
-            let mut active: yauth_entity::consents::ActiveModel = existing.into();
-            active.scopes = Set(scopes);
-            active.created_at = Set(Utc::now().fixed_offset());
-            if let Err(e) = active.update(&state.db).await {
-                tracing::error!("Failed to update consent: {}", e);
+        match existing {
+            Ok(Some(existing)) => {
+                let mut active: yauth_entity::consents::ActiveModel = existing.into();
+                active.scopes = Set(scopes);
+                active.created_at = Set(Utc::now().fixed_offset());
+                if let Err(e) = active.update(&state.db).await {
+                    tracing::error!("Failed to update consent: {}", e);
+                }
+            }
+            _ => {
+                let consent = yauth_entity::consents::ActiveModel {
+                    id: Set(Uuid::new_v4()),
+                    user_id: Set(user_id),
+                    client_id: Set(client_id.to_string()),
+                    scopes: Set(scopes),
+                    created_at: Set(Utc::now().fixed_offset()),
+                };
+                if let Err(e) = consent.insert(&state.db).await {
+                    tracing::error!("Failed to save consent: {}", e);
+                }
             }
         }
-        _ => {
-            let consent = yauth_entity::consents::ActiveModel {
-                id: Set(Uuid::new_v4()),
-                user_id: Set(user_id),
-                client_id: Set(client_id.to_string()),
-                scopes: Set(scopes),
-                created_at: Set(Utc::now().fixed_offset()),
-            };
-            if let Err(e) = consent.insert(&state.db).await {
-                tracing::error!("Failed to save consent: {}", e);
+    }
+    #[cfg(feature = "diesel-async")]
+    {
+        let mut conn = match state.db.get().await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!("Pool error saving consent: {}", e);
+                return;
+            }
+        };
+        let existing = diesel_db::find_consent(&mut conn, user_id, client_id).await;
+        let now = Utc::now().fixed_offset();
+        match existing {
+            Ok(Some(existing)) => {
+                if let Err(e) =
+                    diesel_db::update_consent(&mut conn, existing.id, scopes.as_ref(), now).await
+                {
+                    tracing::error!("Failed to update consent: {}", e);
+                }
+            }
+            _ => {
+                if let Err(e) = diesel_db::insert_consent(
+                    &mut conn,
+                    Uuid::new_v4(),
+                    user_id,
+                    client_id,
+                    scopes.as_ref(),
+                    now,
+                )
+                .await
+                {
+                    tracing::error!("Failed to save consent: {}", e);
+                }
             }
         }
     }
 }
 
 /// Create a refresh token for the OAuth2 flow (reuses bearer token storage).
-#[cfg(feature = "bearer")]
+#[cfg(all(feature = "bearer", feature = "seaorm"))]
 async fn create_refresh_token_for_oauth2(
     db: &sea_orm::DatabaseConnection,
     user_id: Uuid,
@@ -2324,8 +4089,41 @@ async fn create_refresh_token_for_oauth2(
     Ok(raw_token)
 }
 
+/// Create a refresh token for the OAuth2 flow (diesel-async backend).
+#[cfg(all(feature = "bearer", feature = "diesel-async"))]
+async fn create_refresh_token_for_oauth2_diesel(
+    conn: &mut diesel_async_crate::AsyncPgConnection,
+    user_id: Uuid,
+    family_id: Uuid,
+    ttl: std::time::Duration,
+) -> Result<String, ApiError> {
+    let raw_token = crypto::generate_token();
+    let token_hash = crypto::hash_token(&raw_token);
+    let now = Utc::now().fixed_offset();
+    let expires_at = (Utc::now()
+        + chrono::Duration::from_std(ttl).unwrap_or(chrono::Duration::days(7)))
+    .fixed_offset();
+
+    diesel_db::insert_refresh_token(
+        conn,
+        Uuid::new_v4(),
+        user_id,
+        &token_hash,
+        family_id,
+        expires_at,
+        now,
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to create refresh token: {}", e);
+        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+    })?;
+
+    Ok(raw_token)
+}
+
 /// Revoke all refresh tokens in a family.
-#[cfg(feature = "bearer")]
+#[cfg(all(feature = "bearer", feature = "seaorm"))]
 async fn revoke_family(db: &sea_orm::DatabaseConnection, family_id: Uuid) {
     use sea_orm::sea_query::Expr;
 

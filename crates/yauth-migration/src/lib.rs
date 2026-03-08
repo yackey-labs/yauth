@@ -1,50 +1,54 @@
+#[cfg(feature = "seaorm")]
 pub use sea_orm_migration::prelude::*;
 
+#[cfg(feature = "seaorm")]
 mod m20250101_000001_core;
 
-#[cfg(feature = "email-password")]
+#[cfg(all(feature = "seaorm", feature = "email-password"))]
 mod m20250101_000002_email_password;
 
-#[cfg(feature = "passkey")]
+#[cfg(all(feature = "seaorm", feature = "passkey"))]
 mod m20250101_000003_passkey;
 
-#[cfg(feature = "mfa")]
+#[cfg(all(feature = "seaorm", feature = "mfa"))]
 mod m20250101_000004_mfa;
 
-#[cfg(feature = "oauth")]
+#[cfg(all(feature = "seaorm", feature = "oauth"))]
 mod m20250101_000005_oauth;
 
-#[cfg(feature = "bearer")]
+#[cfg(all(feature = "seaorm", feature = "bearer"))]
 mod m20250101_000006_bearer;
 
-#[cfg(feature = "api-key")]
+#[cfg(all(feature = "seaorm", feature = "api-key"))]
 mod m20250101_000007_api_key;
 
-#[cfg(feature = "magic-link")]
+#[cfg(all(feature = "seaorm", feature = "magic-link"))]
 mod m20250101_000008_magic_link;
 
-#[cfg(feature = "oauth")]
+#[cfg(all(feature = "seaorm", feature = "oauth"))]
 mod m20250101_000009_oauth_token_refresh;
 
-#[cfg(feature = "oauth2-server")]
+#[cfg(all(feature = "seaorm", feature = "oauth2-server"))]
 mod m20250101_000010_oauth2_server;
-#[cfg(feature = "oauth2-server")]
+#[cfg(all(feature = "seaorm", feature = "oauth2-server"))]
 mod m20250101_000011_device_authorization;
 
-#[cfg(feature = "oauth2-server")]
+#[cfg(all(feature = "seaorm", feature = "oauth2-server"))]
 mod m20250101_000013_oauth2_auth_code_nonce;
 
-#[cfg(feature = "account-lockout")]
+#[cfg(all(feature = "seaorm", feature = "account-lockout"))]
 mod m20250101_000012_account_lockout;
 
-#[cfg(feature = "webhooks")]
+#[cfg(all(feature = "seaorm", feature = "webhooks"))]
 mod m20250101_000014_webhooks;
 
-#[cfg(feature = "oidc")]
+#[cfg(all(feature = "seaorm", feature = "oidc"))]
 mod m20250101_000015_oidc;
 
+#[cfg(feature = "seaorm")]
 pub struct Migrator;
 
+#[cfg(feature = "seaorm")]
 #[async_trait::async_trait]
 impl MigratorTrait for Migrator {
     fn migration_table_name() -> sea_orm::DynIden {
@@ -100,3 +104,6 @@ impl MigratorTrait for Migrator {
         migrations
     }
 }
+
+#[cfg(feature = "diesel-async")]
+pub mod diesel_migrations;

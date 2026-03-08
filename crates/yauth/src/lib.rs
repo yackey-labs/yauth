@@ -16,6 +16,16 @@ pub mod telemetry;
 pub use yauth_entity as entity;
 pub use yauth_migration as migration;
 
+// Re-export diesel pool types for host app use
+#[cfg(feature = "diesel-async")]
+pub use diesel_async_crate::AsyncPgConnection;
+#[cfg(feature = "diesel-async")]
+pub use diesel_async_crate::RunQueryDsl;
+#[cfg(feature = "diesel-async")]
+pub use diesel_async_crate::pooled_connection::AsyncDieselConnectionManager;
+#[cfg(feature = "diesel-async")]
+pub use diesel_async_crate::pooled_connection::deadpool::Pool as DieselPool;
+
 pub mod prelude {
     pub use crate::YAuthBuilder;
     pub use crate::config::*;
@@ -28,7 +38,7 @@ pub mod prelude {
 use axum::Router;
 use config::YAuthConfig;
 use plugin::YAuthPlugin;
-use state::YAuthState;
+use state::{DbPool, YAuthState};
 use stores::StoreBackend;
 
 pub struct YAuth {
@@ -73,7 +83,7 @@ impl YAuth {
 }
 
 pub struct YAuthBuilder {
-    db: sea_orm::DatabaseConnection,
+    db: DbPool,
     config: YAuthConfig,
     plugins: Vec<Box<dyn YAuthPlugin>>,
     store_backend: StoreBackend,
@@ -100,7 +110,7 @@ pub struct YAuthBuilder {
 }
 
 impl YAuthBuilder {
-    pub fn new(db: sea_orm::DatabaseConnection, config: YAuthConfig) -> Self {
+    pub fn new(db: DbPool, config: YAuthConfig) -> Self {
         Self {
             db,
             config,

@@ -43,7 +43,6 @@ use axum::{
     routing::{get, patch, post},
 };
 use chrono::Utc;
-use sea_orm::{ActiveModelTrait, EntityTrait, Set};
 use serde::Deserialize;
 use ts_rs::TS;
 
@@ -51,7 +50,6 @@ use crate::middleware::AuthUser;
 use crate::plugin::PluginContext;
 use crate::state::YAuthState;
 
-/// Core routes that are always available (session + logout + profile update)
 pub fn core_routes(_ctx: &PluginContext) -> Router<YAuthState> {
     Router::new()
         .route("/session", get(get_session))
@@ -79,11 +77,14 @@ pub struct UpdateProfileRequest {
     pub display_name: Option<String>,
 }
 
+#[cfg(feature = "seaorm")]
 async fn update_profile(
     axum::extract::State(state): axum::extract::State<YAuthState>,
     Extension(user): Extension<AuthUser>,
     Json(input): Json<UpdateProfileRequest>,
 ) -> impl axum::response::IntoResponse {
+    use sea_orm::{ActiveModelTrait, EntityTrait, Set};
+
     let db_user = match yauth_entity::users::Entity::find_by_id(user.id)
         .one(&state.db)
         .await
@@ -141,12 +142,84 @@ async fn update_profile(
     }
 }
 
+#[cfg(feature = "diesel-async")]
+async fn update_profile(
+    axum::extract::State(state): axum::extract::State<YAuthState>,
+    Extension(user): Extension<AuthUser>,
+    Json(input): Json<UpdateProfileRequest>,
+) -> impl axum::response::IntoResponse {
+    use diesel_async_crate::RunQueryDsl;
+
+    let mut conn = match state.db.get().await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("Pool error: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Internal error" })),
+            );
+        }
+    };
+
+    let display_name = input
+        .display_name
+        .map(|n| n.trim().to_string())
+        .filter(|n| !n.is_empty());
+
+    #[derive(diesel::QueryableByName)]
+    struct UpdatedUser {
+        #[diesel(sql_type = diesel::sql_types::Uuid)]
+        id: uuid::Uuid,
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        email: String,
+        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+        display_name: Option<String>,
+        #[diesel(sql_type = diesel::sql_types::Bool)]
+        email_verified: bool,
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        role: String,
+        #[diesel(sql_type = diesel::sql_types::Bool)]
+        banned: bool,
+    }
+
+    let result: Result<UpdatedUser, _> = diesel::sql_query(
+        "UPDATE yauth_users SET display_name = $1, updated_at = $2 WHERE id = $3 RETURNING id, email, display_name, email_verified, role, banned",
+    )
+    .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(&display_name)
+    .bind::<diesel::sql_types::Timestamptz, _>(Utc::now())
+    .bind::<diesel::sql_types::Uuid, _>(user.id)
+    .get_result(&mut conn)
+    .await;
+
+    match result {
+        Ok(updated) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "user": {
+                    "id": updated.id,
+                    "email": updated.email,
+                    "display_name": updated.display_name,
+                    "email_verified": updated.email_verified,
+                    "role": updated.role,
+                    "banned": updated.banned,
+                }
+            })),
+        ),
+        Err(e) => {
+            tracing::error!("DB error updating profile: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Internal error" })),
+            )
+        }
+    }
+}
+
 async fn logout(
     axum::extract::State(state): axum::extract::State<YAuthState>,
     Extension(user): Extension<AuthUser>,
     jar: axum_extra::extract::cookie::CookieJar,
 ) -> impl axum::response::IntoResponse {
-    // Delete session if cookie-based auth
     if let Some(cookie) = jar.get(&state.config.session_cookie_name) {
         let _ = crate::auth::session::delete_session(&state.db, cookie.value()).await;
     }

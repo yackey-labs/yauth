@@ -5,6 +5,7 @@ use axum::{
     response::IntoResponse,
     routing::{delete, get, post},
 };
+#[cfg(feature = "seaorm")]
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
@@ -102,6 +103,148 @@ impl YAuthPlugin for PasskeyPlugin {
 
 use crate::auth::session::session_set_cookie;
 
+// ---------------------------------------------------------------------------
+// Diesel-async helpers
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "diesel-async")]
+mod diesel_db {
+    use diesel::result::OptionalExtension;
+    use diesel_async_crate::RunQueryDsl;
+    use uuid::Uuid;
+
+    type Conn = diesel_async_crate::AsyncPgConnection;
+    type DbResult<T> = Result<T, String>;
+
+    #[derive(diesel::QueryableByName, Clone)]
+    #[allow(dead_code)]
+    pub struct UserRow {
+        #[diesel(sql_type = diesel::sql_types::Uuid)]
+        pub id: Uuid,
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        pub email: String,
+        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+        pub display_name: Option<String>,
+        #[diesel(sql_type = diesel::sql_types::Bool)]
+        pub email_verified: bool,
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        pub role: String,
+        #[diesel(sql_type = diesel::sql_types::Bool)]
+        pub banned: bool,
+    }
+
+    #[derive(diesel::QueryableByName, Clone)]
+    #[allow(dead_code)]
+    pub struct CredentialRow {
+        #[diesel(sql_type = diesel::sql_types::Uuid)]
+        pub id: Uuid,
+        #[diesel(sql_type = diesel::sql_types::Uuid)]
+        pub user_id: Uuid,
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        pub name: String,
+        #[diesel(sql_type = diesel::sql_types::Jsonb)]
+        pub credential: serde_json::Value,
+        #[diesel(sql_type = diesel::sql_types::Timestamptz)]
+        pub created_at: chrono::NaiveDateTime,
+        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Timestamptz>)]
+        pub last_used_at: Option<chrono::NaiveDateTime>,
+    }
+
+    pub async fn find_user_by_id(conn: &mut Conn, id: Uuid) -> DbResult<Option<UserRow>> {
+        diesel::sql_query(
+            "SELECT id, email, display_name, email_verified, role, banned FROM yauth_users WHERE id = $1",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(id)
+        .get_result(conn)
+        .await
+        .optional()
+        .map_err(|e| e.to_string())
+    }
+
+    pub async fn find_user_by_email(conn: &mut Conn, email: &str) -> DbResult<Option<UserRow>> {
+        diesel::sql_query(
+            "SELECT id, email, display_name, email_verified, role, banned FROM yauth_users WHERE email = $1",
+        )
+        .bind::<diesel::sql_types::Text, _>(email)
+        .get_result(conn)
+        .await
+        .optional()
+        .map_err(|e| e.to_string())
+    }
+
+    pub async fn find_credentials_by_user(
+        conn: &mut Conn,
+        user_id: Uuid,
+    ) -> DbResult<Vec<CredentialRow>> {
+        diesel::sql_query(
+            "SELECT id, user_id, name, credential, created_at, last_used_at FROM yauth_webauthn_credentials WHERE user_id = $1",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(user_id)
+        .load(conn)
+        .await
+        .map_err(|e| e.to_string())
+    }
+
+    pub async fn insert_credential(
+        conn: &mut Conn,
+        id: Uuid,
+        user_id: Uuid,
+        name: &str,
+        credential: &serde_json::Value,
+    ) -> DbResult<()> {
+        let now = chrono::Utc::now();
+        diesel::sql_query(
+            "INSERT INTO yauth_webauthn_credentials (id, user_id, name, aaguid, device_name, credential, created_at, last_used_at) VALUES ($1, $2, $3, NULL, NULL, $4, $5, NULL)",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(id)
+        .bind::<diesel::sql_types::Uuid, _>(user_id)
+        .bind::<diesel::sql_types::Text, _>(name)
+        .bind::<diesel::sql_types::Jsonb, _>(credential)
+        .bind::<diesel::sql_types::Timestamptz, _>(now)
+        .execute(conn)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub async fn update_credentials_last_used(conn: &mut Conn, user_id: Uuid) -> DbResult<()> {
+        diesel::sql_query(
+            "UPDATE yauth_webauthn_credentials SET last_used_at = $1 WHERE user_id = $2",
+        )
+        .bind::<diesel::sql_types::Timestamptz, _>(chrono::Utc::now())
+        .bind::<diesel::sql_types::Uuid, _>(user_id)
+        .execute(conn)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub async fn find_credential_by_id_and_user(
+        conn: &mut Conn,
+        id: Uuid,
+        user_id: Uuid,
+    ) -> DbResult<Option<CredentialRow>> {
+        diesel::sql_query(
+            "SELECT id, user_id, name, credential, created_at, last_used_at FROM yauth_webauthn_credentials WHERE id = $1 AND user_id = $2",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(id)
+        .bind::<diesel::sql_types::Uuid, _>(user_id)
+        .get_result(conn)
+        .await
+        .optional()
+        .map_err(|e| e.to_string())
+    }
+
+    pub async fn delete_credential(conn: &mut Conn, id: Uuid) -> DbResult<()> {
+        diesel::sql_query("DELETE FROM yauth_webauthn_credentials WHERE id = $1")
+            .bind::<diesel::sql_types::Uuid, _>(id)
+            .execute(conn)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+}
+
 // --- Registration ---
 
 async fn register_begin(
@@ -109,35 +252,94 @@ async fn register_begin(
     Extension(auth_user): Extension<AuthUser>,
     webauthn: Arc<Webauthn>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    let user = yauth_entity::users::Entity::find_by_id(auth_user.id)
-        .one(&state.db)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Internal error".to_string(),
-            )
-        })?
-        .ok_or((StatusCode::NOT_FOUND, "User not found".to_string()))?;
+    // Common struct for user data used by both backends
+    struct UserData {
+        id: Uuid,
+        email: String,
+        display_name: Option<String>,
+    }
+
+    #[cfg(feature = "diesel-async")]
+    let mut conn = state.db.get().await.map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Internal error".to_string(),
+        )
+    })?;
+
+    #[cfg(feature = "seaorm")]
+    let user_data = {
+        let user = yauth_entity::users::Entity::find_by_id(auth_user.id)
+            .one(&state.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal error".to_string(),
+                )
+            })?
+            .ok_or((StatusCode::NOT_FOUND, "User not found".to_string()))?;
+        UserData {
+            id: user.id,
+            email: user.email,
+            display_name: user.display_name,
+        }
+    };
+    #[cfg(feature = "diesel-async")]
+    let user_data = {
+        let user = diesel_db::find_user_by_id(&mut conn, auth_user.id)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal error".to_string(),
+                )
+            })?
+            .ok_or((StatusCode::NOT_FOUND, "User not found".to_string()))?;
+        UserData {
+            id: user.id,
+            email: user.email,
+            display_name: user.display_name,
+        }
+    };
 
     // Get existing credentials to exclude
-    let existing_creds = yauth_entity::webauthn_credentials::Entity::find()
-        .filter(yauth_entity::webauthn_credentials::Column::UserId.eq(user.id))
-        .all(&state.db)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Internal error".to_string(),
-            )
-        })?;
-
-    let existing_passkeys: Vec<Passkey> = existing_creds
-        .iter()
-        .filter_map(|c| serde_json::from_value(c.credential.clone()).ok())
-        .collect();
+    #[cfg(feature = "seaorm")]
+    let existing_passkeys: Vec<Passkey> = {
+        let existing_creds = yauth_entity::webauthn_credentials::Entity::find()
+            .filter(yauth_entity::webauthn_credentials::Column::UserId.eq(user_data.id))
+            .all(&state.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal error".to_string(),
+                )
+            })?;
+        existing_creds
+            .into_iter()
+            .filter_map(|c| serde_json::from_value(c.credential).ok())
+            .collect()
+    };
+    #[cfg(feature = "diesel-async")]
+    let existing_passkeys: Vec<Passkey> = {
+        let existing_creds = diesel_db::find_credentials_by_user(&mut conn, user_data.id)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal error".to_string(),
+                )
+            })?;
+        existing_creds
+            .into_iter()
+            .filter_map(|c| serde_json::from_value(c.credential).ok())
+            .collect()
+    };
 
     let exclude_opt = if existing_passkeys.is_empty() {
         None
@@ -150,9 +352,12 @@ async fn register_begin(
         )
     };
 
-    let display_name = user.display_name.as_deref().unwrap_or(&user.email);
+    let display_name = user_data
+        .display_name
+        .as_deref()
+        .unwrap_or(&user_data.email);
     let (ccr, reg_state) = webauthn
-        .start_passkey_registration(user.id, &user.email, display_name, exclude_opt)
+        .start_passkey_registration(user_data.id, &user_data.email, display_name, exclude_opt)
         .map_err(|e| {
             tracing::error!("WebAuthn registration start error: {}", e);
             (
@@ -170,7 +375,7 @@ async fn register_begin(
         )
     })?;
 
-    let challenge_key = format!("passkey_reg:{}", user.id);
+    let challenge_key = format!("passkey_reg:{}", user_data.id);
     state
         .challenge_store
         .set(&challenge_key, reg_state_json, CHALLENGE_TTL_SECS)
@@ -246,26 +451,54 @@ async fn register_finish(
         )
     })?;
 
-    let now = chrono::Utc::now().fixed_offset();
     let passkey_name = input.name;
-    let cred = yauth_entity::webauthn_credentials::ActiveModel {
-        id: Set(Uuid::new_v4()),
-        user_id: Set(auth_user.id),
-        name: Set(passkey_name.clone()),
-        aaguid: Set(None),
-        device_name: Set(None),
-        credential: Set(credential_json),
-        created_at: Set(now),
-        last_used_at: Set(None),
-    };
 
-    cred.insert(&state.db).await.map_err(|e| {
-        tracing::error!("Failed to save credential: {}", e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Internal error".to_string(),
+    #[cfg(feature = "seaorm")]
+    {
+        let now = chrono::Utc::now().fixed_offset();
+        let cred = yauth_entity::webauthn_credentials::ActiveModel {
+            id: Set(Uuid::new_v4()),
+            user_id: Set(auth_user.id),
+            name: Set(passkey_name.clone()),
+            aaguid: Set(None),
+            device_name: Set(None),
+            credential: Set(credential_json),
+            created_at: Set(now),
+            last_used_at: Set(None),
+        };
+
+        cred.insert(&state.db).await.map_err(|e| {
+            tracing::error!("Failed to save credential: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Internal error".to_string(),
+            )
+        })?;
+    }
+    #[cfg(feature = "diesel-async")]
+    {
+        let mut conn = state.db.get().await.map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Internal error".to_string(),
+            )
+        })?;
+        diesel_db::insert_credential(
+            &mut conn,
+            Uuid::new_v4(),
+            auth_user.id,
+            &passkey_name,
+            &credential_json,
         )
-    })?;
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to save credential: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Internal error".to_string(),
+            )
+        })?;
+    }
 
     info!(event = "passkey_registered", user_id = %auth_user.id, "Passkey registered");
 
@@ -303,6 +536,14 @@ async fn login_begin(
 ) -> Result<Json<PasskeyLoginBeginResponse>, (StatusCode, String)> {
     let challenge_id = Uuid::new_v4();
 
+    #[cfg(feature = "diesel-async")]
+    let mut conn = state.db.get().await.map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Internal error".to_string(),
+        )
+    })?;
+
     let (rcr, challenge_data) = if let Some(ref email_raw) = input.email {
         // --- Email-based flow ---
         let email = email_raw.trim().to_lowercase();
@@ -319,44 +560,80 @@ async fn login_begin(
             ));
         }
 
-        let user = yauth_entity::users::Entity::find()
-            .filter(yauth_entity::users::Column::Email.eq(&email))
-            .one(&state.db)
-            .await
-            .map_err(|e| {
-                tracing::error!("DB error: {}", e);
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Internal error".to_string(),
-                )
-            })?
-            .ok_or((
-                StatusCode::BAD_REQUEST,
-                "No passkeys registered for this email".to_string(),
-            ))?;
+        #[cfg(feature = "seaorm")]
+        let user = {
+            yauth_entity::users::Entity::find()
+                .filter(yauth_entity::users::Column::Email.eq(&email))
+                .one(&state.db)
+                .await
+                .map_err(|e| {
+                    tracing::error!("DB error: {}", e);
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Internal error".to_string(),
+                    )
+                })?
+                .ok_or((
+                    StatusCode::BAD_REQUEST,
+                    "No passkeys registered for this email".to_string(),
+                ))?
+        };
+        #[cfg(feature = "diesel-async")]
+        let user = {
+            diesel_db::find_user_by_email(&mut conn, &email)
+                .await
+                .map_err(|e| {
+                    tracing::error!("DB error: {}", e);
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Internal error".to_string(),
+                    )
+                })?
+                .ok_or((
+                    StatusCode::BAD_REQUEST,
+                    "No passkeys registered for this email".to_string(),
+                ))?
+        };
 
-        let creds = yauth_entity::webauthn_credentials::Entity::find()
-            .filter(yauth_entity::webauthn_credentials::Column::UserId.eq(user.id))
-            .all(&state.db)
-            .await
-            .map_err(|e| {
-                tracing::error!("DB error: {}", e);
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Internal error".to_string(),
-                )
-            })?;
+        #[cfg(feature = "seaorm")]
+        let creds_json: Vec<serde_json::Value> = {
+            let creds = yauth_entity::webauthn_credentials::Entity::find()
+                .filter(yauth_entity::webauthn_credentials::Column::UserId.eq(user.id))
+                .all(&state.db)
+                .await
+                .map_err(|e| {
+                    tracing::error!("DB error: {}", e);
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Internal error".to_string(),
+                    )
+                })?;
+            creds.into_iter().map(|c| c.credential).collect()
+        };
+        #[cfg(feature = "diesel-async")]
+        let creds_json: Vec<serde_json::Value> = {
+            let creds = diesel_db::find_credentials_by_user(&mut conn, user.id)
+                .await
+                .map_err(|e| {
+                    tracing::error!("DB error: {}", e);
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Internal error".to_string(),
+                    )
+                })?;
+            creds.into_iter().map(|c| c.credential).collect()
+        };
 
-        if creds.is_empty() {
+        if creds_json.is_empty() {
             return Err((
                 StatusCode::BAD_REQUEST,
                 "No passkeys registered for this email".to_string(),
             ));
         }
 
-        let passkeys: Vec<Passkey> = creds
-            .iter()
-            .filter_map(|c| serde_json::from_value(c.credential.clone()).ok())
+        let passkeys: Vec<Passkey> = creds_json
+            .into_iter()
+            .filter_map(|c| serde_json::from_value(c).ok())
             .collect();
 
         if passkeys.is_empty() {
@@ -490,6 +767,14 @@ async fn login_finish(
         "Internal error".to_string(),
     ))?;
 
+    #[cfg(feature = "diesel-async")]
+    let mut conn = state.db.get().await.map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Internal error".to_string(),
+        )
+    })?;
+
     let user_id = if discoverable {
         // --- Discoverable flow ---
         let auth_state: DiscoverableAuthentication = serde_json::from_value(auth_state_json)
@@ -502,7 +787,6 @@ async fn login_finish(
             })?;
 
         // Identify which user owns this credential
-        // Returns (user_uuid, credential_id_bytes)
         let (uid, _cred_id) = webauthn
             .identify_discoverable_authentication(&input.credential)
             .map_err(|e| {
@@ -514,28 +798,50 @@ async fn login_finish(
             })?;
 
         // Load user's passkeys from DB
-        let creds = yauth_entity::webauthn_credentials::Entity::find()
-            .filter(yauth_entity::webauthn_credentials::Column::UserId.eq(uid))
-            .all(&state.db)
-            .await
-            .map_err(|e| {
-                tracing::error!("DB error: {}", e);
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Internal error".to_string(),
-                )
-            })?;
+        #[cfg(feature = "seaorm")]
+        let creds_json: Vec<serde_json::Value> = {
+            let creds = yauth_entity::webauthn_credentials::Entity::find()
+                .filter(yauth_entity::webauthn_credentials::Column::UserId.eq(uid))
+                .all(&state.db)
+                .await
+                .map_err(|e| {
+                    tracing::error!("DB error: {}", e);
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Internal error".to_string(),
+                    )
+                })?;
+            if creds.is_empty() {
+                return Err((
+                    StatusCode::UNAUTHORIZED,
+                    "Authentication failed".to_string(),
+                ));
+            }
+            creds.into_iter().map(|c| c.credential).collect()
+        };
+        #[cfg(feature = "diesel-async")]
+        let creds_json: Vec<serde_json::Value> = {
+            let creds = diesel_db::find_credentials_by_user(&mut conn, uid)
+                .await
+                .map_err(|e| {
+                    tracing::error!("DB error: {}", e);
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Internal error".to_string(),
+                    )
+                })?;
+            if creds.is_empty() {
+                return Err((
+                    StatusCode::UNAUTHORIZED,
+                    "Authentication failed".to_string(),
+                ));
+            }
+            creds.into_iter().map(|c| c.credential).collect()
+        };
 
-        if creds.is_empty() {
-            return Err((
-                StatusCode::UNAUTHORIZED,
-                "Authentication failed".to_string(),
-            ));
-        }
-
-        let passkeys: Vec<Passkey> = creds
-            .iter()
-            .filter_map(|c| serde_json::from_value(c.credential.clone()).ok())
+        let passkeys: Vec<Passkey> = creds_json
+            .into_iter()
+            .filter_map(|c| serde_json::from_value(c).ok())
             .collect();
 
         let discoverable_keys: Vec<DiscoverableKey> =
@@ -602,23 +908,59 @@ async fn login_finish(
                 )
             })?;
 
-    let user = yauth_entity::users::Entity::find_by_id(user_id)
-        .one(&state.db)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Internal error".to_string(),
-            )
-        })?
-        .ok_or((StatusCode::NOT_FOUND, "User not found".to_string()))?;
+    // Common struct for user info
+    struct LoginUserInfo {
+        id: Uuid,
+        email: String,
+        display_name: Option<String>,
+        email_verified: bool,
+    }
 
-    info!(event = "passkey_login_success", user_id = %user.id, email = %user.email, "Passkey login successful");
+    #[cfg(feature = "seaorm")]
+    let user_info = {
+        let user = yauth_entity::users::Entity::find_by_id(user_id)
+            .one(&state.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal error".to_string(),
+                )
+            })?
+            .ok_or((StatusCode::NOT_FOUND, "User not found".to_string()))?;
+        LoginUserInfo {
+            id: user.id,
+            email: user.email,
+            display_name: user.display_name,
+            email_verified: user.email_verified,
+        }
+    };
+    #[cfg(feature = "diesel-async")]
+    let user_info = {
+        let user = diesel_db::find_user_by_id(&mut conn, user_id)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal error".to_string(),
+                )
+            })?
+            .ok_or((StatusCode::NOT_FOUND, "User not found".to_string()))?;
+        LoginUserInfo {
+            id: user.id,
+            email: user.email,
+            display_name: user.display_name,
+            email_verified: user.email_verified,
+        }
+    };
+
+    info!(event = "passkey_login_success", user_id = %user_info.id, email = %user_info.email, "Passkey login successful");
 
     state
         .write_audit_log(
-            Some(user.id),
+            Some(user_info.id),
             "login_succeeded",
             Some(serde_json::json!({ "method": "passkey" })),
             None,
@@ -631,14 +973,15 @@ async fn login_finish(
             session_set_cookie(&state, &token, state.config.session_ttl),
         )],
         Json(serde_json::json!({
-            "user_id": user.id.to_string(),
-            "email": user.email,
-            "display_name": user.display_name,
-            "email_verified": user.email_verified,
+            "user_id": user_info.id.to_string(),
+            "email": user_info.email,
+            "display_name": user_info.display_name,
+            "email_verified": user_info.email_verified,
         })),
     ))
 }
 
+#[cfg(feature = "seaorm")]
 async fn update_credential_last_used(state: &YAuthState, user_id: Uuid) -> Result<(), ()> {
     let creds = yauth_entity::webauthn_credentials::Entity::find()
         .filter(yauth_entity::webauthn_credentials::Column::UserId.eq(user_id))
@@ -652,6 +995,15 @@ async fn update_credential_last_used(state: &YAuthState, user_id: Uuid) -> Resul
         active.last_used_at = Set(Some(now));
         let _ = active.update(&state.db).await;
     }
+    Ok(())
+}
+
+#[cfg(feature = "diesel-async")]
+async fn update_credential_last_used(state: &YAuthState, user_id: Uuid) -> Result<(), ()> {
+    let mut conn = state.db.get().await.map_err(|_| ())?;
+    diesel_db::update_credentials_last_used(&mut conn, user_id)
+        .await
+        .map_err(|_| ())?;
     Ok(())
 }
 
@@ -670,27 +1022,61 @@ async fn list_passkeys(
     State(state): State<YAuthState>,
     Extension(auth_user): Extension<AuthUser>,
 ) -> Result<Json<Vec<PasskeyInfo>>, (StatusCode, String)> {
-    let creds = yauth_entity::webauthn_credentials::Entity::find()
-        .filter(yauth_entity::webauthn_credentials::Column::UserId.eq(auth_user.id))
-        .all(&state.db)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error: {}", e);
+    #[cfg(feature = "seaorm")]
+    let passkeys = {
+        let creds = yauth_entity::webauthn_credentials::Entity::find()
+            .filter(yauth_entity::webauthn_credentials::Column::UserId.eq(auth_user.id))
+            .all(&state.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal error".to_string(),
+                )
+            })?;
+        creds
+            .into_iter()
+            .map(|c| PasskeyInfo {
+                id: c.id,
+                name: c.name,
+                created_at: c.created_at,
+                last_used_at: c.last_used_at,
+            })
+            .collect::<Vec<_>>()
+    };
+    #[cfg(feature = "diesel-async")]
+    let passkeys = {
+        let mut conn = state.db.get().await.map_err(|_| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Internal error".to_string(),
             )
         })?;
-
-    let passkeys = creds
-        .into_iter()
-        .map(|c| PasskeyInfo {
-            id: c.id,
-            name: c.name,
-            created_at: c.created_at,
-            last_used_at: c.last_used_at,
-        })
-        .collect();
+        let creds = diesel_db::find_credentials_by_user(&mut conn, auth_user.id)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal error".to_string(),
+                )
+            })?;
+        creds
+            .into_iter()
+            .map(|c| {
+                use chrono::TimeZone;
+                PasskeyInfo {
+                    id: c.id,
+                    name: c.name,
+                    created_at: chrono::Utc.from_utc_datetime(&c.created_at).fixed_offset(),
+                    last_used_at: c
+                        .last_used_at
+                        .map(|dt| chrono::Utc.from_utc_datetime(&dt).fixed_offset()),
+                }
+            })
+            .collect::<Vec<_>>()
+    };
 
     Ok(Json(passkeys))
 }
@@ -700,29 +1086,61 @@ async fn delete_passkey(
     Extension(auth_user): Extension<AuthUser>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    let cred = yauth_entity::webauthn_credentials::Entity::find_by_id(id)
-        .filter(yauth_entity::webauthn_credentials::Column::UserId.eq(auth_user.id))
-        .one(&state.db)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Internal error".to_string(),
-            )
-        })?
-        .ok_or((StatusCode::NOT_FOUND, "Passkey not found".to_string()))?;
+    #[cfg(feature = "seaorm")]
+    {
+        let cred = yauth_entity::webauthn_credentials::Entity::find_by_id(id)
+            .filter(yauth_entity::webauthn_credentials::Column::UserId.eq(auth_user.id))
+            .one(&state.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal error".to_string(),
+                )
+            })?
+            .ok_or((StatusCode::NOT_FOUND, "Passkey not found".to_string()))?;
 
-    yauth_entity::webauthn_credentials::Entity::delete_by_id(cred.id)
-        .exec(&state.db)
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to delete passkey: {}", e);
+        yauth_entity::webauthn_credentials::Entity::delete_by_id(cred.id)
+            .exec(&state.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to delete passkey: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal error".to_string(),
+                )
+            })?;
+    }
+    #[cfg(feature = "diesel-async")]
+    {
+        let mut conn = state.db.get().await.map_err(|_| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Internal error".to_string(),
             )
         })?;
+        let cred = diesel_db::find_credential_by_id_and_user(&mut conn, id, auth_user.id)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal error".to_string(),
+                )
+            })?
+            .ok_or((StatusCode::NOT_FOUND, "Passkey not found".to_string()))?;
+
+        diesel_db::delete_credential(&mut conn, cred.id)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to delete passkey: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal error".to_string(),
+                )
+            })?;
+    }
 
     info!(event = "passkey_deleted", user_id = %auth_user.id, passkey_id = %id, "Passkey deleted");
 

@@ -7,7 +7,9 @@ repository.workspace = true
 publish = ["yauth"]
 
 [features]
-default = ["email-password"]
+default = ["seaorm", "email-password"]
+seaorm = ["dep:sea-orm-migration", "dep:async-trait"]
+diesel-async = ["dep:diesel", "dep:diesel-async-crate", "dep:tokio"]
 email-password = []
 passkey = []
 mfa = []
@@ -19,9 +21,12 @@ oauth2-server = []
 account-lockout = []
 webhooks = []
 oidc = []
-full = ["email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link", "oauth2-server", "account-lockout", "webhooks", "oidc"]
+full = ["seaorm", "email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link", "oauth2-server", "account-lockout", "webhooks", "oidc"]
 
 [dependencies]
-sea-orm-migration = { workspace = true }
-async-trait = { workspace = true }
+sea-orm-migration = { workspace = true, optional = true }
+async-trait = { workspace = true, optional = true }
+diesel = { workspace = true, optional = true }
+diesel-async-crate = { version = "0.5", features = ["postgres", "deadpool"], optional = true, package = "diesel-async" }
+tokio = { workspace = true, optional = true }
 uuid = { workspace = true }

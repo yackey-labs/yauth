@@ -20,9 +20,14 @@ tokio = { version = "1", features = ["full"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace", "limit"] }
 
-# Database
+# Database — SeaORM (default)
 sea-orm = { version = "1.1", features = ["sqlx-postgres", "runtime-tokio-rustls"] }
 sea-orm-migration = { version = "1.1", features = ["sqlx-postgres", "runtime-tokio-rustls"] }
+
+# Database — Diesel (optional alternative)
+diesel = { version = "2.2", features = ["postgres", "uuid", "chrono", "serde_json"] }
+diesel-async = { version = "0.5", features = ["postgres", "deadpool"] }
+diesel_migrations = { version = "2.2", features = ["postgres"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

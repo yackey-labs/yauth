@@ -8,6 +8,7 @@ use axum::{
 };
 use chrono::Utc;
 use hmac::{Hmac, Mac};
+#[cfg(feature = "seaorm")]
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Set,
 };
@@ -24,6 +25,194 @@ use crate::plugin::{AuthEvent, EventResponse, PluginContext, YAuthPlugin};
 use crate::state::YAuthState;
 
 type HmacSha256 = Hmac<Sha256>;
+
+// ---------------------------------------------------------------------------
+// Diesel-async helpers
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "diesel-async")]
+mod diesel_db {
+    use diesel::result::OptionalExtension;
+    use diesel_async_crate::RunQueryDsl;
+    use uuid::Uuid;
+
+    type Conn = diesel_async_crate::AsyncPgConnection;
+    type DbResult<T> = Result<T, String>;
+
+    #[derive(diesel::QueryableByName, Clone)]
+    #[allow(dead_code)]
+    pub struct WebhookRow {
+        #[diesel(sql_type = diesel::sql_types::Uuid)]
+        pub id: Uuid,
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        pub url: String,
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        pub secret: String,
+        #[diesel(sql_type = diesel::sql_types::Jsonb)]
+        pub events: serde_json::Value,
+        #[diesel(sql_type = diesel::sql_types::Bool)]
+        pub active: bool,
+        #[diesel(sql_type = diesel::sql_types::Timestamptz)]
+        pub created_at: chrono::NaiveDateTime,
+        #[diesel(sql_type = diesel::sql_types::Timestamptz)]
+        pub updated_at: chrono::NaiveDateTime,
+    }
+
+    #[derive(diesel::QueryableByName, Clone)]
+    #[allow(dead_code)]
+    pub struct WebhookDeliveryRow {
+        #[diesel(sql_type = diesel::sql_types::Uuid)]
+        pub id: Uuid,
+        #[diesel(sql_type = diesel::sql_types::Uuid)]
+        pub webhook_id: Uuid,
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        pub event_type: String,
+        #[diesel(sql_type = diesel::sql_types::Jsonb)]
+        pub payload: serde_json::Value,
+        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::SmallInt>)]
+        pub status_code: Option<i16>,
+        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+        pub response_body: Option<String>,
+        #[diesel(sql_type = diesel::sql_types::Bool)]
+        pub success: bool,
+        #[diesel(sql_type = diesel::sql_types::Integer)]
+        pub attempt: i32,
+        #[diesel(sql_type = diesel::sql_types::Timestamptz)]
+        pub created_at: chrono::NaiveDateTime,
+    }
+
+    pub async fn find_active_webhooks(conn: &mut Conn) -> DbResult<Vec<WebhookRow>> {
+        diesel::sql_query(
+            "SELECT id, url, secret, events, active, created_at, updated_at FROM yauth_webhooks WHERE active = true",
+        )
+        .load(conn)
+        .await
+        .map_err(|e| e.to_string())
+    }
+
+    pub async fn find_all_webhooks(conn: &mut Conn) -> DbResult<Vec<WebhookRow>> {
+        diesel::sql_query(
+            "SELECT id, url, secret, events, active, created_at, updated_at FROM yauth_webhooks ORDER BY created_at DESC",
+        )
+        .load(conn)
+        .await
+        .map_err(|e| e.to_string())
+    }
+
+    pub async fn find_webhook_by_id(conn: &mut Conn, id: Uuid) -> DbResult<Option<WebhookRow>> {
+        diesel::sql_query(
+            "SELECT id, url, secret, events, active, created_at, updated_at FROM yauth_webhooks WHERE id = $1",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(id)
+        .get_result(conn)
+        .await
+        .optional()
+        .map_err(|e| e.to_string())
+    }
+
+    pub async fn insert_webhook(
+        conn: &mut Conn,
+        id: Uuid,
+        url: &str,
+        secret: &str,
+        events: &serde_json::Value,
+        now: chrono::DateTime<chrono::FixedOffset>,
+    ) -> DbResult<()> {
+        diesel::sql_query(
+            "INSERT INTO yauth_webhooks (id, url, secret, events, active, created_at, updated_at) VALUES ($1, $2, $3, $4, true, $5, $6)",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(id)
+        .bind::<diesel::sql_types::Text, _>(url)
+        .bind::<diesel::sql_types::Text, _>(secret)
+        .bind::<diesel::sql_types::Jsonb, _>(events.clone())
+        .bind::<diesel::sql_types::Timestamptz, _>(now)
+        .bind::<diesel::sql_types::Timestamptz, _>(now)
+        .execute(conn)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub async fn update_webhook(
+        conn: &mut Conn,
+        id: Uuid,
+        url: Option<&str>,
+        events: Option<&serde_json::Value>,
+        secret: Option<&str>,
+        active: Option<bool>,
+        now: chrono::DateTime<chrono::FixedOffset>,
+    ) -> DbResult<Option<WebhookRow>> {
+        // Use COALESCE pattern to handle optional fields
+        diesel::sql_query(
+            "UPDATE yauth_webhooks SET url = COALESCE($2, url), events = COALESCE($3, events), secret = COALESCE($4, secret), active = COALESCE($5, active), updated_at = $6 WHERE id = $1 RETURNING id, url, secret, events, active, created_at, updated_at",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(id)
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(url.map(|s| s.to_string()))
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Jsonb>, _>(events.cloned())
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(secret.map(|s| s.to_string()))
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Bool>, _>(active)
+        .bind::<diesel::sql_types::Timestamptz, _>(now)
+        .get_result(conn)
+        .await
+        .optional()
+        .map_err(|e| e.to_string())
+    }
+
+    pub async fn delete_webhook(conn: &mut Conn, id: Uuid) -> DbResult<()> {
+        diesel::sql_query("DELETE FROM yauth_webhooks WHERE id = $1")
+            .bind::<diesel::sql_types::Uuid, _>(id)
+            .execute(conn)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn insert_delivery(
+        conn: &mut Conn,
+        id: Uuid,
+        webhook_id: Uuid,
+        event_type: &str,
+        payload: &serde_json::Value,
+        status_code: Option<i16>,
+        response_body: Option<&str>,
+        success: bool,
+        attempt: i32,
+        now: chrono::DateTime<chrono::FixedOffset>,
+    ) -> DbResult<()> {
+        diesel::sql_query(
+            "INSERT INTO yauth_webhook_deliveries (id, webhook_id, event_type, payload, status_code, response_body, success, attempt, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(id)
+        .bind::<diesel::sql_types::Uuid, _>(webhook_id)
+        .bind::<diesel::sql_types::Text, _>(event_type)
+        .bind::<diesel::sql_types::Jsonb, _>(payload.clone())
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::SmallInt>, _>(status_code)
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(response_body.map(|s| s.to_string()))
+        .bind::<diesel::sql_types::Bool, _>(success)
+        .bind::<diesel::sql_types::Integer, _>(attempt)
+        .bind::<diesel::sql_types::Timestamptz, _>(now)
+        .execute(conn)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub async fn find_recent_deliveries(
+        conn: &mut Conn,
+        webhook_id: Uuid,
+        limit: i64,
+    ) -> DbResult<Vec<WebhookDeliveryRow>> {
+        diesel::sql_query(
+            "SELECT id, webhook_id, event_type, payload, status_code, response_body, success, attempt, created_at FROM yauth_webhook_deliveries WHERE webhook_id = $1 ORDER BY created_at DESC LIMIT $2",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(webhook_id)
+        .bind::<diesel::sql_types::BigInt, _>(limit)
+        .load(conn)
+        .await
+        .map_err(|e| e.to_string())
+    }
+}
 
 pub struct WebhookPlugin {
     config: WebhookConfig,
@@ -64,9 +253,19 @@ impl YAuthPlugin for WebhookPlugin {
         let retry_delay = self.config.retry_delay;
         let timeout = self.config.timeout;
 
+        #[cfg(feature = "seaorm")]
         tokio::spawn(async move {
             if let Err(e) =
                 dispatch_webhooks(db, event_clone, max_retries, retry_delay, timeout).await
+            {
+                error!("Webhook dispatch error: {}", e);
+            }
+        });
+
+        #[cfg(feature = "diesel-async")]
+        tokio::spawn(async move {
+            if let Err(e) =
+                dispatch_webhooks_diesel(db, event_clone, max_retries, retry_delay, timeout).await
             {
                 error!("Webhook dispatch error: {}", e);
             }
@@ -106,6 +305,7 @@ fn event_type_name(event: &AuthEvent) -> &'static str {
 // Webhook dispatch (background task)
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "seaorm")]
 async fn dispatch_webhooks(
     db: sea_orm::DatabaseConnection,
     event: AuthEvent,
@@ -232,6 +432,135 @@ async fn dispatch_webhooks(
     Ok(())
 }
 
+#[cfg(feature = "diesel-async")]
+async fn dispatch_webhooks_diesel(
+    pool: diesel_async_crate::pooled_connection::deadpool::Pool<
+        diesel_async_crate::AsyncPgConnection,
+    >,
+    event: AuthEvent,
+    max_retries: u32,
+    retry_delay: std::time::Duration,
+    timeout: std::time::Duration,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let event_type = event_type_name(&event);
+    let payload = serde_json::to_value(&event)?;
+
+    let mut conn = pool.get().await.map_err(|e| e.to_string())?;
+    let webhooks = diesel_db::find_active_webhooks(&mut conn)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let client = reqwest::Client::builder().timeout(timeout).build()?;
+
+    for webhook in webhooks {
+        let events: Vec<String> =
+            serde_json::from_value(webhook.events.clone()).unwrap_or_default();
+        if !events.contains(&"*".to_string()) && !events.contains(&event_type.to_string()) {
+            continue;
+        }
+
+        let body = serde_json::json!({
+            "event": event_type,
+            "payload": payload,
+            "timestamp": Utc::now().to_rfc3339(),
+            "webhook_id": webhook.id,
+        });
+        let body_str = serde_json::to_string(&body)?;
+
+        let signature = compute_signature(&webhook.secret, &body_str);
+
+        let mut last_status: Option<i16> = None;
+        let mut last_body: Option<String> = None;
+        let mut success = false;
+
+        for attempt in 1..=(max_retries + 1) {
+            match client
+                .post(&webhook.url)
+                .header("Content-Type", "application/json")
+                .header("X-YAuth-Signature", format!("sha256={}", signature))
+                .header("X-YAuth-Event", event_type)
+                .body(body_str.clone())
+                .send()
+                .await
+            {
+                Ok(response) => {
+                    let status = response.status().as_u16() as i16;
+                    let resp_body = response.text().await.unwrap_or_default();
+                    last_status = Some(status);
+                    last_body = Some(resp_body.clone());
+
+                    if (200..300).contains(&(status as u16)) {
+                        success = true;
+                        let mut conn = pool.get().await.map_err(|e| e.to_string())?;
+                        if let Err(e) = diesel_db::insert_delivery(
+                            &mut conn,
+                            Uuid::new_v4(),
+                            webhook.id,
+                            event_type,
+                            &body,
+                            Some(status),
+                            Some(&truncate_response(&resp_body)),
+                            true,
+                            attempt as i32,
+                            Utc::now().fixed_offset(),
+                        )
+                        .await
+                        {
+                            error!("Failed to record webhook delivery: {}", e);
+                        }
+                        break;
+                    } else if (500..600).contains(&(status as u16)) && attempt <= max_retries {
+                        warn!(
+                            webhook_id = %webhook.id,
+                            status = status,
+                            attempt = attempt,
+                            "Webhook delivery got 5xx, retrying"
+                        );
+                        tokio::time::sleep(retry_delay).await;
+                        continue;
+                    } else {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    last_body = Some(e.to_string());
+                    if attempt <= max_retries {
+                        warn!(
+                            webhook_id = %webhook.id,
+                            error = %e,
+                            attempt = attempt,
+                            "Webhook delivery failed, retrying"
+                        );
+                        tokio::time::sleep(retry_delay).await;
+                    }
+                }
+            }
+        }
+
+        if !success {
+            let mut conn = pool.get().await.map_err(|e| e.to_string())?;
+            if let Err(e) = diesel_db::insert_delivery(
+                &mut conn,
+                Uuid::new_v4(),
+                webhook.id,
+                event_type,
+                &body,
+                last_status,
+                last_body.as_deref().map(truncate_response).as_deref(),
+                false,
+                (max_retries + 1) as i32,
+                Utc::now().fixed_offset(),
+            )
+            .await
+            {
+                error!("Failed to record webhook delivery: {}", e);
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn compute_signature(secret: &str, body: &str) -> String {
     let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key size");
     mac.update(body.as_bytes());
@@ -296,6 +625,7 @@ pub struct WebhookDeliveryResponse {
     pub created_at: String,
 }
 
+#[cfg(feature = "seaorm")]
 impl From<yauth_entity::webhooks::Model> for WebhookResponse {
     fn from(m: yauth_entity::webhooks::Model) -> Self {
         let events: Vec<String> = serde_json::from_value(m.events).unwrap_or_default();
@@ -310,6 +640,7 @@ impl From<yauth_entity::webhooks::Model> for WebhookResponse {
     }
 }
 
+#[cfg(feature = "seaorm")]
 impl From<yauth_entity::webhook_deliveries::Model> for WebhookDeliveryResponse {
     fn from(m: yauth_entity::webhook_deliveries::Model) -> Self {
         Self {
@@ -319,6 +650,40 @@ impl From<yauth_entity::webhook_deliveries::Model> for WebhookDeliveryResponse {
             success: m.success,
             attempt: m.attempt,
             created_at: m.created_at.to_rfc3339(),
+        }
+    }
+}
+
+#[cfg(feature = "diesel-async")]
+impl From<diesel_db::WebhookRow> for WebhookResponse {
+    fn from(r: diesel_db::WebhookRow) -> Self {
+        use chrono::TimeZone;
+        let events: Vec<String> = serde_json::from_value(r.events).unwrap_or_default();
+        let created = chrono::Utc.from_utc_datetime(&r.created_at);
+        let updated = chrono::Utc.from_utc_datetime(&r.updated_at);
+        Self {
+            id: r.id.to_string(),
+            url: r.url,
+            events,
+            active: r.active,
+            created_at: created.to_rfc3339(),
+            updated_at: updated.to_rfc3339(),
+        }
+    }
+}
+
+#[cfg(feature = "diesel-async")]
+impl From<diesel_db::WebhookDeliveryRow> for WebhookDeliveryResponse {
+    fn from(r: diesel_db::WebhookDeliveryRow) -> Self {
+        use chrono::TimeZone;
+        let created = chrono::Utc.from_utc_datetime(&r.created_at);
+        Self {
+            id: r.id.to_string(),
+            event_type: r.event_type,
+            status_code: r.status_code,
+            success: r.success,
+            attempt: r.attempt,
+            created_at: created.to_rfc3339(),
         }
     }
 }
@@ -352,51 +717,99 @@ async fn create_webhook(
 
     let now = Utc::now().fixed_offset();
     let id = Uuid::new_v4();
+    let events_json = serde_json::to_value(&input.events).unwrap();
 
-    let webhook = yauth_entity::webhooks::ActiveModel {
-        id: Set(id),
-        url: Set(input.url.clone()),
-        secret: Set(secret.clone()),
-        events: Set(serde_json::to_value(&input.events).unwrap()),
-        active: Set(true),
-        created_at: Set(now),
-        updated_at: Set(now),
-    };
+    #[cfg(feature = "seaorm")]
+    {
+        let webhook = yauth_entity::webhooks::ActiveModel {
+            id: Set(id),
+            url: Set(input.url.clone()),
+            secret: Set(secret.clone()),
+            events: Set(events_json),
+            active: Set(true),
+            created_at: Set(now),
+            updated_at: Set(now),
+        };
 
-    let model = webhook.insert(&state.db).await.map_err(|e| {
-        error!("DB error creating webhook: {}", e);
-        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-    })?;
+        let model = webhook.insert(&state.db).await.map_err(|e| {
+            error!("DB error creating webhook: {}", e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
 
-    info!(
-        event = "webhook_created",
-        admin_id = %admin.id,
-        webhook_id = %id,
-        "Admin created webhook"
-    );
+        info!(
+            event = "webhook_created",
+            admin_id = %admin.id,
+            webhook_id = %id,
+            "Admin created webhook"
+        );
 
-    state
-        .write_audit_log(
-            Some(admin.id),
-            "webhook_created",
-            Some(serde_json::json!({ "webhook_id": id, "url": input.url })),
-            None,
-        )
-        .await;
+        state
+            .write_audit_log(
+                Some(admin.id),
+                "webhook_created",
+                Some(serde_json::json!({ "webhook_id": id, "url": input.url })),
+                None,
+            )
+            .await;
 
-    // Return the webhook with the secret visible (only on creation)
-    Ok((
-        StatusCode::CREATED,
-        Json(serde_json::json!({
-            "id": model.id,
-            "url": model.url,
-            "secret": secret,
-            "events": input.events,
-            "active": model.active,
-            "created_at": model.created_at.to_rfc3339(),
-            "updated_at": model.updated_at.to_rfc3339(),
-        })),
-    ))
+        Ok((
+            StatusCode::CREATED,
+            Json(serde_json::json!({
+                "id": model.id,
+                "url": model.url,
+                "secret": secret,
+                "events": input.events,
+                "active": model.active,
+                "created_at": model.created_at.to_rfc3339(),
+                "updated_at": model.updated_at.to_rfc3339(),
+            })),
+        ))
+    }
+
+    #[cfg(feature = "diesel-async")]
+    {
+        let mut conn = state
+            .db
+            .get()
+            .await
+            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
+
+        diesel_db::insert_webhook(&mut conn, id, &input.url, &secret, &events_json, now)
+            .await
+            .map_err(|e| {
+                error!("DB error creating webhook: {}", e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?;
+
+        info!(
+            event = "webhook_created",
+            admin_id = %admin.id,
+            webhook_id = %id,
+            "Admin created webhook"
+        );
+
+        state
+            .write_audit_log(
+                Some(admin.id),
+                "webhook_created",
+                Some(serde_json::json!({ "webhook_id": id, "url": input.url })),
+                None,
+            )
+            .await;
+
+        Ok((
+            StatusCode::CREATED,
+            Json(serde_json::json!({
+                "id": id,
+                "url": input.url,
+                "secret": secret,
+                "events": input.events,
+                "active": true,
+                "created_at": now.to_rfc3339(),
+                "updated_at": now.to_rfc3339(),
+            })),
+        ))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -407,16 +820,32 @@ async fn list_webhooks(
     State(state): State<YAuthState>,
     Extension(_admin): Extension<AuthUser>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let webhooks = yauth_entity::webhooks::Entity::find()
-        .order_by_desc(yauth_entity::webhooks::Column::CreatedAt)
-        .all(&state.db)
-        .await
-        .map_err(|e| {
+    #[cfg(feature = "seaorm")]
+    let responses: Vec<WebhookResponse> = {
+        let webhooks = yauth_entity::webhooks::Entity::find()
+            .order_by_desc(yauth_entity::webhooks::Column::CreatedAt)
+            .all(&state.db)
+            .await
+            .map_err(|e| {
+                error!("DB error listing webhooks: {}", e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?;
+        webhooks.into_iter().map(Into::into).collect()
+    };
+
+    #[cfg(feature = "diesel-async")]
+    let responses: Vec<WebhookResponse> = {
+        let mut conn = state
+            .db
+            .get()
+            .await
+            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
+        let webhooks = diesel_db::find_all_webhooks(&mut conn).await.map_err(|e| {
             error!("DB error listing webhooks: {}", e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?;
-
-    let responses: Vec<WebhookResponse> = webhooks.into_iter().map(Into::into).collect();
+        webhooks.into_iter().map(Into::into).collect()
+    };
 
     Ok(Json(serde_json::json!({ "webhooks": responses })))
 }
@@ -430,32 +859,67 @@ async fn get_webhook(
     Extension(_admin): Extension<AuthUser>,
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let webhook = yauth_entity::webhooks::Entity::find_by_id(id)
-        .one(&state.db)
-        .await
-        .map_err(|e| {
-            error!("DB error fetching webhook: {}", e);
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?
-        .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "Webhook not found"))?;
+    #[cfg(feature = "seaorm")]
+    let detail = {
+        let webhook = yauth_entity::webhooks::Entity::find_by_id(id)
+            .one(&state.db)
+            .await
+            .map_err(|e| {
+                error!("DB error fetching webhook: {}", e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?
+            .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "Webhook not found"))?;
 
-    let deliveries = yauth_entity::webhook_deliveries::Entity::find()
-        .filter(yauth_entity::webhook_deliveries::Column::WebhookId.eq(id))
-        .order_by_desc(yauth_entity::webhook_deliveries::Column::CreatedAt)
-        .limit(50)
-        .all(&state.db)
-        .await
-        .map_err(|e| {
-            error!("DB error fetching deliveries: {}", e);
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
+        let deliveries = yauth_entity::webhook_deliveries::Entity::find()
+            .filter(yauth_entity::webhook_deliveries::Column::WebhookId.eq(id))
+            .order_by_desc(yauth_entity::webhook_deliveries::Column::CreatedAt)
+            .limit(50)
+            .all(&state.db)
+            .await
+            .map_err(|e| {
+                error!("DB error fetching deliveries: {}", e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?;
 
-    let delivery_responses: Vec<WebhookDeliveryResponse> =
-        deliveries.into_iter().map(Into::into).collect();
+        let delivery_responses: Vec<WebhookDeliveryResponse> =
+            deliveries.into_iter().map(Into::into).collect();
 
-    let detail = WebhookDetailResponse {
-        webhook: webhook.into(),
-        recent_deliveries: delivery_responses,
+        WebhookDetailResponse {
+            webhook: webhook.into(),
+            recent_deliveries: delivery_responses,
+        }
+    };
+
+    #[cfg(feature = "diesel-async")]
+    let detail = {
+        let mut conn = state
+            .db
+            .get()
+            .await
+            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
+
+        let webhook = diesel_db::find_webhook_by_id(&mut conn, id)
+            .await
+            .map_err(|e| {
+                error!("DB error fetching webhook: {}", e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?
+            .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "Webhook not found"))?;
+
+        let deliveries = diesel_db::find_recent_deliveries(&mut conn, id, 50)
+            .await
+            .map_err(|e| {
+                error!("DB error fetching deliveries: {}", e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?;
+
+        let delivery_responses: Vec<WebhookDeliveryResponse> =
+            deliveries.into_iter().map(Into::into).collect();
+
+        WebhookDetailResponse {
+            webhook: webhook.into(),
+            recent_deliveries: delivery_responses,
+        }
     };
 
     Ok(Json(detail))
@@ -471,36 +935,83 @@ async fn update_webhook(
     Path(id): Path<Uuid>,
     Json(input): Json<UpdateWebhookRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let webhook = yauth_entity::webhooks::Entity::find_by_id(id)
-        .one(&state.db)
+    #[cfg(feature = "seaorm")]
+    let response: WebhookResponse = {
+        let webhook = yauth_entity::webhooks::Entity::find_by_id(id)
+            .one(&state.db)
+            .await
+            .map_err(|e| {
+                error!("DB error fetching webhook: {}", e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?
+            .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "Webhook not found"))?;
+
+        let mut active: yauth_entity::webhooks::ActiveModel = webhook.into();
+
+        if let Some(ref url) = input.url {
+            active.url = Set(url.clone());
+        }
+        if let Some(ref events) = input.events {
+            active.events = Set(serde_json::to_value(events).unwrap());
+        }
+        if let Some(ref secret) = input.secret {
+            active.secret = Set(secret.clone());
+        }
+        if let Some(is_active) = input.active {
+            active.active = Set(is_active);
+        }
+
+        active.updated_at = Set(Utc::now().fixed_offset());
+
+        let updated = active.update(&state.db).await.map_err(|e| {
+            error!("DB error updating webhook: {}", e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
+
+        updated.into()
+    };
+
+    #[cfg(feature = "diesel-async")]
+    let response: WebhookResponse = {
+        let mut conn = state
+            .db
+            .get()
+            .await
+            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
+
+        // Check existence first
+        diesel_db::find_webhook_by_id(&mut conn, id)
+            .await
+            .map_err(|e| {
+                error!("DB error fetching webhook: {}", e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?
+            .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "Webhook not found"))?;
+
+        let events_json = input
+            .events
+            .as_ref()
+            .map(|e| serde_json::to_value(e).unwrap());
+        let now = Utc::now().fixed_offset();
+
+        let updated = diesel_db::update_webhook(
+            &mut conn,
+            id,
+            input.url.as_deref(),
+            events_json.as_ref(),
+            input.secret.as_deref(),
+            input.active,
+            now,
+        )
         .await
         .map_err(|e| {
-            error!("DB error fetching webhook: {}", e);
+            error!("DB error updating webhook: {}", e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?
         .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "Webhook not found"))?;
 
-    let mut active: yauth_entity::webhooks::ActiveModel = webhook.into();
-
-    if let Some(url) = input.url {
-        active.url = Set(url);
-    }
-    if let Some(events) = input.events {
-        active.events = Set(serde_json::to_value(&events).unwrap());
-    }
-    if let Some(secret) = input.secret {
-        active.secret = Set(secret);
-    }
-    if let Some(is_active) = input.active {
-        active.active = Set(is_active);
-    }
-
-    active.updated_at = Set(Utc::now().fixed_offset());
-
-    let updated = active.update(&state.db).await.map_err(|e| {
-        error!("DB error updating webhook: {}", e);
-        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-    })?;
+        updated.into()
+    };
 
     info!(
         event = "webhook_updated",
@@ -509,7 +1020,6 @@ async fn update_webhook(
         "Admin updated webhook"
     );
 
-    let response: WebhookResponse = updated.into();
     Ok(Json(response))
 }
 
@@ -522,22 +1032,49 @@ async fn delete_webhook(
     Extension(admin): Extension<AuthUser>,
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let _webhook = yauth_entity::webhooks::Entity::find_by_id(id)
-        .one(&state.db)
-        .await
-        .map_err(|e| {
-            error!("DB error fetching webhook: {}", e);
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?
-        .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "Webhook not found"))?;
+    #[cfg(feature = "seaorm")]
+    {
+        let _webhook = yauth_entity::webhooks::Entity::find_by_id(id)
+            .one(&state.db)
+            .await
+            .map_err(|e| {
+                error!("DB error fetching webhook: {}", e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?
+            .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "Webhook not found"))?;
 
-    yauth_entity::webhooks::Entity::delete_by_id(id)
-        .exec(&state.db)
-        .await
-        .map_err(|e| {
-            error!("DB error deleting webhook: {}", e);
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
+        yauth_entity::webhooks::Entity::delete_by_id(id)
+            .exec(&state.db)
+            .await
+            .map_err(|e| {
+                error!("DB error deleting webhook: {}", e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?;
+    }
+
+    #[cfg(feature = "diesel-async")]
+    {
+        let mut conn = state
+            .db
+            .get()
+            .await
+            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
+
+        diesel_db::find_webhook_by_id(&mut conn, id)
+            .await
+            .map_err(|e| {
+                error!("DB error fetching webhook: {}", e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?
+            .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "Webhook not found"))?;
+
+        diesel_db::delete_webhook(&mut conn, id)
+            .await
+            .map_err(|e| {
+                error!("DB error deleting webhook: {}", e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?;
+    }
 
     info!(
         event = "webhook_deleted",
@@ -567,14 +1104,36 @@ async fn test_webhook(
     Extension(admin): Extension<AuthUser>,
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let webhook = yauth_entity::webhooks::Entity::find_by_id(id)
-        .one(&state.db)
-        .await
-        .map_err(|e| {
-            error!("DB error fetching webhook: {}", e);
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?
-        .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "Webhook not found"))?;
+    // Fetch webhook URL, secret, and id (abstracted across backends)
+    #[cfg(feature = "seaorm")]
+    let (webhook_id, webhook_url, webhook_secret) = {
+        let webhook = yauth_entity::webhooks::Entity::find_by_id(id)
+            .one(&state.db)
+            .await
+            .map_err(|e| {
+                error!("DB error fetching webhook: {}", e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?
+            .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "Webhook not found"))?;
+        (webhook.id, webhook.url, webhook.secret)
+    };
+
+    #[cfg(feature = "diesel-async")]
+    let (webhook_id, webhook_url, webhook_secret) = {
+        let mut conn = state
+            .db
+            .get()
+            .await
+            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
+        let webhook = diesel_db::find_webhook_by_id(&mut conn, id)
+            .await
+            .map_err(|e| {
+                error!("DB error fetching webhook: {}", e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?
+            .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "Webhook not found"))?;
+        (webhook.id, webhook.url, webhook.secret)
+    };
 
     let body = serde_json::json!({
         "event": "test",
@@ -583,12 +1142,12 @@ async fn test_webhook(
             "triggered_by": admin.id,
         },
         "timestamp": Utc::now().to_rfc3339(),
-        "webhook_id": webhook.id,
+        "webhook_id": webhook_id,
     });
     let body_str = serde_json::to_string(&body)
         .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Serialization error"))?;
 
-    let signature = compute_signature(&webhook.secret, &body_str);
+    let signature = compute_signature(&webhook_secret, &body_str);
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
@@ -596,7 +1155,7 @@ async fn test_webhook(
         .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "HTTP client error"))?;
 
     let result = client
-        .post(&webhook.url)
+        .post(&webhook_url)
         .header("Content-Type", "application/json")
         .header("X-YAuth-Signature", format!("sha256={}", signature))
         .header("X-YAuth-Event", "test")
@@ -615,22 +1174,52 @@ async fn test_webhook(
     };
 
     // Record delivery
-    let delivery = yauth_entity::webhook_deliveries::ActiveModel {
-        id: Set(Uuid::new_v4()),
-        webhook_id: Set(webhook.id),
-        event_type: Set("test".to_string()),
-        payload: Set(body),
-        status_code: Set(status_code),
-        response_body: Set(response_body.clone()),
-        success: Set(success),
-        attempt: Set(1),
-        created_at: Set(Utc::now().fixed_offset()),
-    };
+    #[cfg(feature = "seaorm")]
+    {
+        let delivery = yauth_entity::webhook_deliveries::ActiveModel {
+            id: Set(Uuid::new_v4()),
+            webhook_id: Set(webhook_id),
+            event_type: Set("test".to_string()),
+            payload: Set(body),
+            status_code: Set(status_code),
+            response_body: Set(response_body.clone()),
+            success: Set(success),
+            attempt: Set(1),
+            created_at: Set(Utc::now().fixed_offset()),
+        };
 
-    delivery.insert(&state.db).await.map_err(|e| {
-        error!("DB error recording test delivery: {}", e);
-        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-    })?;
+        delivery.insert(&state.db).await.map_err(|e| {
+            error!("DB error recording test delivery: {}", e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
+    }
+
+    #[cfg(feature = "diesel-async")]
+    {
+        let mut conn = state
+            .db
+            .get()
+            .await
+            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
+
+        diesel_db::insert_delivery(
+            &mut conn,
+            Uuid::new_v4(),
+            webhook_id,
+            "test",
+            &body,
+            status_code,
+            response_body.as_deref(),
+            success,
+            1,
+            Utc::now().fixed_offset(),
+        )
+        .await
+        .map_err(|e| {
+            error!("DB error recording test delivery: {}", e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
+    }
 
     Ok(Json(serde_json::json!({
         "success": success,
@@ -798,6 +1387,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "seaorm")]
     #[test]
     fn webhook_response_from_model() {
         let now = Utc::now().fixed_offset();

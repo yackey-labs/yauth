@@ -7,7 +7,9 @@ repository.workspace = true
 publish = ["yauth"]
 
 [features]
-default = ["email-password"]
+default = ["seaorm", "email-password"]
+seaorm = ["dep:sea-orm"]
+diesel-async = ["dep:diesel", "dep:diesel-async-crate"]
 email-password = []
 passkey = []
 mfa = []
@@ -19,10 +21,12 @@ oauth2-server = []
 account-lockout = []
 webhooks = []
 oidc = []
-full = ["email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link", "oauth2-server", "account-lockout", "webhooks", "oidc"]
+full = ["seaorm", "email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link", "oauth2-server", "account-lockout", "webhooks", "oidc"]
 
 [dependencies]
-sea-orm = { workspace = true }
+sea-orm = { workspace = true, optional = true }
+diesel = { workspace = true, optional = true }
+diesel-async-crate = { version = "0.5", features = ["postgres", "deadpool"], optional = true, package = "diesel-async" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }

@@ -1,10 +1,10 @@
-use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, Statement};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::{ChallengeStore, RateLimitResult, RateLimitStore};
+use crate::state::DbPool;
 
 // ---------------------------------------------------------------------------
-// Shared helpers
+// Shared constants
 // ---------------------------------------------------------------------------
 
 const CREATE_RATE_LIMITS_TABLE: &str = r#"
@@ -23,8 +23,34 @@ CREATE UNLOGGED TABLE IF NOT EXISTS yauth_challenges (
 )
 "#;
 
-async fn ensure_table(db: &DatabaseConnection, ddl: &str) -> Result<(), String> {
+// ---------------------------------------------------------------------------
+// SeaORM helpers
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "seaorm")]
+async fn ensure_table_seaorm(db: &sea_orm::DatabaseConnection, ddl: &str) -> Result<(), String> {
+    use sea_orm::{ConnectionTrait, DbBackend, Statement};
     db.execute(Statement::from_string(DbBackend::Postgres, ddl.to_owned()))
+        .await
+        .map_err(|e| format!("failed to create table: {e}"))?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Diesel helpers
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "diesel-async")]
+async fn ensure_table_diesel(
+    pool: &diesel_async_crate::pooled_connection::deadpool::Pool<
+        diesel_async_crate::AsyncPgConnection,
+    >,
+    ddl: &str,
+) -> Result<(), String> {
+    use diesel_async_crate::RunQueryDsl;
+    let mut conn = pool.get().await.map_err(|e| format!("pool error: {e}"))?;
+    diesel::sql_query(ddl)
+        .execute(&mut conn)
         .await
         .map_err(|e| format!("failed to create table: {e}"))?;
     Ok(())
@@ -35,12 +61,12 @@ async fn ensure_table(db: &DatabaseConnection, ddl: &str) -> Result<(), String> 
 // ---------------------------------------------------------------------------
 
 pub struct PostgresChallengeStore {
-    db: DatabaseConnection,
+    db: DbPool,
     initialized: AtomicBool,
 }
 
 impl PostgresChallengeStore {
-    pub fn new(db: DatabaseConnection) -> Self {
+    pub fn new(db: DbPool) -> Self {
         Self {
             db,
             initialized: AtomicBool::new(false),
@@ -49,22 +75,40 @@ impl PostgresChallengeStore {
 
     async fn ensure_init(&self) -> Result<(), String> {
         if !self.initialized.load(Ordering::Relaxed) {
-            ensure_table(&self.db, CREATE_CHALLENGES_TABLE).await?;
+            #[cfg(feature = "seaorm")]
+            ensure_table_seaorm(&self.db, CREATE_CHALLENGES_TABLE).await?;
+            #[cfg(feature = "diesel-async")]
+            ensure_table_diesel(&self.db, CREATE_CHALLENGES_TABLE).await?;
             self.initialized.store(true, Ordering::Relaxed);
         }
         Ok(())
     }
 
-    /// Delete expired entries. Called opportunistically on `set` to keep the
-    /// table from growing unbounded.
     async fn cleanup_expired(&self) -> Result<(), String> {
-        self.db
-            .execute(Statement::from_string(
-                DbBackend::Postgres,
-                "DELETE FROM yauth_challenges WHERE expires_at < now()".to_owned(),
-            ))
-            .await
-            .map_err(|e| format!("cleanup failed: {e}"))?;
+        #[cfg(feature = "seaorm")]
+        {
+            use sea_orm::{ConnectionTrait, DbBackend, Statement};
+            self.db
+                .execute(Statement::from_string(
+                    DbBackend::Postgres,
+                    "DELETE FROM yauth_challenges WHERE expires_at < now()".to_owned(),
+                ))
+                .await
+                .map_err(|e| format!("cleanup failed: {e}"))?;
+        }
+        #[cfg(feature = "diesel-async")]
+        {
+            use diesel_async_crate::RunQueryDsl;
+            let mut conn = self
+                .db
+                .get()
+                .await
+                .map_err(|e| format!("pool error: {e}"))?;
+            diesel::sql_query("DELETE FROM yauth_challenges WHERE expires_at < now()")
+                .execute(&mut conn)
+                .await
+                .map_err(|e| format!("cleanup failed: {e}"))?;
+        }
         Ok(())
     }
 }
@@ -73,11 +117,8 @@ impl PostgresChallengeStore {
 impl ChallengeStore for PostgresChallengeStore {
     async fn set(&self, key: &str, value: serde_json::Value, ttl_secs: u64) -> Result<(), String> {
         self.ensure_init().await?;
-
-        // Opportunistic cleanup — fire-and-forget, don't fail the set
         let _ = self.cleanup_expired().await;
 
-        // Upsert: insert or update on conflict
         let sql = r#"
             INSERT INTO yauth_challenges (key, value, expires_at)
             VALUES ($1, $2, now() + make_interval(secs => $3))
@@ -86,15 +127,34 @@ impl ChallengeStore for PostgresChallengeStore {
                     expires_at = EXCLUDED.expires_at
         "#;
 
-        self.db
-            .execute(Statement::from_sql_and_values(
-                DbBackend::Postgres,
-                sql,
-                vec![key.into(), value.into(), (ttl_secs as f64).into()],
-            ))
-            .await
-            .map_err(|e| format!("challenge set failed: {e}"))?;
-
+        #[cfg(feature = "seaorm")]
+        {
+            use sea_orm::{ConnectionTrait, DbBackend, Statement};
+            self.db
+                .execute(Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    sql,
+                    vec![key.into(), value.into(), (ttl_secs as f64).into()],
+                ))
+                .await
+                .map_err(|e| format!("challenge set failed: {e}"))?;
+        }
+        #[cfg(feature = "diesel-async")]
+        {
+            use diesel_async_crate::RunQueryDsl;
+            let mut conn = self
+                .db
+                .get()
+                .await
+                .map_err(|e| format!("pool error: {e}"))?;
+            diesel::sql_query(sql)
+                .bind::<diesel::sql_types::Text, _>(key)
+                .bind::<diesel::sql_types::Jsonb, _>(value)
+                .bind::<diesel::sql_types::Float8, _>(ttl_secs as f64)
+                .execute(&mut conn)
+                .await
+                .map_err(|e| format!("challenge set failed: {e}"))?;
+        }
         Ok(())
     }
 
@@ -106,24 +166,51 @@ impl ChallengeStore for PostgresChallengeStore {
             WHERE key = $1 AND expires_at > now()
         "#;
 
-        let row = self
-            .db
-            .query_one(Statement::from_sql_and_values(
-                DbBackend::Postgres,
-                sql,
-                vec![key.into()],
-            ))
-            .await
-            .map_err(|e| format!("challenge get failed: {e}"))?;
+        #[cfg(feature = "seaorm")]
+        {
+            use sea_orm::{ConnectionTrait, DbBackend, Statement};
+            let row = self
+                .db
+                .query_one(Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    sql,
+                    vec![key.into()],
+                ))
+                .await
+                .map_err(|e| format!("challenge get failed: {e}"))?;
 
-        match row {
-            Some(r) => {
-                let val: serde_json::Value = r
-                    .try_get_by_index::<serde_json::Value>(0)
-                    .map_err(|e| format!("deserialize challenge value: {e}"))?;
-                Ok(Some(val))
+            match row {
+                Some(r) => {
+                    let val: serde_json::Value = r
+                        .try_get_by_index::<serde_json::Value>(0)
+                        .map_err(|e| format!("deserialize challenge value: {e}"))?;
+                    Ok(Some(val))
+                }
+                None => Ok(None),
             }
-            None => Ok(None),
+        }
+        #[cfg(feature = "diesel-async")]
+        {
+            use diesel_async_crate::RunQueryDsl;
+            let mut conn = self
+                .db
+                .get()
+                .await
+                .map_err(|e| format!("pool error: {e}"))?;
+
+            #[derive(diesel::QueryableByName)]
+            struct ChallengeRow {
+                #[diesel(sql_type = diesel::sql_types::Jsonb)]
+                value: serde_json::Value,
+            }
+
+            let result: Option<ChallengeRow> = diesel::sql_query(sql)
+                .bind::<diesel::sql_types::Text, _>(key)
+                .get_result(&mut conn)
+                .await
+                .optional()
+                .map_err(|e| format!("challenge get failed: {e}"))?;
+            Ok(result.map(|r| r.value))
         }
     }
 
@@ -132,15 +219,32 @@ impl ChallengeStore for PostgresChallengeStore {
 
         let sql = "DELETE FROM yauth_challenges WHERE key = $1";
 
-        self.db
-            .execute(Statement::from_sql_and_values(
-                DbBackend::Postgres,
-                sql,
-                vec![key.into()],
-            ))
-            .await
-            .map_err(|e| format!("challenge delete failed: {e}"))?;
-
+        #[cfg(feature = "seaorm")]
+        {
+            use sea_orm::{ConnectionTrait, DbBackend, Statement};
+            self.db
+                .execute(Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    sql,
+                    vec![key.into()],
+                ))
+                .await
+                .map_err(|e| format!("challenge delete failed: {e}"))?;
+        }
+        #[cfg(feature = "diesel-async")]
+        {
+            use diesel_async_crate::RunQueryDsl;
+            let mut conn = self
+                .db
+                .get()
+                .await
+                .map_err(|e| format!("pool error: {e}"))?;
+            diesel::sql_query(sql)
+                .bind::<diesel::sql_types::Text, _>(key)
+                .execute(&mut conn)
+                .await
+                .map_err(|e| format!("challenge delete failed: {e}"))?;
+        }
         Ok(())
     }
 }
@@ -150,12 +254,12 @@ impl ChallengeStore for PostgresChallengeStore {
 // ---------------------------------------------------------------------------
 
 pub struct PostgresRateLimitStore {
-    db: DatabaseConnection,
+    db: DbPool,
     initialized: AtomicBool,
 }
 
 impl PostgresRateLimitStore {
-    pub fn new(db: DatabaseConnection) -> Self {
+    pub fn new(db: DbPool) -> Self {
         Self {
             db,
             initialized: AtomicBool::new(false),
@@ -164,7 +268,10 @@ impl PostgresRateLimitStore {
 
     async fn ensure_init(&self) -> Result<(), String> {
         if !self.initialized.load(Ordering::Relaxed) {
-            ensure_table(&self.db, CREATE_RATE_LIMITS_TABLE).await?;
+            #[cfg(feature = "seaorm")]
+            ensure_table_seaorm(&self.db, CREATE_RATE_LIMITS_TABLE).await?;
+            #[cfg(feature = "diesel-async")]
+            ensure_table_diesel(&self.db, CREATE_RATE_LIMITS_TABLE).await?;
             self.initialized.store(true, Ordering::Relaxed);
         }
         Ok(())
@@ -176,7 +283,6 @@ impl RateLimitStore for PostgresRateLimitStore {
     async fn check(&self, key: &str, limit: u32, window_secs: u64) -> RateLimitResult {
         if let Err(e) = self.ensure_init().await {
             tracing::error!("rate limit store init failed: {e}");
-            // Fail open — allow the request rather than blocking everyone
             return RateLimitResult {
                 allowed: true,
                 remaining: limit.saturating_sub(1),
@@ -184,11 +290,6 @@ impl RateLimitStore for PostgresRateLimitStore {
             };
         }
 
-        // Atomic upsert that either:
-        //   - Inserts a new row with count=1 if the key doesn't exist
-        //   - Resets the window and sets count=1 if the window has expired
-        //   - Increments the count if within the current window
-        // Returns the resulting count and window_start.
         let sql = r#"
             INSERT INTO yauth_rate_limits (key, count, window_start)
             VALUES ($1, 1, now())
@@ -208,54 +309,112 @@ impl RateLimitStore for PostgresRateLimitStore {
             RETURNING count, window_start
         "#;
 
-        let result = self
-            .db
-            .query_one(Statement::from_sql_and_values(
-                DbBackend::Postgres,
-                sql,
-                vec![key.into(), (window_secs as f64).into()],
-            ))
-            .await;
+        #[cfg(feature = "seaorm")]
+        {
+            use sea_orm::{ConnectionTrait, DbBackend, Statement};
+            let result = self
+                .db
+                .query_one(Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    sql,
+                    vec![key.into(), (window_secs as f64).into()],
+                ))
+                .await;
 
-        match result {
-            Ok(Some(row)) => {
-                let count: i32 = row.try_get_by_index(0).unwrap_or(1);
-                let window_start: chrono::DateTime<chrono::Utc> = row
-                    .try_get_by_index(1)
-                    .unwrap_or_else(|_| chrono::Utc::now());
-
-                let count = count as u32;
-
-                if count > limit {
-                    // Over limit — compute retry_after
-                    let window_end = window_start + chrono::Duration::seconds(window_secs as i64);
-                    let now = chrono::Utc::now();
-                    let retry_after = (window_end - now).num_seconds().max(0) as u64;
-
-                    RateLimitResult {
-                        allowed: false,
-                        remaining: 0,
-                        retry_after,
+            match result {
+                Ok(Some(row)) => {
+                    let count: i32 = row.try_get_by_index(0).unwrap_or(1);
+                    let window_start: chrono::DateTime<chrono::Utc> = row
+                        .try_get_by_index(1)
+                        .unwrap_or_else(|_| chrono::Utc::now());
+                    let count = count as u32;
+                    rate_limit_result(count, limit, window_start, window_secs)
+                }
+                Ok(None) | Err(_) => {
+                    if let Err(e) = &result {
+                        tracing::error!("rate limit check failed: {e}");
                     }
-                } else {
                     RateLimitResult {
                         allowed: true,
-                        remaining: limit - count,
+                        remaining: limit.saturating_sub(1),
                         retry_after: 0,
                     }
                 }
             }
-            Ok(None) | Err(_) => {
-                // Fail open on unexpected errors
-                if let Err(e) = &result {
-                    tracing::error!("rate limit check failed: {e}");
+        }
+        #[cfg(feature = "diesel-async")]
+        {
+            use diesel_async_crate::RunQueryDsl;
+
+            #[derive(diesel::QueryableByName)]
+            struct RateLimitRow {
+                #[diesel(sql_type = diesel::sql_types::Int4)]
+                count: i32,
+                #[diesel(sql_type = diesel::sql_types::Timestamptz)]
+                window_start: chrono::NaiveDateTime,
+            }
+
+            let conn = self.db.get().await;
+            match conn {
+                Ok(mut conn) => {
+                    let result: Result<RateLimitRow, _> = diesel::sql_query(sql)
+                        .bind::<diesel::sql_types::Text, _>(key)
+                        .bind::<diesel::sql_types::Float8, _>(window_secs as f64)
+                        .get_result(&mut conn)
+                        .await;
+
+                    match result {
+                        Ok(row) => {
+                            let count = row.count as u32;
+                            let window_start = row.window_start.and_utc();
+                            rate_limit_result(count, limit, window_start, window_secs)
+                        }
+                        Err(e) => {
+                            tracing::error!("rate limit check failed: {e}");
+                            RateLimitResult {
+                                allowed: true,
+                                remaining: limit.saturating_sub(1),
+                                retry_after: 0,
+                            }
+                        }
+                    }
                 }
-                RateLimitResult {
-                    allowed: true,
-                    remaining: limit.saturating_sub(1),
-                    retry_after: 0,
+                Err(e) => {
+                    tracing::error!("rate limit pool error: {e}");
+                    RateLimitResult {
+                        allowed: true,
+                        remaining: limit.saturating_sub(1),
+                        retry_after: 0,
+                    }
                 }
             }
         }
     }
 }
+
+fn rate_limit_result(
+    count: u32,
+    limit: u32,
+    window_start: chrono::DateTime<chrono::Utc>,
+    window_secs: u64,
+) -> RateLimitResult {
+    if count > limit {
+        let window_end = window_start + chrono::Duration::seconds(window_secs as i64);
+        let now = chrono::Utc::now();
+        let retry_after = (window_end - now).num_seconds().max(0) as u64;
+        RateLimitResult {
+            allowed: false,
+            remaining: 0,
+            retry_after,
+        }
+    } else {
+        RateLimitResult {
+            allowed: true,
+            remaining: limit - count,
+            retry_after: 0,
+        }
+    }
+}
+
+#[cfg(feature = "diesel-async")]
+use diesel::result::OptionalExtension;

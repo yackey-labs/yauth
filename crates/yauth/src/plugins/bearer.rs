@@ -248,15 +248,16 @@ pub struct TokenResponse {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Internal JWT user info struct used for cross-backend JWT creation
-struct JwtUser {
-    id: Uuid,
-    email: String,
-    role: String,
+/// JWT user info struct used for cross-backend JWT creation
+pub struct JwtUser {
+    pub id: Uuid,
+    pub email: String,
+    pub role: String,
 }
 
 /// Create a JWT for use by the OAuth2 server plugin. This is the public-facing
 /// version of `create_jwt` that can be called from other plugins.
+#[cfg(feature = "seaorm")]
 pub fn create_jwt_with_audience(
     user: &yauth_entity::users::Model,
     config: &BearerConfig,
@@ -268,6 +269,15 @@ pub fn create_jwt_with_audience(
         role: user.role.clone(),
     };
     create_jwt_internal(&jwt_user, config, scope)
+}
+
+/// Create a JWT from a JwtUser struct (backend-agnostic).
+pub fn create_jwt_with_audience_from_fields(
+    user: &JwtUser,
+    config: &BearerConfig,
+    scope: Option<&str>,
+) -> Result<(String, String), ApiError> {
+    create_jwt_internal(user, config, scope)
 }
 
 fn create_jwt_internal(

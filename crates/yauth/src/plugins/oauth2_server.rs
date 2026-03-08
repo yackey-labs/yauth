@@ -1409,6 +1409,78 @@ async fn handle_authorization_code_grant(
         }));
     }
 
+    #[cfg(all(feature = "bearer", feature = "diesel-async"))]
+    {
+        let bearer_config = &state.bearer_config;
+
+        let jwt_user = crate::plugins::bearer::JwtUser {
+            id: user.id,
+            email: user.email.clone(),
+            role: user.role.clone(),
+        };
+
+        let (access_token, _jti) = crate::plugins::bearer::create_jwt_with_audience_from_fields(
+            &jwt_user,
+            bearer_config,
+            scope_str.as_deref(),
+        )
+        .map_err(|_| {
+            oauth2_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "Failed to create token",
+            )
+        })?;
+
+        let family_id = Uuid::new_v4();
+        let mut conn = state.db.get().await.map_err(|_| {
+            oauth2_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Internal error")
+        })?;
+        let refresh_token = create_refresh_token_for_oauth2_diesel(
+            &mut conn,
+            user.id,
+            family_id,
+            bearer_config.refresh_token_ttl,
+        )
+        .await
+        .map_err(|_| {
+            oauth2_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "Failed to create refresh token",
+            )
+        })?;
+
+        let expires_in = bearer_config.access_token_ttl.as_secs();
+
+        info!(
+            event = "oauth2_token_issued",
+            user_id = %user.id,
+            client_id = %client_id,
+            "OAuth2 access token issued via authorization_code grant"
+        );
+
+        state
+            .write_audit_log(
+                Some(user.id),
+                "oauth2_token_issued",
+                Some(serde_json::json!({
+                    "client_id": client_id,
+                    "grant_type": "authorization_code",
+                })),
+                None,
+            )
+            .await;
+
+        return Ok(Json(OAuth2TokenResponse {
+            access_token,
+            token_type: "Bearer".into(),
+            expires_in,
+            refresh_token,
+            scope: scope_str,
+        }));
+    }
+
     #[cfg(not(feature = "bearer"))]
     {
         let _ = user;
@@ -1601,14 +1673,16 @@ async fn handle_oauth2_refresh_token(
                 |_| oauth2_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Failed to create token"),
             )?
         };
-        // TODO: diesel-async + bearer needs a diesel-compatible create_jwt_with_audience in bearer.rs
         #[cfg(feature = "diesel-async")]
-        let (access_token, _jti): (String, String) = {
-            return Err(oauth2_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "server_error",
-                "Bearer + diesel-async not yet supported for OAuth2 refresh",
-            ));
+        let (access_token, _jti) = {
+            let jwt_user = crate::plugins::bearer::JwtUser {
+                id: user.id,
+                email: user.email.clone(),
+                role: user.role.clone(),
+            };
+            crate::plugins::bearer::create_jwt_with_audience_from_fields(&jwt_user, bearer_config, None).map_err(
+                |_| oauth2_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Failed to create token"),
+            )?
         };
 
         #[cfg(feature = "seaorm")]
@@ -2596,6 +2670,78 @@ async fn handle_device_code_grant(
         let family_id = Uuid::new_v4();
         let refresh_token = create_refresh_token_for_oauth2(
             &state.db,
+            user.id,
+            family_id,
+            bearer_config.refresh_token_ttl,
+        )
+        .await
+        .map_err(|_| {
+            oauth2_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "Failed to create refresh token",
+            )
+        })?;
+
+        let expires_in = bearer_config.access_token_ttl.as_secs();
+
+        info!(
+            event = "oauth2_token_issued",
+            user_id = %user.id,
+            client_id = %client_id,
+            "OAuth2 access token issued via device_code grant"
+        );
+
+        state
+            .write_audit_log(
+                Some(user.id),
+                "oauth2_token_issued",
+                Some(serde_json::json!({
+                    "client_id": client_id,
+                    "grant_type": "device_code",
+                })),
+                None,
+            )
+            .await;
+
+        return Ok(Json(OAuth2TokenResponse {
+            access_token,
+            token_type: "Bearer".into(),
+            expires_in,
+            refresh_token,
+            scope: scope_str,
+        }));
+    }
+
+    #[cfg(all(feature = "bearer", feature = "diesel-async"))]
+    {
+        let bearer_config = &state.bearer_config;
+
+        let jwt_user = crate::plugins::bearer::JwtUser {
+            id: user.id,
+            email: user.email.clone(),
+            role: user.role.clone(),
+        };
+
+        let (access_token, _jti) = crate::plugins::bearer::create_jwt_with_audience_from_fields(
+            &jwt_user,
+            bearer_config,
+            scope_str.as_deref(),
+        )
+        .map_err(|_| {
+            oauth2_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "Failed to create token",
+            )
+        })?;
+
+        let family_id = Uuid::new_v4();
+        let mut conn = state.db.get().await.map_err(|_| {
+            oauth2_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Internal error")
+        })?;
+        let refresh_token = create_refresh_token_for_oauth2_diesel(
+            &mut conn,
             user.id,
             family_id,
             bearer_config.refresh_token_ttl,

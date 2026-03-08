@@ -312,20 +312,6 @@ fn create_jwt_internal(
     Ok((token, jti))
 }
 
-#[allow(dead_code)]
-fn create_jwt(
-    user: &yauth_entity::users::Model,
-    config: &BearerConfig,
-    scope: Option<&str>,
-) -> Result<(String, String), ApiError> {
-    let jwt_user = JwtUser {
-        id: user.id,
-        email: user.email.clone(),
-        role: user.role.clone(),
-    };
-    create_jwt_internal(&jwt_user, config, scope)
-}
-
 #[cfg(feature = "seaorm")]
 async fn create_refresh_token_seaorm(
     db: &sea_orm::DatabaseConnection,

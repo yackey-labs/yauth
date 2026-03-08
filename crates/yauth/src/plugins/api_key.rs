@@ -633,8 +633,7 @@ pub async fn validate_api_key(key: &str, state: &YAuthState) -> Result<AuthUser,
     // Wire API key scopes into AuthUser
     let scopes: Option<Vec<String>> = api_key_info
         .scopes
-        .as_ref()
-        .and_then(|v| serde_json::from_value(v.clone()).ok());
+        .and_then(|v| serde_json::from_value(v).ok());
 
     Ok(AuthUser {
         id: user_info.id,

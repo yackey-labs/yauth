@@ -320,8 +320,8 @@ async fn register_begin(
                 )
             })?;
         existing_creds
-            .iter()
-            .filter_map(|c| serde_json::from_value(c.credential.clone()).ok())
+            .into_iter()
+            .filter_map(|c| serde_json::from_value(c.credential).ok())
             .collect()
     };
     #[cfg(feature = "diesel-async")]
@@ -336,8 +336,8 @@ async fn register_begin(
                 )
             })?;
         existing_creds
-            .iter()
-            .filter_map(|c| serde_json::from_value(c.credential.clone()).ok())
+            .into_iter()
+            .filter_map(|c| serde_json::from_value(c.credential).ok())
             .collect()
     };
 
@@ -608,7 +608,7 @@ async fn login_begin(
                         "Internal error".to_string(),
                     )
                 })?;
-            creds.iter().map(|c| c.credential.clone()).collect()
+            creds.into_iter().map(|c| c.credential).collect()
         };
         #[cfg(feature = "diesel-async")]
         let creds_json: Vec<serde_json::Value> = {
@@ -621,7 +621,7 @@ async fn login_begin(
                         "Internal error".to_string(),
                     )
                 })?;
-            creds.iter().map(|c| c.credential.clone()).collect()
+            creds.into_iter().map(|c| c.credential).collect()
         };
 
         if creds_json.is_empty() {
@@ -632,8 +632,8 @@ async fn login_begin(
         }
 
         let passkeys: Vec<Passkey> = creds_json
-            .iter()
-            .filter_map(|c| serde_json::from_value(c.clone()).ok())
+            .into_iter()
+            .filter_map(|c| serde_json::from_value(c).ok())
             .collect();
 
         if passkeys.is_empty() {
@@ -817,7 +817,7 @@ async fn login_finish(
                     "Authentication failed".to_string(),
                 ));
             }
-            creds.iter().map(|c| c.credential.clone()).collect()
+            creds.into_iter().map(|c| c.credential).collect()
         };
         #[cfg(feature = "diesel-async")]
         let creds_json: Vec<serde_json::Value> = {
@@ -836,12 +836,12 @@ async fn login_finish(
                     "Authentication failed".to_string(),
                 ));
             }
-            creds.iter().map(|c| c.credential.clone()).collect()
+            creds.into_iter().map(|c| c.credential).collect()
         };
 
         let passkeys: Vec<Passkey> = creds_json
-            .iter()
-            .filter_map(|c| serde_json::from_value(c.clone()).ok())
+            .into_iter()
+            .filter_map(|c| serde_json::from_value(c).ok())
             .collect();
 
         let discoverable_keys: Vec<DiscoverableKey> =

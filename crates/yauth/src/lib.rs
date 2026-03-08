@@ -20,7 +20,11 @@ pub use yauth_migration as migration;
 #[cfg(feature = "diesel-async")]
 pub use diesel_async_crate::AsyncPgConnection;
 #[cfg(feature = "diesel-async")]
+pub use diesel_async_crate::RunQueryDsl;
+#[cfg(feature = "diesel-async")]
 pub use diesel_async_crate::pooled_connection::deadpool::Pool as DieselPool;
+#[cfg(feature = "diesel-async")]
+pub use diesel_async_crate::pooled_connection::AsyncDieselConnectionManager;
 
 pub mod prelude {
     pub use crate::YAuthBuilder;

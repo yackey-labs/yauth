@@ -837,7 +837,8 @@ async fn authorize_post(
         let mut conn = match state.db.get().await {
             Ok(c) => c,
             Err(_) => {
-                return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
+                return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+                    .into_response();
             }
         };
         if let Err(e) = diesel_db::insert_auth_code(
@@ -2592,7 +2593,8 @@ async fn device_verify_post(
         let mut conn = match state.db.get().await {
             Ok(c) => c,
             Err(_) => {
-                return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
+                return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+                    .into_response();
             }
         };
         match diesel_db::find_device_code_by_user_code_pending(&mut conn, &input.user_code).await {
@@ -2651,7 +2653,8 @@ async fn device_verify_post(
         let mut conn = match state.db.get().await {
             Ok(c) => c,
             Err(_) => {
-                return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
+                return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+                    .into_response();
             }
         };
         let user_id = if input.approved {

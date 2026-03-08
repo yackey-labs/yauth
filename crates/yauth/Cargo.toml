@@ -95,6 +95,7 @@ uuid = { workspace = true }
 base64 = "0.22"
 url = "2"
 
+
 [[example]]
 name = "server"
 required-features = ["seaorm"]

@@ -30,11 +30,11 @@
 
 use std::time::Duration;
 
+use uuid::Uuid;
 use yauth::AsyncDieselConnectionManager;
 use yauth::AsyncPgConnection;
 use yauth::DieselPool;
 use yauth::RunQueryDsl;
-use uuid::Uuid;
 
 use yauth::config::YAuthConfig;
 use yauth::prelude::*;
@@ -189,9 +189,7 @@ async fn diesel_session_create_validate_delete() {
 
     // --- Validate session ---
     let config = YAuthConfig::default();
-    let state = YAuthBuilder::new(pool.clone(), config)
-        .build()
-        .into_state();
+    let state = YAuthBuilder::new(pool.clone(), config).build().into_state();
 
     let user = yauth::auth::session::validate_session(
         &state,
@@ -242,9 +240,7 @@ async fn diesel_pool_sharing() {
 
     // Build YAuth with the pool
     let config = YAuthConfig::default();
-    let state = YAuthBuilder::new(pool.clone(), config)
-        .build()
-        .into_state();
+    let state = YAuthBuilder::new(pool.clone(), config).build().into_state();
 
     // Use the pool directly for a raw query
     {
@@ -269,13 +265,15 @@ async fn diesel_pool_sharing() {
             cnt: i64,
         }
 
-        let row: CountRow =
-            diesel::sql_query("SELECT COUNT(*) AS cnt FROM yauth_users")
-                .get_result(&mut conn)
-                .await
-                .expect("count via state pool");
+        let row: CountRow = diesel::sql_query("SELECT COUNT(*) AS cnt FROM yauth_users")
+            .get_result(&mut conn)
+            .await
+            .expect("count via state pool");
 
-        assert_eq!(row.cnt, 1, "should see the user inserted via the shared pool");
+        assert_eq!(
+            row.cnt, 1,
+            "should see the user inserted via the shared pool"
+        );
     }
 
     drop_yauth_tables(&pool).await;

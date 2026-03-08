@@ -35,6 +35,23 @@ pub enum AuthMethod {
     ApiKey,
 }
 
+/// Record authenticated user context on the current (SERVER) span.
+fn record_auth_user_on_span(user: &AuthUser) {
+    let span = tracing::Span::current();
+    span.record("user.id", tracing::field::display(&user.id));
+    span.record("enduser.id", tracing::field::display(&user.id));
+    span.record("user.email", user.email.as_str());
+    span.record("user.role", user.role.as_str());
+    span.record(
+        "yauth.auth_method",
+        match &user.auth_method {
+            AuthMethod::Session => "session",
+            AuthMethod::Bearer => "bearer",
+            AuthMethod::ApiKey => "api_key",
+        },
+    );
+}
+
 pub async fn auth_middleware(
     State(state): State<YAuthState>,
     jar: CookieJar,
@@ -75,6 +92,7 @@ pub async fn auth_middleware(
                             return api_err(StatusCode::FORBIDDEN, "Account suspended")
                                 .into_response();
                         }
+                        record_auth_user_on_span(&auth_user);
                         req.extensions_mut().insert(auth_user);
                         return next.run(req).await;
                     }
@@ -97,6 +115,7 @@ pub async fn auth_middleware(
         if let Ok(header_str) = auth_header.to_str() {
             if let Some(token) = header_str.strip_prefix("Bearer ") {
                 if let Ok(auth_user) = crate::plugins::bearer::validate_jwt(token, &state).await {
+                    record_auth_user_on_span(&auth_user);
                     req.extensions_mut().insert(auth_user);
                     return next.run(req).await;
                 }
@@ -111,6 +130,7 @@ pub async fn auth_middleware(
         if let Ok(key_str) = api_key_header.to_str() {
             if let Ok(auth_user) = crate::plugins::api_key::validate_api_key(key_str, &state).await
             {
+                record_auth_user_on_span(&auth_user);
                 req.extensions_mut().insert(auth_user);
                 return next.run(req).await;
             }

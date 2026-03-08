@@ -37,12 +37,14 @@ impl RateLimiter {
         let entry = map.entry(key.to_string()).or_default();
         // Remove entries outside the window
         entry.retain(|t| now.duration_since(*t) < self.window);
-        if entry.len() >= self.max_requests {
-            false
-        } else {
+        let allowed = entry.len() < self.max_requests;
+        if allowed {
             entry.push(now);
-            true
+        } else {
+            // Record rate limiting on the parent SERVER span
+            tracing::Span::current().record("yauth.rate_limited", true);
         }
+        allowed
     }
 }
 

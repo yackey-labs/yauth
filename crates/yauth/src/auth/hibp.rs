@@ -8,51 +8,72 @@ use tracing::{info, warn};
 /// Returns Err only on network/parse errors — callers should treat errors as
 /// "unable to check" rather than blocking registration.
 pub async fn check_password_breach(password: &str) -> Result<u64, String> {
-    let mut hasher = Sha1::new();
-    hasher.update(password.as_bytes());
-    let hash = format!("{:X}", hasher.finalize());
+    use tracing::Instrument;
 
-    let prefix = &hash[..5];
-    let suffix = &hash[5..];
+    let parent_span = tracing::Span::current();
+    let child_span = tracing::info_span!(
+        "yauth.hibp_check",
+        otel.kind = "Client",
+        http.request.method = "GET",
+        yauth.hibp.breach_count = tracing::field::Empty,
+    );
 
-    let url = format!("https://api.pwnedpasswords.com/range/{}", prefix);
+    async {
+        let mut hasher = Sha1::new();
+        hasher.update(password.as_bytes());
+        let hash = format!("{:X}", hasher.finalize());
 
-    let client = reqwest::Client::builder()
-        .user_agent("yauth-security-check")
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+        let prefix = &hash[..5];
+        let suffix = &hash[5..];
 
-    let response = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| format!("HIBP API request failed: {}", e))?;
+        let url = format!("https://api.pwnedpasswords.com/range/{}", prefix);
 
-    if !response.status().is_success() {
-        return Err(format!("HIBP API returned status {}", response.status()));
-    }
+        let client = reqwest::Client::builder()
+            .user_agent("yauth-security-check")
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
 
-    let body = response
-        .text()
-        .await
-        .map_err(|e| format!("Failed to read HIBP response: {}", e))?;
+        let response = client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("HIBP API request failed: {}", e))?;
 
-    for line in body.lines() {
-        let parts: Vec<&str> = line.split(':').collect();
-        if parts.len() == 2 && parts[0].trim().eq_ignore_ascii_case(suffix) {
-            let count: u64 = parts[1].trim().parse().unwrap_or(1);
-            info!(
-                event = "hibp_password_breached",
-                breach_count = count,
-                "Password found in {} data breaches",
-                count
-            );
-            return Ok(count);
+        if !response.status().is_success() {
+            return Err(format!("HIBP API returned status {}", response.status()));
         }
-    }
 
-    Ok(0)
+        let body = response
+            .text()
+            .await
+            .map_err(|e| format!("Failed to read HIBP response: {}", e))?;
+
+        for line in body.lines() {
+            let parts: Vec<&str> = line.split(':').collect();
+            if parts.len() == 2 && parts[0].trim().eq_ignore_ascii_case(suffix) {
+                let count: u64 = parts[1].trim().parse().unwrap_or(1);
+                // Record on both the child span and the parent SERVER span
+                tracing::Span::current().record("yauth.hibp.breach_count", count);
+                parent_span.record("yauth.hibp.breach_count", count);
+                info!(
+                    event = "hibp_password_breached",
+                    breach_count = count,
+                    "Password found in {} data breaches",
+                    count
+                );
+                return Ok(count);
+            }
+        }
+
+        // Record zero breaches
+        tracing::Span::current().record("yauth.hibp.breach_count", 0u64);
+        parent_span.record("yauth.hibp.breach_count", 0u64);
+
+        Ok(0)
+    }
+    .instrument(child_span)
+    .await
 }
 
 /// Parse a HIBP response body to find a matching suffix, returning the breach count.

@@ -24,6 +24,17 @@ pub async fn trace_middleware(req: Request, next: Next) -> Response {
         url.path = %path,
         http.response.status_code = tracing::field::Empty,
         otel.status_code = tracing::field::Empty,
+        // Auth context (populated by auth middleware/handlers)
+        user.id = tracing::field::Empty,
+        user.email = tracing::field::Empty,
+        user.role = tracing::field::Empty,
+        enduser.id = tracing::field::Empty,
+        // Auth operation context
+        yauth.auth_method = tracing::field::Empty,
+        yauth.session_found = tracing::field::Empty,
+        yauth.rate_limited = tracing::field::Empty,
+        yauth.hibp.breach_count = tracing::field::Empty,
+        yauth.mfa_required = tracing::field::Empty,
     );
 
     let response = {

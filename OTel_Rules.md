@@ -4,6 +4,27 @@ Rules for instrumenting applications that use the yauth authentication library. 
 
 YAuth uses `tracing` + `tracing-opentelemetry` to bridge spans into OTel format. The library provides optional telemetry helpers via the `telemetry` Cargo feature.
 
+## Wide Event Philosophy (Honeycomb-style)
+
+YAuth follows the **wide event** approach to observability:
+
+**Prefer adding attributes to the parent span over creating child spans.**
+
+A single SERVER span for an HTTP request should contain all the context needed to understand what happened: who authenticated, how they authenticated, whether they were rate limited, and what the outcome was. This produces fewer, richer spans that are easier to query and correlate in Honeycomb, Grafana Tempo, or any trace backend.
+
+### When to widen the parent span (add attributes)
+- **Fast operations** where separate timing is not useful: session lookup, JWT verification, rate limit check, password verify result, user context after authentication
+- **Auth context**: user ID, email, role, auth method — always recorded on the SERVER span
+- **Boolean outcomes**: `yauth.session_found`, `yauth.rate_limited`, `yauth.mfa_required`
+
+### When to create a child span
+Only create child spans for operations where **separate timing matters**:
+- **CPU-bound work** (100ms+): password hashing with Argon2id (`yauth.password_hash`, `yauth.password_verify`)
+- **External network calls**: HIBP API check (`yauth.hibp_check` with `otel.kind = "Client"`)
+
+### Auth events as span events (not separate spans)
+Auth outcomes (login succeeded, login failed, user registered) should be recorded as **span events** on the SERVER span using `tracing::info!()` within the span context, not as separate INTERNAL spans. The structured fields on the log event are automatically attached to the parent span's trace context.
+
 ## Required Environment Variables
 
 Set these in your deployment manifest:
@@ -19,7 +40,7 @@ Set these in your deployment manifest:
 
 ## Telemetry Feature
 
-Enable with `features = ["telemetry"]` in your `Cargo.toml`. This gates the OTel bridge and exporter dependencies. `tracing` itself is always available (zero-cost when no subscriber is registered).
+Enable with `features = ["telemetry"]` in your `Cargo.toml`. This gates the OTel bridge and exporter dependencies. `tracing` itself is always available — spans and `.record()` calls are zero-cost no-ops when no subscriber is registered.
 
 ### Provided Helpers
 
@@ -38,27 +59,9 @@ app.layer(axum::middleware::from_fn(telemetry::layer::trace_middleware));
 provider.shutdown().expect("Failed to flush traces");
 ```
 
-## Span Naming Reference
+## SERVER Span: The Wide Event
 
-Every span name must follow these conventions. Dashboards query `span_name` labels against these exact patterns.
-
-| Context | Span Kind | Name Format | Example |
-|---|---|---|---|
-| API route handler | `SERVER` | `{METHOD} {route}` | `POST /api/auth/email/login` |
-| Outbound HTTP call | `CLIENT` | `HTTP {METHOD}` | `HTTP GET` |
-| Database query | `CLIENT` | `{OPERATION} {table}` | `SELECT yauth_users` |
-| Auth operation | `INTERNAL` | `yauth.{operation}` | `yauth.password_hash` |
-| Auth event | `INTERNAL` | `yauth.event {type}` | `yauth.event login_succeeded` |
-
-### Rules
-
-- **Low cardinality**: Never put IDs, query params, or request bodies in span names. Use route templates with `:param` placeholders, not resolved paths.
-- **Uppercase operations**: SQL operations (`SELECT`, `INSERT`) and HTTP methods (`GET`, `POST`) are always uppercase.
-- **Route templates**: Use the framework's route pattern. `POST /api/auth/admin/users/:id` not `POST /api/auth/admin/users/abc-123`.
-
-## API Spans (SERVER) — Provided by trace_middleware
-
-The `trace_middleware` creates a SERVER span for each request (excluding health checks):
+The `trace_middleware` creates a single SERVER span per request with **pre-declared Empty fields** that auth code populates during request processing:
 
 ```rust
 let span = tracing::info_span!(
@@ -70,55 +73,87 @@ let span = tracing::info_span!(
     url.path = %path,
     http.response.status_code = tracing::field::Empty,
     otel.status_code = tracing::field::Empty,
+    // Auth context (populated by auth middleware/handlers)
+    user.id = tracing::field::Empty,
+    user.email = tracing::field::Empty,
+    user.role = tracing::field::Empty,
+    enduser.id = tracing::field::Empty,
+    // Auth operation context
+    yauth.auth_method = tracing::field::Empty,
+    yauth.session_found = tracing::field::Empty,
+    yauth.rate_limited = tracing::field::Empty,
+    yauth.hibp.breach_count = tracing::field::Empty,
+    yauth.mfa_required = tracing::field::Empty,
 );
 ```
 
-### Required attributes (SERVER spans)
+Fields are recorded using `tracing::Span::current().record("field", value)` from anywhere within the request's span context. The field must be pre-declared as `tracing::field::Empty` on the span — recording a field that wasn't declared is silently ignored.
 
-| Attribute | Value | Example |
+### Attributes on the SERVER span
+
+| Attribute | When Populated | Example Value |
 |---|---|---|
-| `http.request.method` | HTTP verb | `POST` |
-| `http.route` | Route template | `/api/auth/email/login` |
-| `url.path` | Actual path | `/api/auth/email/login` |
-| `http.response.status_code` | Status code int | `200` |
+| `http.request.method` | Always | `POST` |
+| `http.route` | Always | `/api/auth/email/login` |
+| `url.path` | Always | `/api/auth/email/login` |
+| `http.response.status_code` | After response | `200` |
+| `user.id` | After auth | `550e8400-e29b-41d4-a716-446655440000` |
+| `user.email` | After auth | `user@example.com` |
+| `user.role` | After auth | `admin` |
+| `enduser.id` | After auth | Same as `user.id` (OTel semantic convention) |
+| `yauth.auth_method` | After auth | `session`, `bearer`, `api_key` |
+| `yauth.session_found` | After session lookup | `true` / `false` |
+| `yauth.rate_limited` | When rate limited | `true` |
+| `yauth.hibp.breach_count` | After HIBP check | `42` |
+| `yauth.mfa_required` | When MFA needed | `true` |
 
 ### Error handling
 
 - 5xx responses: set `otel.status_code = "ERROR"` on the span
 - 4xx responses: do NOT set error status (client errors are not server errors)
 
-## YAuth Auth Operation Spans (INTERNAL)
+## Child Spans (only for slow/external operations)
 
-These spans instrument yauth's internal auth operations. They are created automatically when the `telemetry` feature is enabled.
+These are the **only** operations that warrant their own child span:
 
-| Span Name | Description | Key Attributes |
-|---|---|---|
-| `yauth.password_hash` | Argon2id hashing | duration (for tuning cost params) |
-| `yauth.session_validate` | Session lookup + expiry check | `yauth.session_found` |
-| `yauth.hibp_check` | HIBP API call (CLIENT span) | `http.request.method`, `http.response.status_code` |
-| `yauth.rate_limit_check` | Rate limiter check | `yauth.rate_limit.allowed`, `yauth.rate_limit.key` |
-| `yauth.webauthn_verify` | WebAuthn credential verification | `yauth.user_id` |
-| `yauth.totp_verify` | TOTP code verification | `yauth.user_id` |
-| `yauth.jwt_verify` | JWT signature + expiry validation | `yauth.jwt_valid` |
+| Span Name | Kind | Why | Key Attributes |
+|---|---|---|---|
+| `yauth.password_hash` | INTERNAL | CPU-bound Argon2id hashing (100ms+) | duration |
+| `yauth.password_verify` | INTERNAL | CPU-bound Argon2id verification (100ms+) | duration |
+| `yauth.hibp_check` | CLIENT | External HTTP call to HIBP API | `http.request.method`, `yauth.hibp.breach_count` |
 
-## Auth Event Spans (INTERNAL)
+Everything else (session lookup, JWT verify, rate limit check, user lookup) is fast enough that separate timing is not useful — the result is recorded as an attribute on the SERVER span.
 
-Emitted by the plugin event system when auth events occur:
+## Span Naming Reference
 
-| Span Name | Attributes |
-|---|---|
-| `yauth.event login_succeeded` | `yauth.event.type`, `yauth.user_id`, `yauth.auth_method` |
-| `yauth.event login_failed` | `yauth.event.type`, `yauth.email`, `yauth.reason` |
-| `yauth.event user_registered` | `yauth.event.type`, `yauth.user_id`, `yauth.email` |
-| `yauth.event session_created` | `yauth.event.type`, `yauth.user_id`, `yauth.session_id` |
-| `yauth.event password_changed` | `yauth.event.type`, `yauth.user_id` |
-| `yauth.event email_verified` | `yauth.event.type`, `yauth.user_id` |
-| `yauth.event mfa_enabled` | `yauth.event.type`, `yauth.user_id`, `yauth.mfa_method` |
-| `yauth.event user_banned` | `yauth.event.type`, `yauth.user_id` |
+| Context | Span Kind | Name Format | Example |
+|---|---|---|---|
+| API route handler | `SERVER` | `{METHOD} {route}` | `POST /api/auth/email/login` |
+| Password hash/verify | `INTERNAL` | `yauth.{operation}` | `yauth.password_hash` |
+| HIBP API call | `CLIENT` | `yauth.hibp_check` | `yauth.hibp_check` |
+| Database query | `CLIENT` | `{OPERATION} {table}` | `SELECT yauth_users` |
 
-## Database Spans (SeaORM)
+### Rules
 
-YAuth prefixes all its tables with `yauth_`. For proper span naming matching `{OPERATION} {table}`:
+- **Low cardinality**: Never put IDs, query params, or request bodies in span names. Use route templates with `:param` placeholders, not resolved paths.
+- **Uppercase operations**: SQL operations (`SELECT`, `INSERT`) and HTTP methods (`GET`, `POST`) are always uppercase.
+- **Route templates**: Use the framework's route pattern. `POST /api/auth/admin/users/:id` not `POST /api/auth/admin/users/abc-123`.
+
+## Consuming App Instrumentation
+
+Apps using yauth should add their own attributes to the SERVER span using the `app.*` prefix:
+
+```rust
+let span = tracing::Span::current();
+span.record("app.guitar_id", &guitar_id.to_string());
+span.record("app.action", "restring");
+```
+
+Pre-declare these fields on the SERVER span in your app's trace middleware (or add a second middleware layer that widens the span with app-specific Empty fields).
+
+## Database Spans (SeaORM / Diesel)
+
+YAuth prefixes all its tables with `yauth_`. Database spans follow `{OPERATION} {table}` naming:
 
 ```
 [CLIENT] SELECT yauth_users
@@ -142,20 +177,13 @@ Health check routes are excluded from tracing in the trace middleware. No span i
 - `/api/health*`
 - `/health*`
 
-```rust
-// In trace_middleware — health checks skip span creation entirely
-if path.starts_with("/api/health") || path.starts_with("/health") {
-    return next.run(req).await;
-}
-```
-
 ## Signal Strategy: What Goes Where
 
 ### Traces — "Where and why is it wrong?"
-Trace every user-facing request. The SERVER span records method, route, status, and duration. Auth operation spans nest inside the SERVER span to show exactly where time is spent (password hashing, HIBP check, DB queries).
+A single wide SERVER span per request captures method, route, status, duration, auth context, and outcomes. Child spans only exist for password hashing and HIBP checks where separate timing matters.
 
 ### Logs — "What happened outside a request?"
-Only log what traces don't cover. Use `tracing` macros (`info!`, `warn!`, `error!`) which automatically include trace context via `tracing-opentelemetry`.
+Only log what the span doesn't cover. Use `tracing` macros (`info!`, `warn!`, `error!`) which automatically include trace context via `tracing-opentelemetry`. Auth events (login succeeded, login failed, etc.) are logged with structured fields inside the SERVER span context.
 
 ### Metrics — "Is something wrong?"
 Tempo generates RED metrics automatically from traces. Only add custom metrics for things traces can't cover: rate limit hit rates, auth method distribution, failed login trends.
@@ -164,15 +192,60 @@ Tempo generates RED metrics automatically from traces. Only add custom metrics f
 
 | Event | Signal | Why |
 |---|---|---|
-| Auth request handled | **Trace** (SERVER span) | Span has method, route, status, duration |
-| DB query executed | **Trace** (CLIENT span) | Span has statement, duration, error |
-| User authenticated | **Span attribute** (`user.id`) | Attach to SERVER span in auth middleware |
-| Password hashed | **Trace** (INTERNAL span) | Duration matters for Argon2id tuning |
-| HIBP API called | **Trace** (CLIENT span) | External call duration and success |
-| Login succeeded/failed | **Auth event span** | Structured auth audit trail |
-| Rate limit hit | **Span attribute** | `yauth.rate_limited = true` on SERVER span |
+| Auth request handled | **Span attribute** on SERVER span | Span has method, route, status, duration, auth context |
+| User authenticated | **Span attribute** (`user.id`, `user.email`, `yauth.auth_method`) | Widened onto SERVER span by auth middleware |
+| Session lookup result | **Span attribute** (`yauth.session_found`) | Fast DB lookup, no child span needed |
+| Rate limit hit | **Span attribute** (`yauth.rate_limited`) | In-memory check, no child span needed |
+| Password hashed/verified | **Child span** (`yauth.password_hash` / `yauth.password_verify`) | CPU-bound 100ms+, timing matters for Argon2id tuning |
+| HIBP API called | **Child span** (`yauth.hibp_check`, CLIENT kind) | External network call, timing matters |
+| Login succeeded/failed | **Log event** (`tracing::info!`) inside SERVER span | Structured fields auto-attached to trace context |
+| User registered | **Log event** (`tracing::info!`) inside SERVER span | Structured fields auto-attached to trace context |
 | App started / shutdown | **Log** | No request context |
 | Background cleanup | **Log** | No parent span |
+
+## Trace Structure Example
+
+### Login request (wide event style)
+
+```
+[SERVER] POST /api/auth/email/login
+    user.id = "abc-123"
+    user.email = "user@example.com"
+    user.role = "user"
+    yauth.auth_method = "session"
+    yauth.session_found = true
+    yauth.rate_limited = false
+    http.response.status_code = 200
+    +-- [INTERNAL] yauth.password_verify (112ms)
+```
+
+Compare with the old approach that created 5+ child spans — the wide event captures the same information in a single queryable span.
+
+### Registration with HIBP check
+
+```
+[SERVER] POST /api/auth/email/register
+    yauth.hibp.breach_count = 0
+    http.response.status_code = 201
+    +-- [INTERNAL] yauth.password_hash (145ms)
+    +-- [CLIENT] yauth.hibp_check (89ms)
+            http.request.method = "GET"
+            yauth.hibp.breach_count = 0
+```
+
+### Authenticated API request
+
+```
+[SERVER] GET /api/guitars
+    user.id = "abc-123"
+    user.email = "user@example.com"
+    user.role = "user"
+    yauth.auth_method = "session"
+    yauth.session_found = true
+    http.response.status_code = 200
+```
+
+No child spans at all — session validation is fast and the result is an attribute.
 
 ## CORS for Context Propagation
 
@@ -198,6 +271,7 @@ let cors = CorsLayer::new()
 - Traefik (or your ingress) injects W3C `traceparent` headers on all ingress requests
 - `tracing-opentelemetry` extracts `traceparent` automatically via `TraceContextPropagator`
 - No manual context manager needed in Rust — `tracing` uses task-local storage natively
+- `tracing::Span::current()` always returns the active span — auth code can record attributes without passing span references around
 
 ## Logs (Rust)
 
@@ -223,67 +297,28 @@ tracing_subscriber::registry()
     .init();
 ```
 
-## Trace Structure Examples
-
-### Login request with MFA
-```
-[SERVER] POST /api/auth/email/login (my-app)
-  +-- [INTERNAL] yauth.rate_limit_check
-  +-- [CLIENT] SELECT yauth_users (postgresql)
-  +-- [INTERNAL] yauth.password_hash (argon2id verify)
-  +-- [INTERNAL] yauth.event login_succeeded
-  +-- response: { mfa_required: true, pending_session_id: "..." }
-```
-
-### MFA verify then session creation
-```
-[SERVER] POST /api/auth/mfa/verify (my-app)
-  +-- [INTERNAL] yauth.totp_verify
-  +-- [CLIENT] INSERT yauth_sessions (postgresql)
-  +-- [INTERNAL] yauth.event session_created
-  +-- Set-Cookie: session=...
-```
-
-### Bearer token authentication
-```
-[SERVER] GET /api/me (my-app)
-  +-- [INTERNAL] yauth.jwt_verify
-  +-- [CLIENT] SELECT yauth_users (postgresql)
-  +-- response: { user data }
-```
-
-### Registration with HIBP check
-```
-[SERVER] POST /api/auth/email/register (my-app)
-  +-- [INTERNAL] yauth.rate_limit_check
-  +-- [CLIENT] SELECT yauth_users (postgresql)  -- check existing
-  +-- [CLIENT] HTTP GET (api.pwnedpasswords.com)  -- HIBP k-anonymity
-  +-- [INTERNAL] yauth.password_hash (argon2id hash)
-  +-- [CLIENT] INSERT yauth_users (postgresql)
-  +-- [CLIENT] INSERT yauth_passwords (postgresql)
-  +-- [INTERNAL] yauth.event user_registered
-  +-- response: 201 Created
-```
-
 ## Checklist
 
 ### Instrumentation
 - [ ] `telemetry` feature enabled in Cargo.toml
 - [ ] `telemetry::init()` called before Axum server starts
 - [ ] `OTEL_SERVICE_NAME` set in deployment manifest
-- [ ] `trace_middleware` applied as Axum layer
+- [ ] `trace_middleware` applied as Axum layer — creates wide SERVER span with auth Empty fields
 - [ ] SERVER spans named `{METHOD} {route}` with route templates
-- [ ] Auth operation INTERNAL spans created for password hashing, session validation, etc.
-- [ ] Auth event spans emitted on login, registration, logout, etc.
-- [ ] DB spans follow `{OPERATION} {table}` naming with semantic attributes
+- [ ] Auth middleware records `user.id`, `user.email`, `user.role`, `yauth.auth_method` on SERVER span
+- [ ] Session validation records `yauth.session_found` on SERVER span
+- [ ] Rate limiter records `yauth.rate_limited` on SERVER span when blocked
+- [ ] Password hash/verify have their own child spans (CPU-bound)
+- [ ] HIBP check has its own CLIENT child span (network-bound)
 - [ ] Error spans set `otel.status_code = "ERROR"` for 5xx only
 
 ### Noise reduction
 - [ ] Health check routes skip span creation
-- [ ] No spans for `/api/health*`, `/health*`
+- [ ] No child spans for fast operations (session lookup, JWT verify, rate limit check)
+- [ ] Auth events are log events inside the SERVER span, not separate INTERNAL spans
 
 ### Signal hygiene
-- [ ] Not logging what the trace already records
+- [ ] Not logging what the span already records
 - [ ] `tracing` macros used instead of `println`/`log` for structured output
 - [ ] No custom RED metrics — Tempo generates from traces
 - [ ] `debug` level disabled in production via `RUST_LOG`

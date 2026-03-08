@@ -111,6 +111,9 @@ pub async fn validate_session(
         .one(&state.db)
         .await?;
 
+    let span = tracing::Span::current();
+    span.record("yauth.session_found", session.is_some());
+
     match session {
         Some(s) => {
             let now = Utc::now().fixed_offset();
@@ -275,6 +278,9 @@ pub async fn validate_session(
     .get_result(&mut conn)
     .await
     .optional()?;
+
+    let span = tracing::Span::current();
+    span.record("yauth.session_found", session.is_some());
 
     match session {
         Some(s) => {

@@ -3,6 +3,7 @@ use password_hash::{PasswordHash, SaltString};
 use rand::rngs::OsRng;
 
 pub fn hash_password(password: &str) -> Result<String, password_hash::Error> {
+    let _span = tracing::info_span!("yauth.password_hash").entered();
     let salt = SaltString::generate(&mut OsRng);
     let argon2 = Argon2::default();
     Ok(argon2
@@ -11,6 +12,7 @@ pub fn hash_password(password: &str) -> Result<String, password_hash::Error> {
 }
 
 pub fn verify_password(password: &str, hash: &str) -> Result<bool, password_hash::Error> {
+    let _span = tracing::info_span!("yauth.password_verify").entered();
     let parsed = PasswordHash::new(hash)?;
     Ok(Argon2::default()
         .verify_password(password.as_bytes(), &parsed)

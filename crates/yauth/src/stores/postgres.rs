@@ -28,10 +28,7 @@ CREATE UNLOGGED TABLE IF NOT EXISTS yauth_challenges (
 // ---------------------------------------------------------------------------
 
 #[cfg(feature = "seaorm")]
-async fn ensure_table_seaorm(
-    db: &sea_orm::DatabaseConnection,
-    ddl: &str,
-) -> Result<(), String> {
+async fn ensure_table_seaorm(db: &sea_orm::DatabaseConnection, ddl: &str) -> Result<(), String> {
     use sea_orm::{ConnectionTrait, DbBackend, Statement};
     db.execute(Statement::from_string(DbBackend::Postgres, ddl.to_owned()))
         .await
@@ -118,12 +115,7 @@ impl PostgresChallengeStore {
 
 #[async_trait::async_trait]
 impl ChallengeStore for PostgresChallengeStore {
-    async fn set(
-        &self,
-        key: &str,
-        value: serde_json::Value,
-        ttl_secs: u64,
-    ) -> Result<(), String> {
+    async fn set(&self, key: &str, value: serde_json::Value, ttl_secs: u64) -> Result<(), String> {
         self.ensure_init().await?;
         let _ = self.cleanup_expired().await;
 
@@ -374,9 +366,7 @@ impl RateLimitStore for PostgresRateLimitStore {
                     match result {
                         Ok(row) => {
                             let count = row.count as u32;
-                            let window_start = row
-                                .window_start
-                                .and_utc();
+                            let window_start = row.window_start.and_utc();
                             rate_limit_result(count, limit, window_start, window_secs)
                         }
                         Err(e) => {

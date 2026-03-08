@@ -18,9 +18,9 @@ pub use yauth_migration as migration;
 
 // Re-export diesel pool types for host app use
 #[cfg(feature = "diesel-async")]
-pub use diesel_async_crate::pooled_connection::deadpool::Pool as DieselPool;
-#[cfg(feature = "diesel-async")]
 pub use diesel_async_crate::AsyncPgConnection;
+#[cfg(feature = "diesel-async")]
+pub use diesel_async_crate::pooled_connection::deadpool::Pool as DieselPool;
 
 pub mod prelude {
     pub use crate::YAuthBuilder;

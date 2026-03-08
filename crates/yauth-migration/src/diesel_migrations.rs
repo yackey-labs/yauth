@@ -1,8 +1,9 @@
-use diesel::sql_types::Text;
 use diesel::QueryableByName;
+use diesel::sql_types::Text;
 use diesel_async_crate::RunQueryDsl;
 
-type Pool = diesel_async_crate::pooled_connection::deadpool::Pool<diesel_async_crate::AsyncPgConnection>;
+type Pool =
+    diesel_async_crate::pooled_connection::deadpool::Pool<diesel_async_crate::AsyncPgConnection>;
 
 const CORE_UP: &str = include_str!("../diesel_migrations/00000000000001_core/up.sql");
 
@@ -64,16 +65,12 @@ async fn exec_sql(
         diesel::sql_query(trimmed)
             .execute(conn)
             .await
-            .map_err(|e| {
-                Box::new(e) as Box<dyn std::error::Error + Send + Sync>
-            })?;
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
     }
     Ok(())
 }
 
-pub async fn run_migrations(
-    pool: &Pool,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+pub async fn run_migrations(pool: &Pool) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut conn = pool.get().await?;
 
     // Core tables (always)

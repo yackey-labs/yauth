@@ -220,8 +220,7 @@ pub async fn create_session(
     let session_id = Uuid::new_v4();
 
     let now = Utc::now();
-    let expires_at =
-        now + chrono::Duration::from_std(ttl).unwrap_or(chrono::Duration::days(7));
+    let expires_at = now + chrono::Duration::from_std(ttl).unwrap_or(chrono::Duration::days(7));
 
     let mut conn = db.get().await?;
 
@@ -371,12 +370,11 @@ pub async fn delete_other_user_sessions(
     use diesel_async_crate::RunQueryDsl;
 
     let mut conn = db.get().await?;
-    let rows = diesel::sql_query(
-        "DELETE FROM yauth_sessions WHERE user_id = $1 AND token_hash != $2",
-    )
-    .bind::<diesel::sql_types::Uuid, _>(user_id)
-    .bind::<diesel::sql_types::Text, _>(keep_token_hash)
-    .execute(&mut conn)
-    .await?;
+    let rows =
+        diesel::sql_query("DELETE FROM yauth_sessions WHERE user_id = $1 AND token_hash != $2")
+            .bind::<diesel::sql_types::Uuid, _>(user_id)
+            .bind::<diesel::sql_types::Text, _>(keep_token_hash)
+            .execute(&mut conn)
+            .await?;
     Ok(rows as u64)
 }

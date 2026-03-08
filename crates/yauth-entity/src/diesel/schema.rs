@@ -387,8 +387,4 @@ diesel::joinable!(yauth_webhook_deliveries -> yauth_webhooks (webhook_id));
 #[cfg(feature = "oidc")]
 diesel::joinable!(yauth_oidc_nonces -> yauth_authorization_codes (authorization_code_id));
 
-diesel::allow_tables_to_appear_in_same_query!(
-    yauth_users,
-    yauth_sessions,
-    yauth_audit_log,
-);
+diesel::allow_tables_to_appear_in_same_query!(yauth_users, yauth_sessions, yauth_audit_log,);

@@ -77,26 +77,22 @@ mod diesel_db {
     }
 
     pub async fn find_user_by_email_id(conn: &mut Conn, email: &str) -> DbResult<Option<Uuid>> {
-        let row: Option<UserRow> = diesel::sql_query(
-            "SELECT id FROM yauth_users WHERE email = $1",
-        )
-        .bind::<diesel::sql_types::Text, _>(email)
-        .get_result(conn)
-        .await
-        .optional()
-        .map_err(|e| e.to_string())?;
+        let row: Option<UserRow> = diesel::sql_query("SELECT id FROM yauth_users WHERE email = $1")
+            .bind::<diesel::sql_types::Text, _>(email)
+            .get_result(conn)
+            .await
+            .optional()
+            .map_err(|e| e.to_string())?;
         Ok(row.map(|r| r.id))
     }
 
     pub async fn find_user_exists(conn: &mut Conn, user_id: Uuid) -> DbResult<bool> {
-        let row: Option<UserRow> = diesel::sql_query(
-            "SELECT id FROM yauth_users WHERE id = $1",
-        )
-        .bind::<diesel::sql_types::Uuid, _>(user_id)
-        .get_result(conn)
-        .await
-        .optional()
-        .map_err(|e| e.to_string())?;
+        let row: Option<UserRow> = diesel::sql_query("SELECT id FROM yauth_users WHERE id = $1")
+            .bind::<diesel::sql_types::Uuid, _>(user_id)
+            .get_result(conn)
+            .await
+            .optional()
+            .map_err(|e| e.to_string())?;
         Ok(row.is_some())
     }
 
@@ -515,15 +511,13 @@ async fn handle_login_failed(
     // Find or create account lock record
     let lock_record = match diesel_db::find_lock_by_user(&mut conn, user_id).await {
         Ok(Some(r)) => r,
-        Ok(None) => {
-            match diesel_db::insert_lock(&mut conn, Uuid::new_v4(), user_id, now).await {
-                Ok(r) => r,
-                Err(e) => {
-                    tracing::error!("Failed to create account lock record: {}", e);
-                    return EventResponse::Continue;
-                }
+        Ok(None) => match diesel_db::insert_lock(&mut conn, Uuid::new_v4(), user_id, now).await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!("Failed to create account lock record: {}", e);
+                return EventResponse::Continue;
             }
-        }
+        },
         Err(e) => {
             tracing::error!("DB error checking account lock: {}", e);
             return EventResponse::Continue;
@@ -614,7 +608,9 @@ async fn handle_login_failed(
     }
 
     // Just increment - not yet locked
-    if let Err(e) = diesel_db::update_lock_increment(&mut conn, lock_record.id, new_failed_count, now).await {
+    if let Err(e) =
+        diesel_db::update_lock_increment(&mut conn, lock_record.id, new_failed_count, now).await
+    {
         tracing::error!("Failed to update failed count: {}", e);
     }
 
@@ -807,9 +803,11 @@ async fn request_unlock(
     }
 
     #[cfg(feature = "diesel-async")]
-    let mut conn = state.db.get().await.map_err(|_| {
-        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-    })?;
+    let mut conn = state
+        .db
+        .get()
+        .await
+        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
     struct FoundUser {
         id: Uuid,
@@ -979,9 +977,11 @@ async fn unlock_account(
     }
 
     #[cfg(feature = "diesel-async")]
-    let mut conn = state.db.get().await.map_err(|_| {
-        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-    })?;
+    let mut conn = state
+        .db
+        .get()
+        .await
+        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
     // Find the unlock token
     #[cfg(feature = "seaorm")]
@@ -995,8 +995,17 @@ async fn unlock_account(
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
         match found {
-            Some(t) => FoundToken { id: t.id, user_id: t.user_id, expires_at: t.expires_at },
-            None => return Err(api_err(StatusCode::BAD_REQUEST, "Invalid or expired unlock token")),
+            Some(t) => FoundToken {
+                id: t.id,
+                user_id: t.user_id,
+                expires_at: t.expires_at,
+            },
+            None => {
+                return Err(api_err(
+                    StatusCode::BAD_REQUEST,
+                    "Invalid or expired unlock token",
+                ));
+            }
         }
     };
     #[cfg(feature = "diesel-async")]
@@ -1009,10 +1018,16 @@ async fn unlock_account(
             })?;
         match found {
             Some(t) => FoundToken {
-                id: t.id, user_id: t.user_id,
+                id: t.id,
+                user_id: t.user_id,
                 expires_at: t.expires_at.and_utc().fixed_offset(),
             },
-            None => return Err(api_err(StatusCode::BAD_REQUEST, "Invalid or expired unlock token")),
+            None => {
+                return Err(api_err(
+                    StatusCode::BAD_REQUEST,
+                    "Invalid or expired unlock token",
+                ));
+            }
         }
     };
 
@@ -1102,9 +1117,11 @@ async fn admin_unlock(
     Path(user_id): Path<Uuid>,
 ) -> Result<Json<AccountLockoutMessageResponse>, (StatusCode, Json<serde_json::Value>)> {
     #[cfg(feature = "diesel-async")]
-    let mut conn = state.db.get().await.map_err(|_| {
-        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-    })?;
+    let mut conn = state
+        .db
+        .get()
+        .await
+        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
     // Verify target user exists
     #[cfg(feature = "seaorm")]

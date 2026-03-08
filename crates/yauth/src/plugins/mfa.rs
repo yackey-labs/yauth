@@ -145,28 +145,21 @@ mod diesel_db {
             .map_err(|e| e.to_string())?;
             Ok(result as u64)
         } else {
-            let result = diesel::sql_query(
-                "DELETE FROM yauth_totp_secrets WHERE user_id = $1",
-            )
-            .bind::<diesel::sql_types::Uuid, _>(user_id)
-            .execute(conn)
-            .await
-            .map_err(|e| e.to_string())?;
+            let result = diesel::sql_query("DELETE FROM yauth_totp_secrets WHERE user_id = $1")
+                .bind::<diesel::sql_types::Uuid, _>(user_id)
+                .execute(conn)
+                .await
+                .map_err(|e| e.to_string())?;
             Ok(result as u64)
         }
     }
 
-    pub async fn update_totp_secret_verified(
-        conn: &mut Conn,
-        id: Uuid,
-    ) -> DbResult<()> {
-        diesel::sql_query(
-            "UPDATE yauth_totp_secrets SET verified = true WHERE id = $1",
-        )
-        .bind::<diesel::sql_types::Uuid, _>(id)
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
+    pub async fn update_totp_secret_verified(conn: &mut Conn, id: Uuid) -> DbResult<()> {
+        diesel::sql_query("UPDATE yauth_totp_secrets SET verified = true WHERE id = $1")
+            .bind::<diesel::sql_types::Uuid, _>(id)
+            .execute(conn)
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -203,31 +196,21 @@ mod diesel_db {
         Ok(())
     }
 
-    pub async fn delete_all_backup_codes(
-        conn: &mut Conn,
-        user_id: Uuid,
-    ) -> DbResult<()> {
-        diesel::sql_query(
-            "DELETE FROM yauth_backup_codes WHERE user_id = $1",
-        )
-        .bind::<diesel::sql_types::Uuid, _>(user_id)
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
+    pub async fn delete_all_backup_codes(conn: &mut Conn, user_id: Uuid) -> DbResult<()> {
+        diesel::sql_query("DELETE FROM yauth_backup_codes WHERE user_id = $1")
+            .bind::<diesel::sql_types::Uuid, _>(user_id)
+            .execute(conn)
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
 
-    pub async fn mark_backup_code_used(
-        conn: &mut Conn,
-        id: Uuid,
-    ) -> DbResult<()> {
-        diesel::sql_query(
-            "UPDATE yauth_backup_codes SET used = true WHERE id = $1",
-        )
-        .bind::<diesel::sql_types::Uuid, _>(id)
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
+    pub async fn mark_backup_code_used(conn: &mut Conn, id: Uuid) -> DbResult<()> {
+        diesel::sql_query("UPDATE yauth_backup_codes SET used = true WHERE id = $1")
+            .bind::<diesel::sql_types::Uuid, _>(id)
+            .execute(conn)
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
 }
@@ -560,9 +543,11 @@ async fn setup_totp(
     let err = |status: StatusCode, msg: &str| (status, Json(serde_json::json!({ "error": msg })));
 
     #[cfg(feature = "diesel-async")]
-    let mut conn = state.db.get().await.map_err(|_| {
-        err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-    })?;
+    let mut conn = state
+        .db
+        .get()
+        .await
+        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
     // Check if user already has a verified TOTP secret
     #[cfg(feature = "seaorm")]
@@ -702,9 +687,11 @@ async fn confirm_totp(
     let err = |status: StatusCode, msg: &str| (status, Json(serde_json::json!({ "error": msg })));
 
     #[cfg(feature = "diesel-async")]
-    let mut conn = state.db.get().await.map_err(|_| {
-        err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-    })?;
+    let mut conn = state
+        .db
+        .get()
+        .await
+        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
     // Find the unverified TOTP secret for this user
     #[cfg(feature = "seaorm")]
@@ -812,9 +799,11 @@ async fn disable_totp(
     let err = |status: StatusCode, msg: &str| (status, Json(serde_json::json!({ "error": msg })));
 
     #[cfg(feature = "diesel-async")]
-    let mut conn = state.db.get().await.map_err(|_| {
-        err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-    })?;
+    let mut conn = state
+        .db
+        .get()
+        .await
+        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
     // Delete TOTP secret (verified or not)
     #[cfg(feature = "seaorm")]
@@ -914,9 +903,11 @@ async fn verify_mfa(
     })?;
 
     #[cfg(feature = "diesel-async")]
-    let mut conn = state.db.get().await.map_err(|_| {
-        err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-    })?;
+    let mut conn = state
+        .db
+        .get()
+        .await
+        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
     // Load the user's verified TOTP secret
     #[cfg(feature = "seaorm")]
@@ -1129,9 +1120,11 @@ async fn get_backup_code_count(
     };
     #[cfg(feature = "diesel-async")]
     let remaining = {
-        let mut conn = state.db.get().await.map_err(|_| {
-            err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
+        let mut conn = state
+            .db
+            .get()
+            .await
+            .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
         let codes = diesel_db::find_unused_backup_codes(&mut conn, user.id)
             .await
             .map_err(|e| {
@@ -1155,9 +1148,11 @@ async fn regenerate_backup_codes(
     let err = |status: StatusCode, msg: &str| (status, Json(serde_json::json!({ "error": msg })));
 
     #[cfg(feature = "diesel-async")]
-    let mut conn = state.db.get().await.map_err(|_| {
-        err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-    })?;
+    let mut conn = state
+        .db
+        .get()
+        .await
+        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
     // Ensure MFA is enabled
     #[cfg(feature = "seaorm")]

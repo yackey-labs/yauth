@@ -172,7 +172,10 @@ mod diesel_db {
         .map_err(|e| e.to_string())
     }
 
-    pub async fn find_credentials_by_user(conn: &mut Conn, user_id: Uuid) -> DbResult<Vec<CredentialRow>> {
+    pub async fn find_credentials_by_user(
+        conn: &mut Conn,
+        user_id: Uuid,
+    ) -> DbResult<Vec<CredentialRow>> {
         diesel::sql_query(
             "SELECT id, user_id, name, credential, created_at, last_used_at FROM yauth_webauthn_credentials WHERE user_id = $1",
         )
@@ -258,7 +261,10 @@ async fn register_begin(
 
     #[cfg(feature = "diesel-async")]
     let mut conn = state.db.get().await.map_err(|_| {
-        (StatusCode::INTERNAL_SERVER_ERROR, "Internal error".to_string())
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Internal error".to_string(),
+        )
     })?;
 
     #[cfg(feature = "seaorm")]
@@ -268,10 +274,17 @@ async fn register_begin(
             .await
             .map_err(|e| {
                 tracing::error!("DB error: {}", e);
-                (StatusCode::INTERNAL_SERVER_ERROR, "Internal error".to_string())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal error".to_string(),
+                )
             })?
             .ok_or((StatusCode::NOT_FOUND, "User not found".to_string()))?;
-        UserData { id: user.id, email: user.email, display_name: user.display_name }
+        UserData {
+            id: user.id,
+            email: user.email,
+            display_name: user.display_name,
+        }
     };
     #[cfg(feature = "diesel-async")]
     let user_data = {
@@ -279,10 +292,17 @@ async fn register_begin(
             .await
             .map_err(|e| {
                 tracing::error!("DB error: {}", e);
-                (StatusCode::INTERNAL_SERVER_ERROR, "Internal error".to_string())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal error".to_string(),
+                )
             })?
             .ok_or((StatusCode::NOT_FOUND, "User not found".to_string()))?;
-        UserData { id: user.id, email: user.email, display_name: user.display_name }
+        UserData {
+            id: user.id,
+            email: user.email,
+            display_name: user.display_name,
+        }
     };
 
     // Get existing credentials to exclude
@@ -294,7 +314,10 @@ async fn register_begin(
             .await
             .map_err(|e| {
                 tracing::error!("DB error: {}", e);
-                (StatusCode::INTERNAL_SERVER_ERROR, "Internal error".to_string())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal error".to_string(),
+                )
             })?;
         existing_creds
             .iter()
@@ -307,7 +330,10 @@ async fn register_begin(
             .await
             .map_err(|e| {
                 tracing::error!("DB error: {}", e);
-                (StatusCode::INTERNAL_SERVER_ERROR, "Internal error".to_string())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal error".to_string(),
+                )
             })?;
         existing_creds
             .iter()
@@ -326,7 +352,10 @@ async fn register_begin(
         )
     };
 
-    let display_name = user_data.display_name.as_deref().unwrap_or(&user_data.email);
+    let display_name = user_data
+        .display_name
+        .as_deref()
+        .unwrap_or(&user_data.email);
     let (ccr, reg_state) = webauthn
         .start_passkey_registration(user_data.id, &user_data.email, display_name, exclude_opt)
         .map_err(|e| {
@@ -449,14 +478,26 @@ async fn register_finish(
     #[cfg(feature = "diesel-async")]
     {
         let mut conn = state.db.get().await.map_err(|_| {
-            (StatusCode::INTERNAL_SERVER_ERROR, "Internal error".to_string())
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Internal error".to_string(),
+            )
         })?;
-        diesel_db::insert_credential(&mut conn, Uuid::new_v4(), auth_user.id, &passkey_name, &credential_json)
-            .await
-            .map_err(|e| {
-                tracing::error!("Failed to save credential: {}", e);
-                (StatusCode::INTERNAL_SERVER_ERROR, "Internal error".to_string())
-            })?;
+        diesel_db::insert_credential(
+            &mut conn,
+            Uuid::new_v4(),
+            auth_user.id,
+            &passkey_name,
+            &credential_json,
+        )
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to save credential: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Internal error".to_string(),
+            )
+        })?;
     }
 
     info!(event = "passkey_registered", user_id = %auth_user.id, "Passkey registered");
@@ -497,7 +538,10 @@ async fn login_begin(
 
     #[cfg(feature = "diesel-async")]
     let mut conn = state.db.get().await.map_err(|_| {
-        (StatusCode::INTERNAL_SERVER_ERROR, "Internal error".to_string())
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Internal error".to_string(),
+        )
     })?;
 
     let (rcr, challenge_data) = if let Some(ref email_raw) = input.email {
@@ -524,7 +568,10 @@ async fn login_begin(
                 .await
                 .map_err(|e| {
                     tracing::error!("DB error: {}", e);
-                    (StatusCode::INTERNAL_SERVER_ERROR, "Internal error".to_string())
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Internal error".to_string(),
+                    )
                 })?
                 .ok_or((
                     StatusCode::BAD_REQUEST,
@@ -537,7 +584,10 @@ async fn login_begin(
                 .await
                 .map_err(|e| {
                     tracing::error!("DB error: {}", e);
-                    (StatusCode::INTERNAL_SERVER_ERROR, "Internal error".to_string())
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Internal error".to_string(),
+                    )
                 })?
                 .ok_or((
                     StatusCode::BAD_REQUEST,
@@ -553,7 +603,10 @@ async fn login_begin(
                 .await
                 .map_err(|e| {
                     tracing::error!("DB error: {}", e);
-                    (StatusCode::INTERNAL_SERVER_ERROR, "Internal error".to_string())
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Internal error".to_string(),
+                    )
                 })?;
             creds.iter().map(|c| c.credential.clone()).collect()
         };
@@ -563,7 +616,10 @@ async fn login_begin(
                 .await
                 .map_err(|e| {
                     tracing::error!("DB error: {}", e);
-                    (StatusCode::INTERNAL_SERVER_ERROR, "Internal error".to_string())
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Internal error".to_string(),
+                    )
                 })?;
             creds.iter().map(|c| c.credential.clone()).collect()
         };
@@ -713,7 +769,10 @@ async fn login_finish(
 
     #[cfg(feature = "diesel-async")]
     let mut conn = state.db.get().await.map_err(|_| {
-        (StatusCode::INTERNAL_SERVER_ERROR, "Internal error".to_string())
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Internal error".to_string(),
+        )
     })?;
 
     let user_id = if discoverable {
@@ -747,10 +806,16 @@ async fn login_finish(
                 .await
                 .map_err(|e| {
                     tracing::error!("DB error: {}", e);
-                    (StatusCode::INTERNAL_SERVER_ERROR, "Internal error".to_string())
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Internal error".to_string(),
+                    )
                 })?;
             if creds.is_empty() {
-                return Err((StatusCode::UNAUTHORIZED, "Authentication failed".to_string()));
+                return Err((
+                    StatusCode::UNAUTHORIZED,
+                    "Authentication failed".to_string(),
+                ));
             }
             creds.iter().map(|c| c.credential.clone()).collect()
         };
@@ -760,10 +825,16 @@ async fn login_finish(
                 .await
                 .map_err(|e| {
                     tracing::error!("DB error: {}", e);
-                    (StatusCode::INTERNAL_SERVER_ERROR, "Internal error".to_string())
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Internal error".to_string(),
+                    )
                 })?;
             if creds.is_empty() {
-                return Err((StatusCode::UNAUTHORIZED, "Authentication failed".to_string()));
+                return Err((
+                    StatusCode::UNAUTHORIZED,
+                    "Authentication failed".to_string(),
+                ));
             }
             creds.iter().map(|c| c.credential.clone()).collect()
         };
@@ -852,7 +923,10 @@ async fn login_finish(
             .await
             .map_err(|e| {
                 tracing::error!("DB error: {}", e);
-                (StatusCode::INTERNAL_SERVER_ERROR, "Internal error".to_string())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal error".to_string(),
+                )
             })?
             .ok_or((StatusCode::NOT_FOUND, "User not found".to_string()))?;
         LoginUserInfo {
@@ -868,7 +942,10 @@ async fn login_finish(
             .await
             .map_err(|e| {
                 tracing::error!("DB error: {}", e);
-                (StatusCode::INTERNAL_SERVER_ERROR, "Internal error".to_string())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal error".to_string(),
+                )
             })?
             .ok_or((StatusCode::NOT_FOUND, "User not found".to_string()))?;
         LoginUserInfo {
@@ -953,7 +1030,10 @@ async fn list_passkeys(
             .await
             .map_err(|e| {
                 tracing::error!("DB error: {}", e);
-                (StatusCode::INTERNAL_SERVER_ERROR, "Internal error".to_string())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal error".to_string(),
+                )
             })?;
         creds
             .into_iter()
@@ -968,13 +1048,19 @@ async fn list_passkeys(
     #[cfg(feature = "diesel-async")]
     let passkeys = {
         let mut conn = state.db.get().await.map_err(|_| {
-            (StatusCode::INTERNAL_SERVER_ERROR, "Internal error".to_string())
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Internal error".to_string(),
+            )
         })?;
         let creds = diesel_db::find_credentials_by_user(&mut conn, auth_user.id)
             .await
             .map_err(|e| {
                 tracing::error!("DB error: {}", e);
-                (StatusCode::INTERNAL_SERVER_ERROR, "Internal error".to_string())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal error".to_string(),
+                )
             })?;
         creds
             .into_iter()
@@ -984,7 +1070,9 @@ async fn list_passkeys(
                     id: c.id,
                     name: c.name,
                     created_at: chrono::Utc.from_utc_datetime(&c.created_at).fixed_offset(),
-                    last_used_at: c.last_used_at.map(|dt| chrono::Utc.from_utc_datetime(&dt).fixed_offset()),
+                    last_used_at: c
+                        .last_used_at
+                        .map(|dt| chrono::Utc.from_utc_datetime(&dt).fixed_offset()),
                 }
             })
             .collect::<Vec<_>>()
@@ -1006,7 +1094,10 @@ async fn delete_passkey(
             .await
             .map_err(|e| {
                 tracing::error!("DB error: {}", e);
-                (StatusCode::INTERNAL_SERVER_ERROR, "Internal error".to_string())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal error".to_string(),
+                )
             })?
             .ok_or((StatusCode::NOT_FOUND, "Passkey not found".to_string()))?;
 
@@ -1015,19 +1106,28 @@ async fn delete_passkey(
             .await
             .map_err(|e| {
                 tracing::error!("Failed to delete passkey: {}", e);
-                (StatusCode::INTERNAL_SERVER_ERROR, "Internal error".to_string())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal error".to_string(),
+                )
             })?;
     }
     #[cfg(feature = "diesel-async")]
     {
         let mut conn = state.db.get().await.map_err(|_| {
-            (StatusCode::INTERNAL_SERVER_ERROR, "Internal error".to_string())
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Internal error".to_string(),
+            )
         })?;
         let cred = diesel_db::find_credential_by_id_and_user(&mut conn, id, auth_user.id)
             .await
             .map_err(|e| {
                 tracing::error!("DB error: {}", e);
-                (StatusCode::INTERNAL_SERVER_ERROR, "Internal error".to_string())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal error".to_string(),
+                )
             })?
             .ok_or((StatusCode::NOT_FOUND, "Passkey not found".to_string()))?;
 
@@ -1035,7 +1135,10 @@ async fn delete_passkey(
             .await
             .map_err(|e| {
                 tracing::error!("Failed to delete passkey: {}", e);
-                (StatusCode::INTERNAL_SERVER_ERROR, "Internal error".to_string())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal error".to_string(),
+                )
             })?;
     }
 

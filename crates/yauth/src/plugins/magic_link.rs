@@ -100,13 +100,11 @@ mod diesel_db {
     }
 
     pub async fn delete_unused_magic_links_for_email(conn: &mut Conn, email: &str) -> DbResult<()> {
-        diesel::sql_query(
-            "DELETE FROM yauth_magic_links WHERE email = $1 AND used = false",
-        )
-        .bind::<diesel::sql_types::Text, _>(email)
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
+        diesel::sql_query("DELETE FROM yauth_magic_links WHERE email = $1 AND used = false")
+            .bind::<diesel::sql_types::Text, _>(email)
+            .execute(conn)
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -163,12 +161,7 @@ mod diesel_db {
         Ok(())
     }
 
-    pub async fn insert_user(
-        conn: &mut Conn,
-        id: Uuid,
-        email: &str,
-        role: &str,
-    ) -> DbResult<()> {
+    pub async fn insert_user(conn: &mut Conn, id: Uuid, email: &str, role: &str) -> DbResult<()> {
         let now = chrono::Utc::now();
         diesel::sql_query(
             "INSERT INTO yauth_users (id, email, display_name, email_verified, role, banned, created_at, updated_at) VALUES ($1, $2, NULL, true, $3, false, $4, $4)",
@@ -248,11 +241,15 @@ async fn send_magic_link(
     let ml_config = &state.magic_link_config;
 
     #[cfg(feature = "diesel-async")]
-    let mut conn = state.db.get().await.map_err(|_| {
-        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-    })?;
+    let mut conn = state
+        .db
+        .get()
+        .await
+        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
-    struct UserInfo { banned: bool }
+    struct UserInfo {
+        banned: bool,
+    }
 
     #[cfg(feature = "seaorm")]
     let user_opt = {
@@ -295,10 +292,16 @@ async fn send_magic_link(
         yauth_entity::magic_links::Entity::delete_many()
             .filter(yauth_entity::magic_links::Column::Email.eq(&email))
             .filter(yauth_entity::magic_links::Column::Used.eq(false))
-            .exec(&state.db).await.ok();
+            .exec(&state.db)
+            .await
+            .ok();
     }
     #[cfg(feature = "diesel-async")]
-    { diesel_db::delete_unused_magic_links_for_email(&mut conn, &email).await.ok(); }
+    {
+        diesel_db::delete_unused_magic_links_for_email(&mut conn, &email)
+            .await
+            .ok();
+    }
 
     let token = crypto::generate_token();
     let token_hash = crypto::hash_token(&token);
@@ -338,7 +341,9 @@ async fn send_magic_link(
         tracing::error!("Failed to send magic link email: {}", e);
     }
 
-    state.emit_event(&AuthEvent::MagicLinkSent { email: email.clone() });
+    state.emit_event(&AuthEvent::MagicLinkSent {
+        email: email.clone(),
+    });
     info!(event = "magic_link_sent", email = %email, "Magic link sent");
 
     Ok(success_msg)
@@ -360,45 +365,84 @@ async fn verify_magic_link(
     let token_hash = crypto::hash_token(token);
 
     #[cfg(feature = "diesel-async")]
-    let mut conn = state.db.get().await.map_err(|_| {
-        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-    })?;
+    let mut conn = state
+        .db
+        .get()
+        .await
+        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
-    struct MlInfo { id: Uuid, email: String, expires_at: chrono::NaiveDateTime }
+    struct MlInfo {
+        id: Uuid,
+        email: String,
+        expires_at: chrono::NaiveDateTime,
+    }
 
     #[cfg(feature = "seaorm")]
     let ml_info = {
         let ml = yauth_entity::magic_links::Entity::find()
             .filter(yauth_entity::magic_links::Column::TokenHash.eq(&token_hash))
             .filter(yauth_entity::magic_links::Column::Used.eq(false))
-            .one(&state.db).await
-            .map_err(|e| { tracing::error!("DB error: {}", e); api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error") })?
+            .one(&state.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?
             .ok_or_else(|| api_err(StatusCode::BAD_REQUEST, "Invalid or expired magic link"))?;
-        MlInfo { id: ml.id, email: ml.email, expires_at: ml.expires_at.naive_utc() }
+        MlInfo {
+            id: ml.id,
+            email: ml.email,
+            expires_at: ml.expires_at.naive_utc(),
+        }
     };
     #[cfg(feature = "diesel-async")]
     let ml_info = {
-        let ml = diesel_db::find_unused_magic_link_by_token(&mut conn, &token_hash).await
-            .map_err(|e| { tracing::error!("DB error: {}", e); api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error") })?
+        let ml = diesel_db::find_unused_magic_link_by_token(&mut conn, &token_hash)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?
             .ok_or_else(|| api_err(StatusCode::BAD_REQUEST, "Invalid or expired magic link"))?;
-        MlInfo { id: ml.id, email: ml.email, expires_at: ml.expires_at }
+        MlInfo {
+            id: ml.id,
+            email: ml.email,
+            expires_at: ml.expires_at,
+        }
     };
 
     let now_naive = chrono::Utc::now().naive_utc();
     if ml_info.expires_at < now_naive {
         #[cfg(feature = "seaorm")]
-        { yauth_entity::magic_links::Entity::delete_by_id(ml_info.id).exec(&state.db).await.ok(); }
+        {
+            yauth_entity::magic_links::Entity::delete_by_id(ml_info.id)
+                .exec(&state.db)
+                .await
+                .ok();
+        }
         #[cfg(feature = "diesel-async")]
-        { diesel_db::delete_magic_link(&mut conn, ml_info.id).await.ok(); }
-        return Err(api_err(StatusCode::BAD_REQUEST, "Magic link has expired. Please request a new one."));
+        {
+            diesel_db::delete_magic_link(&mut conn, ml_info.id)
+                .await
+                .ok();
+        }
+        return Err(api_err(
+            StatusCode::BAD_REQUEST,
+            "Magic link has expired. Please request a new one.",
+        ));
     }
 
     // Mark as used
     let ml_id = ml_info.id;
     #[cfg(feature = "seaorm")]
     {
-        let ml = yauth_entity::magic_links::Entity::find_by_id(ml_id).one(&state.db).await
-            .map_err(|e| { tracing::error!("DB error: {}", e); api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error") })?
+        let ml = yauth_entity::magic_links::Entity::find_by_id(ml_id)
+            .one(&state.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?
             .ok_or_else(|| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
         let mut ml_active: yauth_entity::magic_links::ActiveModel = ml.into();
         ml_active.used = Set(true);
@@ -409,30 +453,58 @@ async fn verify_magic_link(
     }
     #[cfg(feature = "diesel-async")]
     {
-        diesel_db::mark_magic_link_used(&mut conn, ml_id).await.map_err(|e| {
-            tracing::error!("Failed to mark magic link as used: {}", e);
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
+        diesel_db::mark_magic_link_used(&mut conn, ml_id)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to mark magic link as used: {}", e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?;
     }
 
     let email = &ml_info.email;
     let ml_config = &state.magic_link_config;
 
-    struct VerifyUser { id: Uuid, email: String, display_name: Option<String>, email_verified: bool, banned: bool }
+    struct VerifyUser {
+        id: Uuid,
+        email: String,
+        display_name: Option<String>,
+        email_verified: bool,
+        banned: bool,
+    }
 
     #[cfg(feature = "seaorm")]
     let user_opt = {
         yauth_entity::users::Entity::find()
             .filter(yauth_entity::users::Column::Email.eq(email))
-            .one(&state.db).await
-            .map_err(|e| { tracing::error!("DB error: {}", e); api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error") })?
-            .map(|u| VerifyUser { id: u.id, email: u.email, display_name: u.display_name, email_verified: u.email_verified, banned: u.banned })
+            .one(&state.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?
+            .map(|u| VerifyUser {
+                id: u.id,
+                email: u.email,
+                display_name: u.display_name,
+                email_verified: u.email_verified,
+                banned: u.banned,
+            })
     };
     #[cfg(feature = "diesel-async")]
     let user_opt = {
-        diesel_db::find_user_by_email(&mut conn, email).await
-            .map_err(|e| { tracing::error!("DB error: {}", e); api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error") })?
-            .map(|u| VerifyUser { id: u.id, email: u.email, display_name: u.display_name, email_verified: u.email_verified, banned: u.banned })
+        diesel_db::find_user_by_email(&mut conn, email)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?
+            .map(|u| VerifyUser {
+                id: u.id,
+                email: u.email,
+                display_name: u.display_name,
+                email_verified: u.email_verified,
+                banned: u.banned,
+            })
     };
 
     let (user_model, is_new_user) = match user_opt {
@@ -445,7 +517,10 @@ async fn verify_magic_link(
         }
         None => {
             if !ml_config.allow_signup {
-                return Err(api_err(StatusCode::FORBIDDEN, "Account does not exist. Registration via magic link is disabled."));
+                return Err(api_err(
+                    StatusCode::FORBIDDEN,
+                    "Account does not exist. Registration via magic link is disabled.",
+                ));
             }
 
             let user_id = Uuid::new_v4();
@@ -453,17 +528,27 @@ async fn verify_magic_link(
                 tracing::info!(event = "auto_admin_first_user", email = %email, "First user — assigning admin role");
                 "admin".to_string()
             } else {
-                ml_config.default_role.as_deref().unwrap_or("user").to_string()
+                ml_config
+                    .default_role
+                    .as_deref()
+                    .unwrap_or("user")
+                    .to_string()
             };
 
             #[cfg(feature = "seaorm")]
             {
                 let now = chrono::Utc::now().fixed_offset();
                 let new_user = yauth_entity::users::ActiveModel {
-                    id: Set(user_id), email: Set(email.clone()), display_name: Set(None),
-                    email_verified: Set(true), role: Set(role.clone()), banned: Set(false),
-                    banned_reason: Set(None), banned_until: Set(None),
-                    created_at: Set(now), updated_at: Set(now),
+                    id: Set(user_id),
+                    email: Set(email.clone()),
+                    display_name: Set(None),
+                    email_verified: Set(true),
+                    role: Set(role.clone()),
+                    banned: Set(false),
+                    banned_reason: Set(None),
+                    banned_until: Set(None),
+                    created_at: Set(now),
+                    updated_at: Set(now),
                 };
                 new_user.insert(&state.db).await.map_err(|e| {
                     tracing::error!("Failed to create user via magic link: {}", e);
@@ -472,16 +557,30 @@ async fn verify_magic_link(
             }
             #[cfg(feature = "diesel-async")]
             {
-                diesel_db::insert_user(&mut conn, user_id, email, &role).await.map_err(|e| {
-                    tracing::error!("Failed to create user via magic link: {}", e);
-                    api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-                })?;
+                diesel_db::insert_user(&mut conn, user_id, email, &role)
+                    .await
+                    .map_err(|e| {
+                        tracing::error!("Failed to create user via magic link: {}", e);
+                        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+                    })?;
             }
 
             info!(event = "magic_link_user_created", email = %email, user_id = %user_id, "User auto-created via magic link");
-            state.emit_event(&AuthEvent::UserRegistered { user_id, email: email.clone() });
+            state.emit_event(&AuthEvent::UserRegistered {
+                user_id,
+                email: email.clone(),
+            });
 
-            (VerifyUser { id: user_id, email: email.clone(), display_name: None, email_verified: true, banned: false }, true)
+            (
+                VerifyUser {
+                    id: user_id,
+                    email: email.clone(),
+                    display_name: None,
+                    email_verified: true,
+                    banned: false,
+                },
+                true,
+            )
         }
     };
 
@@ -489,8 +588,13 @@ async fn verify_magic_link(
         #[cfg(feature = "seaorm")]
         {
             let now = chrono::Utc::now().fixed_offset();
-            let db_user = yauth_entity::users::Entity::find_by_id(user_model.id).one(&state.db).await
-                .map_err(|e| { tracing::error!("DB error: {}", e); api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error") })?
+            let db_user = yauth_entity::users::Entity::find_by_id(user_model.id)
+                .one(&state.db)
+                .await
+                .map_err(|e| {
+                    tracing::error!("DB error: {}", e);
+                    api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+                })?
                 .ok_or_else(|| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
             let mut user_active: yauth_entity::users::ActiveModel = db_user.into();
             user_active.email_verified = Set(true);
@@ -502,22 +606,36 @@ async fn verify_magic_link(
         }
         #[cfg(feature = "diesel-async")]
         {
-            diesel_db::set_user_email_verified(&mut conn, user_model.id).await.map_err(|e| {
-                tracing::error!("Failed to update user email_verified: {}", e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
+            diesel_db::set_user_email_verified(&mut conn, user_model.id)
+                .await
+                .map_err(|e| {
+                    tracing::error!("Failed to update user email_verified: {}", e);
+                    api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+                })?;
         }
     }
 
     let (session_token, _session_id) = session::create_session(
-        &state.db, user_model.id, None, None, state.config.session_ttl,
-    ).await.map_err(|e| {
+        &state.db,
+        user_model.id,
+        None,
+        None,
+        state.config.session_ttl,
+    )
+    .await
+    .map_err(|e| {
         tracing::error!("Failed to create session: {}", e);
         api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
     })?;
 
-    state.emit_event(&AuthEvent::MagicLinkVerified { user_id: user_model.id, is_new_user });
-    state.emit_event(&AuthEvent::LoginSucceeded { user_id: user_model.id, method: "magic-link".to_string() });
+    state.emit_event(&AuthEvent::MagicLinkVerified {
+        user_id: user_model.id,
+        is_new_user,
+    });
+    state.emit_event(&AuthEvent::LoginSucceeded {
+        user_id: user_model.id,
+        method: "magic-link".to_string(),
+    });
 
     info!(
         event = "magic_link_verified", email = %email, user_id = %user_model.id,
@@ -525,7 +643,10 @@ async fn verify_magic_link(
     );
 
     Ok((
-        [(SET_COOKIE, session_set_cookie(&state, &session_token, state.config.session_ttl))],
+        [(
+            SET_COOKIE,
+            session_set_cookie(&state, &session_token, state.config.session_ttl),
+        )],
         Json(serde_json::json!({
             "user_id": user_model.id.to_string(),
             "email": user_model.email,

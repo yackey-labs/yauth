@@ -81,13 +81,12 @@ impl YAuthState {
             Err(_) => return false,
         };
         use diesel_async_crate::RunQueryDsl;
-        let exists: Option<ExistsRow> = diesel::sql_query(
-            "SELECT 1 AS one FROM yauth_users LIMIT 1",
-        )
-        .get_result::<ExistsRow>(&mut conn)
-        .await
-        .optional()
-        .unwrap_or(Some(ExistsRow { one: 1 }));
+        let exists: Option<ExistsRow> =
+            diesel::sql_query("SELECT 1 AS one FROM yauth_users LIMIT 1")
+                .get_result::<ExistsRow>(&mut conn)
+                .await
+                .optional()
+                .unwrap_or(Some(ExistsRow { one: 1 }));
         exists.is_none()
     }
 

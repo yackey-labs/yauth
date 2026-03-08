@@ -180,13 +180,11 @@ mod diesel_db {
     }
 
     pub async fn revoke_family(conn: &mut Conn, family_id: Uuid) -> DbResult<()> {
-        diesel::sql_query(
-            "UPDATE yauth_refresh_tokens SET revoked = true WHERE family_id = $1",
-        )
-        .bind::<diesel::sql_types::Uuid, _>(family_id)
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
+        diesel::sql_query("UPDATE yauth_refresh_tokens SET revoked = true WHERE family_id = $1")
+            .bind::<diesel::sql_types::Uuid, _>(family_id)
+            .execute(conn)
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
 }
@@ -373,12 +371,19 @@ async fn create_refresh_token_diesel(
         + chrono::Duration::from_std(ttl).unwrap_or(chrono::Duration::days(7)))
     .fixed_offset();
 
-    diesel_db::insert_refresh_token(conn, Uuid::new_v4(), user_id, &token_hash, family_id, expires_at)
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to create refresh token: {}", e);
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
+    diesel_db::insert_refresh_token(
+        conn,
+        Uuid::new_v4(),
+        user_id,
+        &token_hash,
+        family_id,
+        expires_at,
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to create refresh token: {}", e);
+        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+    })?;
 
     Ok(raw_token)
 }
@@ -423,9 +428,11 @@ async fn create_token(
     }
 
     #[cfg(feature = "diesel-async")]
-    let mut conn = state.db.get().await.map_err(|_| {
-        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-    })?;
+    let mut conn = state
+        .db
+        .get()
+        .await
+        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
     struct TokenUser {
         id: Uuid,
@@ -460,8 +467,11 @@ async fn create_token(
                     .unwrap_or_else(|| state.dummy_hash.clone());
                 (
                     Some(TokenUser {
-                        id: u.id, email: u.email.clone(), role: u.role.clone(),
-                        banned: u.banned, email_verified: u.email_verified,
+                        id: u.id,
+                        email: u.email.clone(),
+                        role: u.role.clone(),
+                        banned: u.banned,
+                        email_verified: u.email_verified,
                     }),
                     h,
                 )
@@ -491,8 +501,11 @@ async fn create_token(
                     .unwrap_or_else(|| state.dummy_hash.clone());
                 (
                     Some(TokenUser {
-                        id: u.id, email: u.email.clone(), role: u.role.clone(),
-                        banned: u.banned, email_verified: u.email_verified,
+                        id: u.id,
+                        email: u.email.clone(),
+                        role: u.role.clone(),
+                        banned: u.banned,
+                        email_verified: u.email_verified,
                     }),
                     h,
                 )
@@ -519,17 +532,23 @@ async fn create_token(
 
             let config = &state.bearer_config;
             let scope_str = input.scope.as_deref();
-            let jwt_user = JwtUser { id: u.id, email: u.email.clone(), role: u.role.clone() };
+            let jwt_user = JwtUser {
+                id: u.id,
+                email: u.email.clone(),
+                role: u.role.clone(),
+            };
             let (access_token, _jti) = create_jwt_internal(&jwt_user, config, scope_str)?;
 
             let family_id = Uuid::new_v4();
 
             #[cfg(feature = "seaorm")]
             let refresh_token =
-                create_refresh_token_seaorm(&state.db, u.id, family_id, config.refresh_token_ttl).await?;
+                create_refresh_token_seaorm(&state.db, u.id, family_id, config.refresh_token_ttl)
+                    .await?;
             #[cfg(feature = "diesel-async")]
             let refresh_token =
-                create_refresh_token_diesel(&mut conn, u.id, family_id, config.refresh_token_ttl).await?;
+                create_refresh_token_diesel(&mut conn, u.id, family_id, config.refresh_token_ttl)
+                    .await?;
 
             let expires_in = config.access_token_ttl.as_secs();
 
@@ -542,7 +561,8 @@ async fn create_token(
 
             state
                 .write_audit_log(
-                    Some(u.id), "login_succeeded",
+                    Some(u.id),
+                    "login_succeeded",
                     Some(serde_json::json!({ "method": "bearer" })),
                     None,
                 )
@@ -562,7 +582,10 @@ async fn create_token(
                 Some(serde_json::json!({ "email": email, "method": "bearer", "reason": "invalid_credentials" })),
                 None,
             ).await;
-            Err(api_err(StatusCode::UNAUTHORIZED, "Invalid email or password"))
+            Err(api_err(
+                StatusCode::UNAUTHORIZED,
+                "Invalid email or password",
+            ))
         }
     }
 }
@@ -577,15 +600,20 @@ async fn refresh_token(
 ) -> Result<impl IntoResponse, ApiError> {
     let raw_token = input.refresh_token.trim();
     if raw_token.is_empty() {
-        return Err(api_err(StatusCode::BAD_REQUEST, "Refresh token is required"));
+        return Err(api_err(
+            StatusCode::BAD_REQUEST,
+            "Refresh token is required",
+        ));
     }
 
     let token_hash = crypto::hash_token(raw_token);
 
     #[cfg(feature = "diesel-async")]
-    let mut conn = state.db.get().await.map_err(|_| {
-        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-    })?;
+    let mut conn = state
+        .db
+        .get()
+        .await
+        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
     struct StoredToken {
         id: Uuid,
@@ -607,8 +635,11 @@ async fn refresh_token(
             })?;
         match found {
             Some(t) => StoredToken {
-                id: t.id, user_id: t.user_id, family_id: t.family_id,
-                expires_at: t.expires_at.naive_utc(), revoked: t.revoked,
+                id: t.id,
+                user_id: t.user_id,
+                family_id: t.family_id,
+                expires_at: t.expires_at.naive_utc(),
+                revoked: t.revoked,
             },
             None => {
                 warn!(event = "bearer_refresh_invalid", "Refresh token not found");
@@ -626,8 +657,11 @@ async fn refresh_token(
             })?;
         match found {
             Some(t) => StoredToken {
-                id: t.id, user_id: t.user_id, family_id: t.family_id,
-                expires_at: t.expires_at, revoked: t.revoked,
+                id: t.id,
+                user_id: t.user_id,
+                family_id: t.family_id,
+                expires_at: t.expires_at,
+                revoked: t.revoked,
             },
             None => {
                 warn!(event = "bearer_refresh_invalid", "Refresh token not found");
@@ -642,16 +676,26 @@ async fn refresh_token(
             user_id = %stored.user_id, "Refresh token reuse detected — revoking entire family"
         );
         #[cfg(feature = "seaorm")]
-        { let _ = revoke_family(&state.db, stored.family_id).await; }
+        {
+            let _ = revoke_family(&state.db, stored.family_id).await;
+        }
         #[cfg(feature = "diesel-async")]
-        { let _ = diesel_db::revoke_family(&mut conn, stored.family_id).await; }
-        return Err(api_err(StatusCode::UNAUTHORIZED, "Refresh token has been revoked"));
+        {
+            let _ = diesel_db::revoke_family(&mut conn, stored.family_id).await;
+        }
+        return Err(api_err(
+            StatusCode::UNAUTHORIZED,
+            "Refresh token has been revoked",
+        ));
     }
 
     let now_naive = Utc::now().naive_utc();
     if stored.expires_at < now_naive {
         warn!(event = "bearer_refresh_expired", user_id = %stored.user_id, "Expired refresh token used");
-        return Err(api_err(StatusCode::UNAUTHORIZED, "Refresh token has expired"));
+        return Err(api_err(
+            StatusCode::UNAUTHORIZED,
+            "Refresh token has expired",
+        ));
     }
 
     let family_id = stored.family_id;
@@ -662,8 +706,12 @@ async fn refresh_token(
     {
         use sea_orm::IntoActiveModel;
         let found = yauth_entity::refresh_tokens::Entity::find_by_id(stored.id)
-            .one(&state.db).await
-            .map_err(|e| { tracing::error!("DB error: {}", e); api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error") })?
+            .one(&state.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?
             .ok_or_else(|| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
         let mut active = found.into_active_model();
         active.revoked = Set(true);
@@ -674,29 +722,54 @@ async fn refresh_token(
     }
     #[cfg(feature = "diesel-async")]
     {
-        diesel_db::revoke_refresh_token(&mut conn, stored.id).await.map_err(|e| {
-            tracing::error!("Failed to revoke old refresh token: {}", e);
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
+        diesel_db::revoke_refresh_token(&mut conn, stored.id)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to revoke old refresh token: {}", e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?;
     }
 
     // Look up user
-    struct RefreshUser { id: Uuid, email: String, role: String, banned: bool }
+    struct RefreshUser {
+        id: Uuid,
+        email: String,
+        role: String,
+        banned: bool,
+    }
 
     #[cfg(feature = "seaorm")]
     let user = {
         let u = yauth_entity::users::Entity::find_by_id(user_id)
-            .one(&state.db).await
-            .map_err(|e| { tracing::error!("DB error: {}", e); api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error") })?
+            .one(&state.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?
             .ok_or_else(|| api_err(StatusCode::UNAUTHORIZED, "User not found"))?;
-        RefreshUser { id: u.id, email: u.email, role: u.role, banned: u.banned }
+        RefreshUser {
+            id: u.id,
+            email: u.email,
+            role: u.role,
+            banned: u.banned,
+        }
     };
     #[cfg(feature = "diesel-async")]
     let user = {
-        let u = diesel_db::find_user_by_id(&mut conn, user_id).await
-            .map_err(|e| { tracing::error!("DB error: {}", e); api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error") })?
+        let u = diesel_db::find_user_by_id(&mut conn, user_id)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?
             .ok_or_else(|| api_err(StatusCode::UNAUTHORIZED, "User not found"))?;
-        RefreshUser { id: u.id, email: u.email, role: u.role, banned: u.banned }
+        RefreshUser {
+            id: u.id,
+            email: u.email,
+            role: u.role,
+            banned: u.banned,
+        }
     };
 
     if user.banned {
@@ -705,13 +778,21 @@ async fn refresh_token(
     }
 
     let config = &state.bearer_config;
-    let jwt_user = JwtUser { id: user.id, email: user.email, role: user.role };
+    let jwt_user = JwtUser {
+        id: user.id,
+        email: user.email,
+        role: user.role,
+    };
     let (access_token, _jti) = create_jwt_internal(&jwt_user, config, None)?;
 
     #[cfg(feature = "seaorm")]
-    let new_refresh = create_refresh_token_seaorm(&state.db, jwt_user.id, family_id, config.refresh_token_ttl).await?;
+    let new_refresh =
+        create_refresh_token_seaorm(&state.db, jwt_user.id, family_id, config.refresh_token_ttl)
+            .await?;
     #[cfg(feature = "diesel-async")]
-    let new_refresh = create_refresh_token_diesel(&mut conn, jwt_user.id, family_id, config.refresh_token_ttl).await?;
+    let new_refresh =
+        create_refresh_token_diesel(&mut conn, jwt_user.id, family_id, config.refresh_token_ttl)
+            .await?;
 
     let expires_in = config.access_token_ttl.as_secs();
 
@@ -739,31 +820,56 @@ async fn revoke_token(
 ) -> Result<impl IntoResponse, ApiError> {
     let raw_token = input.refresh_token.trim();
     if raw_token.is_empty() {
-        return Err(api_err(StatusCode::BAD_REQUEST, "Refresh token is required"));
+        return Err(api_err(
+            StatusCode::BAD_REQUEST,
+            "Refresh token is required",
+        ));
     }
 
     let token_hash = crypto::hash_token(raw_token);
 
     #[cfg(feature = "diesel-async")]
-    let mut conn = state.db.get().await.map_err(|_| {
-        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-    })?;
+    let mut conn = state
+        .db
+        .get()
+        .await
+        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
-    struct StoredInfo { user_id: Uuid, revoked: bool, id: Uuid }
+    struct StoredInfo {
+        user_id: Uuid,
+        revoked: bool,
+        id: Uuid,
+    }
 
     #[cfg(feature = "seaorm")]
     let stored_opt = {
         let found = yauth_entity::refresh_tokens::Entity::find()
             .filter(yauth_entity::refresh_tokens::Column::TokenHash.eq(&token_hash))
-            .one(&state.db).await
-            .map_err(|e| { tracing::error!("DB error: {}", e); api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error") })?;
-        found.map(|t| StoredInfo { user_id: t.user_id, revoked: t.revoked, id: t.id })
+            .one(&state.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?;
+        found.map(|t| StoredInfo {
+            user_id: t.user_id,
+            revoked: t.revoked,
+            id: t.id,
+        })
     };
     #[cfg(feature = "diesel-async")]
     let stored_opt = {
-        let found = diesel_db::find_refresh_token_by_hash(&mut conn, &token_hash).await
-            .map_err(|e| { tracing::error!("DB error: {}", e); api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error") })?;
-        found.map(|t| StoredInfo { user_id: t.user_id, revoked: t.revoked, id: t.id })
+        let found = diesel_db::find_refresh_token_by_hash(&mut conn, &token_hash)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?;
+        found.map(|t| StoredInfo {
+            user_id: t.user_id,
+            revoked: t.revoked,
+            id: t.id,
+        })
     };
 
     let stored = match stored_opt {
@@ -772,7 +878,10 @@ async fn revoke_token(
     };
 
     if stored.user_id != auth_user.id && auth_user.role != "admin" {
-        return Err(api_err(StatusCode::FORBIDDEN, "Cannot revoke another user's token"));
+        return Err(api_err(
+            StatusCode::FORBIDDEN,
+            "Cannot revoke another user's token",
+        ));
     }
 
     if !stored.revoked {
@@ -780,8 +889,12 @@ async fn revoke_token(
         {
             use sea_orm::IntoActiveModel;
             let found = yauth_entity::refresh_tokens::Entity::find_by_id(stored.id)
-                .one(&state.db).await
-                .map_err(|e| { tracing::error!("DB error: {}", e); api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error") })?
+                .one(&state.db)
+                .await
+                .map_err(|e| {
+                    tracing::error!("DB error: {}", e);
+                    api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+                })?
                 .ok_or_else(|| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
             let mut active = found.into_active_model();
             active.revoked = Set(true);
@@ -792,15 +905,19 @@ async fn revoke_token(
         }
         #[cfg(feature = "diesel-async")]
         {
-            diesel_db::revoke_refresh_token(&mut conn, stored.id).await.map_err(|e| {
-                tracing::error!("Failed to revoke refresh token: {}", e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
+            diesel_db::revoke_refresh_token(&mut conn, stored.id)
+                .await
+                .map_err(|e| {
+                    tracing::error!("Failed to revoke refresh token: {}", e);
+                    api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+                })?;
         }
     }
 
     info!(event = "bearer_token_revoked", user_id = %auth_user.id, "Refresh token revoked");
-    state.write_audit_log(Some(auth_user.id), "bearer_token_revoked", None, None).await;
+    state
+        .write_audit_log(Some(auth_user.id), "bearer_token_revoked", None, None)
+        .await;
 
     Ok(Json(serde_json::json!({ "success": true })))
 }
@@ -829,22 +946,33 @@ pub async fn validate_jwt(token: &str, state: &YAuthState) -> Result<AuthUser, S
     .map_err(|e| format!("JWT validation failed: {}", e))?;
 
     let claims = token_data.claims;
-    let user_id: Uuid = claims.sub.parse().map_err(|_| "Invalid user ID in JWT".to_string())?;
+    let user_id: Uuid = claims
+        .sub
+        .parse()
+        .map_err(|_| "Invalid user ID in JWT".to_string())?;
 
-    let scopes = claims.scope.as_deref()
+    let scopes = claims
+        .scope
+        .as_deref()
         .map(|s| s.split_whitespace().map(String::from).collect());
 
     #[cfg(feature = "seaorm")]
     let user = {
         yauth_entity::users::Entity::find_by_id(user_id)
-            .one(&state.db).await
+            .one(&state.db)
+            .await
             .map_err(|e| format!("DB error during JWT validation: {}", e))?
             .ok_or_else(|| "User not found".to_string())?
     };
     #[cfg(feature = "diesel-async")]
     let user = {
-        let mut conn = state.db.get().await.map_err(|e| format!("Pool error: {}", e))?;
-        diesel_db::find_user_by_id(&mut conn, user_id).await
+        let mut conn = state
+            .db
+            .get()
+            .await
+            .map_err(|e| format!("Pool error: {}", e))?;
+        diesel_db::find_user_by_id(&mut conn, user_id)
+            .await
             .map_err(|e| format!("DB error during JWT validation: {}", e))?
             .ok_or_else(|| "User not found".to_string())?
     };

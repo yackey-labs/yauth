@@ -142,12 +142,10 @@ mod diesel_db {
                 .await
                 .map_err(|e| e.to_string())?
             }
-            None => {
-                diesel::sql_query("SELECT COUNT(*) AS count FROM yauth_users")
-                    .get_result(conn)
-                    .await
-                    .map_err(|e| e.to_string())?
-            }
+            None => diesel::sql_query("SELECT COUNT(*) AS count FROM yauth_users")
+                .get_result(conn)
+                .await
+                .map_err(|e| e.to_string())?,
         };
         Ok(row.count as u64)
     }
@@ -392,8 +390,8 @@ async fn list_users(
 
     #[cfg(feature = "seaorm")]
     {
-        let mut query =
-            yauth_entity::users::Entity::find().order_by_asc(yauth_entity::users::Column::CreatedAt);
+        let mut query = yauth_entity::users::Entity::find()
+            .order_by_asc(yauth_entity::users::Column::CreatedAt);
 
         if let Some(ref search) = params.search {
             let pattern = format!("%{}%", search);
@@ -427,9 +425,11 @@ async fn list_users(
 
     #[cfg(feature = "diesel-async")]
     {
-        let mut conn = state.db.get().await.map_err(|_| {
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
+        let mut conn = state
+            .db
+            .get()
+            .await
+            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
         let offset = ((page - 1) * per_page) as i64;
         let limit = per_page as i64;
@@ -482,9 +482,11 @@ async fn get_user(
 
     #[cfg(feature = "diesel-async")]
     {
-        let mut conn = state.db.get().await.map_err(|_| {
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
+        let mut conn = state
+            .db
+            .get()
+            .await
+            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
         let user = diesel_db::find_user_by_id(&mut conn, id)
             .await
@@ -541,9 +543,11 @@ async fn update_user(
 
     #[cfg(feature = "diesel-async")]
     let updated = {
-        let mut conn = state.db.get().await.map_err(|_| {
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
+        let mut conn = state
+            .db
+            .get()
+            .await
+            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
         // Verify user exists
         diesel_db::find_user_by_id(&mut conn, id)
@@ -623,9 +627,11 @@ async fn delete_user(
 
     #[cfg(feature = "diesel-async")]
     {
-        let mut conn = state.db.get().await.map_err(|_| {
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
+        let mut conn = state
+            .db
+            .get()
+            .await
+            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
         diesel_db::find_user_by_id(&mut conn, id)
             .await
@@ -635,12 +641,10 @@ async fn delete_user(
             })?
             .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "User not found"))?;
 
-        diesel_db::delete_user(&mut conn, id)
-            .await
-            .map_err(|e| {
-                tracing::error!("DB error deleting user: {}", e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
+        diesel_db::delete_user(&mut conn, id).await.map_err(|e| {
+            tracing::error!("DB error deleting user: {}", e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
     }
 
     info!(
@@ -714,9 +718,11 @@ async fn ban_user(
 
     #[cfg(feature = "diesel-async")]
     let updated = {
-        let mut conn = state.db.get().await.map_err(|_| {
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
+        let mut conn = state
+            .db
+            .get()
+            .await
+            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
         diesel_db::find_user_by_id(&mut conn, id)
             .await
@@ -800,9 +806,11 @@ async fn unban_user(
 
     #[cfg(feature = "diesel-async")]
     let updated = {
-        let mut conn = state.db.get().await.map_err(|_| {
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
+        let mut conn = state
+            .db
+            .get()
+            .await
+            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
         diesel_db::find_user_by_id(&mut conn, id)
             .await
@@ -856,9 +864,11 @@ async fn impersonate_user(
     }
 
     #[cfg(feature = "diesel-async")]
-    let mut conn = state.db.get().await.map_err(|_| {
-        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-    })?;
+    let mut conn = state
+        .db
+        .get()
+        .await
+        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
     // Verify target user exists
     #[cfg(feature = "seaorm")]
@@ -1015,19 +1025,19 @@ async fn list_sessions(
 
     #[cfg(feature = "diesel-async")]
     {
-        let mut conn = state.db.get().await.map_err(|_| {
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
+        let mut conn = state
+            .db
+            .get()
+            .await
+            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
         let offset = ((page - 1) * per_page) as i64;
         let limit = per_page as i64;
 
-        let total = diesel_db::count_sessions(&mut conn)
-            .await
-            .map_err(|e| {
-                tracing::error!("DB error counting sessions: {}", e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
+        let total = diesel_db::count_sessions(&mut conn).await.map_err(|e| {
+            tracing::error!("DB error counting sessions: {}", e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
 
         let sessions = diesel_db::list_sessions(&mut conn, limit, offset)
             .await
@@ -1080,9 +1090,11 @@ async fn delete_session(
 
     #[cfg(feature = "diesel-async")]
     let session_user_id = {
-        let mut conn = state.db.get().await.map_err(|_| {
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
+        let mut conn = state
+            .db
+            .get()
+            .await
+            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
         let session = diesel_db::find_session_by_id(&mut conn, id)
             .await

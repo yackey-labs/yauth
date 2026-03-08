@@ -302,15 +302,13 @@ mod diesel_db {
         scopes: Option<&serde_json::Value>,
         created_at: chrono::DateTime<chrono::FixedOffset>,
     ) -> DbResult<()> {
-        diesel::sql_query(
-            "UPDATE yauth_consents SET scopes = $1, created_at = $2 WHERE id = $3",
-        )
-        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Jsonb>, _>(scopes)
-        .bind::<diesel::sql_types::Timestamptz, _>(created_at)
-        .bind::<diesel::sql_types::Uuid, _>(id)
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
+        diesel::sql_query("UPDATE yauth_consents SET scopes = $1, created_at = $2 WHERE id = $3")
+            .bind::<diesel::sql_types::Nullable<diesel::sql_types::Jsonb>, _>(scopes)
+            .bind::<diesel::sql_types::Timestamptz, _>(created_at)
+            .bind::<diesel::sql_types::Uuid, _>(id)
+            .execute(conn)
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -401,15 +399,13 @@ mod diesel_db {
         status: &str,
         user_id: Option<Uuid>,
     ) -> DbResult<()> {
-        diesel::sql_query(
-            "UPDATE yauth_device_codes SET status = $1, user_id = $2 WHERE id = $3",
-        )
-        .bind::<diesel::sql_types::Text, _>(status)
-        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Uuid>, _>(user_id)
-        .bind::<diesel::sql_types::Uuid, _>(id)
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
+        diesel::sql_query("UPDATE yauth_device_codes SET status = $1, user_id = $2 WHERE id = $3")
+            .bind::<diesel::sql_types::Text, _>(status)
+            .bind::<diesel::sql_types::Nullable<diesel::sql_types::Uuid>, _>(user_id)
+            .bind::<diesel::sql_types::Uuid, _>(id)
+            .execute(conn)
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -418,14 +414,12 @@ mod diesel_db {
         id: Uuid,
         last_polled_at: chrono::DateTime<chrono::FixedOffset>,
     ) -> DbResult<()> {
-        diesel::sql_query(
-            "UPDATE yauth_device_codes SET last_polled_at = $1 WHERE id = $2",
-        )
-        .bind::<diesel::sql_types::Timestamptz, _>(last_polled_at)
-        .bind::<diesel::sql_types::Uuid, _>(id)
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
+        diesel::sql_query("UPDATE yauth_device_codes SET last_polled_at = $1 WHERE id = $2")
+            .bind::<diesel::sql_types::Timestamptz, _>(last_polled_at)
+            .bind::<diesel::sql_types::Uuid, _>(id)
+            .execute(conn)
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -510,13 +504,11 @@ mod diesel_db {
     }
 
     pub async fn revoke_family(conn: &mut Conn, family_id: Uuid) -> DbResult<()> {
-        diesel::sql_query(
-            "UPDATE yauth_refresh_tokens SET revoked = true WHERE family_id = $1",
-        )
-        .bind::<diesel::sql_types::Uuid, _>(family_id)
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
+        diesel::sql_query("UPDATE yauth_refresh_tokens SET revoked = true WHERE family_id = $1")
+            .bind::<diesel::sql_types::Uuid, _>(family_id)
+            .execute(conn)
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
 }
@@ -844,7 +836,9 @@ async fn authorize_post(
     {
         let mut conn = match state.db.get().await {
             Ok(c) => c,
-            Err(_) => return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response(),
+            Err(_) => {
+                return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
+            }
         };
         if let Err(e) = diesel_db::insert_auth_code(
             &mut conn,
@@ -858,7 +852,9 @@ async fn authorize_post(
             &input.code_challenge_method,
             expires_at,
             now,
-        ).await {
+        )
+        .await
+        {
             tracing::error!("Failed to store authorization code: {}", e);
             return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
         }
@@ -1155,39 +1151,77 @@ async fn handle_authorization_code_grant(
             .await
             .map_err(|e| {
                 tracing::error!("DB error: {}", e);
-                oauth2_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Internal error")
+                oauth2_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "Internal error",
+                )
             })?
             .ok_or_else(|| {
-                warn!(event = "oauth2_invalid_code", "Authorization code not found");
-                oauth2_error(StatusCode::BAD_REQUEST, "invalid_grant", "Invalid authorization code")
+                warn!(
+                    event = "oauth2_invalid_code",
+                    "Authorization code not found"
+                );
+                oauth2_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_grant",
+                    "Invalid authorization code",
+                )
             })?;
         StoredCode {
-            id: row.id, code_hash: row.code_hash, client_id: row.client_id,
-            user_id: row.user_id, scopes: row.scopes, redirect_uri: row.redirect_uri,
-            code_challenge: row.code_challenge, code_challenge_method: row.code_challenge_method,
-            expires_at: row.expires_at.naive_utc(), used: row.used,
+            id: row.id,
+            code_hash: row.code_hash,
+            client_id: row.client_id,
+            user_id: row.user_id,
+            scopes: row.scopes,
+            redirect_uri: row.redirect_uri,
+            code_challenge: row.code_challenge,
+            code_challenge_method: row.code_challenge_method,
+            expires_at: row.expires_at.naive_utc(),
+            used: row.used,
         }
     };
     #[cfg(feature = "diesel-async")]
     let stored_code = {
         let mut conn = state.db.get().await.map_err(|_| {
-            oauth2_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Internal error")
+            oauth2_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "Internal error",
+            )
         })?;
         let row = diesel_db::find_auth_code_by_hash(&mut conn, &code_hash)
             .await
             .map_err(|e| {
                 tracing::error!("DB error: {}", e);
-                oauth2_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Internal error")
+                oauth2_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "Internal error",
+                )
             })?
             .ok_or_else(|| {
-                warn!(event = "oauth2_invalid_code", "Authorization code not found");
-                oauth2_error(StatusCode::BAD_REQUEST, "invalid_grant", "Invalid authorization code")
+                warn!(
+                    event = "oauth2_invalid_code",
+                    "Authorization code not found"
+                );
+                oauth2_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_grant",
+                    "Invalid authorization code",
+                )
             })?;
         StoredCode {
-            id: row.id, code_hash: row.code_hash, client_id: row.client_id,
-            user_id: row.user_id, scopes: row.scopes, redirect_uri: row.redirect_uri,
-            code_challenge: row.code_challenge, code_challenge_method: row.code_challenge_method,
-            expires_at: row.expires_at, used: row.used,
+            id: row.id,
+            code_hash: row.code_hash,
+            client_id: row.client_id,
+            user_id: row.user_id,
+            scopes: row.scopes,
+            redirect_uri: row.redirect_uri,
+            code_challenge: row.code_challenge,
+            code_challenge_method: row.code_challenge_method,
+            expires_at: row.expires_at,
+            used: row.used,
         }
     };
 
@@ -1258,25 +1292,53 @@ async fn handle_authorization_code_grant(
     #[cfg(feature = "seaorm")]
     {
         let found = yauth_entity::authorization_codes::Entity::find_by_id(stored_code.id)
-            .one(&state.db).await
-            .map_err(|e| { tracing::error!("DB error: {}", e); oauth2_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Internal error") })?
-            .ok_or_else(|| oauth2_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Internal error"))?;
+            .one(&state.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                oauth2_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "Internal error",
+                )
+            })?
+            .ok_or_else(|| {
+                oauth2_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "Internal error",
+                )
+            })?;
         let mut active: yauth_entity::authorization_codes::ActiveModel = found.into();
         active.used = Set(true);
         active.update(&state.db).await.map_err(|e| {
             tracing::error!("Failed to mark auth code as used: {}", e);
-            oauth2_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Internal error")
+            oauth2_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "Internal error",
+            )
         })?;
     }
     #[cfg(feature = "diesel-async")]
     {
         let mut conn = state.db.get().await.map_err(|_| {
-            oauth2_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Internal error")
+            oauth2_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "Internal error",
+            )
         })?;
-        diesel_db::mark_auth_code_used(&mut conn, stored_code.id).await.map_err(|e| {
-            tracing::error!("Failed to mark auth code as used: {}", e);
-            oauth2_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Internal error")
-        })?;
+        diesel_db::mark_auth_code_used(&mut conn, stored_code.id)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to mark auth code as used: {}", e);
+                oauth2_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "Internal error",
+                )
+            })?;
     }
 
     // Look up user — common struct for cross-backend
@@ -1297,26 +1359,53 @@ async fn handle_authorization_code_grant(
             .await
             .map_err(|e| {
                 tracing::error!("DB error: {}", e);
-                oauth2_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Internal error")
+                oauth2_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "Internal error",
+                )
             })?
-            .ok_or_else(|| oauth2_error(StatusCode::BAD_REQUEST, "invalid_grant", "User not found"))?;
+            .ok_or_else(|| {
+                oauth2_error(StatusCode::BAD_REQUEST, "invalid_grant", "User not found")
+            })?;
         AuthCodeUser {
-            id: u.id, email: u.email, display_name: u.display_name,
-            email_verified: u.email_verified, role: u.role, banned: u.banned,
+            id: u.id,
+            email: u.email,
+            display_name: u.display_name,
+            email_verified: u.email_verified,
+            role: u.role,
+            banned: u.banned,
         }
     };
     #[cfg(feature = "diesel-async")]
     let user = {
         let mut conn = state.db.get().await.map_err(|_| {
-            oauth2_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Internal error")
+            oauth2_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "Internal error",
+            )
         })?;
-        let u = diesel_db::find_user_by_id(&mut conn, stored_code.user_id).await.map_err(|e| {
-            tracing::error!("DB error: {}", e);
-            oauth2_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Internal error")
-        })?.ok_or_else(|| oauth2_error(StatusCode::BAD_REQUEST, "invalid_grant", "User not found"))?;
+        let u = diesel_db::find_user_by_id(&mut conn, stored_code.user_id)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                oauth2_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "Internal error",
+                )
+            })?
+            .ok_or_else(|| {
+                oauth2_error(StatusCode::BAD_REQUEST, "invalid_grant", "User not found")
+            })?;
         AuthCodeUser {
-            id: u.id, email: u.email, display_name: u.display_name,
-            email_verified: u.email_verified, role: u.role, banned: u.banned,
+            id: u.id,
+            email: u.email,
+            display_name: u.display_name,
+            email_verified: u.email_verified,
+            role: u.role,
+            banned: u.banned,
         }
     };
 
@@ -1347,10 +1436,16 @@ async fn handle_authorization_code_grant(
 
         // Reconstruct users::Model for create_jwt_with_audience
         let user_model = yauth_entity::users::Model {
-            id: user.id, email: user.email.clone(), display_name: user.display_name.clone(),
-            email_verified: user.email_verified, role: user.role.clone(), banned: user.banned,
-            banned_reason: None, banned_until: None,
-            created_at: Utc::now().fixed_offset(), updated_at: Utc::now().fixed_offset(),
+            id: user.id,
+            email: user.email.clone(),
+            display_name: user.display_name.clone(),
+            email_verified: user.email_verified,
+            role: user.role.clone(),
+            banned: user.banned,
+            banned_reason: None,
+            banned_until: None,
+            created_at: Utc::now().fixed_offset(),
+            updated_at: Utc::now().fixed_offset(),
         };
 
         let (access_token, _jti) = crate::plugins::bearer::create_jwt_with_audience(
@@ -1437,7 +1532,11 @@ async fn handle_authorization_code_grant(
 
         let family_id = Uuid::new_v4();
         let mut conn = state.db.get().await.map_err(|_| {
-            oauth2_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Internal error")
+            oauth2_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "Internal error",
+            )
         })?;
         let refresh_token = create_refresh_token_for_oauth2_diesel(
             &mut conn,
@@ -1530,29 +1629,59 @@ async fn handle_oauth2_refresh_token(
                 .await
                 .map_err(|e| {
                     tracing::error!("DB error: {}", e);
-                    oauth2_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Internal error")
+                    oauth2_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "server_error",
+                        "Internal error",
+                    )
                 })?
-                .ok_or_else(|| oauth2_error(StatusCode::BAD_REQUEST, "invalid_grant", "Invalid refresh token"))?;
+                .ok_or_else(|| {
+                    oauth2_error(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_grant",
+                        "Invalid refresh token",
+                    )
+                })?;
             StoredRefresh {
-                id: row.id, user_id: row.user_id, family_id: row.family_id,
-                expires_at: row.expires_at.naive_utc(), revoked: row.revoked,
+                id: row.id,
+                user_id: row.user_id,
+                family_id: row.family_id,
+                expires_at: row.expires_at.naive_utc(),
+                revoked: row.revoked,
             }
         };
         #[cfg(feature = "diesel-async")]
         let stored = {
             let mut conn = state.db.get().await.map_err(|_| {
-                oauth2_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Internal error")
+                oauth2_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "Internal error",
+                )
             })?;
             let row = diesel_db::find_refresh_token_by_hash(&mut conn, &token_hash)
                 .await
                 .map_err(|e| {
                     tracing::error!("DB error: {}", e);
-                    oauth2_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Internal error")
+                    oauth2_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "server_error",
+                        "Internal error",
+                    )
                 })?
-                .ok_or_else(|| oauth2_error(StatusCode::BAD_REQUEST, "invalid_grant", "Invalid refresh token"))?;
+                .ok_or_else(|| {
+                    oauth2_error(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_grant",
+                        "Invalid refresh token",
+                    )
+                })?;
             StoredRefresh {
-                id: row.id, user_id: row.user_id, family_id: row.family_id,
-                expires_at: row.expires_at, revoked: row.revoked,
+                id: row.id,
+                user_id: row.user_id,
+                family_id: row.family_id,
+                expires_at: row.expires_at,
+                revoked: row.revoked,
             }
         };
 
@@ -1593,25 +1722,53 @@ async fn handle_oauth2_refresh_token(
         #[cfg(feature = "seaorm")]
         {
             let found = yauth_entity::refresh_tokens::Entity::find_by_id(stored.id)
-                .one(&state.db).await
-                .map_err(|e| { tracing::error!("DB error: {}", e); oauth2_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Internal error") })?
-                .ok_or_else(|| oauth2_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Internal error"))?;
+                .one(&state.db)
+                .await
+                .map_err(|e| {
+                    tracing::error!("DB error: {}", e);
+                    oauth2_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "server_error",
+                        "Internal error",
+                    )
+                })?
+                .ok_or_else(|| {
+                    oauth2_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "server_error",
+                        "Internal error",
+                    )
+                })?;
             let mut active: yauth_entity::refresh_tokens::ActiveModel = found.into();
             active.revoked = Set(true);
             active.update(&state.db).await.map_err(|e| {
                 tracing::error!("Failed to revoke old refresh token: {}", e);
-                oauth2_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Internal error")
+                oauth2_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "Internal error",
+                )
             })?;
         }
         #[cfg(feature = "diesel-async")]
         {
             let mut conn = state.db.get().await.map_err(|_| {
-                oauth2_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Internal error")
+                oauth2_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "Internal error",
+                )
             })?;
-            diesel_db::revoke_refresh_token(&mut conn, stored.id).await.map_err(|e| {
-                tracing::error!("Failed to revoke old refresh token: {}", e);
-                oauth2_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Internal error")
-            })?;
+            diesel_db::revoke_refresh_token(&mut conn, stored.id)
+                .await
+                .map_err(|e| {
+                    tracing::error!("Failed to revoke old refresh token: {}", e);
+                    oauth2_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "server_error",
+                        "Internal error",
+                    )
+                })?;
         }
 
         // Look up user — common struct
@@ -1632,26 +1789,53 @@ async fn handle_oauth2_refresh_token(
                 .await
                 .map_err(|e| {
                     tracing::error!("DB error: {}", e);
-                    oauth2_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Internal error")
+                    oauth2_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "server_error",
+                        "Internal error",
+                    )
                 })?
-                .ok_or_else(|| oauth2_error(StatusCode::BAD_REQUEST, "invalid_grant", "User not found"))?;
+                .ok_or_else(|| {
+                    oauth2_error(StatusCode::BAD_REQUEST, "invalid_grant", "User not found")
+                })?;
             RefreshUser {
-                id: u.id, email: u.email, display_name: u.display_name,
-                email_verified: u.email_verified, role: u.role, banned: u.banned,
+                id: u.id,
+                email: u.email,
+                display_name: u.display_name,
+                email_verified: u.email_verified,
+                role: u.role,
+                banned: u.banned,
             }
         };
         #[cfg(feature = "diesel-async")]
         let user = {
             let mut conn = state.db.get().await.map_err(|_| {
-                oauth2_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Internal error")
+                oauth2_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "Internal error",
+                )
             })?;
-            let u = diesel_db::find_user_by_id(&mut conn, user_id).await.map_err(|e| {
-                tracing::error!("DB error: {}", e);
-                oauth2_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Internal error")
-            })?.ok_or_else(|| oauth2_error(StatusCode::BAD_REQUEST, "invalid_grant", "User not found"))?;
+            let u = diesel_db::find_user_by_id(&mut conn, user_id)
+                .await
+                .map_err(|e| {
+                    tracing::error!("DB error: {}", e);
+                    oauth2_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "server_error",
+                        "Internal error",
+                    )
+                })?
+                .ok_or_else(|| {
+                    oauth2_error(StatusCode::BAD_REQUEST, "invalid_grant", "User not found")
+                })?;
             RefreshUser {
-                id: u.id, email: u.email, display_name: u.display_name,
-                email_verified: u.email_verified, role: u.role, banned: u.banned,
+                id: u.id,
+                email: u.email,
+                display_name: u.display_name,
+                email_verified: u.email_verified,
+                role: u.role,
+                banned: u.banned,
             }
         };
 
@@ -1668,14 +1852,25 @@ async fn handle_oauth2_refresh_token(
         #[cfg(feature = "seaorm")]
         let (access_token, _jti) = {
             let user_model = yauth_entity::users::Model {
-                id: user.id, email: user.email.clone(), display_name: user.display_name.clone(),
-                email_verified: user.email_verified, role: user.role.clone(), banned: user.banned,
-                banned_reason: None, banned_until: None,
-                created_at: Utc::now().fixed_offset(), updated_at: Utc::now().fixed_offset(),
+                id: user.id,
+                email: user.email.clone(),
+                display_name: user.display_name.clone(),
+                email_verified: user.email_verified,
+                role: user.role.clone(),
+                banned: user.banned,
+                banned_reason: None,
+                banned_until: None,
+                created_at: Utc::now().fixed_offset(),
+                updated_at: Utc::now().fixed_offset(),
             };
-            crate::plugins::bearer::create_jwt_with_audience(&user_model, bearer_config, None).map_err(
-                |_| oauth2_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Failed to create token"),
-            )?
+            crate::plugins::bearer::create_jwt_with_audience(&user_model, bearer_config, None)
+                .map_err(|_| {
+                    oauth2_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "server_error",
+                        "Failed to create token",
+                    )
+                })?
         };
         #[cfg(feature = "diesel-async")]
         let (access_token, _jti) = {
@@ -1684,9 +1879,18 @@ async fn handle_oauth2_refresh_token(
                 email: user.email.clone(),
                 role: user.role.clone(),
             };
-            crate::plugins::bearer::create_jwt_with_audience_from_fields(&jwt_user, bearer_config, None).map_err(
-                |_| oauth2_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Failed to create token"),
-            )?
+            crate::plugins::bearer::create_jwt_with_audience_from_fields(
+                &jwt_user,
+                bearer_config,
+                None,
+            )
+            .map_err(|_| {
+                oauth2_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "Failed to create token",
+                )
+            })?
         };
 
         #[cfg(feature = "seaorm")]
@@ -1707,11 +1911,26 @@ async fn handle_oauth2_refresh_token(
         #[cfg(feature = "diesel-async")]
         let new_refresh = {
             let mut conn = state.db.get().await.map_err(|_| {
-                oauth2_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Internal error")
+                oauth2_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "Internal error",
+                )
             })?;
-            create_refresh_token_for_oauth2_diesel(&mut conn, user.id, family_id, bearer_config.refresh_token_ttl)
-                .await
-                .map_err(|_| oauth2_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Failed to create refresh token"))?
+            create_refresh_token_for_oauth2_diesel(
+                &mut conn,
+                user.id,
+                family_id,
+                bearer_config.refresh_token_ttl,
+            )
+            .await
+            .map_err(|_| {
+                oauth2_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "Failed to create refresh token",
+                )
+            })?
         };
 
         let expires_in = bearer_config.access_token_ttl.as_secs();
@@ -1838,14 +2057,19 @@ async fn dynamic_client_registration(
 
         client.insert(&state.db).await.map_err(|e| {
             tracing::error!("Failed to register client: {}", e);
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Failed to register client")
+            api_err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to register client",
+            )
         })?;
     }
     #[cfg(feature = "diesel-async")]
     {
-        let mut conn = state.db.get().await.map_err(|_| {
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
+        let mut conn = state
+            .db
+            .get()
+            .await
+            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
         diesel_db::insert_client(
             &mut conn,
             Uuid::new_v4(),
@@ -1857,9 +2081,14 @@ async fn dynamic_client_registration(
             scopes_json.as_ref(),
             is_public,
             now,
-        ).await.map_err(|e| {
+        )
+        .await
+        .map_err(|e| {
             tracing::error!("Failed to register client: {}", e);
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Failed to register client")
+            api_err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to register client",
+            )
         })?;
     }
 
@@ -1982,7 +2211,9 @@ async fn device_authorization(
     #[cfg(feature = "diesel-async")]
     let mut conn = match state.db.get().await {
         Ok(c) => c,
-        Err(_) => return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response(),
+        Err(_) => {
+            return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
+        }
     };
 
     #[cfg(feature = "seaorm")]
@@ -2042,7 +2273,9 @@ async fn device_authorization(
             interval as i32,
             expires_at,
             now,
-        ).await {
+        )
+        .await
+        {
             tracing::error!("Failed to store device code: {}", e);
             return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
         }
@@ -2111,28 +2344,35 @@ async fn device_verify_get(
                 .filter(yauth_entity::device_codes::Column::Status.eq("pending"))
                 .one(&state.db)
                 .await
-                .map(|opt| opt.map(|dc| DcInfo {
-                    user_code: dc.user_code,
-                    client_id: dc.client_id,
-                    scopes: dc.scopes,
-                    expires_at: dc.expires_at.naive_utc(),
-                }))
+                .map(|opt| {
+                    opt.map(|dc| DcInfo {
+                        user_code: dc.user_code,
+                        client_id: dc.client_id,
+                        scopes: dc.scopes,
+                        expires_at: dc.expires_at.naive_utc(),
+                    })
+                })
                 .map_err(|e| e.to_string())
         };
         #[cfg(feature = "diesel-async")]
         let dc_result: Result<Option<DcInfo>, String> = {
             let mut conn = match state.db.get().await {
                 Ok(c) => c,
-                Err(_) => return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response(),
+                Err(_) => {
+                    return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+                        .into_response();
+                }
             };
             diesel_db::find_device_code_by_user_code_pending(&mut conn, code)
                 .await
-                .map(|opt| opt.map(|dc| DcInfo {
-                    user_code: dc.user_code,
-                    client_id: dc.client_id,
-                    scopes: dc.scopes,
-                    expires_at: dc.expires_at,
-                }))
+                .map(|opt| {
+                    opt.map(|dc| DcInfo {
+                        user_code: dc.user_code,
+                        client_id: dc.client_id,
+                        scopes: dc.scopes,
+                        expires_at: dc.expires_at,
+                    })
+                })
         };
 
         match dc_result {
@@ -2162,7 +2402,10 @@ async fn device_verify_get(
                 let client_name = {
                     let mut conn = match state.db.get().await {
                         Ok(c) => c,
-                        Err(_) => return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response(),
+                        Err(_) => {
+                            return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+                                .into_response();
+                        }
                     };
                     diesel_db::find_client_by_client_id(&mut conn, &dc.client_id)
                         .await
@@ -2258,7 +2501,10 @@ async fn device_verify_post(
             .await;
 
         match stored {
-            Ok(Some(dc)) => DcInfo { id: dc.id, expires_at: dc.expires_at.naive_utc() },
+            Ok(Some(dc)) => DcInfo {
+                id: dc.id,
+                expires_at: dc.expires_at.naive_utc(),
+            },
             Ok(None) => {
                 return oauth2_error(
                     StatusCode::BAD_REQUEST,
@@ -2268,7 +2514,8 @@ async fn device_verify_post(
             }
             Err(e) => {
                 tracing::error!("DB error: {}", e);
-                return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
+                return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+                    .into_response();
             }
         }
     };
@@ -2276,10 +2523,15 @@ async fn device_verify_post(
     let dc = {
         let mut conn = match state.db.get().await {
             Ok(c) => c,
-            Err(_) => return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response(),
+            Err(_) => {
+                return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
+            }
         };
         match diesel_db::find_device_code_by_user_code_pending(&mut conn, &input.user_code).await {
-            Ok(Some(dc)) => DcInfo { id: dc.id, expires_at: dc.expires_at },
+            Ok(Some(dc)) => DcInfo {
+                id: dc.id,
+                expires_at: dc.expires_at,
+            },
             Ok(None) => {
                 return oauth2_error(
                     StatusCode::BAD_REQUEST,
@@ -2289,7 +2541,8 @@ async fn device_verify_post(
             }
             Err(e) => {
                 tracing::error!("DB error: {}", e);
-                return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
+                return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+                    .into_response();
             }
         }
     };
@@ -2320,7 +2573,8 @@ async fn device_verify_post(
             }
             if let Err(e) = active.update(&state.db).await {
                 tracing::error!("Failed to update device code status: {}", e);
-                return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
+                return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+                    .into_response();
             }
         }
     }
@@ -2328,10 +2582,18 @@ async fn device_verify_post(
     {
         let mut conn = match state.db.get().await {
             Ok(c) => c,
-            Err(_) => return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response(),
+            Err(_) => {
+                return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
+            }
         };
-        let user_id = if input.approved { Some(auth_user.id) } else { None };
-        if let Err(e) = diesel_db::update_device_code_status(&mut conn, dc.id, new_status, user_id).await {
+        let user_id = if input.approved {
+            Some(auth_user.id)
+        } else {
+            None
+        };
+        if let Err(e) =
+            diesel_db::update_device_code_status(&mut conn, dc.id, new_status, user_id).await
+        {
             tracing::error!("Failed to update device code status: {}", e);
             return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
         }
@@ -2415,12 +2677,26 @@ async fn handle_device_code_grant(
             .await
             .map_err(|e| {
                 tracing::error!("DB error: {}", e);
-                oauth2_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Internal error")
+                oauth2_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "Internal error",
+                )
             })?
-            .ok_or_else(|| oauth2_error(StatusCode::BAD_REQUEST, "invalid_grant", "Invalid device code"))?;
+            .ok_or_else(|| {
+                oauth2_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_grant",
+                    "Invalid device code",
+                )
+            })?;
         StoredDc {
-            id: row.id, client_id: row.client_id, scopes: row.scopes,
-            user_id: row.user_id, status: row.status, interval: row.interval,
+            id: row.id,
+            client_id: row.client_id,
+            scopes: row.scopes,
+            user_id: row.user_id,
+            status: row.status,
+            interval: row.interval,
             expires_at: row.expires_at.naive_utc(),
             last_polled_at: row.last_polled_at.map(|t| t.naive_utc()),
         }
@@ -2428,19 +2704,38 @@ async fn handle_device_code_grant(
     #[cfg(feature = "diesel-async")]
     let stored = {
         let mut conn = state.db.get().await.map_err(|_| {
-            oauth2_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Internal error")
+            oauth2_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "Internal error",
+            )
         })?;
         let row = diesel_db::find_device_code_by_hash(&mut conn, &device_code_hash)
             .await
             .map_err(|e| {
                 tracing::error!("DB error: {}", e);
-                oauth2_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Internal error")
+                oauth2_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "Internal error",
+                )
             })?
-            .ok_or_else(|| oauth2_error(StatusCode::BAD_REQUEST, "invalid_grant", "Invalid device code"))?;
+            .ok_or_else(|| {
+                oauth2_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_grant",
+                    "Invalid device code",
+                )
+            })?;
         StoredDc {
-            id: row.id, client_id: row.client_id, scopes: row.scopes,
-            user_id: row.user_id, status: row.status, interval: row.interval,
-            expires_at: row.expires_at, last_polled_at: row.last_polled_at,
+            id: row.id,
+            client_id: row.client_id,
+            scopes: row.scopes,
+            user_id: row.user_id,
+            status: row.status,
+            interval: row.interval,
+            expires_at: row.expires_at,
+            last_polled_at: row.last_polled_at,
         }
     };
 
@@ -2472,8 +2767,10 @@ async fn handle_device_code_grant(
             #[cfg(feature = "seaorm")]
             {
                 let row = yauth_entity::device_codes::Entity::find_by_id(stored.id)
-                    .one(&state.db).await
-                    .ok().flatten();
+                    .one(&state.db)
+                    .await
+                    .ok()
+                    .flatten();
                 if let Some(row) = row {
                     let mut active: yauth_entity::device_codes::ActiveModel = row.into();
                     active.interval = Set(stored.interval + 5);
@@ -2485,7 +2782,13 @@ async fn handle_device_code_grant(
             {
                 let mut conn = state.db.get().await.ok();
                 if let Some(ref mut conn) = conn {
-                    let _ = diesel_db::update_device_code_slow_down(conn, stored.id, stored.interval + 5, now).await;
+                    let _ = diesel_db::update_device_code_slow_down(
+                        conn,
+                        stored.id,
+                        stored.interval + 5,
+                        now,
+                    )
+                    .await;
                 }
             }
             return Err(oauth2_error(
@@ -2501,8 +2804,10 @@ async fn handle_device_code_grant(
     #[cfg(feature = "seaorm")]
     {
         let row = yauth_entity::device_codes::Entity::find_by_id(stored.id)
-            .one(&state.db).await
-            .ok().flatten();
+            .one(&state.db)
+            .await
+            .ok()
+            .flatten();
         if let Some(row) = row {
             let mut active: yauth_entity::device_codes::ActiveModel = row.into();
             active.last_polled_at = Set(Some(now));
@@ -2564,25 +2869,53 @@ async fn handle_device_code_grant(
     #[cfg(feature = "seaorm")]
     {
         let row = yauth_entity::device_codes::Entity::find_by_id(stored.id)
-            .one(&state.db).await
-            .map_err(|e| { tracing::error!("DB error: {}", e); oauth2_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Internal error") })?
-            .ok_or_else(|| oauth2_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Device code disappeared"))?;
+            .one(&state.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                oauth2_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "Internal error",
+                )
+            })?
+            .ok_or_else(|| {
+                oauth2_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "Device code disappeared",
+                )
+            })?;
         let mut active: yauth_entity::device_codes::ActiveModel = row.into();
         active.status = Set("used".into());
         active.update(&state.db).await.map_err(|e| {
             tracing::error!("Failed to mark device code as used: {}", e);
-            oauth2_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Internal error")
+            oauth2_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "Internal error",
+            )
         })?;
     }
     #[cfg(feature = "diesel-async")]
     {
         let mut conn = state.db.get().await.map_err(|_| {
-            oauth2_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Internal error")
+            oauth2_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "Internal error",
+            )
         })?;
-        diesel_db::update_device_code_status(&mut conn, stored.id, "used", stored.user_id).await.map_err(|e| {
-            tracing::error!("Failed to mark device code as used: {}", e);
-            oauth2_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Internal error")
-        })?;
+        diesel_db::update_device_code_status(&mut conn, stored.id, "used", stored.user_id)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to mark device code as used: {}", e);
+                oauth2_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "Internal error",
+                )
+            })?;
     }
 
     // Look up user — common struct for cross-backend
@@ -2603,26 +2936,53 @@ async fn handle_device_code_grant(
             .await
             .map_err(|e| {
                 tracing::error!("DB error: {}", e);
-                oauth2_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Internal error")
+                oauth2_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "Internal error",
+                )
             })?
-            .ok_or_else(|| oauth2_error(StatusCode::BAD_REQUEST, "invalid_grant", "User not found"))?;
+            .ok_or_else(|| {
+                oauth2_error(StatusCode::BAD_REQUEST, "invalid_grant", "User not found")
+            })?;
         DeviceCodeUser {
-            id: u.id, email: u.email, display_name: u.display_name,
-            email_verified: u.email_verified, role: u.role, banned: u.banned,
+            id: u.id,
+            email: u.email,
+            display_name: u.display_name,
+            email_verified: u.email_verified,
+            role: u.role,
+            banned: u.banned,
         }
     };
     #[cfg(feature = "diesel-async")]
     let user = {
         let mut conn = state.db.get().await.map_err(|_| {
-            oauth2_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Internal error")
+            oauth2_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "Internal error",
+            )
         })?;
-        let u = diesel_db::find_user_by_id(&mut conn, user_id).await.map_err(|e| {
-            tracing::error!("DB error: {}", e);
-            oauth2_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Internal error")
-        })?.ok_or_else(|| oauth2_error(StatusCode::BAD_REQUEST, "invalid_grant", "User not found"))?;
+        let u = diesel_db::find_user_by_id(&mut conn, user_id)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                oauth2_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "Internal error",
+                )
+            })?
+            .ok_or_else(|| {
+                oauth2_error(StatusCode::BAD_REQUEST, "invalid_grant", "User not found")
+            })?;
         DeviceCodeUser {
-            id: u.id, email: u.email, display_name: u.display_name,
-            email_verified: u.email_verified, role: u.role, banned: u.banned,
+            id: u.id,
+            email: u.email,
+            display_name: u.display_name,
+            email_verified: u.email_verified,
+            role: u.role,
+            banned: u.banned,
         }
     };
 
@@ -2652,10 +3012,16 @@ async fn handle_device_code_grant(
         let bearer_config = &state.bearer_config;
 
         let user_model = yauth_entity::users::Model {
-            id: user.id, email: user.email.clone(), display_name: user.display_name.clone(),
-            email_verified: user.email_verified, role: user.role.clone(), banned: user.banned,
-            banned_reason: None, banned_until: None,
-            created_at: Utc::now().fixed_offset(), updated_at: Utc::now().fixed_offset(),
+            id: user.id,
+            email: user.email.clone(),
+            display_name: user.display_name.clone(),
+            email_verified: user.email_verified,
+            role: user.role.clone(),
+            banned: user.banned,
+            banned_reason: None,
+            banned_until: None,
+            created_at: Utc::now().fixed_offset(),
+            updated_at: Utc::now().fixed_offset(),
         };
 
         let (access_token, _jti) = crate::plugins::bearer::create_jwt_with_audience(
@@ -2742,7 +3108,11 @@ async fn handle_device_code_grant(
 
         let family_id = Uuid::new_v4();
         let mut conn = state.db.get().await.map_err(|_| {
-            oauth2_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Internal error")
+            oauth2_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "Internal error",
+            )
         })?;
         let refresh_token = create_refresh_token_for_oauth2_diesel(
             &mut conn,
@@ -2893,28 +3263,35 @@ async fn introspect_endpoint(
                         .ok()
                         .flatten()
                         .map(|s| RefreshInfo {
-                            user_id: s.user_id, expires_at: s.expires_at.naive_utc(),
-                            created_at: s.created_at.naive_utc(), revoked: s.revoked,
+                            user_id: s.user_id,
+                            expires_at: s.expires_at.naive_utc(),
+                            created_at: s.created_at.naive_utc(),
+                            revoked: s.revoked,
                         })
                 };
                 #[cfg(feature = "diesel-async")]
                 let rt_opt: Option<RefreshInfo> = {
                     let mut conn = match state.db.get().await {
                         Ok(c) => c,
-                        Err(_) => { continue; }
+                        Err(_) => {
+                            continue;
+                        }
                     };
                     diesel_db::find_refresh_token_by_hash(&mut conn, &token_hash)
                         .await
                         .ok()
                         .flatten()
                         .map(|s| RefreshInfo {
-                            user_id: s.user_id, expires_at: s.expires_at,
-                            created_at: s.created_at, revoked: s.revoked,
+                            user_id: s.user_id,
+                            expires_at: s.expires_at,
+                            created_at: s.created_at,
+                            revoked: s.revoked,
                         })
                 };
 
                 if let Some(stored) = rt_opt
-                    && !stored.revoked && stored.expires_at > Utc::now().naive_utc()
+                    && !stored.revoked
+                    && stored.expires_at > Utc::now().naive_utc()
                 {
                     return Json(IntrospectResponse {
                         active: true,
@@ -2993,19 +3370,29 @@ async fn revoke_endpoint(
                         .await
                         .ok()
                         .flatten()
-                        .map(|s| RevokeInfo { id: s.id, family_id: s.family_id, revoked: s.revoked })
+                        .map(|s| RevokeInfo {
+                            id: s.id,
+                            family_id: s.family_id,
+                            revoked: s.revoked,
+                        })
                 };
                 #[cfg(feature = "diesel-async")]
                 let rt_opt: Option<RevokeInfo> = {
                     let mut conn = match state.db.get().await {
                         Ok(c) => c,
-                        Err(_) => { continue; }
+                        Err(_) => {
+                            continue;
+                        }
                     };
                     diesel_db::find_refresh_token_by_hash(&mut conn, &token_hash)
                         .await
                         .ok()
                         .flatten()
-                        .map(|s| RevokeInfo { id: s.id, family_id: s.family_id, revoked: s.revoked })
+                        .map(|s| RevokeInfo {
+                            id: s.id,
+                            family_id: s.family_id,
+                            revoked: s.revoked,
+                        })
                 };
 
                 if let Some(stored) = rt_opt {
@@ -3026,10 +3413,13 @@ async fn revoke_endpoint(
                         if !stored.revoked {
                             #[cfg(feature = "seaorm")]
                             {
-                                if let Ok(Some(found)) = yauth_entity::refresh_tokens::Entity::find_by_id(stored.id)
-                                    .one(&state.db).await
+                                if let Ok(Some(found)) =
+                                    yauth_entity::refresh_tokens::Entity::find_by_id(stored.id)
+                                        .one(&state.db)
+                                        .await
                                 {
-                                    let mut active: yauth_entity::refresh_tokens::ActiveModel = found.into();
+                                    let mut active: yauth_entity::refresh_tokens::ActiveModel =
+                                        found.into();
                                     active.revoked = Set(true);
                                     let _ = active.update(&state.db).await;
                                 }
@@ -3354,10 +3744,7 @@ struct ClientInfo {
     is_public: bool,
 }
 
-async fn lookup_client(
-    state: &YAuthState,
-    client_id: &str,
-) -> Result<ClientInfo, ApiError> {
+async fn lookup_client(state: &YAuthState, client_id: &str) -> Result<ClientInfo, ApiError> {
     #[cfg(feature = "seaorm")]
     {
         let m = yauth_entity::oauth2_clients::Entity::find()
@@ -3370,16 +3757,22 @@ async fn lookup_client(
             })?
             .ok_or_else(|| api_err(StatusCode::BAD_REQUEST, "Unknown client_id"))?;
         Ok(ClientInfo {
-            client_id: m.client_id, client_secret_hash: m.client_secret_hash,
-            redirect_uris: m.redirect_uris, client_name: m.client_name,
-            grant_types: m.grant_types, scopes: m.scopes, is_public: m.is_public,
+            client_id: m.client_id,
+            client_secret_hash: m.client_secret_hash,
+            redirect_uris: m.redirect_uris,
+            client_name: m.client_name,
+            grant_types: m.grant_types,
+            scopes: m.scopes,
+            is_public: m.is_public,
         })
     }
     #[cfg(feature = "diesel-async")]
     {
-        let mut conn = state.db.get().await.map_err(|_| {
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
+        let mut conn = state
+            .db
+            .get()
+            .await
+            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
         let m = diesel_db::find_client_by_client_id(&mut conn, client_id)
             .await
             .map_err(|e| {
@@ -3388,9 +3781,13 @@ async fn lookup_client(
             })?
             .ok_or_else(|| api_err(StatusCode::BAD_REQUEST, "Unknown client_id"))?;
         Ok(ClientInfo {
-            client_id: m.client_id, client_secret_hash: m.client_secret_hash,
-            redirect_uris: m.redirect_uris, client_name: m.client_name,
-            grant_types: m.grant_types, scopes: m.scopes, is_public: m.is_public,
+            client_id: m.client_id,
+            client_secret_hash: m.client_secret_hash,
+            redirect_uris: m.redirect_uris,
+            client_name: m.client_name,
+            grant_types: m.grant_types,
+            scopes: m.scopes,
+            is_public: m.is_public,
         })
     }
 }
@@ -3433,10 +3830,7 @@ fn resolve_redirect_uri(
     }
 }
 
-fn validate_redirect_uri(
-    client: &ClientInfo,
-    redirect_uri: &str,
-) -> Result<(), ApiError> {
+fn validate_redirect_uri(client: &ClientInfo, redirect_uri: &str) -> Result<(), ApiError> {
     resolve_redirect_uri(client, Some(redirect_uri)).map(|_| ())
 }
 
@@ -3477,7 +3871,9 @@ async fn authenticate_user(
                     Ok(c) => c,
                     Err(_) => return Err(()),
                 };
-                if let Ok(Some(user)) = diesel_db::find_user_by_id(&mut conn, session_user.user_id).await {
+                if let Ok(Some(user)) =
+                    diesel_db::find_user_by_id(&mut conn, session_user.user_id).await
+                {
                     if !user.banned {
                         return Ok(AuthUser {
                             id: user.id,
@@ -3563,14 +3959,23 @@ async fn save_consent(
         let now = Utc::now().fixed_offset();
         match existing {
             Ok(Some(existing)) => {
-                if let Err(e) = diesel_db::update_consent(&mut conn, existing.id, scopes.as_ref(), now).await {
+                if let Err(e) =
+                    diesel_db::update_consent(&mut conn, existing.id, scopes.as_ref(), now).await
+                {
                     tracing::error!("Failed to update consent: {}", e);
                 }
             }
             _ => {
                 if let Err(e) = diesel_db::insert_consent(
-                    &mut conn, Uuid::new_v4(), user_id, client_id, scopes.as_ref(), now,
-                ).await {
+                    &mut conn,
+                    Uuid::new_v4(),
+                    user_id,
+                    client_id,
+                    scopes.as_ref(),
+                    now,
+                )
+                .await
+                {
                     tracing::error!("Failed to save consent: {}", e);
                 }
             }
@@ -3627,7 +4032,13 @@ async fn create_refresh_token_for_oauth2_diesel(
     .fixed_offset();
 
     diesel_db::insert_refresh_token(
-        conn, Uuid::new_v4(), user_id, &token_hash, family_id, expires_at, now,
+        conn,
+        Uuid::new_v4(),
+        user_id,
+        &token_hash,
+        family_id,
+        expires_at,
+        now,
     )
     .await
     .map_err(|e| {

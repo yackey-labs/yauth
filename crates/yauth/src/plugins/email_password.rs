@@ -204,26 +204,22 @@ mod diesel_db {
     }
 
     pub async fn insert_password(conn: &mut Conn, user_id: Uuid, hash: &str) -> DbResult<()> {
-        diesel::sql_query(
-            "INSERT INTO yauth_passwords (user_id, password_hash) VALUES ($1, $2)",
-        )
-        .bind::<diesel::sql_types::Uuid, _>(user_id)
-        .bind::<diesel::sql_types::Text, _>(hash)
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
+        diesel::sql_query("INSERT INTO yauth_passwords (user_id, password_hash) VALUES ($1, $2)")
+            .bind::<diesel::sql_types::Uuid, _>(user_id)
+            .bind::<diesel::sql_types::Text, _>(hash)
+            .execute(conn)
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
 
     pub async fn find_password(conn: &mut Conn, user_id: Uuid) -> DbResult<Option<PasswordRow>> {
-        diesel::sql_query(
-            "SELECT password_hash FROM yauth_passwords WHERE user_id = $1",
-        )
-        .bind::<diesel::sql_types::Uuid, _>(user_id)
-        .get_result(conn)
-        .await
-        .optional()
-        .map_err(|e| e.to_string())
+        diesel::sql_query("SELECT password_hash FROM yauth_passwords WHERE user_id = $1")
+            .bind::<diesel::sql_types::Uuid, _>(user_id)
+            .get_result(conn)
+            .await
+            .optional()
+            .map_err(|e| e.to_string())
     }
 
     pub async fn insert_verification(
@@ -348,26 +344,22 @@ mod diesel_db {
     }
 
     pub async fn mark_reset_used(conn: &mut Conn, reset_id: Uuid) -> DbResult<()> {
-        diesel::sql_query(
-            "UPDATE yauth_password_resets SET used_at = $1 WHERE id = $2",
-        )
-        .bind::<diesel::sql_types::Timestamptz, _>(chrono::Utc::now())
-        .bind::<diesel::sql_types::Uuid, _>(reset_id)
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
+        diesel::sql_query("UPDATE yauth_password_resets SET used_at = $1 WHERE id = $2")
+            .bind::<diesel::sql_types::Timestamptz, _>(chrono::Utc::now())
+            .bind::<diesel::sql_types::Uuid, _>(reset_id)
+            .execute(conn)
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
 
     pub async fn update_password(conn: &mut Conn, user_id: Uuid, hash: &str) -> DbResult<()> {
-        diesel::sql_query(
-            "UPDATE yauth_passwords SET password_hash = $1 WHERE user_id = $2",
-        )
-        .bind::<diesel::sql_types::Text, _>(hash)
-        .bind::<diesel::sql_types::Uuid, _>(user_id)
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
+        diesel::sql_query("UPDATE yauth_passwords SET password_hash = $1 WHERE user_id = $2")
+            .bind::<diesel::sql_types::Text, _>(hash)
+            .bind::<diesel::sql_types::Uuid, _>(user_id)
+            .execute(conn)
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -432,9 +424,11 @@ async fn register(
 
     // Get diesel connection for this handler
     #[cfg(feature = "diesel-async")]
-    let mut conn = state.db.get().await.map_err(|_| {
-        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-    })?;
+    let mut conn = state
+        .db
+        .get()
+        .await
+        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
     // Check if user exists
     #[cfg(feature = "seaorm")]
@@ -508,7 +502,8 @@ async fn register(
     }
     #[cfg(feature = "diesel-async")]
     {
-        diesel_db::insert_user(&mut conn,
+        diesel_db::insert_user(
+            &mut conn,
             user_id,
             &email,
             input.display_name.as_ref().map(|n| input::sanitize(n)),
@@ -602,9 +597,11 @@ async fn login(
     }
 
     #[cfg(feature = "diesel-async")]
-    let mut conn = state.db.get().await.map_err(|_| {
-        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-    })?;
+    let mut conn = state
+        .db
+        .get()
+        .await
+        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
     // Shared struct for user data
     struct LoginUser {
@@ -663,10 +660,12 @@ async fn login(
 
         match user {
             Some(u) => {
-                let pwd = diesel_db::find_password(&mut conn, u.id).await.map_err(|e| {
-                    tracing::error!("DB error: {}", e);
-                    api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-                })?;
+                let pwd = diesel_db::find_password(&mut conn, u.id)
+                    .await
+                    .map_err(|e| {
+                        tracing::error!("DB error: {}", e);
+                        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+                    })?;
                 let h = pwd
                     .map(|p| p.password_hash)
                     .unwrap_or_else(|| state.dummy_hash.clone());
@@ -787,7 +786,10 @@ async fn login(
                         StatusCode::from_u16(status).unwrap_or(StatusCode::UNAUTHORIZED);
                     Err(api_err(status_code, &message))
                 }
-                _ => Err(api_err(StatusCode::UNAUTHORIZED, "Invalid email or password")),
+                _ => Err(api_err(
+                    StatusCode::UNAUTHORIZED,
+                    "Invalid email or password",
+                )),
             }
         }
     }
@@ -803,15 +805,20 @@ async fn verify_email(
 ) -> Result<Json<MessageResponse>, (StatusCode, Json<serde_json::Value>)> {
     let token = input::sanitize(&input.token);
     if token.is_empty() {
-        return Err(api_err(StatusCode::BAD_REQUEST, "Verification token is required"));
+        return Err(api_err(
+            StatusCode::BAD_REQUEST,
+            "Verification token is required",
+        ));
     }
 
     let token_hash = crypto::hash_token(&token);
 
     #[cfg(feature = "diesel-async")]
-    let mut conn = state.db.get().await.map_err(|_| {
-        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-    })?;
+    let mut conn = state
+        .db
+        .get()
+        .await
+        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
     #[cfg(feature = "seaorm")]
     {
@@ -823,7 +830,12 @@ async fn verify_email(
                 tracing::error!("DB error: {}", e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?
-            .ok_or_else(|| api_err(StatusCode::BAD_REQUEST, "Invalid or expired verification link"))?;
+            .ok_or_else(|| {
+                api_err(
+                    StatusCode::BAD_REQUEST,
+                    "Invalid or expired verification link",
+                )
+            })?;
 
         let now = chrono::Utc::now().fixed_offset();
         if verification.expires_at < now {
@@ -831,7 +843,10 @@ async fn verify_email(
                 .exec(&state.db)
                 .await
                 .ok();
-            return Err(api_err(StatusCode::BAD_REQUEST, "Verification link has expired. Please request a new one."));
+            return Err(api_err(
+                StatusCode::BAD_REQUEST,
+                "Verification link has expired. Please request a new one.",
+            ));
         }
 
         let user = yauth_entity::users::Entity::find_by_id(verification.user_id)
@@ -858,7 +873,9 @@ async fn verify_email(
             .ok();
 
         info!(event = "email_verified", user_id = %verification.user_id, "Email verified");
-        state.write_audit_log(Some(verification.user_id), "email_verified", None, None).await;
+        state
+            .write_audit_log(Some(verification.user_id), "email_verified", None, None)
+            .await;
     }
     #[cfg(feature = "diesel-async")]
     {
@@ -868,12 +885,22 @@ async fn verify_email(
                 tracing::error!("DB error: {}", e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?
-            .ok_or_else(|| api_err(StatusCode::BAD_REQUEST, "Invalid or expired verification link"))?;
+            .ok_or_else(|| {
+                api_err(
+                    StatusCode::BAD_REQUEST,
+                    "Invalid or expired verification link",
+                )
+            })?;
 
         let now = chrono::Utc::now().naive_utc();
         if verification.expires_at < now {
-            diesel_db::delete_verification(&mut conn, verification.id).await.ok();
-            return Err(api_err(StatusCode::BAD_REQUEST, "Verification link has expired. Please request a new one."));
+            diesel_db::delete_verification(&mut conn, verification.id)
+                .await
+                .ok();
+            return Err(api_err(
+                StatusCode::BAD_REQUEST,
+                "Verification link has expired. Please request a new one.",
+            ));
         }
 
         diesel_db::set_user_email_verified(&mut conn, verification.user_id)
@@ -883,10 +910,14 @@ async fn verify_email(
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
 
-        diesel_db::delete_verifications_for_user(&mut conn, verification.user_id).await.ok();
+        diesel_db::delete_verifications_for_user(&mut conn, verification.user_id)
+            .await
+            .ok();
 
         info!(event = "email_verified", user_id = %verification.user_id, "Email verified");
-        state.write_audit_log(Some(verification.user_id), "email_verified", None, None).await;
+        state
+            .write_audit_log(Some(verification.user_id), "email_verified", None, None)
+            .await;
     }
 
     Ok(Json(MessageResponse {
@@ -909,13 +940,16 @@ async fn resend_verification(
     }
 
     let success_msg = Json(MessageResponse {
-        message: "If an account exists with that email, a verification link has been sent.".to_string(),
+        message: "If an account exists with that email, a verification link has been sent."
+            .to_string(),
     });
 
     #[cfg(feature = "diesel-async")]
-    let mut conn = state.db.get().await.map_err(|_| {
-        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-    })?;
+    let mut conn = state
+        .db
+        .get()
+        .await
+        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
     #[cfg(feature = "seaorm")]
     let user_opt = {
@@ -953,13 +987,14 @@ async fn resend_verification(
     }
     #[cfg(feature = "diesel-async")]
     {
-        diesel_db::delete_verifications_for_user(&mut conn, user_id).await.ok();
+        diesel_db::delete_verifications_for_user(&mut conn, user_id)
+            .await
+            .ok();
     }
 
     let token = crypto::generate_token();
     let token_hash = crypto::hash_token(&token);
-    let expires_at =
-        chrono::Utc::now() + chrono::Duration::hours(VERIFICATION_TOKEN_EXPIRY_HOURS);
+    let expires_at = chrono::Utc::now() + chrono::Duration::hours(VERIFICATION_TOKEN_EXPIRY_HOURS);
 
     #[cfg(feature = "seaorm")]
     {
@@ -1010,13 +1045,16 @@ async fn forgot_password(
     }
 
     let success_msg = Json(MessageResponse {
-        message: "If an account exists with that email, a password reset link has been sent.".to_string(),
+        message: "If an account exists with that email, a password reset link has been sent."
+            .to_string(),
     });
 
     #[cfg(feature = "diesel-async")]
-    let mut conn = state.db.get().await.map_err(|_| {
-        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-    })?;
+    let mut conn = state
+        .db
+        .get()
+        .await
+        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
     #[cfg(feature = "seaorm")]
     let user_opt = {
@@ -1056,13 +1094,14 @@ async fn forgot_password(
     }
     #[cfg(feature = "diesel-async")]
     {
-        diesel_db::delete_unused_resets_for_user(&mut conn, user_id).await.ok();
+        diesel_db::delete_unused_resets_for_user(&mut conn, user_id)
+            .await
+            .ok();
     }
 
     let token = crypto::generate_token();
     let token_hash = crypto::hash_token(&token);
-    let expires_at =
-        chrono::Utc::now() + chrono::Duration::hours(RESET_TOKEN_EXPIRY_HOURS);
+    let expires_at = chrono::Utc::now() + chrono::Duration::hours(RESET_TOKEN_EXPIRY_HOURS);
 
     #[cfg(feature = "seaorm")]
     {
@@ -1118,7 +1157,10 @@ async fn reset_password(
     if reset_password.len() < ep_config.min_password_length {
         return Err(api_err(
             StatusCode::BAD_REQUEST,
-            &format!("Password must be at least {} characters", ep_config.min_password_length),
+            &format!(
+                "Password must be at least {} characters",
+                ep_config.min_password_length
+            ),
         ));
     }
 
@@ -1136,9 +1178,11 @@ async fn reset_password(
     let token_hash = crypto::hash_token(&token);
 
     #[cfg(feature = "diesel-async")]
-    let mut conn = state.db.get().await.map_err(|_| {
-        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-    })?;
+    let mut conn = state
+        .db
+        .get()
+        .await
+        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
     // Find reset token and get user_id + expiry
     struct ResetInfo {
@@ -1187,10 +1231,20 @@ async fn reset_password(
 
     if reset_info.expired {
         #[cfg(feature = "seaorm")]
-        { yauth_entity::password_resets::Entity::delete_by_id(reset_info.id).exec(&state.db).await.ok(); }
+        {
+            yauth_entity::password_resets::Entity::delete_by_id(reset_info.id)
+                .exec(&state.db)
+                .await
+                .ok();
+        }
         #[cfg(feature = "diesel-async")]
-        { diesel_db::delete_reset(&mut conn, reset_info.id).await.ok(); }
-        return Err(api_err(StatusCode::BAD_REQUEST, "Reset link has expired. Please request a new one."));
+        {
+            diesel_db::delete_reset(&mut conn, reset_info.id).await.ok();
+        }
+        return Err(api_err(
+            StatusCode::BAD_REQUEST,
+            "Reset link has expired. Please request a new one.",
+        ));
     }
 
     let new_hash = password::hash_password(&reset_password).map_err(|e| {
@@ -1229,8 +1283,12 @@ async fn reset_password(
 
         // Verify email
         let user = yauth_entity::users::Entity::find_by_id(reset_info.user_id)
-            .one(&state.db).await
-            .map_err(|e| { tracing::error!("DB error: {}", e); api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error") })?
+            .one(&state.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?
             .ok_or_else(|| api_err(StatusCode::INTERNAL_SERVER_ERROR, "User not found"))?;
         let mut user_active: yauth_entity::users::ActiveModel = user.into();
         user_active.email_verified = Set(true);
@@ -1264,16 +1322,23 @@ async fn reset_password(
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
 
-        diesel_db::mark_reset_used(&mut conn, reset_info.id).await.ok();
+        diesel_db::mark_reset_used(&mut conn, reset_info.id)
+            .await
+            .ok();
     }
 
-    session::delete_all_user_sessions(&state.db, reset_info.user_id).await.ok();
+    session::delete_all_user_sessions(&state.db, reset_info.user_id)
+        .await
+        .ok();
 
     info!(event = "password_reset_success", user_id = %reset_info.user_id, "Password reset successfully");
-    state.write_audit_log(Some(reset_info.user_id), "password_reset", None, None).await;
+    state
+        .write_audit_log(Some(reset_info.user_id), "password_reset", None, None)
+        .await;
 
     Ok(Json(MessageResponse {
-        message: "Password reset successfully. You can now sign in with your new password.".to_string(),
+        message: "Password reset successfully. You can now sign in with your new password."
+            .to_string(),
     }))
 }
 
@@ -1287,7 +1352,11 @@ async fn change_password(
     jar: CookieJar,
     Json(input): Json<ChangePasswordRequest>,
 ) -> Result<Json<MessageResponse>, (StatusCode, Json<serde_json::Value>)> {
-    if !state.rate_limiter.check(&format!("change-pwd:{}", user.id)).await {
+    if !state
+        .rate_limiter
+        .check(&format!("change-pwd:{}", user.id))
+        .await
+    {
         return Err(api_err(StatusCode::TOO_MANY_REQUESTS, "Too many requests"));
     }
 
@@ -1298,7 +1367,10 @@ async fn change_password(
     if new_password.len() < ep_config.min_password_length {
         return Err(api_err(
             StatusCode::BAD_REQUEST,
-            &format!("Password must be at least {} characters", ep_config.min_password_length),
+            &format!(
+                "Password must be at least {} characters",
+                ep_config.min_password_length
+            ),
         ));
     }
 
@@ -1308,9 +1380,11 @@ async fn change_password(
     }
 
     #[cfg(feature = "diesel-async")]
-    let mut conn = state.db.get().await.map_err(|_| {
-        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-    })?;
+    let mut conn = state
+        .db
+        .get()
+        .await
+        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
     // Get current password hash
     #[cfg(feature = "seaorm")]
@@ -1341,7 +1415,10 @@ async fn change_password(
     let valid = password::verify_password(&current_password, current_hash).unwrap_or(false);
     if !valid || pwd_record.is_none() {
         warn!(event = "change_password_wrong_current", user_id = %user.id, "Wrong current password");
-        return Err(api_err(StatusCode::UNAUTHORIZED, "Current password is incorrect"));
+        return Err(api_err(
+            StatusCode::UNAUTHORIZED,
+            "Current password is incorrect",
+        ));
     }
 
     if ep_config.hibp_check
@@ -1381,13 +1458,17 @@ async fn change_password(
             .await
             .ok();
     } else {
-        session::delete_all_user_sessions(&state.db, user.id).await.ok();
+        session::delete_all_user_sessions(&state.db, user.id)
+            .await
+            .ok();
     }
 
     state.emit_event(&AuthEvent::PasswordChanged { user_id: user.id });
 
     info!(event = "password_changed", user_id = %user.id, "Password changed successfully");
-    state.write_audit_log(Some(user.id), "password_changed", None, None).await;
+    state
+        .write_audit_log(Some(user.id), "password_changed", None, None)
+        .await;
 
     Ok(Json(MessageResponse {
         message: "Password changed successfully.".to_string(),

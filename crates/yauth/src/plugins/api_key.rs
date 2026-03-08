@@ -99,10 +99,7 @@ mod diesel_db {
         Ok(())
     }
 
-    pub async fn list_api_keys_by_user(
-        conn: &mut Conn,
-        user_id: Uuid,
-    ) -> DbResult<Vec<ApiKeyRow>> {
+    pub async fn list_api_keys_by_user(conn: &mut Conn, user_id: Uuid) -> DbResult<Vec<ApiKeyRow>> {
         diesel::sql_query(
             "SELECT id, user_id, key_prefix, key_hash, name, scopes, last_used_at, expires_at, created_at FROM yauth_api_keys WHERE user_id = $1",
         )
@@ -278,9 +275,11 @@ async fn create_api_key(
     }
     #[cfg(feature = "diesel-async")]
     {
-        let mut conn = state.db.get().await.map_err(|_| {
-            err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
+        let mut conn = state
+            .db
+            .get()
+            .await
+            .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
         diesel_db::insert_api_key(
             &mut conn,
             api_key_id,
@@ -367,9 +366,11 @@ async fn list_api_keys(
 
     #[cfg(feature = "diesel-async")]
     let response: Vec<ApiKeyResponse> = {
-        let mut conn = state.db.get().await.map_err(|_| {
-            err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
+        let mut conn = state
+            .db
+            .get()
+            .await
+            .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
         let keys = diesel_db::list_api_keys_by_user(&mut conn, user.id)
             .await
             .map_err(|e| {
@@ -428,9 +429,11 @@ async fn delete_api_key(
     }
     #[cfg(feature = "diesel-async")]
     {
-        let mut conn = state.db.get().await.map_err(|_| {
-            err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
+        let mut conn = state
+            .db
+            .get()
+            .await
+            .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
         let key = diesel_db::find_api_key_by_id_and_user(&mut conn, id, user.id)
             .await
             .map_err(|e| {
@@ -499,7 +502,11 @@ pub async fn validate_api_key(key: &str, state: &YAuthState) -> Result<AuthUser,
     }
 
     #[cfg(feature = "diesel-async")]
-    let mut conn = state.db.get().await.map_err(|e| format!("Pool error: {}", e))?;
+    let mut conn = state
+        .db
+        .get()
+        .await
+        .map_err(|e| format!("Pool error: {}", e))?;
 
     // Look up by prefix
     #[cfg(feature = "seaorm")]
@@ -589,8 +596,12 @@ pub async fn validate_api_key(key: &str, state: &YAuthState) -> Result<AuthUser,
             .map_err(|e| format!("Database error: {}", e))?
             .ok_or_else(|| "User not found".to_string())?;
         UserInfo {
-            id: user.id, email: user.email, display_name: user.display_name,
-            email_verified: user.email_verified, role: user.role, banned: user.banned,
+            id: user.id,
+            email: user.email,
+            display_name: user.display_name,
+            email_verified: user.email_verified,
+            role: user.role,
+            banned: user.banned,
         }
     };
     #[cfg(feature = "diesel-async")]
@@ -600,8 +611,12 @@ pub async fn validate_api_key(key: &str, state: &YAuthState) -> Result<AuthUser,
             .map_err(|e| format!("Database error: {}", e))?
             .ok_or_else(|| "User not found".to_string())?;
         UserInfo {
-            id: user.id, email: user.email, display_name: user.display_name,
-            email_verified: user.email_verified, role: user.role, banned: user.banned,
+            id: user.id,
+            email: user.email,
+            display_name: user.display_name,
+            email_verified: user.email_verified,
+            role: user.role,
+            banned: user.banned,
         }
     };
 

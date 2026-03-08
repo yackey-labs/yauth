@@ -265,8 +265,7 @@ impl YAuthPlugin for WebhookPlugin {
         #[cfg(feature = "diesel-async")]
         tokio::spawn(async move {
             if let Err(e) =
-                dispatch_webhooks_diesel(db, event_clone, max_retries, retry_delay, timeout)
-                    .await
+                dispatch_webhooks_diesel(db, event_clone, max_retries, retry_delay, timeout).await
             {
                 error!("Webhook dispatch error: {}", e);
             }
@@ -435,7 +434,9 @@ async fn dispatch_webhooks(
 
 #[cfg(feature = "diesel-async")]
 async fn dispatch_webhooks_diesel(
-    pool: diesel_async_crate::pooled_connection::deadpool::Pool<diesel_async_crate::AsyncPgConnection>,
+    pool: diesel_async_crate::pooled_connection::deadpool::Pool<
+        diesel_async_crate::AsyncPgConnection,
+    >,
     event: AuthEvent,
     max_retries: u32,
     retry_delay: std::time::Duration,
@@ -445,7 +446,9 @@ async fn dispatch_webhooks_diesel(
     let payload = serde_json::to_value(&event)?;
 
     let mut conn = pool.get().await.map_err(|e| e.to_string())?;
-    let webhooks = diesel_db::find_active_webhooks(&mut conn).await.map_err(|e| e.to_string())?;
+    let webhooks = diesel_db::find_active_webhooks(&mut conn)
+        .await
+        .map_err(|e| e.to_string())?;
 
     let client = reqwest::Client::builder().timeout(timeout).build()?;
 
@@ -765,9 +768,11 @@ async fn create_webhook(
 
     #[cfg(feature = "diesel-async")]
     {
-        let mut conn = state.db.get().await.map_err(|_| {
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
+        let mut conn = state
+            .db
+            .get()
+            .await
+            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
         diesel_db::insert_webhook(&mut conn, id, &input.url, &secret, &events_json, now)
             .await
@@ -830,9 +835,11 @@ async fn list_webhooks(
 
     #[cfg(feature = "diesel-async")]
     let responses: Vec<WebhookResponse> = {
-        let mut conn = state.db.get().await.map_err(|_| {
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
+        let mut conn = state
+            .db
+            .get()
+            .await
+            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
         let webhooks = diesel_db::find_all_webhooks(&mut conn).await.map_err(|e| {
             error!("DB error listing webhooks: {}", e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
@@ -885,9 +892,11 @@ async fn get_webhook(
 
     #[cfg(feature = "diesel-async")]
     let detail = {
-        let mut conn = state.db.get().await.map_err(|_| {
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
+        let mut conn = state
+            .db
+            .get()
+            .await
+            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
         let webhook = diesel_db::find_webhook_by_id(&mut conn, id)
             .await
@@ -964,9 +973,11 @@ async fn update_webhook(
 
     #[cfg(feature = "diesel-async")]
     let response: WebhookResponse = {
-        let mut conn = state.db.get().await.map_err(|_| {
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
+        let mut conn = state
+            .db
+            .get()
+            .await
+            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
         // Check existence first
         diesel_db::find_webhook_by_id(&mut conn, id)
@@ -977,7 +988,10 @@ async fn update_webhook(
             })?
             .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "Webhook not found"))?;
 
-        let events_json = input.events.as_ref().map(|e| serde_json::to_value(e).unwrap());
+        let events_json = input
+            .events
+            .as_ref()
+            .map(|e| serde_json::to_value(e).unwrap());
         let now = Utc::now().fixed_offset();
 
         let updated = diesel_db::update_webhook(
@@ -1040,9 +1054,11 @@ async fn delete_webhook(
 
     #[cfg(feature = "diesel-async")]
     {
-        let mut conn = state.db.get().await.map_err(|_| {
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
+        let mut conn = state
+            .db
+            .get()
+            .await
+            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
         diesel_db::find_webhook_by_id(&mut conn, id)
             .await
@@ -1052,10 +1068,12 @@ async fn delete_webhook(
             })?
             .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "Webhook not found"))?;
 
-        diesel_db::delete_webhook(&mut conn, id).await.map_err(|e| {
-            error!("DB error deleting webhook: {}", e);
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
+        diesel_db::delete_webhook(&mut conn, id)
+            .await
+            .map_err(|e| {
+                error!("DB error deleting webhook: {}", e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?;
     }
 
     info!(
@@ -1102,9 +1120,11 @@ async fn test_webhook(
 
     #[cfg(feature = "diesel-async")]
     let (webhook_id, webhook_url, webhook_secret) = {
-        let mut conn = state.db.get().await.map_err(|_| {
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
+        let mut conn = state
+            .db
+            .get()
+            .await
+            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
         let webhook = diesel_db::find_webhook_by_id(&mut conn, id)
             .await
             .map_err(|e| {
@@ -1176,9 +1196,11 @@ async fn test_webhook(
 
     #[cfg(feature = "diesel-async")]
     {
-        let mut conn = state.db.get().await.map_err(|_| {
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
+        let mut conn = state
+            .db
+            .get()
+            .await
+            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
         diesel_db::insert_delivery(
             &mut conn,

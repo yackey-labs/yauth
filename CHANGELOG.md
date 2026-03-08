@@ -1,3 +1,9 @@
+## 0.1.46 (2026-03-08)
+
+### Fixes
+
+- add credential-provider for yackey-cloud registry
+
 ## 0.1.45 (2026-03-08)
 
 ### Fixes

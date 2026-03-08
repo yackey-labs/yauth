@@ -44,27 +44,36 @@ use yauth::state::DbPool;
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Try to build a deadpool pool from `DATABASE_URL`. Returns `None` when the
-/// env var is missing so the calling test can skip gracefully.
-fn try_pool() -> Option<DbPool> {
-    let url = std::env::var("DATABASE_URL").ok()?;
+/// Try to build a deadpool pool from `DATABASE_URL` and verify the connection
+/// works. Returns `None` when the env var is missing or the server is
+/// unreachable, so the calling test can skip gracefully.
+async fn try_pool() -> Option<DbPool> {
+    let url = std::env::var("DATABASE_URL").ok().or_else(|| {
+        eprintln!("DATABASE_URL not set — skipping test");
+        None
+    })?;
     let manager = AsyncDieselConnectionManager::<AsyncPgConnection>::new(&url);
     let pool = DieselPool::builder(manager)
         .max_size(4)
         .build()
         .expect("failed to build diesel deadpool");
-    Some(pool)
+
+    // Eagerly verify the connection works — skip if the server is unreachable.
+    match pool.get().await {
+        Ok(_) => Some(pool),
+        Err(e) => {
+            eprintln!("Cannot connect to database — skipping test: {e}");
+            None
+        }
+    }
 }
 
 /// Convenience macro: skip the test when no database is available.
 macro_rules! require_db {
     () => {
-        match try_pool() {
+        match try_pool().await {
             Some(pool) => pool,
-            None => {
-                eprintln!("DATABASE_URL not set — skipping test");
-                return;
-            }
+            None => return,
         }
     };
 }

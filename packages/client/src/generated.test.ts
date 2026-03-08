@@ -1,12 +1,20 @@
 import { describe, expect, mock, test } from "bun:test";
 import { createYAuthClient, YAuthError } from "./generated";
 
+type MockFetch = ReturnType<typeof mock<(...args: unknown[]) => unknown>>;
+
 function mockFetch(status: number, body: unknown = {}) {
 	return mock(async () => ({
 		ok: status >= 200 && status < 300,
 		status,
 		text: async () => JSON.stringify(body),
 	})) as unknown as typeof fetch;
+}
+
+function firstCall(fn: typeof fetch): [string, RequestInit] {
+	const c = (fn as unknown as MockFetch).mock.calls[0];
+	if (!c) throw new Error("Expected at least one call");
+	return c as unknown as [string, RequestInit];
 }
 
 function createClient(fetchFn: typeof fetch) {
@@ -35,8 +43,7 @@ describe("createYAuthClient", () => {
 		expect(result).toEqual(user);
 		expect(fetchFn).toHaveBeenCalledTimes(1);
 
-		const [url, opts] = (fetchFn as unknown as ReturnType<typeof mock>).mock
-			.calls[0]!;
+		const [url, opts] = firstCall(fetchFn);
 		expect(url).toBe("http://localhost:3000/auth/session");
 		expect(opts.method).toBe("GET");
 		expect(opts.credentials).toBe("include");
@@ -47,8 +54,7 @@ describe("createYAuthClient", () => {
 		const client = createClient(fetchFn);
 
 		await client.logout();
-		const [url, opts] = (fetchFn as unknown as ReturnType<typeof mock>).mock
-			.calls[0]!;
+		const [url, opts] = firstCall(fetchFn);
 		expect(url).toBe("http://localhost:3000/auth/logout");
 		expect(opts.method).toBe("POST");
 	});
@@ -63,11 +69,10 @@ describe("createYAuthClient", () => {
 			display_name: null,
 		});
 
-		const [url, opts] = (fetchFn as unknown as ReturnType<typeof mock>).mock
-			.calls[0]!;
+		const [url, opts] = firstCall(fetchFn);
 		expect(url).toBe("http://localhost:3000/auth/register");
 		expect(opts.method).toBe("POST");
-		expect(JSON.parse(opts.body)).toEqual({
+		expect(JSON.parse(opts.body as string)).toEqual({
 			email: "new@example.com",
 			password: "secureP@ss1",
 			display_name: null,
@@ -84,10 +89,9 @@ describe("createYAuthClient", () => {
 			remember_me: null,
 		});
 
-		const [, opts] = (fetchFn as unknown as ReturnType<typeof mock>).mock
-			.calls[0]!;
+		const [, opts] = firstCall(fetchFn);
 		expect(opts.method).toBe("POST");
-		expect(JSON.parse(opts.body)).toEqual({
+		expect(JSON.parse(opts.body as string)).toEqual({
 			email: "user@example.com",
 			password: "pass123",
 			remember_me: null,
@@ -151,9 +155,10 @@ describe("createYAuthClient", () => {
 		});
 
 		await client.getSession();
-		const [, opts] = (fetchFn as unknown as ReturnType<typeof mock>).mock
-			.calls[0]!;
-		expect(opts.headers.Authorization).toBe("Bearer my-jwt-token");
+		const [, opts] = firstCall(fetchFn);
+		expect((opts.headers as Record<string, string>).Authorization).toBe(
+			"Bearer my-jwt-token",
+		);
 	});
 
 	test("updateProfile sends PATCH to /me", async () => {
@@ -161,11 +166,12 @@ describe("createYAuthClient", () => {
 		const client = createClient(fetchFn);
 
 		await client.updateProfile({ display_name: "New Name" });
-		const [url, opts] = (fetchFn as unknown as ReturnType<typeof mock>).mock
-			.calls[0]!;
+		const [url, opts] = firstCall(fetchFn);
 		expect(url).toBe("http://localhost:3000/auth/me");
 		expect(opts.method).toBe("PATCH");
-		expect(JSON.parse(opts.body)).toEqual({ display_name: "New Name" });
+		expect(JSON.parse(opts.body as string)).toEqual({
+			display_name: "New Name",
+		});
 	});
 });
 
@@ -178,8 +184,7 @@ describe("client API groups", () => {
 		const client = createClient(fetchFn);
 
 		await client.mfa.setup();
-		const [url, opts] = (fetchFn as unknown as ReturnType<typeof mock>).mock
-			.calls[0]!;
+		const [url, opts] = firstCall(fetchFn);
 		expect(url).toBe("http://localhost:3000/auth/mfa/totp/setup");
 		expect(opts.method).toBe("POST");
 	});
@@ -189,8 +194,7 @@ describe("client API groups", () => {
 		const client = createClient(fetchFn);
 
 		await client.passkey.list();
-		const [url, opts] = (fetchFn as unknown as ReturnType<typeof mock>).mock
-			.calls[0]!;
+		const [url, opts] = firstCall(fetchFn);
 		expect(url).toBe("http://localhost:3000/auth/passkeys");
 		expect(opts.method).toBe("GET");
 	});
@@ -204,11 +208,10 @@ describe("client API groups", () => {
 			scopes: null,
 			expires_in_days: null,
 		});
-		const [url, opts] = (fetchFn as unknown as ReturnType<typeof mock>).mock
-			.calls[0]!;
+		const [url, opts] = firstCall(fetchFn);
 		expect(url).toBe("http://localhost:3000/auth/api-keys");
 		expect(opts.method).toBe("POST");
-		expect(JSON.parse(opts.body)).toEqual({
+		expect(JSON.parse(opts.body as string)).toEqual({
 			name: "My Key",
 			scopes: null,
 			expires_in_days: null,
@@ -220,8 +223,7 @@ describe("client API groups", () => {
 		const client = createClient(fetchFn);
 
 		await client.admin.deleteUser("user-123");
-		const [url, opts] = (fetchFn as unknown as ReturnType<typeof mock>).mock
-			.calls[0]!;
+		const [url, opts] = firstCall(fetchFn);
 		expect(url).toBe("http://localhost:3000/auth/admin/users/user-123");
 		expect(opts.method).toBe("DELETE");
 	});
@@ -235,8 +237,7 @@ describe("client API groups", () => {
 			events: ["user.registered"],
 			secret: null,
 		});
-		const [url, opts] = (fetchFn as unknown as ReturnType<typeof mock>).mock
-			.calls[0]!;
+		const [url, opts] = firstCall(fetchFn);
 		expect(url).toBe("http://localhost:3000/auth/webhooks");
 		expect(opts.method).toBe("POST");
 	});
@@ -246,8 +247,7 @@ describe("client API groups", () => {
 		const client = createClient(fetchFn);
 
 		await client.oidc.openidConfiguration();
-		const [url] = (fetchFn as unknown as ReturnType<typeof mock>).mock
-			.calls[0]!;
+		const [url] = firstCall(fetchFn);
 		expect(url).toBe(
 			"http://localhost:3000/auth/.well-known/openid-configuration",
 		);
@@ -265,8 +265,7 @@ describe("client API groups", () => {
 			password: "pass",
 			scope: null,
 		});
-		const [url, opts] = (fetchFn as unknown as ReturnType<typeof mock>).mock
-			.calls[0]!;
+		const [url, opts] = firstCall(fetchFn);
 		expect(url).toBe("http://localhost:3000/auth/token");
 		expect(opts.method).toBe("POST");
 	});
@@ -276,10 +275,11 @@ describe("client API groups", () => {
 		const client = createClient(fetchFn);
 
 		await client.magicLink.send({ email: "magic@example.com" });
-		const [url, opts] = (fetchFn as unknown as ReturnType<typeof mock>).mock
-			.calls[0]!;
+		const [url, opts] = firstCall(fetchFn);
 		expect(url).toBe("http://localhost:3000/auth/magic-link/send");
-		expect(JSON.parse(opts.body)).toEqual({ email: "magic@example.com" });
+		expect(JSON.parse(opts.body as string)).toEqual({
+			email: "magic@example.com",
+		});
 	});
 
 	test("oauth.authorize returns URL string", () => {

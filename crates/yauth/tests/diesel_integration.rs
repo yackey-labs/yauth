@@ -47,25 +47,39 @@ struct TestDb {
 }
 
 impl TestDb {
-    async fn new() -> Self {
+    /// Try to create a test database. Returns `None` if neither `DATABASE_URL`
+    /// nor Docker (for testcontainers) is available.
+    async fn try_new() -> Option<Self> {
+        // 1. Try DATABASE_URL first (CI with postgres service).
         if let Ok(url) = std::env::var("DATABASE_URL") {
-            // CI path — use the pre-existing postgres service.
             let manager = AsyncDieselConnectionManager::<AsyncPgConnection>::new(&url);
             let pool = DieselPool::builder(manager)
                 .max_size(4)
                 .build()
                 .expect("failed to build diesel deadpool");
-            return Self {
-                pool,
-                _container: None,
-            };
+
+            // Verify connection works before proceeding.
+            match pool.get().await {
+                Ok(_) => {
+                    return Some(Self {
+                        pool,
+                        _container: None,
+                    });
+                }
+                Err(e) => {
+                    eprintln!("DATABASE_URL set but cannot connect: {e}");
+                }
+            }
         }
 
-        // Local dev path — spin up a disposable container.
-        let container = Postgres::default()
-            .start()
-            .await
-            .expect("failed to start postgres container (is Docker running?)");
+        // 2. Fall back to testcontainers.
+        let container = match Postgres::default().start().await {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("Cannot start testcontainer (Docker unavailable?): {e}");
+                return None;
+            }
+        };
 
         let host_port = container
             .get_host_port_ipv4(5432)
@@ -79,11 +93,24 @@ impl TestDb {
             .build()
             .expect("failed to build diesel deadpool");
 
-        Self {
+        Some(Self {
             pool,
             _container: Some(container),
-        }
+        })
     }
+}
+
+/// Convenience macro: skip the test when no database is available.
+macro_rules! require_db {
+    () => {
+        match TestDb::try_new().await {
+            Some(db) => db,
+            None => {
+                eprintln!("No database available — skipping test");
+                return;
+            }
+        }
+    };
 }
 
 /// Drop all `yauth_*` tables so every test starts from a clean slate.
@@ -107,7 +134,7 @@ async fn drop_yauth_tables(pool: &DbPool) {
 
 #[tokio::test]
 async fn diesel_run_migrations_creates_tables() {
-    let db = TestDb::new().await;
+    let db = require_db!();
     drop_yauth_tables(&db.pool).await;
 
     yauth::migration::diesel_migrations::run_migrations(&db.pool)
@@ -140,7 +167,7 @@ async fn diesel_run_migrations_creates_tables() {
 
 #[tokio::test]
 async fn diesel_migrations_are_idempotent() {
-    let db = TestDb::new().await;
+    let db = require_db!();
 
     yauth::migration::diesel_migrations::run_migrations(&db.pool)
         .await
@@ -156,7 +183,7 @@ async fn diesel_migrations_are_idempotent() {
 
 #[tokio::test]
 async fn diesel_session_create_validate_delete() {
-    let db = TestDb::new().await;
+    let db = require_db!();
 
     yauth::migration::diesel_migrations::run_migrations(&db.pool)
         .await
@@ -235,7 +262,7 @@ async fn diesel_session_create_validate_delete() {
 
 #[tokio::test]
 async fn diesel_pool_sharing() {
-    let db = TestDb::new().await;
+    let db = require_db!();
 
     yauth::migration::diesel_migrations::run_migrations(&db.pool)
         .await

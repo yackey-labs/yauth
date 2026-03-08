@@ -1,3 +1,29 @@
+## 0.1.42 (2026-03-08)
+
+### Features
+
+- add diesel-async as optional alternative to SeaORM
+- add diesel-async support for passkey, bearer, and magic-link plugins
+- add diesel-async support for api-key plugin
+- add diesel-async support for mfa plugin
+- add diesel-async support for account-lockout plugin
+- add diesel-async support for oidc plugin
+- add diesel-async support for oauth plugin
+- add diesel-async support for admin plugin
+- add diesel-async support for oauth2-server plugin
+- add diesel-async support for webhooks plugin
+- add diesel-full feature flag and update CI to test all plugins
+- use testcontainers for diesel integration tests
+
+### Fixes
+
+- complete diesel-async support for oauth2-server and bearer plugins
+- resolve clippy warnings for diesel-full feature set
+- wire up diesel-async generate_id_token_from_fields in oidc plugin
+- fix CI failures in TypeScript typecheck and diesel integration tests
+- gracefully skip diesel tests when DB and Docker both unavailable
+- wait for testcontainer postgres readiness before running tests
+
 ## 0.1.41 (2026-03-07)
 
 ### Fixes

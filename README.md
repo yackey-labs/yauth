@@ -378,9 +378,26 @@ Pre-built SolidJS components:
 - **Webhook signing** — HMAC-SHA256 signatures for payload integrity
 - **PKCE S256** — required for all OAuth2 authorization code flows
 
-## Database
+## Database Backend
 
-yauth uses SeaORM with PostgreSQL. All tables are prefixed with `yauth_`. Migrations are feature-gated — only tables for enabled features are created.
+yauth supports two database backends, selectable via feature flags:
+
+| Backend | Feature | Default | Description |
+|---------|---------|---------|-------------|
+| **SeaORM** | `seaorm` | Yes | Async ORM with entity-based queries. Enabled by default. |
+| **diesel-async** | `diesel-async` | No | Async diesel with deadpool. Enables `diesel-full-text-search` and lower-level SQL control. |
+
+The two backends are **mutually exclusive** — enabling both produces a compile error. To switch to diesel-async, disable default features and add `diesel-async`:
+
+```toml
+yauth = { version = "0.1", default-features = false, features = ["diesel-async", "email-password"] }
+```
+
+See [docs/migrating-to-diesel.md](docs/migrating-to-diesel.md) for a complete migration guide with before/after code examples.
+
+## Database Schema
+
+yauth uses PostgreSQL. All tables are prefixed with `yauth_`. Migrations are feature-gated — only tables for enabled features are created.
 
 Run migrations:
 

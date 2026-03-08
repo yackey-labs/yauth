@@ -1,16 +1,12 @@
 //! Integration tests for the diesel-async database backend.
 //!
-//! These tests require a running PostgreSQL instance. Set the `DATABASE_URL`
-//! environment variable to a connection string for a **disposable** test
-//! database, e.g.:
+//! Uses testcontainers to spin up a disposable PostgreSQL instance per test —
+//! no external database or `DATABASE_URL` required.
 //!
 //! ```text
-//! DATABASE_URL=postgres://yauth:yauth@localhost:5432/yauth_test \
-//!   cargo test --workspace --no-default-features \
-//!     --features "diesel-async,email-password" -- diesel
+//! cargo test --workspace --no-default-features \
+//!   --features "diesel-async,email-password" -- diesel
 //! ```
-//!
-//! If `DATABASE_URL` is not set the tests are silently skipped.
 //!
 //! ## Compile-time exclusivity
 //!
@@ -21,15 +17,13 @@
 //! #[cfg(all(feature = "seaorm", feature = "diesel-async"))]
 //! compile_error!("Features `seaorm` and `diesel-async` are mutually exclusive.");
 //! ```
-//!
-//! Attempting `--features "seaorm,diesel-async"` will fail at compile time.
-//! This is intentionally *not* tested at runtime because there is no way to
-//! catch a `compile_error!` from a running test.
 
 #![cfg(feature = "diesel-async")]
 
 use std::time::Duration;
 
+use testcontainers::runners::AsyncRunner;
+use testcontainers_modules::postgres::Postgres;
 use uuid::Uuid;
 use yauth::AsyncDieselConnectionManager;
 use yauth::AsyncPgConnection;
@@ -44,41 +38,56 @@ use yauth::state::DbPool;
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Try to build a deadpool pool from `DATABASE_URL` and verify the connection
-/// works. Returns `None` when the env var is missing or the server is
-/// unreachable, so the calling test can skip gracefully.
-async fn try_pool() -> Option<DbPool> {
-    let url = std::env::var("DATABASE_URL").ok().or_else(|| {
-        eprintln!("DATABASE_URL not set — skipping test");
-        None
-    })?;
-    let manager = AsyncDieselConnectionManager::<AsyncPgConnection>::new(&url);
-    let pool = DieselPool::builder(manager)
-        .max_size(4)
-        .build()
-        .expect("failed to build diesel deadpool");
+/// Holds a database pool and optionally the testcontainer that backs it.
+/// When `DATABASE_URL` is set (e.g. in CI with a postgres service), that is
+/// used directly. Otherwise a testcontainer is started automatically.
+struct TestDb {
+    pool: DbPool,
+    _container: Option<testcontainers::ContainerAsync<Postgres>>,
+}
 
-    // Eagerly verify the connection works — skip if the server is unreachable.
-    match pool.get().await {
-        Ok(_) => Some(pool),
-        Err(e) => {
-            eprintln!("Cannot connect to database — skipping test: {e}");
-            None
+impl TestDb {
+    async fn new() -> Self {
+        if let Ok(url) = std::env::var("DATABASE_URL") {
+            // CI path — use the pre-existing postgres service.
+            let manager = AsyncDieselConnectionManager::<AsyncPgConnection>::new(&url);
+            let pool = DieselPool::builder(manager)
+                .max_size(4)
+                .build()
+                .expect("failed to build diesel deadpool");
+            return Self {
+                pool,
+                _container: None,
+            };
+        }
+
+        // Local dev path — spin up a disposable container.
+        let container = Postgres::default()
+            .start()
+            .await
+            .expect("failed to start postgres container (is Docker running?)");
+
+        let host_port = container
+            .get_host_port_ipv4(5432)
+            .await
+            .expect("failed to get postgres port");
+
+        let url = format!("postgres://postgres:postgres@127.0.0.1:{host_port}/postgres");
+        let manager = AsyncDieselConnectionManager::<AsyncPgConnection>::new(&url);
+        let pool = DieselPool::builder(manager)
+            .max_size(4)
+            .build()
+            .expect("failed to build diesel deadpool");
+
+        Self {
+            pool,
+            _container: Some(container),
         }
     }
 }
 
-/// Convenience macro: skip the test when no database is available.
-macro_rules! require_db {
-    () => {
-        match try_pool().await {
-            Some(pool) => pool,
-            None => return,
-        }
-    };
-}
-
 /// Drop all `yauth_*` tables so every test starts from a clean slate.
+/// Only needed in CI where the database is shared across tests.
 async fn drop_yauth_tables(pool: &DbPool) {
     let mut conn = pool.get().await.expect("pool connection");
     diesel::sql_query(
@@ -98,22 +107,17 @@ async fn drop_yauth_tables(pool: &DbPool) {
 
 #[tokio::test]
 async fn diesel_run_migrations_creates_tables() {
-    let pool = require_db!();
+    let db = TestDb::new().await;
+    drop_yauth_tables(&db.pool).await;
 
-    // Clean slate
-    drop_yauth_tables(&pool).await;
-
-    // Run migrations
-    yauth::migration::diesel_migrations::run_migrations(&pool)
+    yauth::migration::diesel_migrations::run_migrations(&db.pool)
         .await
         .expect("run_migrations should succeed");
 
-    // Verify core tables exist
-    let tables = yauth::migration::diesel_migrations::list_yauth_tables(&pool)
+    let tables = yauth::migration::diesel_migrations::list_yauth_tables(&db.pool)
         .await
         .expect("list_yauth_tables should succeed");
 
-    // Core tables that are always created
     assert!(
         tables.contains(&"yauth_users".to_string()),
         "yauth_users table should exist, got: {tables:?}"
@@ -127,31 +131,23 @@ async fn diesel_run_migrations_creates_tables() {
         "yauth_audit_log table should exist, got: {tables:?}"
     );
 
-    // email-password tables (only when feature is enabled)
     #[cfg(feature = "email-password")]
     assert!(
         tables.contains(&"yauth_email_verifications".to_string()),
         "yauth_email_verifications table should exist when email-password is enabled, got: {tables:?}"
     );
-
-    // Clean up
-    drop_yauth_tables(&pool).await;
 }
 
 #[tokio::test]
 async fn diesel_migrations_are_idempotent() {
-    let pool = require_db!();
-    drop_yauth_tables(&pool).await;
+    let db = TestDb::new().await;
 
-    // Run migrations twice — the SQL uses IF NOT EXISTS, so this must not error.
-    yauth::migration::diesel_migrations::run_migrations(&pool)
+    yauth::migration::diesel_migrations::run_migrations(&db.pool)
         .await
         .expect("first run should succeed");
-    yauth::migration::diesel_migrations::run_migrations(&pool)
+    yauth::migration::diesel_migrations::run_migrations(&db.pool)
         .await
         .expect("second (idempotent) run should succeed");
-
-    drop_yauth_tables(&pool).await;
 }
 
 // ---------------------------------------------------------------------------
@@ -160,10 +156,9 @@ async fn diesel_migrations_are_idempotent() {
 
 #[tokio::test]
 async fn diesel_session_create_validate_delete() {
-    let pool = require_db!();
-    drop_yauth_tables(&pool).await;
+    let db = TestDb::new().await;
 
-    yauth::migration::diesel_migrations::run_migrations(&pool)
+    yauth::migration::diesel_migrations::run_migrations(&db.pool)
         .await
         .expect("migrations");
 
@@ -171,7 +166,7 @@ async fn diesel_session_create_validate_delete() {
 
     // Insert a dummy user so the FK (if any) is satisfied.
     {
-        let mut conn = pool.get().await.unwrap();
+        let mut conn = db.pool.get().await.unwrap();
         diesel::sql_query(
             "INSERT INTO yauth_users (id, display_name, email, role, is_banned, email_verified, created_at, updated_at) \
              VALUES ($1, 'Test', 'test@example.com', 'user', false, true, NOW(), NOW())",
@@ -184,7 +179,7 @@ async fn diesel_session_create_validate_delete() {
 
     // --- Create session ---
     let (token, session_id) = yauth::auth::session::create_session(
-        &pool,
+        &db.pool,
         user_id,
         Some("127.0.0.1".into()),
         Some("test-agent".into()),
@@ -198,7 +193,9 @@ async fn diesel_session_create_validate_delete() {
 
     // --- Validate session ---
     let config = YAuthConfig::default();
-    let state = YAuthBuilder::new(pool.clone(), config).build().into_state();
+    let state = YAuthBuilder::new(db.pool.clone(), config)
+        .build()
+        .into_state();
 
     let user = yauth::auth::session::validate_session(
         &state,
@@ -215,7 +212,7 @@ async fn diesel_session_create_validate_delete() {
     assert_eq!(user.session_id, session_id);
 
     // --- Delete session ---
-    let deleted = yauth::auth::session::delete_session(&pool, &token)
+    let deleted = yauth::auth::session::delete_session(&db.pool, &token)
         .await
         .expect("delete_session should succeed");
     assert!(deleted, "delete should report success");
@@ -230,8 +227,6 @@ async fn diesel_session_create_validate_delete() {
     .await
     .expect("validate_session after delete should succeed");
     assert!(user_after.is_none(), "session should be gone after delete");
-
-    drop_yauth_tables(&pool).await;
 }
 
 // ---------------------------------------------------------------------------
@@ -240,20 +235,21 @@ async fn diesel_session_create_validate_delete() {
 
 #[tokio::test]
 async fn diesel_pool_sharing() {
-    let pool = require_db!();
-    drop_yauth_tables(&pool).await;
+    let db = TestDb::new().await;
 
-    yauth::migration::diesel_migrations::run_migrations(&pool)
+    yauth::migration::diesel_migrations::run_migrations(&db.pool)
         .await
         .expect("migrations");
 
     // Build YAuth with the pool
     let config = YAuthConfig::default();
-    let state = YAuthBuilder::new(pool.clone(), config).build().into_state();
+    let state = YAuthBuilder::new(db.pool.clone(), config)
+        .build()
+        .into_state();
 
     // Use the pool directly for a raw query
     {
-        let mut conn = pool.get().await.expect("direct pool connection");
+        let mut conn = db.pool.get().await.expect("direct pool connection");
         diesel::sql_query(
             "INSERT INTO yauth_users (id, display_name, email, role, is_banned, email_verified, created_at, updated_at) \
              VALUES ($1, 'Shared', 'shared@example.com', 'user', false, true, NOW(), NOW())",
@@ -284,6 +280,4 @@ async fn diesel_pool_sharing() {
             "should see the user inserted via the shared pool"
         );
     }
-
-    drop_yauth_tables(&pool).await;
 }

@@ -94,6 +94,8 @@ totp-rs = { workspace = true }
 uuid = { workspace = true }
 base64 = "0.22"
 url = "2"
+testcontainers = "0.26"
+testcontainers-modules = { version = "0.14", features = ["postgres"] }
 
 
 [[example]]

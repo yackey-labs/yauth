@@ -5,6 +5,7 @@ use axum::{
     response::IntoResponse,
     routing::{delete, get, post},
 };
+#[cfg(feature = "seaorm")]
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
@@ -18,6 +19,218 @@ use crate::config::MfaConfig;
 use crate::middleware::AuthUser;
 use crate::plugin::{AuthEvent, EventResponse, PluginContext, YAuthPlugin};
 use crate::state::YAuthState;
+
+// ---------------------------------------------------------------------------
+// Diesel-async helpers
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "diesel-async")]
+mod diesel_db {
+    use diesel::result::OptionalExtension;
+    use diesel_async_crate::RunQueryDsl;
+    use uuid::Uuid;
+
+    type Conn = diesel_async_crate::AsyncPgConnection;
+    type DbResult<T> = Result<T, String>;
+
+    #[derive(diesel::QueryableByName, Clone)]
+    #[allow(dead_code)]
+    pub struct UserRow {
+        #[diesel(sql_type = diesel::sql_types::Uuid)]
+        pub id: Uuid,
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        pub email: String,
+        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+        pub display_name: Option<String>,
+        #[diesel(sql_type = diesel::sql_types::Bool)]
+        pub email_verified: bool,
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        pub role: String,
+        #[diesel(sql_type = diesel::sql_types::Bool)]
+        pub banned: bool,
+    }
+
+    #[derive(diesel::QueryableByName, Clone)]
+    #[allow(dead_code)]
+    pub struct TotpSecretRow {
+        #[diesel(sql_type = diesel::sql_types::Uuid)]
+        pub id: Uuid,
+        #[diesel(sql_type = diesel::sql_types::Uuid)]
+        pub user_id: Uuid,
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        pub encrypted_secret: String,
+        #[diesel(sql_type = diesel::sql_types::Bool)]
+        pub verified: bool,
+        #[diesel(sql_type = diesel::sql_types::Timestamptz)]
+        pub created_at: chrono::NaiveDateTime,
+    }
+
+    #[derive(diesel::QueryableByName, Clone)]
+    #[allow(dead_code)]
+    pub struct BackupCodeRow {
+        #[diesel(sql_type = diesel::sql_types::Uuid)]
+        pub id: Uuid,
+        #[diesel(sql_type = diesel::sql_types::Uuid)]
+        pub user_id: Uuid,
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        pub code_hash: String,
+        #[diesel(sql_type = diesel::sql_types::Bool)]
+        pub used: bool,
+        #[diesel(sql_type = diesel::sql_types::Timestamptz)]
+        pub created_at: chrono::NaiveDateTime,
+    }
+
+    pub async fn find_user_by_id(conn: &mut Conn, id: Uuid) -> DbResult<Option<UserRow>> {
+        diesel::sql_query(
+            "SELECT id, email, display_name, email_verified, role, banned FROM yauth_users WHERE id = $1",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(id)
+        .get_result(conn)
+        .await
+        .optional()
+        .map_err(|e| e.to_string())
+    }
+
+    pub async fn find_totp_secret(
+        conn: &mut Conn,
+        user_id: Uuid,
+        verified: bool,
+    ) -> DbResult<Option<TotpSecretRow>> {
+        diesel::sql_query(
+            "SELECT id, user_id, encrypted_secret, verified, created_at FROM yauth_totp_secrets WHERE user_id = $1 AND verified = $2",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(user_id)
+        .bind::<diesel::sql_types::Bool, _>(verified)
+        .get_result(conn)
+        .await
+        .optional()
+        .map_err(|e| e.to_string())
+    }
+
+    pub async fn insert_totp_secret(
+        conn: &mut Conn,
+        id: Uuid,
+        user_id: Uuid,
+        encrypted_secret: &str,
+        verified: bool,
+    ) -> DbResult<()> {
+        let now = chrono::Utc::now();
+        diesel::sql_query(
+            "INSERT INTO yauth_totp_secrets (id, user_id, encrypted_secret, verified, created_at) VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(id)
+        .bind::<diesel::sql_types::Uuid, _>(user_id)
+        .bind::<diesel::sql_types::Text, _>(encrypted_secret)
+        .bind::<diesel::sql_types::Bool, _>(verified)
+        .bind::<diesel::sql_types::Timestamptz, _>(now)
+        .execute(conn)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub async fn delete_totp_secrets_by_user(
+        conn: &mut Conn,
+        user_id: Uuid,
+        verified_filter: Option<bool>,
+    ) -> DbResult<u64> {
+        if let Some(v) = verified_filter {
+            let result = diesel::sql_query(
+                "DELETE FROM yauth_totp_secrets WHERE user_id = $1 AND verified = $2",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(user_id)
+            .bind::<diesel::sql_types::Bool, _>(v)
+            .execute(conn)
+            .await
+            .map_err(|e| e.to_string())?;
+            Ok(result as u64)
+        } else {
+            let result = diesel::sql_query(
+                "DELETE FROM yauth_totp_secrets WHERE user_id = $1",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(user_id)
+            .execute(conn)
+            .await
+            .map_err(|e| e.to_string())?;
+            Ok(result as u64)
+        }
+    }
+
+    pub async fn update_totp_secret_verified(
+        conn: &mut Conn,
+        id: Uuid,
+    ) -> DbResult<()> {
+        diesel::sql_query(
+            "UPDATE yauth_totp_secrets SET verified = true WHERE id = $1",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(id)
+        .execute(conn)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub async fn find_unused_backup_codes(
+        conn: &mut Conn,
+        user_id: Uuid,
+    ) -> DbResult<Vec<BackupCodeRow>> {
+        diesel::sql_query(
+            "SELECT id, user_id, code_hash, used, created_at FROM yauth_backup_codes WHERE user_id = $1 AND used = false",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(user_id)
+        .load(conn)
+        .await
+        .map_err(|e| e.to_string())
+    }
+
+    pub async fn insert_backup_code(
+        conn: &mut Conn,
+        id: Uuid,
+        user_id: Uuid,
+        code_hash: &str,
+    ) -> DbResult<()> {
+        let now = chrono::Utc::now();
+        diesel::sql_query(
+            "INSERT INTO yauth_backup_codes (id, user_id, code_hash, used, created_at) VALUES ($1, $2, $3, false, $4)",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(id)
+        .bind::<diesel::sql_types::Uuid, _>(user_id)
+        .bind::<diesel::sql_types::Text, _>(code_hash)
+        .bind::<diesel::sql_types::Timestamptz, _>(now)
+        .execute(conn)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub async fn delete_all_backup_codes(
+        conn: &mut Conn,
+        user_id: Uuid,
+    ) -> DbResult<()> {
+        diesel::sql_query(
+            "DELETE FROM yauth_backup_codes WHERE user_id = $1",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(user_id)
+        .execute(conn)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub async fn mark_backup_code_used(
+        conn: &mut Conn,
+        id: Uuid,
+    ) -> DbResult<()> {
+        diesel::sql_query(
+            "UPDATE yauth_backup_codes SET used = true WHERE id = $1",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(id)
+        .execute(conn)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Plugin struct
@@ -68,44 +281,68 @@ impl YAuthPlugin for MfaPlugin {
                 tokio::task::block_in_place(|| {
                     tokio::runtime::Handle::current().block_on(async {
                         // Check if user has a verified TOTP secret
-                        let totp_secret = yauth_entity::totp_secrets::Entity::find()
-                            .filter(yauth_entity::totp_secrets::Column::UserId.eq(user_id))
-                            .filter(yauth_entity::totp_secrets::Column::Verified.eq(true))
-                            .one(&db)
-                            .await;
-
-                        match totp_secret {
-                            Ok(Some(_)) => {
-                                // User has MFA enabled — create a pending session
-                                let pending_id = Uuid::new_v4();
-                                let key = format!("mfa_pending:{}", pending_id);
-                                let value = serde_json::json!({ "user_id": user_id.to_string() });
-
-                                if let Err(e) = challenge_store.set(&key, value, 300).await {
-                                    tracing::error!("Failed to store MFA pending session: {}", e);
-                                    return EventResponse::Block {
-                                        status: 500,
-                                        message: "Internal error".to_string(),
-                                    };
-                                }
-
-                                info!(
-                                    event = "mfa_required",
-                                    user_id = %user_id,
-                                    pending_session_id = %pending_id,
-                                    "MFA verification required"
-                                );
-
-                                EventResponse::RequireMfa {
-                                    user_id,
-                                    pending_session_id: pending_id,
+                        #[cfg(feature = "seaorm")]
+                        let has_mfa = {
+                            let totp_secret = yauth_entity::totp_secrets::Entity::find()
+                                .filter(yauth_entity::totp_secrets::Column::UserId.eq(user_id))
+                                .filter(yauth_entity::totp_secrets::Column::Verified.eq(true))
+                                .one(&db)
+                                .await;
+                            match totp_secret {
+                                Ok(Some(_)) => true,
+                                Ok(None) => false,
+                                Err(e) => {
+                                    tracing::error!("DB error checking MFA status: {}", e);
+                                    return EventResponse::Continue;
                                 }
                             }
-                            Ok(None) => EventResponse::Continue,
-                            Err(e) => {
-                                tracing::error!("DB error checking MFA status: {}", e);
-                                EventResponse::Continue
+                        };
+                        #[cfg(feature = "diesel-async")]
+                        let has_mfa = {
+                            let mut conn = match db.get().await {
+                                Ok(c) => c,
+                                Err(e) => {
+                                    tracing::error!("Pool error checking MFA status: {}", e);
+                                    return EventResponse::Continue;
+                                }
+                            };
+                            match diesel_db::find_totp_secret(&mut conn, user_id, true).await {
+                                Ok(Some(_)) => true,
+                                Ok(None) => false,
+                                Err(e) => {
+                                    tracing::error!("DB error checking MFA status: {}", e);
+                                    return EventResponse::Continue;
+                                }
                             }
+                        };
+
+                        if has_mfa {
+                            // User has MFA enabled — create a pending session
+                            let pending_id = Uuid::new_v4();
+                            let key = format!("mfa_pending:{}", pending_id);
+                            let value = serde_json::json!({ "user_id": user_id.to_string() });
+
+                            if let Err(e) = challenge_store.set(&key, value, 300).await {
+                                tracing::error!("Failed to store MFA pending session: {}", e);
+                                return EventResponse::Block {
+                                    status: 500,
+                                    message: "Internal error".to_string(),
+                                };
+                            }
+
+                            info!(
+                                event = "mfa_required",
+                                user_id = %user_id,
+                                pending_session_id = %pending_id,
+                                "MFA verification required"
+                            );
+
+                            EventResponse::RequireMfa {
+                                user_id,
+                                pending_session_id: pending_id,
+                            }
+                        } else {
+                            EventResponse::Continue
                         }
                     })
                 })
@@ -217,6 +454,7 @@ fn build_totp(
 }
 
 /// Store backup codes in the database for a user, returning the plaintext codes.
+#[cfg(feature = "seaorm")]
 async fn store_backup_codes(
     state: &YAuthState,
     user_id: Uuid,
@@ -245,7 +483,32 @@ async fn store_backup_codes(
     Ok(codes)
 }
 
+/// Store backup codes in the database for a user (diesel-async), returning the plaintext codes.
+#[cfg(feature = "diesel-async")]
+async fn store_backup_codes_diesel(
+    conn: &mut diesel_async_crate::AsyncPgConnection,
+    user_id: Uuid,
+    count: usize,
+) -> Result<Vec<String>, (StatusCode, Json<serde_json::Value>)> {
+    let err = |status: StatusCode, msg: &str| (status, Json(serde_json::json!({ "error": msg })));
+
+    let codes = generate_backup_codes(count);
+
+    for code in &codes {
+        let code_hash = crypto::hash_token(code);
+        diesel_db::insert_backup_code(conn, Uuid::new_v4(), user_id, &code_hash)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to store backup code: {}", e);
+                err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?;
+    }
+
+    Ok(codes)
+}
+
 /// Delete all backup codes for a user.
+#[cfg(feature = "seaorm")]
 async fn delete_all_backup_codes(
     state: &YAuthState,
     user_id: Uuid,
@@ -253,6 +516,24 @@ async fn delete_all_backup_codes(
     yauth_entity::backup_codes::Entity::delete_many()
         .filter(yauth_entity::backup_codes::Column::UserId.eq(user_id))
         .exec(&state.db)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to delete backup codes: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Internal error" })),
+            )
+        })?;
+    Ok(())
+}
+
+/// Delete all backup codes for a user (diesel-async).
+#[cfg(feature = "diesel-async")]
+async fn delete_all_backup_codes_diesel(
+    conn: &mut diesel_async_crate::AsyncPgConnection,
+    user_id: Uuid,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    diesel_db::delete_all_backup_codes(conn, user_id)
         .await
         .map_err(|e| {
             tracing::error!("Failed to delete backup codes: {}", e);
@@ -278,16 +559,33 @@ async fn setup_totp(
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let err = |status: StatusCode, msg: &str| (status, Json(serde_json::json!({ "error": msg })));
 
+    #[cfg(feature = "diesel-async")]
+    let mut conn = state.db.get().await.map_err(|_| {
+        err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+    })?;
+
     // Check if user already has a verified TOTP secret
-    let existing = yauth_entity::totp_secrets::Entity::find()
-        .filter(yauth_entity::totp_secrets::Column::UserId.eq(user.id))
-        .filter(yauth_entity::totp_secrets::Column::Verified.eq(true))
-        .one(&state.db)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error: {}", e);
-            err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
+    #[cfg(feature = "seaorm")]
+    let existing = {
+        yauth_entity::totp_secrets::Entity::find()
+            .filter(yauth_entity::totp_secrets::Column::UserId.eq(user.id))
+            .filter(yauth_entity::totp_secrets::Column::Verified.eq(true))
+            .one(&state.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?
+    };
+    #[cfg(feature = "diesel-async")]
+    let existing = {
+        diesel_db::find_totp_secret(&mut conn, user.id, true)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?
+    };
 
     if existing.is_some() {
         return Err(err(
@@ -297,12 +595,19 @@ async fn setup_totp(
     }
 
     // Delete any existing unverified secret for this user (e.g. abandoned setup)
-    yauth_entity::totp_secrets::Entity::delete_many()
-        .filter(yauth_entity::totp_secrets::Column::UserId.eq(user.id))
-        .filter(yauth_entity::totp_secrets::Column::Verified.eq(false))
-        .exec(&state.db)
-        .await
-        .ok();
+    #[cfg(feature = "seaorm")]
+    {
+        yauth_entity::totp_secrets::Entity::delete_many()
+            .filter(yauth_entity::totp_secrets::Column::UserId.eq(user.id))
+            .filter(yauth_entity::totp_secrets::Column::Verified.eq(false))
+            .exec(&state.db)
+            .await
+            .ok();
+    }
+    #[cfg(feature = "diesel-async")]
+    {
+        let _ = diesel_db::delete_totp_secrets_by_user(&mut conn, user.id, Some(false)).await;
+    }
 
     // Generate TOTP secret
     let secret = Secret::generate_secret();
@@ -329,24 +634,48 @@ async fn setup_totp(
     let secret_base32 = secret.to_encoded().to_string();
 
     // Store unverified TOTP secret
-    let now = chrono::Utc::now().fixed_offset();
-    let totp_record = yauth_entity::totp_secrets::ActiveModel {
-        id: Set(Uuid::new_v4()),
-        user_id: Set(user.id),
-        encrypted_secret: Set(secret_base32.clone()),
-        verified: Set(false),
-        created_at: Set(now),
-    };
+    #[cfg(feature = "seaorm")]
+    {
+        let now = chrono::Utc::now().fixed_offset();
+        let totp_record = yauth_entity::totp_secrets::ActiveModel {
+            id: Set(Uuid::new_v4()),
+            user_id: Set(user.id),
+            encrypted_secret: Set(secret_base32.clone()),
+            verified: Set(false),
+            created_at: Set(now),
+        };
 
-    totp_record.insert(&state.db).await.map_err(|e| {
-        tracing::error!("Failed to store TOTP secret: {}", e);
-        err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-    })?;
+        totp_record.insert(&state.db).await.map_err(|e| {
+            tracing::error!("Failed to store TOTP secret: {}", e);
+            err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
+    }
+    #[cfg(feature = "diesel-async")]
+    {
+        diesel_db::insert_totp_secret(&mut conn, Uuid::new_v4(), user.id, &secret_base32, false)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to store TOTP secret: {}", e);
+                err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?;
+    }
 
     // Delete any existing backup codes and generate fresh ones
-    delete_all_backup_codes(&state, user.id).await?;
+    #[cfg(feature = "seaorm")]
+    {
+        delete_all_backup_codes(&state, user.id).await?;
+    }
+    #[cfg(feature = "diesel-async")]
+    {
+        delete_all_backup_codes_diesel(&mut conn, user.id).await?;
+    }
+
+    #[cfg(feature = "seaorm")]
     let backup_codes =
         store_backup_codes(&state, user.id, state.mfa_config.backup_code_count).await?;
+    #[cfg(feature = "diesel-async")]
+    let backup_codes =
+        store_backup_codes_diesel(&mut conn, user.id, state.mfa_config.backup_code_count).await?;
 
     info!(
         event = "mfa_totp_setup_initiated",
@@ -372,22 +701,45 @@ async fn confirm_totp(
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let err = |status: StatusCode, msg: &str| (status, Json(serde_json::json!({ "error": msg })));
 
+    #[cfg(feature = "diesel-async")]
+    let mut conn = state.db.get().await.map_err(|_| {
+        err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+    })?;
+
     // Find the unverified TOTP secret for this user
-    let totp_record = yauth_entity::totp_secrets::Entity::find()
-        .filter(yauth_entity::totp_secrets::Column::UserId.eq(user.id))
-        .filter(yauth_entity::totp_secrets::Column::Verified.eq(false))
-        .one(&state.db)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error: {}", e);
-            err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?
-        .ok_or_else(|| {
-            err(
-                StatusCode::BAD_REQUEST,
-                "No pending TOTP setup found. Call POST /mfa/totp/setup first.",
-            )
-        })?;
+    #[cfg(feature = "seaorm")]
+    let totp_record = {
+        yauth_entity::totp_secrets::Entity::find()
+            .filter(yauth_entity::totp_secrets::Column::UserId.eq(user.id))
+            .filter(yauth_entity::totp_secrets::Column::Verified.eq(false))
+            .one(&state.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?
+            .ok_or_else(|| {
+                err(
+                    StatusCode::BAD_REQUEST,
+                    "No pending TOTP setup found. Call POST /mfa/totp/setup first.",
+                )
+            })?
+    };
+    #[cfg(feature = "diesel-async")]
+    let totp_record = {
+        diesel_db::find_totp_secret(&mut conn, user.id, false)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?
+            .ok_or_else(|| {
+                err(
+                    StatusCode::BAD_REQUEST,
+                    "No pending TOTP setup found. Call POST /mfa/totp/setup first.",
+                )
+            })?
+    };
 
     // Build TOTP from stored secret and verify the code
     let totp = build_totp(
@@ -411,12 +763,24 @@ async fn confirm_totp(
     }
 
     // Mark the secret as verified
-    let mut active: yauth_entity::totp_secrets::ActiveModel = totp_record.into();
-    active.verified = Set(true);
-    active.update(&state.db).await.map_err(|e| {
-        tracing::error!("Failed to verify TOTP secret: {}", e);
-        err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-    })?;
+    #[cfg(feature = "seaorm")]
+    {
+        let mut active: yauth_entity::totp_secrets::ActiveModel = totp_record.into();
+        active.verified = Set(true);
+        active.update(&state.db).await.map_err(|e| {
+            tracing::error!("Failed to verify TOTP secret: {}", e);
+            err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
+    }
+    #[cfg(feature = "diesel-async")]
+    {
+        diesel_db::update_totp_secret_verified(&mut conn, totp_record.id)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to verify TOTP secret: {}", e);
+                err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?;
+    }
 
     info!(
         event = "mfa_totp_enabled",
@@ -447,22 +811,47 @@ async fn disable_totp(
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let err = |status: StatusCode, msg: &str| (status, Json(serde_json::json!({ "error": msg })));
 
-    // Delete TOTP secret (verified or not)
-    let delete_result = yauth_entity::totp_secrets::Entity::delete_many()
-        .filter(yauth_entity::totp_secrets::Column::UserId.eq(user.id))
-        .exec(&state.db)
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to delete TOTP secret: {}", e);
-            err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
+    #[cfg(feature = "diesel-async")]
+    let mut conn = state.db.get().await.map_err(|_| {
+        err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+    })?;
 
-    if delete_result.rows_affected == 0 {
+    // Delete TOTP secret (verified or not)
+    #[cfg(feature = "seaorm")]
+    let rows_affected = {
+        let delete_result = yauth_entity::totp_secrets::Entity::delete_many()
+            .filter(yauth_entity::totp_secrets::Column::UserId.eq(user.id))
+            .exec(&state.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to delete TOTP secret: {}", e);
+                err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?;
+        delete_result.rows_affected
+    };
+    #[cfg(feature = "diesel-async")]
+    let rows_affected = {
+        diesel_db::delete_totp_secrets_by_user(&mut conn, user.id, None)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to delete TOTP secret: {}", e);
+                err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?
+    };
+
+    if rows_affected == 0 {
         return Err(err(StatusCode::NOT_FOUND, "TOTP MFA is not enabled"));
     }
 
     // Delete all backup codes
-    delete_all_backup_codes(&state, user.id).await?;
+    #[cfg(feature = "seaorm")]
+    {
+        delete_all_backup_codes(&state, user.id).await?;
+    }
+    #[cfg(feature = "diesel-async")]
+    {
+        delete_all_backup_codes_diesel(&mut conn, user.id).await?;
+    }
 
     info!(
         event = "mfa_totp_disabled",
@@ -524,26 +913,75 @@ async fn verify_mfa(
         )
     })?;
 
+    #[cfg(feature = "diesel-async")]
+    let mut conn = state.db.get().await.map_err(|_| {
+        err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+    })?;
+
     // Load the user's verified TOTP secret
-    let totp_record = yauth_entity::totp_secrets::Entity::find()
-        .filter(yauth_entity::totp_secrets::Column::UserId.eq(user_id))
-        .filter(yauth_entity::totp_secrets::Column::Verified.eq(true))
-        .one(&state.db)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error: {}", e);
-            err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
+    #[cfg(feature = "seaorm")]
+    let totp_record = {
+        yauth_entity::totp_secrets::Entity::find()
+            .filter(yauth_entity::totp_secrets::Column::UserId.eq(user_id))
+            .filter(yauth_entity::totp_secrets::Column::Verified.eq(true))
+            .one(&state.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?
+    };
+    #[cfg(feature = "diesel-async")]
+    let totp_record = {
+        diesel_db::find_totp_secret(&mut conn, user_id, true)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?
+    };
 
     // Load the user for the email (needed to build the TOTP)
-    let user = yauth_entity::users::Entity::find_by_id(user_id)
-        .one(&state.db)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error: {}", e);
-            err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?
-        .ok_or_else(|| err(StatusCode::INTERNAL_SERVER_ERROR, "User not found"))?;
+    struct UserData {
+        id: Uuid,
+        email: String,
+        display_name: Option<String>,
+        email_verified: bool,
+    }
+
+    #[cfg(feature = "seaorm")]
+    let user = {
+        let u = yauth_entity::users::Entity::find_by_id(user_id)
+            .one(&state.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?
+            .ok_or_else(|| err(StatusCode::INTERNAL_SERVER_ERROR, "User not found"))?;
+        UserData {
+            id: u.id,
+            email: u.email,
+            display_name: u.display_name,
+            email_verified: u.email_verified,
+        }
+    };
+    #[cfg(feature = "diesel-async")]
+    let user = {
+        let u = diesel_db::find_user_by_id(&mut conn, user_id)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?
+            .ok_or_else(|| err(StatusCode::INTERNAL_SERVER_ERROR, "User not found"))?;
+        UserData {
+            id: u.id,
+            email: u.email,
+            display_name: u.display_name,
+            email_verified: u.email_verified,
+        }
+    };
 
     let mut verified = false;
 
@@ -563,25 +1001,49 @@ async fn verify_mfa(
     if !verified {
         let code_hash = crypto::hash_token(&input.code);
 
-        let backup = yauth_entity::backup_codes::Entity::find()
-            .filter(yauth_entity::backup_codes::Column::UserId.eq(user_id))
-            .filter(yauth_entity::backup_codes::Column::Used.eq(false))
-            .all(&state.db)
-            .await
-            .map_err(|e| {
-                tracing::error!("DB error: {}", e);
-                err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
+        #[cfg(feature = "seaorm")]
+        let backup_codes = {
+            yauth_entity::backup_codes::Entity::find()
+                .filter(yauth_entity::backup_codes::Column::UserId.eq(user_id))
+                .filter(yauth_entity::backup_codes::Column::Used.eq(false))
+                .all(&state.db)
+                .await
+                .map_err(|e| {
+                    tracing::error!("DB error: {}", e);
+                    err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+                })?
+        };
+        #[cfg(feature = "diesel-async")]
+        let backup_codes = {
+            diesel_db::find_unused_backup_codes(&mut conn, user_id)
+                .await
+                .map_err(|e| {
+                    tracing::error!("DB error: {}", e);
+                    err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+                })?
+        };
 
-        for bc in backup {
+        for bc in backup_codes {
             if crypto::constant_time_eq(bc.code_hash.as_bytes(), code_hash.as_bytes()) {
                 // Mark backup code as used
-                let mut active: yauth_entity::backup_codes::ActiveModel = bc.into();
-                active.used = Set(true);
-                active.update(&state.db).await.map_err(|e| {
-                    tracing::error!("Failed to mark backup code as used: {}", e);
-                    err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-                })?;
+                #[cfg(feature = "seaorm")]
+                {
+                    let mut active: yauth_entity::backup_codes::ActiveModel = bc.into();
+                    active.used = Set(true);
+                    active.update(&state.db).await.map_err(|e| {
+                        tracing::error!("Failed to mark backup code as used: {}", e);
+                        err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+                    })?;
+                }
+                #[cfg(feature = "diesel-async")]
+                {
+                    diesel_db::mark_backup_code_used(&mut conn, bc.id)
+                        .await
+                        .map_err(|e| {
+                            tracing::error!("Failed to mark backup code as used: {}", e);
+                            err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+                        })?;
+                }
 
                 verified = true;
                 info!(
@@ -652,19 +1114,34 @@ async fn get_backup_code_count(
 ) -> Result<Json<BackupCodeCountResponse>, (StatusCode, Json<serde_json::Value>)> {
     let err = |status: StatusCode, msg: &str| (status, Json(serde_json::json!({ "error": msg })));
 
-    let codes = yauth_entity::backup_codes::Entity::find()
-        .filter(yauth_entity::backup_codes::Column::UserId.eq(user.id))
-        .filter(yauth_entity::backup_codes::Column::Used.eq(false))
-        .all(&state.db)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error: {}", e);
+    #[cfg(feature = "seaorm")]
+    let remaining = {
+        let codes = yauth_entity::backup_codes::Entity::find()
+            .filter(yauth_entity::backup_codes::Column::UserId.eq(user.id))
+            .filter(yauth_entity::backup_codes::Column::Used.eq(false))
+            .all(&state.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?;
+        codes.len()
+    };
+    #[cfg(feature = "diesel-async")]
+    let remaining = {
+        let mut conn = state.db.get().await.map_err(|_| {
             err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?;
+        let codes = diesel_db::find_unused_backup_codes(&mut conn, user.id)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?;
+        codes.len()
+    };
 
-    Ok(Json(BackupCodeCountResponse {
-        remaining: codes.len(),
-    }))
+    Ok(Json(BackupCodeCountResponse { remaining }))
 }
 
 /// POST /mfa/backup-codes/regenerate (protected)
@@ -677,16 +1154,33 @@ async fn regenerate_backup_codes(
 ) -> Result<Json<BackupCodesResponse>, (StatusCode, Json<serde_json::Value>)> {
     let err = |status: StatusCode, msg: &str| (status, Json(serde_json::json!({ "error": msg })));
 
+    #[cfg(feature = "diesel-async")]
+    let mut conn = state.db.get().await.map_err(|_| {
+        err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+    })?;
+
     // Ensure MFA is enabled
-    let has_mfa = yauth_entity::totp_secrets::Entity::find()
-        .filter(yauth_entity::totp_secrets::Column::UserId.eq(user.id))
-        .filter(yauth_entity::totp_secrets::Column::Verified.eq(true))
-        .one(&state.db)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error: {}", e);
-            err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
+    #[cfg(feature = "seaorm")]
+    let has_mfa = {
+        yauth_entity::totp_secrets::Entity::find()
+            .filter(yauth_entity::totp_secrets::Column::UserId.eq(user.id))
+            .filter(yauth_entity::totp_secrets::Column::Verified.eq(true))
+            .one(&state.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?
+    };
+    #[cfg(feature = "diesel-async")]
+    let has_mfa = {
+        diesel_db::find_totp_secret(&mut conn, user.id, true)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?
+    };
 
     if has_mfa.is_none() {
         return Err(err(
@@ -696,10 +1190,21 @@ async fn regenerate_backup_codes(
     }
 
     // Delete old backup codes
-    delete_all_backup_codes(&state, user.id).await?;
+    #[cfg(feature = "seaorm")]
+    {
+        delete_all_backup_codes(&state, user.id).await?;
+    }
+    #[cfg(feature = "diesel-async")]
+    {
+        delete_all_backup_codes_diesel(&mut conn, user.id).await?;
+    }
 
     // Generate and store fresh backup codes
+    #[cfg(feature = "seaorm")]
     let codes = store_backup_codes(&state, user.id, state.mfa_config.backup_code_count).await?;
+    #[cfg(feature = "diesel-async")]
+    let codes =
+        store_backup_codes_diesel(&mut conn, user.id, state.mfa_config.backup_code_count).await?;
 
     info!(
         event = "mfa_backup_codes_regenerated",

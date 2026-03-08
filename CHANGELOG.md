@@ -1,3 +1,9 @@
+## 0.1.43 (2026-03-08)
+
+### Fixes
+
+- use published axum-ts-client 0.1 from registry
+
 ## 0.1.42 (2026-03-08)
 
 ### Features

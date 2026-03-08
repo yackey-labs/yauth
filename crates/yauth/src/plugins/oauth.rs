@@ -184,6 +184,7 @@ mod diesel_db {
         .map_err(|e| e.to_string())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn insert_oauth_account(
         conn: &mut Conn,
         id: Uuid,

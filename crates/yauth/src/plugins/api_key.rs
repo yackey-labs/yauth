@@ -70,6 +70,7 @@ mod diesel_db {
         pub banned: bool,
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn insert_api_key(
         conn: &mut Conn,
         id: Uuid,

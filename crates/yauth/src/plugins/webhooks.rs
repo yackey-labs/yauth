@@ -167,6 +167,7 @@ mod diesel_db {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn insert_delivery(
         conn: &mut Conn,
         id: Uuid,
@@ -542,7 +543,7 @@ async fn dispatch_webhooks_diesel(
                 event_type,
                 &body,
                 last_status,
-                last_body.as_deref().map(|b| truncate_response(b)).as_deref(),
+                last_body.as_deref().map(truncate_response).as_deref(),
                 false,
                 (max_retries + 1) as i32,
                 Utc::now().fixed_offset(),
@@ -748,7 +749,7 @@ async fn create_webhook(
             )
             .await;
 
-        return Ok((
+        Ok((
             StatusCode::CREATED,
             Json(serde_json::json!({
                 "id": model.id,
@@ -759,7 +760,7 @@ async fn create_webhook(
                 "created_at": model.created_at.to_rfc3339(),
                 "updated_at": model.updated_at.to_rfc3339(),
             })),
-        ));
+        ))
     }
 
     #[cfg(feature = "diesel-async")]
@@ -791,7 +792,7 @@ async fn create_webhook(
             )
             .await;
 
-        return Ok((
+        Ok((
             StatusCode::CREATED,
             Json(serde_json::json!({
                 "id": id,
@@ -802,7 +803,7 @@ async fn create_webhook(
                 "created_at": now.to_rfc3339(),
                 "updated_at": now.to_rfc3339(),
             })),
-        ));
+        ))
     }
 }
 

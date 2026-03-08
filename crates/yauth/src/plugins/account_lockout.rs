@@ -548,10 +548,10 @@ async fn handle_login_failed(
                 ),
             };
         }
-        if config.auto_unlock {
-            if let Err(e) = diesel_db::update_lock_auto_unlock(&mut conn, lock_record.id, now).await {
-                tracing::error!("Failed to auto-unlock expired lock: {}", e);
-            }
+        if config.auto_unlock
+            && let Err(e) = diesel_db::update_lock_auto_unlock(&mut conn, lock_record.id, now).await
+        {
+            tracing::error!("Failed to auto-unlock expired lock: {}", e);
         }
     }
 

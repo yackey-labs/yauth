@@ -189,6 +189,7 @@ mod diesel_db {
         .map_err(|e| e.to_string())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn insert_client(
         conn: &mut Conn,
         id: Uuid,
@@ -244,6 +245,7 @@ mod diesel_db {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn insert_auth_code(
         conn: &mut Conn,
         id: Uuid,
@@ -364,6 +366,7 @@ mod diesel_db {
         .map_err(|e| e.to_string())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn insert_device_code(
         conn: &mut Conn,
         id: Uuid,
@@ -1612,6 +1615,7 @@ async fn handle_oauth2_refresh_token(
         }
 
         // Look up user — common struct
+        #[allow(dead_code)]
         struct RefreshUser {
             id: Uuid,
             email: String,
@@ -2909,19 +2913,19 @@ async fn introspect_endpoint(
                         })
                 };
 
-                if let Some(stored) = rt_opt {
-                    if !stored.revoked && stored.expires_at > Utc::now().naive_utc() {
-                        return Json(IntrospectResponse {
-                            active: true,
-                            sub: Some(stored.user_id.to_string()),
-                            client_id: None,
-                            scope: None,
-                            exp: Some(stored.expires_at.and_utc().timestamp() as u64),
-                            iat: Some(stored.created_at.and_utc().timestamp() as u64),
-                            token_type: Some("refresh_token".into()),
-                        })
-                        .into_response();
-                    }
+                if let Some(stored) = rt_opt
+                    && !stored.revoked && stored.expires_at > Utc::now().naive_utc()
+                {
+                    return Json(IntrospectResponse {
+                        active: true,
+                        sub: Some(stored.user_id.to_string()),
+                        client_id: None,
+                        scope: None,
+                        exp: Some(stored.expires_at.and_utc().timestamp() as u64),
+                        iat: Some(stored.created_at.and_utc().timestamp() as u64),
+                        token_type: Some("refresh_token".into()),
+                    })
+                    .into_response();
                 }
             }
             _ => {}

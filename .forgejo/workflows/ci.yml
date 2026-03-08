@@ -13,7 +13,7 @@ concurrency:
 env:
   REGISTRY: forgejo.yackey.cloud
   CARGO_TERM_COLOR: always
-  CARGO_REGISTRIES_YACKEY_CLOUD_TOKEN: "Bearer ${{ secrets.RELEASE_PAT }}"
+  CARGO_REGISTRIES_YACKEY_CLOUD_TOKEN: "token ${{ secrets.RELEASE_PAT }}"
 
 jobs:
   lint:

@@ -19,9 +19,6 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.RELEASE_PAT }}
 
-      - name: Clone axum-ts-client (path dependency)
-        run: git clone http://x-access-token:${{ secrets.RELEASE_PAT }}@forgejo-http.forgejo.svc.cluster.local:3000/yackey-cloud/axum-ts-client.git ../axum-ts-client
-
       - name: Install Rust
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable

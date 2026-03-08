@@ -1,3 +1,9 @@
+## 0.1.44 (2026-03-08)
+
+### Fixes
+
+- add registry token for axum-ts-client fetches
+
 ## 0.1.43 (2026-03-08)
 
 ### Fixes

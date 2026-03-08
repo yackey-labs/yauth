@@ -93,10 +93,25 @@ impl TestDb {
             .build()
             .expect("failed to build diesel deadpool");
 
-        Some(Self {
-            pool,
-            _container: Some(container),
-        })
+        // Wait for postgres to be ready inside the container.
+        for attempt in 1..=30 {
+            match pool.get().await {
+                Ok(_) => {
+                    return Some(Self {
+                        pool,
+                        _container: Some(container),
+                    });
+                }
+                Err(_) if attempt < 30 => {
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                }
+                Err(e) => {
+                    eprintln!("Testcontainer started but postgres not ready after 15s: {e}");
+                    return None;
+                }
+            }
+        }
+        None
     }
 }
 

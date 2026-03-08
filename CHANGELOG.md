@@ -1,3 +1,9 @@
+## 0.1.47 (2026-03-08)
+
+### Features
+
+- adopt Honeycomb-style wide spans for observability
+
 ## 0.1.46 (2026-03-08)
 
 ### Fixes

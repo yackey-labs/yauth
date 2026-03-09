@@ -59,6 +59,9 @@ pub fn core_routes(_ctx: &PluginContext) -> Router<YAuthState> {
 }
 
 /// Public routes that don't require authentication.
+///
+/// Currently exposes `GET /config` for frontends to discover server-side
+/// auth configuration (e.g., whether signups are enabled).
 pub fn core_public_routes() -> Router<YAuthState> {
     Router::new().route("/config", get(get_config))
 }

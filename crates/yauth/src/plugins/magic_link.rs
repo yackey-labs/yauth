@@ -274,7 +274,7 @@ async fn send_magic_link(
         user.map(|u| UserInfo { banned: u.banned })
     };
 
-    if user_opt.is_none() && !ml_config.allow_signup {
+    if user_opt.is_none() && (!ml_config.allow_signup || !state.config.allow_signups) {
         info!(event = "yauth.magic_link.no_user", email = %email, "Magic link requested for non-existent email (signup disabled)");
         return Ok(success_msg);
     }
@@ -516,10 +516,10 @@ async fn verify_magic_link(
             (u, false)
         }
         None => {
-            if !ml_config.allow_signup {
+            if !ml_config.allow_signup || !state.config.allow_signups {
                 return Err(api_err(
                     StatusCode::FORBIDDEN,
-                    "Account does not exist. Registration via magic link is disabled.",
+                    "Account does not exist. Registration is disabled.",
                 ));
             }
 

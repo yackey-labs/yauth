@@ -21,5 +21,8 @@ impl YAuthPlugin for StatusPlugin {
 
 async fn get_status(State(state): State<YAuthState>) -> Json<serde_json::Value> {
     let plugins: Vec<&str> = state.plugins.iter().map(|p| p.name()).collect();
-    Json(serde_json::json!({ "plugins": plugins }))
+    Json(serde_json::json!({
+        "plugins": plugins,
+        "allow_signups": state.config.allow_signups,
+    }))
 }

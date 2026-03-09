@@ -31,6 +31,7 @@
 //! | `PASSKEY_RP_ORIGIN`   | `http://localhost:3000`     | WebAuthn Relying Party origin        |
 //! | `PASSKEY_RP_NAME`     | `YAuth Dev`                 | WebAuthn Relying Party display name  |
 //! | `MFA_ISSUER`          | `YAuth Dev`                 | TOTP issuer shown in authenticator   |
+//! | `ALLOW_SIGNUPS`       | `true`                      | Set to `false` to disable all signups|
 //!
 //! ## Endpoints
 //!
@@ -96,6 +97,11 @@ async fn main() {
     // MFA / TOTP
     let mfa_issuer = env::var("MFA_ISSUER").unwrap_or_else(|_| "YAuth Dev".into());
 
+    // Global signup toggle
+    let allow_signups = env::var("ALLOW_SIGNUPS")
+        .map(|v| v != "false" && v != "0")
+        .unwrap_or(true);
+
     if smtp_config.is_none() {
         tracing::warn!(
             "SMTP_HOST not set — email sending is disabled. \
@@ -131,6 +137,7 @@ async fn main() {
             trusted_origins: vec![base_url.clone()],
             smtp: smtp_config,
             auto_admin_first_user: true,
+            allow_signups,
             ..Default::default()
         },
     )

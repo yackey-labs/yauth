@@ -628,7 +628,10 @@ async fn refresh_token(
                 revoked: t.revoked,
             },
             None => {
-                warn!(event = "yauth.bearer.refresh.invalid", "Refresh token not found");
+                warn!(
+                    event = "yauth.bearer.refresh.invalid",
+                    "Refresh token not found"
+                );
                 return Err(api_err(StatusCode::UNAUTHORIZED, "Invalid refresh token"));
             }
         }
@@ -650,7 +653,10 @@ async fn refresh_token(
                 revoked: t.revoked,
             },
             None => {
-                warn!(event = "yauth.bearer.refresh.invalid", "Refresh token not found");
+                warn!(
+                    event = "yauth.bearer.refresh.invalid",
+                    "Refresh token not found"
+                );
                 return Err(api_err(StatusCode::UNAUTHORIZED, "Invalid refresh token"));
             }
         }

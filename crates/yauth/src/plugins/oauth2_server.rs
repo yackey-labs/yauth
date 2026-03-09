@@ -1249,7 +1249,10 @@ async fn handle_authorization_code_grant(
     // Check expiration
     let now_naive = Utc::now().naive_utc();
     if stored_code.expires_at < now_naive {
-        warn!(event = "yauth.oauth2.code_expired", "Authorization code expired");
+        warn!(
+            event = "yauth.oauth2.code_expired",
+            "Authorization code expired"
+        );
         return Err(oauth2_error(
             StatusCode::BAD_REQUEST,
             "invalid_grant",
@@ -1286,7 +1289,10 @@ async fn handle_authorization_code_grant(
 
     let computed_challenge = pkce_s256_challenge(code_verifier);
     if computed_challenge != stored_code.code_challenge {
-        warn!(event = "yauth.oauth2.pkce_mismatch", "PKCE verification failed");
+        warn!(
+            event = "yauth.oauth2.pkce_mismatch",
+            "PKCE verification failed"
+        );
         return Err(oauth2_error(
             StatusCode::BAD_REQUEST,
             "invalid_grant",

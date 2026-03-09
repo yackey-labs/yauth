@@ -382,7 +382,10 @@ async fn register(
     Json(input): Json<RegisterRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     if !state.rate_limiter.check("register").await {
-        warn!(event = "yauth.register.rate_limited", "Registration rate limited");
+        warn!(
+            event = "yauth.register.rate_limited",
+            "Registration rate limited"
+        );
         return Err(api_err(StatusCode::TOO_MANY_REQUESTS, "Too many requests"));
     }
 

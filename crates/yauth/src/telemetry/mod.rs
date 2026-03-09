@@ -1,5 +1,7 @@
 pub mod layer;
 
+#[cfg(feature = "diesel-async")]
+use diesel::connection::{InstrumentationEvent, set_default_instrumentation};
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry::{KeyValue, global};
 use opentelemetry_otlp::{SpanExporter, WithExportConfig};
@@ -8,8 +10,6 @@ use opentelemetry_sdk::trace::SdkTracerProvider;
 use opentelemetry_semantic_conventions::resource::SERVICE_NAME;
 use tracing_opentelemetry::OpenTelemetryLayer;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
-#[cfg(feature = "diesel-async")]
-use diesel::connection::{InstrumentationEvent, set_default_instrumentation};
 
 /// Extract the SQL operation (SELECT, INSERT, etc.) from a query's Display output.
 #[cfg(feature = "diesel-async")]
@@ -100,9 +100,7 @@ pub fn init() -> SdkTracerProvider {
     // Register diesel query instrumentation so every connection traces queries.
     #[cfg(feature = "diesel-async")]
     {
-        let _ = set_default_instrumentation(|| {
-            Some(Box::new(QueryTracing { span: None }))
-        });
+        let _ = set_default_instrumentation(|| Some(Box::new(QueryTracing { span: None })));
     }
 
     provider

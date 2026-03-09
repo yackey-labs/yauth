@@ -299,7 +299,7 @@ async fn create_api_key(
     }
 
     info!(
-        event = "api_key_created",
+        event = "yauth.api_key.created",
         user_id = %user.id,
         key_id = %api_key_id,
         prefix = %prefix,
@@ -452,7 +452,7 @@ async fn delete_api_key(
     }
 
     info!(
-        event = "api_key_deleted",
+        event = "yauth.api_key.deleted",
         user_id = %user.id,
         key_id = %id,
         "API key deleted"
@@ -545,7 +545,7 @@ pub async fn validate_api_key(key: &str, state: &YAuthState) -> Result<AuthUser,
         let now = chrono::Utc::now().fixed_offset();
         if expires_at < now {
             warn!(
-                event = "api_key_expired",
+                event = "yauth.api_key.expired",
                 prefix = %prefix,
                 "Expired API key used"
             );
@@ -557,7 +557,7 @@ pub async fn validate_api_key(key: &str, state: &YAuthState) -> Result<AuthUser,
     let computed_hash = crypto::hash_token(key);
     if !crypto::constant_time_eq(computed_hash.as_bytes(), api_key_info.key_hash.as_bytes()) {
         warn!(
-            event = "api_key_invalid_secret",
+            event = "yauth.api_key.invalid",
             prefix = %prefix,
             "API key secret mismatch"
         );
@@ -622,7 +622,7 @@ pub async fn validate_api_key(key: &str, state: &YAuthState) -> Result<AuthUser,
 
     if user_info.banned {
         warn!(
-            event = "api_key_banned_user",
+            event = "yauth.api_key.banned",
             user_id = %user_info.id,
             prefix = %prefix,
             "API key used by banned user"

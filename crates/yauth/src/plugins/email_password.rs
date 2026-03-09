@@ -382,7 +382,7 @@ async fn register(
     Json(input): Json<RegisterRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     if !state.rate_limiter.check("register").await {
-        warn!(event = "register_rate_limited", "Registration rate limited");
+        warn!(event = "yauth.register.rate_limited", "Registration rate limited");
         return Err(api_err(StatusCode::TOO_MANY_REQUESTS, "Too many requests"));
     }
 
@@ -418,7 +418,7 @@ async fn register(
     if ep_config.hibp_check
         && let Some(breach_msg) = hibp::validate_password_not_breached(&pwd).await
     {
-        warn!(event = "register_breached_password", email = %email, "Breached password rejected");
+        warn!(event = "yauth.register.breached_password", email = %email, "Breached password rejected");
         return Err(api_err(StatusCode::BAD_REQUEST, &breach_msg));
     }
 
@@ -453,7 +453,7 @@ async fn register(
     };
 
     if existing.is_some() {
-        warn!(event = "register_duplicate", email = %email, "Registration attempt with existing email");
+        warn!(event = "yauth.register.duplicate", email = %email, "Registration attempt with existing email");
         return Err(api_err(StatusCode::CONFLICT, "Registration failed"));
     }
 
@@ -465,7 +465,7 @@ async fn register(
     let user_id = Uuid::new_v4();
 
     let role = if state.should_auto_admin().await {
-        info!(event = "auto_admin_first_user", email = %email, "First user — assigning admin role");
+        info!(event = "yauth.register.auto_admin", email = %email, "First user — assigning admin role");
         "admin".to_string()
     } else {
         "user".to_string()
@@ -561,7 +561,7 @@ async fn register(
         }
     }
 
-    info!(event = "register_success", email = %email, user_id = %user_id, "User registered");
+    info!(event = "yauth.register", email = %email, user_id = %user_id, "User registered");
 
     state
         .write_audit_log(
@@ -592,7 +592,7 @@ async fn login(
     let password_input = input::sanitize(&input.password);
 
     if !state.rate_limiter.check(&format!("login:{}", email)).await {
-        warn!(event = "login_rate_limited", email = %email, "Login rate limited");
+        warn!(event = "yauth.login.rate_limited", email = %email, "Login rate limited");
         return Err(api_err(StatusCode::TOO_MANY_REQUESTS, "Too many requests"));
     }
 
@@ -689,12 +689,12 @@ async fn login(
     match (user_opt, valid) {
         (Some(u), true) => {
             if u.banned {
-                warn!(event = "login_banned", email = %u.email, "Login attempt by banned user");
+                warn!(event = "yauth.login.banned", email = %u.email, "Login attempt by banned user");
                 return Err(api_err(StatusCode::FORBIDDEN, "Account suspended"));
             }
 
             if state.email_password_config.require_email_verification && !u.email_verified {
-                warn!(event = "login_email_not_verified", email = %u.email, "Login attempt with unverified email");
+                warn!(event = "yauth.login.email_not_verified", email = %u.email, "Login attempt with unverified email");
                 return Err(api_err(
                     StatusCode::FORBIDDEN,
                     "Email not verified. Please check your inbox or request a new verification email.",
@@ -710,7 +710,7 @@ async fn login(
                 EventResponse::RequireMfa {
                     pending_session_id, ..
                 } => {
-                    info!(event = "login_mfa_required", email = %u.email, user_id = %u.id, "Login requires MFA");
+                    info!(event = "yauth.login.mfa_required", email = %u.email, user_id = %u.id, "Login requires MFA");
                     Ok(Json(serde_json::json!({
                         "mfa_required": true,
                         "pending_session_id": pending_session_id,
@@ -718,7 +718,7 @@ async fn login(
                     .into_response())
                 }
                 EventResponse::Block { status, message } => {
-                    warn!(event = "login_blocked_by_plugin", email = %u.email, "Login blocked");
+                    warn!(event = "yauth.login.blocked", email = %u.email, "Login blocked");
                     let status_code =
                         StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
                     Err(api_err(status_code, &message))
@@ -741,7 +741,7 @@ async fn login(
                                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
                             })?;
 
-                    info!(event = "login_success", email = %u.email, user_id = %u.id, "User logged in");
+                    info!(event = "yauth.login", email = %u.email, user_id = %u.id, "User logged in");
 
                     state
                         .write_audit_log(
@@ -766,7 +766,7 @@ async fn login(
             }
         }
         _ => {
-            warn!(event = "login_failure", email = %email, "Failed login attempt");
+            warn!(event = "yauth.login.failed", email = %email, "Failed login attempt");
             state.write_audit_log(
                 None,
                 "login_failed",
@@ -872,7 +872,7 @@ async fn verify_email(
             .await
             .ok();
 
-        info!(event = "email_verified", user_id = %verification.user_id, "Email verified");
+        info!(event = "yauth.email.verified", user_id = %verification.user_id, "Email verified");
         state
             .write_audit_log(Some(verification.user_id), "email_verified", None, None)
             .await;
@@ -914,7 +914,7 @@ async fn verify_email(
             .await
             .ok();
 
-        info!(event = "email_verified", user_id = %verification.user_id, "Email verified");
+        info!(event = "yauth.email.verified", user_id = %verification.user_id, "Email verified");
         state
             .write_audit_log(Some(verification.user_id), "email_verified", None, None)
             .await;
@@ -1026,7 +1026,7 @@ async fn resend_verification(
         tracing::error!("Failed to send verification email: {}", e);
     }
 
-    info!(event = "verification_resent", email = %email, "Verification email resent");
+    info!(event = "yauth.email.verification_resent", email = %email, "Verification email resent");
     Ok(success_msg)
 }
 
@@ -1134,7 +1134,7 @@ async fn forgot_password(
         tracing::error!("Failed to send password reset email: {}", e);
     }
 
-    info!(event = "forgot_password_sent", email = %email, user_id = %user_id, "Password reset email sent");
+    info!(event = "yauth.password.reset_requested", email = %email, user_id = %user_id, "Password reset email sent");
     Ok(success_msg)
 }
 
@@ -1331,7 +1331,7 @@ async fn reset_password(
         .await
         .ok();
 
-    info!(event = "password_reset_success", user_id = %reset_info.user_id, "Password reset successfully");
+    info!(event = "yauth.password.reset", user_id = %reset_info.user_id, "Password reset successfully");
     state
         .write_audit_log(Some(reset_info.user_id), "password_reset", None, None)
         .await;
@@ -1414,7 +1414,7 @@ async fn change_password(
 
     let valid = password::verify_password(&current_password, current_hash).unwrap_or(false);
     if !valid || pwd_record.is_none() {
-        warn!(event = "change_password_wrong_current", user_id = %user.id, "Wrong current password");
+        warn!(event = "yauth.password.change_failed", user_id = %user.id, "Wrong current password");
         return Err(api_err(
             StatusCode::UNAUTHORIZED,
             "Current password is incorrect",
@@ -1465,7 +1465,7 @@ async fn change_password(
 
     state.emit_event(&AuthEvent::PasswordChanged { user_id: user.id });
 
-    info!(event = "password_changed", user_id = %user.id, "Password changed successfully");
+    info!(event = "yauth.password.changed", user_id = %user.id, "Password changed successfully");
     state
         .write_audit_log(Some(user.id), "password_changed", None, None)
         .await;

@@ -226,7 +226,7 @@ async fn send_magic_link(
         .check(&format!("magic-link:{}", email))
         .await
     {
-        warn!(event = "magic_link_rate_limited", email = %email, "Magic link rate limited");
+        warn!(event = "yauth.magic_link.rate_limited", email = %email, "Magic link rate limited");
         return Err(api_err(StatusCode::TOO_MANY_REQUESTS, "Too many requests"));
     }
 
@@ -275,14 +275,14 @@ async fn send_magic_link(
     };
 
     if user_opt.is_none() && !ml_config.allow_signup {
-        info!(event = "magic_link_no_user", email = %email, "Magic link requested for non-existent email (signup disabled)");
+        info!(event = "yauth.magic_link.no_user", email = %email, "Magic link requested for non-existent email (signup disabled)");
         return Ok(success_msg);
     }
 
     if let Some(ref u) = user_opt
         && u.banned
     {
-        warn!(event = "magic_link_banned", email = %email, "Magic link requested for banned user");
+        warn!(event = "yauth.magic_link.banned", email = %email, "Magic link requested for banned user");
         return Ok(success_msg);
     }
 
@@ -344,7 +344,7 @@ async fn send_magic_link(
     state.emit_event(&AuthEvent::MagicLinkSent {
         email: email.clone(),
     });
-    info!(event = "magic_link_sent", email = %email, "Magic link sent");
+    info!(event = "yauth.magic_link.sent", email = %email, "Magic link sent");
 
     Ok(success_msg)
 }
@@ -510,7 +510,7 @@ async fn verify_magic_link(
     let (user_model, is_new_user) = match user_opt {
         Some(u) => {
             if u.banned {
-                warn!(event = "magic_link_verify_banned", email = %email, "Magic link verify for banned user");
+                warn!(event = "yauth.magic_link.verify_banned", email = %email, "Magic link verify for banned user");
                 return Err(api_err(StatusCode::FORBIDDEN, "Account suspended"));
             }
             (u, false)
@@ -525,7 +525,7 @@ async fn verify_magic_link(
 
             let user_id = Uuid::new_v4();
             let role = if state.should_auto_admin().await {
-                tracing::info!(event = "auto_admin_first_user", email = %email, "First user — assigning admin role");
+                tracing::info!(event = "yauth.register.auto_admin", email = %email, "First user — assigning admin role");
                 "admin".to_string()
             } else {
                 ml_config
@@ -565,7 +565,7 @@ async fn verify_magic_link(
                     })?;
             }
 
-            info!(event = "magic_link_user_created", email = %email, user_id = %user_id, "User auto-created via magic link");
+            info!(event = "yauth.magic_link.user_created", email = %email, user_id = %user_id, "User auto-created via magic link");
             state.emit_event(&AuthEvent::UserRegistered {
                 user_id,
                 email: email.clone(),
@@ -638,7 +638,7 @@ async fn verify_magic_link(
     });
 
     info!(
-        event = "magic_link_verified", email = %email, user_id = %user_model.id,
+        event = "yauth.magic_link.verified", email = %email, user_id = %user_model.id,
         is_new_user = is_new_user, magic_link_id = %ml_id, "Magic link verified, session created"
     );
 

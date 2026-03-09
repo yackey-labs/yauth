@@ -387,7 +387,7 @@ async fn handle_login_failed(
     if let Some(locked_until) = lock_record.locked_until {
         if now < locked_until {
             warn!(
-                event = "login_blocked_locked",
+                event = "yauth.lockout.blocked",
                 email = %email,
                 locked_until = %locked_until,
                 "Login attempt on locked account"
@@ -457,7 +457,7 @@ async fn handle_login_failed(
         }
 
         warn!(
-            event = "account_locked",
+            event = "yauth.lockout.locked",
             email = %email,
             user_id = %user.id,
             lock_count = new_lock_count,
@@ -529,7 +529,7 @@ async fn handle_login_failed(
         let locked_until_fo = locked_until.and_utc().fixed_offset();
         if now < locked_until_fo {
             warn!(
-                event = "login_blocked_locked",
+                event = "yauth.lockout.blocked",
                 email = %email,
                 locked_until = %locked_until_fo,
                 "Login attempt on locked account"
@@ -590,7 +590,7 @@ async fn handle_login_failed(
         }
 
         warn!(
-            event = "account_locked",
+            event = "yauth.lockout.locked",
             email = %email,
             user_id = %user_id,
             lock_count = new_lock_count,
@@ -645,7 +645,7 @@ async fn handle_login_succeeded(
     {
         // Account is still locked - block even though credentials are valid
         warn!(
-            event = "login_blocked_locked_valid_creds",
+            event = "yauth.lockout.blocked_valid_creds",
             user_id = %user_id,
             locked_until = %locked_until,
             "Valid credentials but account is locked"
@@ -705,7 +705,7 @@ async fn handle_login_succeeded(
         let locked_until_fo = locked_until.and_utc().fixed_offset();
         if now < locked_until_fo {
             warn!(
-                event = "login_blocked_locked_valid_creds",
+                event = "yauth.lockout.blocked_valid_creds",
                 user_id = %user_id,
                 locked_until = %locked_until_fo,
                 "Valid credentials but account is locked"
@@ -795,7 +795,7 @@ async fn request_unlock(
         .await
     {
         warn!(
-            event = "unlock_request_rate_limited",
+            event = "yauth.lockout.unlock_rate_limited",
             email = %email,
             "Unlock request rate limited"
         );
@@ -936,7 +936,7 @@ async fn request_unlock(
             }
 
             info!(
-                event = "unlock_email_sent",
+                event = "yauth.lockout.unlock_email_sent",
                 email = %email,
                 user_id = %user.id,
                 "Account unlock email sent"
@@ -1087,7 +1087,7 @@ async fn unlock_account(
     }
 
     info!(
-        event = "account_unlocked",
+        event = "yauth.lockout.unlocked",
         user_id = %user_id,
         method = "token",
         "Account unlocked via token"
@@ -1186,7 +1186,7 @@ async fn admin_unlock(
     }
 
     info!(
-        event = "account_unlocked",
+        event = "yauth.lockout.unlocked",
         user_id = %user_id,
         admin_id = %auth_user.id,
         method = "admin",

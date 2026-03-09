@@ -314,7 +314,7 @@ impl YAuthPlugin for MfaPlugin {
                             }
 
                             info!(
-                                event = "mfa_required",
+                                event = "yauth.mfa.required",
                                 user_id = %user_id,
                                 pending_session_id = %pending_id,
                                 "MFA verification required"
@@ -663,7 +663,7 @@ async fn setup_totp(
         store_backup_codes_diesel(&mut conn, user.id, state.mfa_config.backup_code_count).await?;
 
     info!(
-        event = "mfa_totp_setup_initiated",
+        event = "yauth.mfa.totp_setup",
         user_id = %user.id,
         "TOTP setup initiated, awaiting confirmation"
     );
@@ -739,7 +739,7 @@ async fn confirm_totp(
 
     if !is_valid {
         warn!(
-            event = "mfa_totp_confirm_failed",
+            event = "yauth.mfa.totp_confirm_failed",
             user_id = %user.id,
             "Invalid TOTP code during confirmation"
         );
@@ -770,7 +770,7 @@ async fn confirm_totp(
     }
 
     info!(
-        event = "mfa_totp_enabled",
+        event = "yauth.mfa.totp_enabled",
         user_id = %user.id,
         "TOTP MFA enabled successfully"
     );
@@ -843,7 +843,7 @@ async fn disable_totp(
     }
 
     info!(
-        event = "mfa_totp_disabled",
+        event = "yauth.mfa.totp_disabled",
         user_id = %user.id,
         "TOTP MFA disabled, backup codes deleted"
     );
@@ -1038,7 +1038,7 @@ async fn verify_mfa(
 
                 verified = true;
                 info!(
-                    event = "mfa_backup_code_used",
+                    event = "yauth.mfa.backup_code_used",
                     user_id = %user_id,
                     "Backup code used for MFA verification"
                 );
@@ -1049,7 +1049,7 @@ async fn verify_mfa(
 
     if !verified {
         warn!(
-            event = "mfa_verify_failed",
+            event = "yauth.mfa.verify_failed",
             user_id = %user_id,
             "MFA verification failed — invalid code"
         );
@@ -1068,7 +1068,7 @@ async fn verify_mfa(
             })?;
 
     info!(
-        event = "mfa_verify_success",
+        event = "yauth.mfa.verified",
         user_id = %user_id,
         "MFA verification successful, session created"
     );
@@ -1202,7 +1202,7 @@ async fn regenerate_backup_codes(
         store_backup_codes_diesel(&mut conn, user.id, state.mfa_config.backup_code_count).await?;
 
     info!(
-        event = "mfa_backup_codes_regenerated",
+        event = "yauth.mfa.backup_codes_regenerated",
         user_id = %user.id,
         count = codes.len(),
         "Backup codes regenerated"

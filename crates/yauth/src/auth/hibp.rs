@@ -57,7 +57,7 @@ pub async fn check_password_breach(password: &str) -> Result<u64, String> {
                 tracing::Span::current().record("yauth.hibp.breach_count", count);
                 parent_span.record("yauth.hibp.breach_count", count);
                 info!(
-                    event = "hibp_password_breached",
+                    event = "yauth.hibp.breached",
                     breach_count = count,
                     "Password found in {} data breaches",
                     count
@@ -101,7 +101,7 @@ pub async fn validate_password_not_breached(password: &str) -> Option<String> {
         )),
         Err(e) => {
             warn!(
-                event = "hibp_check_failed",
+                event = "yauth.hibp.check_failed",
                 error = %e,
                 "Failed to check HaveIBeenPwned API, allowing registration"
             );

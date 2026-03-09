@@ -737,7 +737,7 @@ async fn create_webhook(
         })?;
 
         info!(
-            event = "webhook_created",
+            event = "yauth.webhook.created",
             admin_id = %admin.id,
             webhook_id = %id,
             "Admin created webhook"
@@ -782,7 +782,7 @@ async fn create_webhook(
             })?;
 
         info!(
-            event = "webhook_created",
+            event = "yauth.webhook.created",
             admin_id = %admin.id,
             webhook_id = %id,
             "Admin created webhook"
@@ -1014,7 +1014,7 @@ async fn update_webhook(
     };
 
     info!(
-        event = "webhook_updated",
+        event = "yauth.webhook.updated",
         admin_id = %admin.id,
         webhook_id = %id,
         "Admin updated webhook"
@@ -1077,7 +1077,7 @@ async fn delete_webhook(
     }
 
     info!(
-        event = "webhook_deleted",
+        event = "yauth.webhook.deleted",
         admin_id = %admin.id,
         webhook_id = %id,
         "Admin deleted webhook"

@@ -78,7 +78,7 @@ impl EmailService {
         self.send(to, "Verify your email address", body)?;
 
         info!(
-            event = "verification_email_sent",
+            event = "yauth.email.verification_sent",
             to = to,
             "Verification email sent"
         );
@@ -115,7 +115,7 @@ impl EmailService {
         self.send(to, "Sign in to your account", body)?;
 
         info!(
-            event = "magic_link_email_sent",
+            event = "yauth.email.magic_link_sent",
             to = to,
             "Magic link email sent"
         );
@@ -152,7 +152,7 @@ impl EmailService {
         self.send(to, "Reset your password", body)?;
 
         info!(
-            event = "password_reset_email_sent",
+            event = "yauth.email.password_reset_sent",
             to = to,
             "Password reset email sent"
         );

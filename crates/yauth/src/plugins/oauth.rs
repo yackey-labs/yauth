@@ -490,7 +490,7 @@ async fn consume_state(
             })?
             .ok_or_else(|| {
                 warn!(
-                    event = "oauth_state_invalid",
+                    event = "yauth.oauth.state_invalid",
                     "OAuth state parameter not found"
                 );
                 api_err(
@@ -526,7 +526,7 @@ async fn consume_state(
             })?
             .ok_or_else(|| {
                 warn!(
-                    event = "oauth_state_invalid",
+                    event = "yauth.oauth.state_invalid",
                     "OAuth state parameter not found"
                 );
                 api_err(
@@ -547,7 +547,7 @@ async fn consume_state(
     let now = chrono::Utc::now().fixed_offset();
     if stored.expires_at < now {
         warn!(
-            event = "oauth_state_expired",
+            event = "yauth.oauth.state_expired",
             "OAuth state parameter expired"
         );
         return Err(api_err(
@@ -559,7 +559,7 @@ async fn consume_state(
     // Check provider matches
     if stored.provider != expected_provider {
         warn!(
-            event = "oauth_state_provider_mismatch",
+            event = "yauth.oauth.state_mismatch",
             expected = %expected_provider,
             actual = %stored.provider,
             "OAuth state provider mismatch"
@@ -640,7 +640,7 @@ async fn fetch_userinfo(
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
         tracing::error!(
-            event = "oauth_userinfo_error",
+            event = "yauth.oauth.userinfo_error",
             status = %status,
             body = %body,
             "Provider userinfo endpoint returned error"
@@ -741,7 +741,7 @@ async fn handle_callback(
         .request_async(&http_client)
         .await
         .map_err(|e| {
-            tracing::error!(event = "oauth_token_exchange_error", error = %e, "OAuth token exchange failed");
+            tracing::error!(event = "yauth.oauth.token_exchange_error", error = %e, "OAuth token exchange failed");
             api_err(StatusCode::BAD_GATEWAY, "Failed to exchange authorization code")
         })?;
 
@@ -892,7 +892,7 @@ async fn handle_callback(
                     api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
                 })?;
 
-        info!(event = "oauth_account_linked", user_id = %user.id, provider = %provider, "OAuth account linked");
+        info!(event = "yauth.oauth.account_linked", user_id = %user.id, provider = %provider, "OAuth account linked");
         state
             .write_audit_log(
                 Some(user.id),
@@ -983,7 +983,7 @@ async fn handle_callback(
                 })?
                 .ok_or_else(|| api_err(StatusCode::INTERNAL_SERVER_ERROR, "User not found"))?;
             if u.banned {
-                warn!(event = "oauth_login_banned", provider = %provider, user_id = %u.id, "OAuth login attempt by banned user");
+                warn!(event = "yauth.oauth.login.banned", provider = %provider, user_id = %u.id, "OAuth login attempt by banned user");
                 return Err(api_err(StatusCode::FORBIDDEN, "Account suspended"));
             }
             CallbackUserInfo {
@@ -1003,7 +1003,7 @@ async fn handle_callback(
                 })?
                 .ok_or_else(|| api_err(StatusCode::INTERNAL_SERVER_ERROR, "User not found"))?;
             if u.banned {
-                warn!(event = "oauth_login_banned", provider = %provider, user_id = %u.id, "OAuth login attempt by banned user");
+                warn!(event = "yauth.oauth.login.banned", provider = %provider, user_id = %u.id, "OAuth login attempt by banned user");
                 return Err(api_err(StatusCode::FORBIDDEN, "Account suspended"));
             }
             CallbackUserInfo {
@@ -1014,7 +1014,7 @@ async fn handle_callback(
             }
         };
 
-        info!(event = "oauth_login_success", user_id = %user.id, provider = %provider, "User logged in via OAuth");
+        info!(event = "yauth.oauth.login", user_id = %user.id, provider = %provider, "User logged in via OAuth");
         state
             .write_audit_log(
                 Some(user.id),
@@ -1028,7 +1028,7 @@ async fn handle_callback(
     } else {
         // New user — create user and OAuth account
         let email = userinfo.email.ok_or_else(|| {
-            warn!(event = "oauth_no_email", provider = %provider, "OAuth provider did not return email");
+            warn!(event = "yauth.oauth.no_email", provider = %provider, "OAuth provider did not return email");
             api_err(StatusCode::BAD_REQUEST, "Email not provided by OAuth provider. Please ensure your account has a verified email.")
         })?;
         let email = email.trim().to_lowercase();
@@ -1128,7 +1128,7 @@ async fn handle_callback(
             })?;
         }
 
-        info!(event = "oauth_register_success", user_id = %uid, provider = %provider, "New user registered via OAuth");
+        info!(event = "yauth.oauth.register", user_id = %uid, provider = %provider, "New user registered via OAuth");
         state
             .write_audit_log(
                 Some(uid),
@@ -1222,7 +1222,7 @@ pub async fn refresh_oauth_token(
         .request_async(&http_client)
         .await
         .map_err(|e| {
-            tracing::error!(event = "oauth_token_refresh_error", provider = %account.provider, error = %e, "OAuth token refresh failed");
+            tracing::error!(event = "yauth.oauth.token_refresh_error", provider = %account.provider, error = %e, "OAuth token refresh failed");
             api_err(StatusCode::UNAUTHORIZED, "Token refresh failed. Please re-connect your account.")
         })?;
 
@@ -1244,7 +1244,7 @@ pub async fn refresh_oauth_token(
         api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
     })?;
 
-    info!(event = "oauth_token_refreshed", provider = %account.provider, user_id = %account.user_id, "OAuth token refreshed successfully");
+    info!(event = "yauth.oauth.token_refreshed", provider = %account.provider, user_id = %account.user_id, "OAuth token refreshed successfully");
 
     Ok(new_access_token)
 }
@@ -1282,7 +1282,7 @@ async fn authorize(
     }
     let (auth_url, _csrf_token) = auth_request.url();
 
-    info!(event = "oauth_authorize_start", provider = %provider, "OAuth authorization flow started");
+    info!(event = "yauth.oauth.authorize_start", provider = %provider, "OAuth authorization flow started");
     Ok(Redirect::temporary(auth_url.as_str()))
 }
 
@@ -1296,7 +1296,7 @@ async fn callback_get(
             .error_description
             .as_deref()
             .unwrap_or("Unknown error");
-        warn!(event = "oauth_callback_error", provider = %provider, error = %error, description = %desc, "OAuth provider returned error");
+        warn!(event = "yauth.oauth.callback_error", provider = %provider, error = %error, description = %desc, "OAuth provider returned error");
         return Err(api_err(
             StatusCode::BAD_REQUEST,
             &format!("OAuth error: {} - {}", error, desc),
@@ -1481,7 +1481,7 @@ async fn unlink_provider(
             })?;
     }
 
-    info!(event = "oauth_account_unlinked", user_id = %user.id, provider = %provider, "OAuth account unlinked");
+    info!(event = "yauth.oauth.account_unlinked", user_id = %user.id, provider = %provider, "OAuth account unlinked");
     state
         .write_audit_log(
             Some(user.id),
@@ -1553,7 +1553,7 @@ async fn start_link(
     }
     let (auth_url, _csrf_token) = auth_request.url();
 
-    info!(event = "oauth_link_start", user_id = %user.id, provider = %provider, "OAuth account linking flow started");
+    info!(event = "yauth.oauth.link_start", user_id = %user.id, provider = %provider, "OAuth account linking flow started");
 
     Ok(Json(AuthorizeResponse {
         auth_url: auth_url.to_string(),

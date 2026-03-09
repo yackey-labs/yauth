@@ -574,7 +574,7 @@ async fn update_user(
     };
 
     info!(
-        event = "admin_update_user",
+        event = "yauth.admin.user_updated",
         admin_id = %admin.id,
         target_id = %id,
         "Admin updated user"
@@ -648,7 +648,7 @@ async fn delete_user(
     }
 
     info!(
-        event = "admin_delete_user",
+        event = "yauth.admin.user_deleted",
         admin_id = %admin.id,
         target_id = %id,
         "Admin deleted user"
@@ -752,7 +752,7 @@ async fn ban_user(
         .unwrap_or(0);
 
     info!(
-        event = "admin_ban_user",
+        event = "yauth.admin.user_banned",
         admin_id = %admin.id,
         target_id = %id,
         sessions_deleted = deleted_sessions,
@@ -829,7 +829,7 @@ async fn unban_user(
     };
 
     info!(
-        event = "admin_unban_user",
+        event = "yauth.admin.user_unbanned",
         admin_id = %admin.id,
         target_id = %id,
         "Admin unbanned user"
@@ -974,7 +974,7 @@ async fn impersonate_user(
     }
 
     warn!(
-        event = "admin_impersonate",
+        event = "yauth.admin.impersonate",
         admin_id = %admin.id,
         target_id = %id,
         session_id = %session_id,
@@ -1117,7 +1117,7 @@ async fn delete_session(
     };
 
     info!(
-        event = "admin_delete_session",
+        event = "yauth.admin.session_deleted",
         admin_id = %admin.id,
         session_id = %id,
         session_user_id = %session_user_id,

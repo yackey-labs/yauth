@@ -500,7 +500,7 @@ async fn register_finish(
         })?;
     }
 
-    info!(event = "passkey_registered", user_id = %auth_user.id, "Passkey registered");
+    info!(event = "yauth.passkey.registered", user_id = %auth_user.id, "Passkey registered");
 
     state
         .write_audit_log(
@@ -553,7 +553,7 @@ async fn login_begin(
             .check(&format!("passkey_login:{}", email))
             .await
         {
-            warn!(event = "passkey_login_rate_limited", email = %email, "Passkey login rate limited");
+            warn!(event = "yauth.passkey.login.rate_limited", email = %email, "Passkey login rate limited");
             return Err((
                 StatusCode::TOO_MANY_REQUESTS,
                 "Too many requests".to_string(),
@@ -672,7 +672,7 @@ async fn login_begin(
         // --- Discoverable (usernameless) flow ---
         if !state.rate_limiter.check("passkey_login:discoverable").await {
             warn!(
-                event = "passkey_login_rate_limited",
+                event = "yauth.passkey.login.rate_limited",
                 "Discoverable passkey login rate limited"
             );
             return Err((
@@ -956,7 +956,7 @@ async fn login_finish(
         }
     };
 
-    info!(event = "passkey_login_success", user_id = %user_info.id, email = %user_info.email, "Passkey login successful");
+    info!(event = "yauth.passkey.login", user_id = %user_info.id, email = %user_info.email, "Passkey login successful");
 
     state
         .write_audit_log(
@@ -1142,7 +1142,7 @@ async fn delete_passkey(
             })?;
     }
 
-    info!(event = "passkey_deleted", user_id = %auth_user.id, passkey_id = %id, "Passkey deleted");
+    info!(event = "yauth.passkey.deleted", user_id = %auth_user.id, passkey_id = %id, "Passkey deleted");
 
     state
         .write_audit_log(

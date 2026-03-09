@@ -862,7 +862,7 @@ async fn authorize_post(
     }
 
     info!(
-        event = "oauth2_authorize_approved",
+        event = "yauth.oauth2.authorize_approved",
         user_id = %auth_user.id,
         client_id = %input.client_id,
         "User approved OAuth2 authorization"
@@ -1163,7 +1163,7 @@ async fn handle_authorization_code_grant(
             })?
             .ok_or_else(|| {
                 warn!(
-                    event = "oauth2_invalid_code",
+                    event = "yauth.oauth2.invalid_code",
                     "Authorization code not found"
                 );
                 oauth2_error(
@@ -1207,7 +1207,7 @@ async fn handle_authorization_code_grant(
             })?
             .ok_or_else(|| {
                 warn!(
-                    event = "oauth2_invalid_code",
+                    event = "yauth.oauth2.invalid_code",
                     "Authorization code not found"
                 );
                 oauth2_error(
@@ -1234,7 +1234,7 @@ async fn handle_authorization_code_grant(
     // Check if code was already used
     if stored_code.used {
         warn!(
-            event = "oauth2_code_reuse",
+            event = "yauth.oauth2.code_reuse",
             client_id = %stored_code.client_id,
             user_id = %stored_code.user_id,
             "Authorization code reuse detected"
@@ -1249,7 +1249,7 @@ async fn handle_authorization_code_grant(
     // Check expiration
     let now_naive = Utc::now().naive_utc();
     if stored_code.expires_at < now_naive {
-        warn!(event = "oauth2_code_expired", "Authorization code expired");
+        warn!(event = "yauth.oauth2.code_expired", "Authorization code expired");
         return Err(oauth2_error(
             StatusCode::BAD_REQUEST,
             "invalid_grant",
@@ -1286,7 +1286,7 @@ async fn handle_authorization_code_grant(
 
     let computed_challenge = pkce_s256_challenge(code_verifier);
     if computed_challenge != stored_code.code_challenge {
-        warn!(event = "oauth2_pkce_mismatch", "PKCE verification failed");
+        warn!(event = "yauth.oauth2.pkce_mismatch", "PKCE verification failed");
         return Err(oauth2_error(
             StatusCode::BAD_REQUEST,
             "invalid_grant",
@@ -1493,7 +1493,7 @@ async fn handle_authorization_code_grant(
         let expires_in = bearer_config.access_token_ttl.as_secs();
 
         info!(
-            event = "oauth2_token_issued",
+            event = "yauth.oauth2.token_issued",
             user_id = %user.id,
             client_id = %client_id,
             "OAuth2 access token issued via authorization_code grant"
@@ -1595,7 +1595,7 @@ async fn handle_authorization_code_grant(
         let expires_in = bearer_config.access_token_ttl.as_secs();
 
         info!(
-            event = "oauth2_token_issued",
+            event = "yauth.oauth2.token_issued",
             user_id = %user.id,
             client_id = %client_id,
             "OAuth2 access token issued via authorization_code grant"
@@ -1755,7 +1755,7 @@ async fn handle_oauth2_refresh_token(
 
         if stored.revoked {
             warn!(
-                event = "oauth2_refresh_reuse",
+                event = "yauth.oauth2.refresh_reuse",
                 family_id = %stored.family_id,
                 "Refresh token reuse detected — revoking family"
             );
@@ -2162,7 +2162,7 @@ async fn dynamic_client_registration(
     }
 
     info!(
-        event = "oauth2_client_registered",
+        event = "yauth.oauth2.client_registered",
         client_id = %client_id,
         client_name = ?input.client_name,
         "New OAuth2 client registered"
@@ -2358,7 +2358,7 @@ async fn device_authorization(
     let verification_uri_complete = Some(format!("{}?user_code={}", verification_uri, user_code));
 
     info!(
-        event = "device_authorization_initiated",
+        event = "yauth.oauth2.device_auth_initiated",
         client_id = %input.client_id,
         "Device authorization flow initiated"
     );
@@ -2671,7 +2671,7 @@ async fn device_verify_post(
     }
 
     info!(
-        event = "device_authorization_decision",
+        event = "yauth.oauth2.device_auth_decision",
         user_id = %auth_user.id,
         approved = input.approved,
         "User {} device authorization", if input.approved { "approved" } else { "denied" }
@@ -3127,7 +3127,7 @@ async fn handle_device_code_grant(
         let expires_in = bearer_config.access_token_ttl.as_secs();
 
         info!(
-            event = "oauth2_token_issued",
+            event = "yauth.oauth2.token_issued",
             user_id = %user.id,
             client_id = %client_id,
             "OAuth2 access token issued via device_code grant"
@@ -3204,7 +3204,7 @@ async fn handle_device_code_grant(
         let expires_in = bearer_config.access_token_ttl.as_secs();
 
         info!(
-            event = "oauth2_token_issued",
+            event = "yauth.oauth2.token_issued",
             user_id = %user.id,
             client_id = %client_id,
             "OAuth2 access token issued via device_code grant"
@@ -3508,7 +3508,7 @@ async fn revoke_endpoint(
                     }
 
                     info!(
-                        event = "oauth2_token_revoked",
+                        event = "yauth.oauth2.token_revoked",
                         token_type = "refresh_token",
                         "OAuth2 refresh token revoked"
                     );
@@ -3570,7 +3570,7 @@ async fn handle_client_credentials_grant(
         secret_hash.as_bytes(),
     ) {
         warn!(
-            event = "oauth2_client_auth_failed",
+            event = "yauth.oauth2.client_auth_failed",
             client_id = %client_id,
             "Client credentials authentication failed"
         );
@@ -3672,7 +3672,7 @@ async fn handle_client_credentials_grant(
         let expires_in = bearer_config.access_token_ttl.as_secs();
 
         info!(
-            event = "oauth2_token_issued",
+            event = "yauth.oauth2.token_issued",
             client_id = %client_id,
             "OAuth2 access token issued via client_credentials grant"
         );

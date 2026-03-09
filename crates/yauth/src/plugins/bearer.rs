@@ -409,7 +409,7 @@ async fn create_token(
         .check(&format!("bearer_login:{}", email))
         .await
     {
-        warn!(event = "bearer_login_rate_limited", email = %email, "Bearer login rate limited");
+        warn!(event = "yauth.bearer.login.rate_limited", email = %email, "Bearer login rate limited");
         return Err(api_err(StatusCode::TOO_MANY_REQUESTS, "Too many requests"));
     }
 
@@ -505,11 +505,11 @@ async fn create_token(
     match (user_opt, valid) {
         (Some(u), true) => {
             if u.banned {
-                warn!(event = "bearer_login_banned", email = %u.email, "Bearer login attempt by banned user");
+                warn!(event = "yauth.bearer.login.banned", email = %u.email, "Bearer login attempt by banned user");
                 return Err(api_err(StatusCode::FORBIDDEN, "Account suspended"));
             }
             if !u.email_verified {
-                warn!(event = "bearer_login_email_not_verified", email = %u.email, "Bearer login attempt with unverified email");
+                warn!(event = "yauth.bearer.login.email_not_verified", email = %u.email, "Bearer login attempt with unverified email");
                 return Err(api_err(
                     StatusCode::FORBIDDEN,
                     "Email not verified. Please check your inbox or request a new verification email.",
@@ -539,7 +539,7 @@ async fn create_token(
             let expires_in = config.access_token_ttl.as_secs();
 
             info!(
-                event = "bearer_login_success",
+                event = "yauth.bearer.login",
                 email = %u.email,
                 user_id = %u.id,
                 "User authenticated via bearer token"
@@ -562,7 +562,7 @@ async fn create_token(
             }))
         }
         _ => {
-            warn!(event = "bearer_login_failure", email = %email, "Failed bearer login attempt");
+            warn!(event = "yauth.bearer.login.failed", email = %email, "Failed bearer login attempt");
             state.write_audit_log(
                 None, "login_failed",
                 Some(serde_json::json!({ "email": email, "method": "bearer", "reason": "invalid_credentials" })),
@@ -628,7 +628,7 @@ async fn refresh_token(
                 revoked: t.revoked,
             },
             None => {
-                warn!(event = "bearer_refresh_invalid", "Refresh token not found");
+                warn!(event = "yauth.bearer.refresh.invalid", "Refresh token not found");
                 return Err(api_err(StatusCode::UNAUTHORIZED, "Invalid refresh token"));
             }
         }
@@ -650,7 +650,7 @@ async fn refresh_token(
                 revoked: t.revoked,
             },
             None => {
-                warn!(event = "bearer_refresh_invalid", "Refresh token not found");
+                warn!(event = "yauth.bearer.refresh.invalid", "Refresh token not found");
                 return Err(api_err(StatusCode::UNAUTHORIZED, "Invalid refresh token"));
             }
         }
@@ -658,7 +658,7 @@ async fn refresh_token(
 
     if stored.revoked {
         warn!(
-            event = "bearer_refresh_reuse", family_id = %stored.family_id,
+            event = "yauth.bearer.refresh.reuse_detected", family_id = %stored.family_id,
             user_id = %stored.user_id, "Refresh token reuse detected — revoking entire family"
         );
         #[cfg(feature = "seaorm")]
@@ -677,7 +677,7 @@ async fn refresh_token(
 
     let now_naive = Utc::now().naive_utc();
     if stored.expires_at < now_naive {
-        warn!(event = "bearer_refresh_expired", user_id = %stored.user_id, "Expired refresh token used");
+        warn!(event = "yauth.bearer.refresh.expired", user_id = %stored.user_id, "Expired refresh token used");
         return Err(api_err(
             StatusCode::UNAUTHORIZED,
             "Refresh token has expired",
@@ -759,7 +759,7 @@ async fn refresh_token(
     };
 
     if user.banned {
-        warn!(event = "bearer_refresh_banned", user_id = %user.id, "Refresh attempt by banned user");
+        warn!(event = "yauth.bearer.refresh.banned", user_id = %user.id, "Refresh attempt by banned user");
         return Err(api_err(StatusCode::FORBIDDEN, "Account suspended"));
     }
 
@@ -783,7 +783,7 @@ async fn refresh_token(
     let expires_in = config.access_token_ttl.as_secs();
 
     info!(
-        event = "bearer_refresh_success", user_id = %jwt_user.id,
+        event = "yauth.bearer.refresh", user_id = %jwt_user.id,
         family_id = %family_id, "Refresh token rotated"
     );
 
@@ -900,7 +900,7 @@ async fn revoke_token(
         }
     }
 
-    info!(event = "bearer_token_revoked", user_id = %auth_user.id, "Refresh token revoked");
+    info!(event = "yauth.bearer.revoked", user_id = %auth_user.id, "Refresh token revoked");
     state
         .write_audit_log(Some(auth_user.id), "bearer_token_revoked", None, None)
         .await;

@@ -131,7 +131,7 @@ pub async fn validate_session(
                 && session_ip != req_ip
             {
                 tracing::warn!(
-                    event = "session_binding_ip_mismatch",
+                    event = "yauth.session.ip_mismatch",
                     session_id = %s.id,
                     session_ip = %session_ip,
                     request_ip = %req_ip,
@@ -150,7 +150,7 @@ pub async fn validate_session(
                 && session_ua != req_ua
             {
                 tracing::warn!(
-                    event = "session_binding_ua_mismatch",
+                    event = "yauth.session.ua_mismatch",
                     session_id = %s.id,
                     "Session User-Agent mismatch"
                 );
@@ -300,7 +300,7 @@ pub async fn validate_session(
                 && session_ip != req_ip
             {
                 tracing::warn!(
-                    event = "session_binding_ip_mismatch",
+                    event = "yauth.session.ip_mismatch",
                     session_id = %s.id,
                     session_ip = %session_ip,
                     request_ip = %req_ip,
@@ -320,7 +320,7 @@ pub async fn validate_session(
                 && session_ua != req_ua
             {
                 tracing::warn!(
-                    event = "session_binding_ua_mismatch",
+                    event = "yauth.session.ua_mismatch",
                     session_id = %s.id,
                     "Session User-Agent mismatch"
                 );

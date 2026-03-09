@@ -1,4 +1,20 @@
 use axum::{extract::MatchedPath, extract::Request, middleware::Next, response::Response};
+use opentelemetry::global;
+use opentelemetry::propagation::Extractor;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
+
+/// Adapter to extract W3C traceparent/tracestate from HTTP request headers.
+struct HeaderExtractor<'a>(&'a axum::http::HeaderMap);
+
+impl Extractor for HeaderExtractor<'_> {
+    fn get(&self, key: &str) -> Option<&str> {
+        self.0.get(key).and_then(|v| v.to_str().ok())
+    }
+
+    fn keys(&self) -> Vec<&str> {
+        self.0.keys().map(|k| k.as_str()).collect()
+    }
+}
 
 pub async fn trace_middleware(req: Request, next: Next) -> Response {
     let path = req.uri().path().to_string();
@@ -14,6 +30,11 @@ pub async fn trace_middleware(req: Request, next: Next) -> Response {
         .get::<MatchedPath>()
         .map(|m| m.as_str().to_string())
         .unwrap_or_else(|| path.clone());
+
+    // Extract W3C trace context from incoming request headers for distributed tracing.
+    let parent_cx = global::get_text_map_propagator(|propagator| {
+        propagator.extract(&HeaderExtractor(req.headers()))
+    });
 
     let span = tracing::info_span!(
         "HTTP request",
@@ -36,6 +57,10 @@ pub async fn trace_middleware(req: Request, next: Next) -> Response {
         yauth.hibp.breach_count = tracing::field::Empty,
         yauth.mfa_required = tracing::field::Empty,
     );
+
+    // Link the tracing span to the incoming OTel context so frontend and backend
+    // traces share the same trace ID.
+    let _ = span.set_parent(parent_cx);
 
     let response = {
         use tracing::Instrument;

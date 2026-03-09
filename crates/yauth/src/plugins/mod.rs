@@ -63,9 +63,11 @@ pub fn core_public_routes() -> Router<YAuthState> {
     Router::new().route("/config", get(get_config))
 }
 
+/// Server-side auth configuration exposed to frontends via `GET /config`.
 #[derive(Serialize, TS)]
 #[ts(export)]
 pub struct AuthConfigResponse {
+    /// Whether new user registration is allowed.
     pub allow_signups: bool,
 }
 

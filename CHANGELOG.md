@@ -1,3 +1,18 @@
+## 0.1.51 (2026-03-09)
+
+### Features
+
+- add pentest coverage for all 6 uncovered plugins (#9)
+- security pentest suite (12 vuln test cases) + CI job (#10)
+- add global allow_signups flag to YAuthConfig
+- add public GET /config endpoint for frontend signup detection
+- document AuthConfigResponse for frontend config endpoint
+
+### Fixes
+
+- collapse nested if to satisfy clippy collapsible_if lint
+- resolve 5 key pentest vulnerabilities (#11)
+
 ## 0.1.50 (2026-03-09)
 
 ### Features

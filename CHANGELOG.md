@@ -1,3 +1,9 @@
+## 0.1.49 (2026-03-09)
+
+### Features
+
+- add diesel query tracing and align with OTel semconv
+
 ## 0.1.48 (2026-03-09)
 
 ### Features

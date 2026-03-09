@@ -6,9 +6,11 @@
 
 use axum_ts_client::{RouteCollection, api_routes};
 
-/// Core routes (always available): session, logout, profile update.
+/// Core routes (always available): config, session, logout, profile update.
 pub fn core_routes() -> RouteCollection {
     api_routes! {
+        getConfig: GET "/config"
+            -> AuthConfigResponse;
         getSession: GET "/session" [auth]
             -> AuthUser;
         logout: POST "/logout" [auth];

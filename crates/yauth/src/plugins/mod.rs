@@ -39,11 +39,12 @@ pub mod status;
 
 use axum::{
     Extension, Json, Router,
+    extract::State,
     http::StatusCode,
     routing::{get, patch, post},
 };
 use chrono::Utc;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::middleware::AuthUser;
@@ -55,6 +56,23 @@ pub fn core_routes(_ctx: &PluginContext) -> Router<YAuthState> {
         .route("/session", get(get_session))
         .route("/logout", post(logout))
         .route("/me", patch(update_profile))
+}
+
+/// Public routes that don't require authentication.
+pub fn core_public_routes() -> Router<YAuthState> {
+    Router::new().route("/config", get(get_config))
+}
+
+#[derive(Serialize, TS)]
+#[ts(export)]
+pub struct AuthConfigResponse {
+    pub allow_signups: bool,
+}
+
+async fn get_config(State(state): State<YAuthState>) -> Json<AuthConfigResponse> {
+    Json(AuthConfigResponse {
+        allow_signups: state.config.allow_signups,
+    })
 }
 
 async fn get_session(Extension(user): Extension<AuthUser>) -> Json<serde_json::Value> {

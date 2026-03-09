@@ -51,6 +51,9 @@ impl YAuth {
         let mut public_router = Router::new();
         let mut protected_router = Router::new();
 
+        // Public core routes (config endpoint — no auth required)
+        public_router = public_router.merge(crate::plugins::core_public_routes());
+
         // Core routes (session + logout) require authentication
         protected_router = protected_router.merge(crate::plugins::core_routes(&ctx));
 

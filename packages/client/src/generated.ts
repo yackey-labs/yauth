@@ -2,6 +2,7 @@
 
 import type { AccountLockoutMessageResponse } from "./bindings/AccountLockoutMessageResponse";
 import type { ApiKeyResponse } from "./bindings/ApiKeyResponse";
+import type { AuthConfigResponse } from "./bindings/AuthConfigResponse";
 import type { AuthorizeQuery } from "./bindings/AuthorizeQuery";
 import type { AuthorizeResponse } from "./bindings/AuthorizeResponse";
 import type { AuthUser } from "./bindings/AuthUser";
@@ -139,6 +140,7 @@ export function createYAuthClient(options: YAuthClientOptions) {
 	const request = createRequest(options);
 
 	return {
+		getConfig: () => request<AuthConfigResponse>("/config"),
 		getSession: () => request<AuthUser>("/session", { auth: true }),
 		logout: () => request<void>("/logout", { method: "POST", auth: true }),
 		updateProfile: (body: UpdateProfileRequest) =>

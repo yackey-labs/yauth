@@ -1,3 +1,9 @@
+## 0.1.50 (2026-03-09)
+
+### Features
+
+- standardize span event names to yauth.* dotted namespace
+
 ## 0.1.49 (2026-03-09)
 
 ### Features

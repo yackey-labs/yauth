@@ -1,6 +1,6 @@
 {
 	"name": "@yauth/shared",
-	"version": "0.1.49",
+	"version": "0.1.50",
 	"type": "module",
 	"main": "dist/index.js",
 	"module": "dist/index.js",

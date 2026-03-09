@@ -381,6 +381,17 @@ async fn register(
     State(state): State<YAuthState>,
     Json(input): Json<RegisterRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    if !state.config.allow_signups {
+        warn!(
+            event = "yauth.register.disabled",
+            "Registration attempted while signups are disabled"
+        );
+        return Err(api_err(
+            StatusCode::FORBIDDEN,
+            "Registration is currently disabled",
+        ));
+    }
+
     if !state.rate_limiter.check("register").await {
         warn!(
             event = "yauth.register.rate_limited",

@@ -23,6 +23,15 @@ pub struct YAuthConfig {
     /// by binding sessions to client IP and/or User-Agent.
     #[serde(default)]
     pub session_binding: SessionBindingConfig,
+    /// When false, all signup/registration endpoints return 403 Forbidden.
+    /// This is a global kill-switch that applies across all plugins (email-password,
+    /// magic-link, OAuth, etc.). Defaults to true (signups allowed).
+    #[serde(default = "default_true")]
+    pub allow_signups: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for YAuthConfig {
@@ -38,6 +47,7 @@ impl Default for YAuthConfig {
             auto_admin_first_user: false,
             remember_me_ttl: None,
             session_binding: SessionBindingConfig::default(),
+            allow_signups: true,
         }
     }
 }
@@ -433,6 +443,7 @@ mod tests {
         assert!(!config.secure_cookies);
         assert!(config.smtp.is_none());
         assert!(!config.auto_admin_first_user);
+        assert!(config.allow_signups);
     }
 
     #[test]
@@ -442,6 +453,24 @@ mod tests {
         let parsed: YAuthConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.base_url, config.base_url);
         assert_eq!(parsed.session_ttl, config.session_ttl);
+    }
+
+    #[test]
+    fn allow_signups_defaults_to_true_when_missing() {
+        let json = r#"{"base_url":"http://localhost:3000","session_cookie_name":"session","session_ttl":604800,"cookie_domain":null,"secure_cookies":false,"trusted_origins":["http://localhost:3000"],"smtp":null,"auto_admin_first_user":false,"session_binding":{"bind_ip":false,"bind_user_agent":false,"ip_mismatch_action":"Warn","ua_mismatch_action":"Warn"}}"#;
+        let config: YAuthConfig = serde_json::from_str(json).unwrap();
+        assert!(config.allow_signups);
+    }
+
+    #[test]
+    fn allow_signups_can_be_set_to_false() {
+        let config = YAuthConfig {
+            allow_signups: false,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        let parsed: YAuthConfig = serde_json::from_str(&json).unwrap();
+        assert!(!parsed.allow_signups);
     }
 
     #[test]

@@ -1057,6 +1057,13 @@ async fn handle_callback(
         let (uid, display_name, email_verified) = if let Some(existing) = existing_user {
             (existing.id, existing.display_name, existing.email_verified)
         } else {
+            if !state.config.allow_signups {
+                warn!(event = "yauth.oauth.signup_disabled", email = %email, "OAuth signup attempted while signups are disabled");
+                return Err(api_err(
+                    StatusCode::FORBIDDEN,
+                    "Registration is currently disabled",
+                ));
+            }
             let user_id = Uuid::new_v4();
             #[cfg(feature = "seaorm")]
             {

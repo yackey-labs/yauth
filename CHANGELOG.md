@@ -1,3 +1,9 @@
+## 0.1.48 (2026-03-09)
+
+### Features
+
+- extract W3C traceparent for distributed trace correlation
+
 ## 0.1.47 (2026-03-08)
 
 ### Features

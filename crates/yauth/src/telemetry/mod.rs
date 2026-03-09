@@ -51,11 +51,11 @@ impl diesel::connection::Instrumentation for QueryTracing {
                 self.span = Some(span);
             }
             InstrumentationEvent::FinishQuery { error, .. } => {
-                if let Some(ref span) = self.span {
-                    if let Some(err) = error {
-                        span.record("otel.status_code", "ERROR");
-                        tracing::error!(parent: span, error = %err, "query failed");
-                    }
+                if let Some(ref span) = self.span
+                    && let Some(err) = error
+                {
+                    span.record("otel.status_code", "ERROR");
+                    tracing::error!(parent: span, error = %err, "query failed");
                 }
                 self.span.take();
             }

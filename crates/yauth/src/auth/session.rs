@@ -19,7 +19,16 @@ pub fn session_set_cookie(state: &YAuthState, token: &str, ttl: std::time::Durat
         cookie.push_str("; Secure");
     }
     if let Some(ref domain) = state.config.cookie_domain {
-        cookie.push_str(&format!("; Domain={}", domain));
+        // Validate domain to prevent cookie attribute injection via semicolons,
+        // newlines, or other control characters in the domain value.
+        let is_safe = !domain.is_empty()
+            && !domain.contains(';')
+            && !domain.contains('\n')
+            && !domain.contains('\r')
+            && !domain.contains(' ');
+        if is_safe {
+            cookie.push_str(&format!("; Domain={}", domain));
+        }
     }
     cookie
 }

@@ -110,6 +110,13 @@ const COMMON_PASSWORDS: &[&str] = &[
 pub fn validate(password: &str, config: &PasswordPolicyConfig) -> Vec<String> {
     let mut violations = Vec::new();
 
+    if password.len() < config.min_length {
+        violations.push(format!(
+            "Password must be at least {} characters",
+            config.min_length
+        ));
+    }
+
     if password.len() > config.max_length {
         violations.push(format!(
             "Password must be at most {} characters",
@@ -162,6 +169,7 @@ mod tests {
 
     fn strict_policy() -> PasswordPolicyConfig {
         PasswordPolicyConfig {
+            min_length: 8,
             max_length: 128,
             require_uppercase: true,
             require_lowercase: true,
@@ -238,6 +246,7 @@ mod tests {
     #[test]
     fn disabled_policy_allows_anything() {
         let policy = PasswordPolicyConfig {
+            min_length: 0,
             max_length: 999,
             require_uppercase: false,
             require_lowercase: false,

@@ -153,6 +153,9 @@ impl Default for EmailPasswordConfig {
 #[cfg(feature = "email-password")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PasswordPolicyConfig {
+    /// Minimum password length enforced by the policy validator (default: 8).
+    #[serde(default = "default_min_password_length")]
+    pub min_length: usize,
     pub max_length: usize,
     pub require_uppercase: bool,
     pub require_lowercase: bool,
@@ -165,9 +168,15 @@ pub struct PasswordPolicyConfig {
 }
 
 #[cfg(feature = "email-password")]
+fn default_min_password_length() -> usize {
+    8
+}
+
+#[cfg(feature = "email-password")]
 impl Default for PasswordPolicyConfig {
     fn default() -> Self {
         Self {
+            min_length: 8,
             max_length: 128,
             require_uppercase: false,
             require_lowercase: false,
@@ -550,6 +559,7 @@ mod tests {
     #[test]
     fn password_policy_config_defaults() {
         let config = PasswordPolicyConfig::default();
+        assert_eq!(config.min_length, 8);
         assert_eq!(config.max_length, 128);
         assert!(!config.require_uppercase);
         assert!(!config.require_lowercase);

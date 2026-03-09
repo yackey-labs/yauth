@@ -390,7 +390,7 @@ async fn register(
     }
 
     let email = input::sanitize(&input.email).to_lowercase();
-    let pwd = input::sanitize(&input.password);
+    let pwd = input::sanitize_password(&input.password);
     if email.is_empty() || pwd.is_empty() {
         return Err(api_err(
             StatusCode::BAD_REQUEST,
@@ -592,7 +592,7 @@ async fn login(
     Json(input): Json<LoginRequest>,
 ) -> Result<Response, (StatusCode, Json<serde_json::Value>)> {
     let email = input::sanitize(&input.email).to_lowercase();
-    let password_input = input::sanitize(&input.password);
+    let password_input = input::sanitize_password(&input.password);
 
     if !state.rate_limiter.check(&format!("login:{}", email)).await {
         warn!(event = "yauth.login.rate_limited", email = %email, "Login rate limited");
@@ -1154,7 +1154,7 @@ async fn reset_password(
         return Err(api_err(StatusCode::BAD_REQUEST, "Reset token is required"));
     }
 
-    let reset_password = input::sanitize(&input.password);
+    let reset_password = input::sanitize_password(&input.password);
     let ep_config = &state.email_password_config;
 
     if reset_password.len() < ep_config.min_password_length {
@@ -1363,8 +1363,8 @@ async fn change_password(
         return Err(api_err(StatusCode::TOO_MANY_REQUESTS, "Too many requests"));
     }
 
-    let current_password = input::sanitize(&input.current_password);
-    let new_password = input::sanitize(&input.new_password);
+    let current_password = input::sanitize_password(&input.current_password);
+    let new_password = input::sanitize_password(&input.new_password);
     let ep_config = &state.email_password_config;
 
     if new_password.len() < ep_config.min_password_length {

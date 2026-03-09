@@ -16,15 +16,22 @@ pub fn hash_token(token: &str) -> String {
 }
 
 /// Timing-safe comparison of two byte slices.
+///
+/// Always iterates through the longer of the two inputs to avoid
+/// leaking length information via timing side-channels.
 pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut result = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
+    let len_diff = a.len() ^ b.len();
+    let mut result = len_diff as u8;
+    // Iterate through all bytes of the longer slice. For indices beyond
+    // the shorter slice, use 0xFF vs 0x00 to accumulate a difference
+    // without short-circuiting.
+    let max_len = a.len().max(b.len());
+    for i in 0..max_len {
+        let x = if i < a.len() { a[i] } else { 0xFF };
+        let y = if i < b.len() { b[i] } else { 0x00 };
         result |= x ^ y;
     }
-    result == 0
+    result == 0 && len_diff == 0
 }
 
 #[cfg(test)]

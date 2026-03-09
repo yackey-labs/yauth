@@ -45,11 +45,10 @@ pub async fn trace_middleware(req: Request, next: Next) -> Response {
         url.path = %path,
         http.response.status_code = tracing::field::Empty,
         otel.status_code = tracing::field::Empty,
-        // Auth context (populated by auth middleware/handlers)
+        // User context — OTel semconv user.* namespace (populated after auth)
         user.id = tracing::field::Empty,
         user.email = tracing::field::Empty,
-        user.role = tracing::field::Empty,
-        enduser.id = tracing::field::Empty,
+        user.roles = tracing::field::Empty,
         // Auth operation context
         yauth.auth_method = tracing::field::Empty,
         yauth.session_found = tracing::field::Empty,

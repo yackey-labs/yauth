@@ -39,9 +39,8 @@ pub enum AuthMethod {
 fn record_auth_user_on_span(user: &AuthUser) {
     let span = tracing::Span::current();
     span.record("user.id", tracing::field::display(&user.id));
-    span.record("enduser.id", tracing::field::display(&user.id));
     span.record("user.email", user.email.as_str());
-    span.record("user.role", user.role.as_str());
+    span.record("user.roles", user.role.as_str());
     span.record(
         "yauth.auth_method",
         match &user.auth_method {

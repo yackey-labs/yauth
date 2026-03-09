@@ -73,11 +73,10 @@ let span = tracing::info_span!(
     url.path = %path,
     http.response.status_code = tracing::field::Empty,
     otel.status_code = tracing::field::Empty,
-    // Auth context (populated by auth middleware/handlers)
+    // User context — OTel semconv user.* namespace (populated after auth)
     user.id = tracing::field::Empty,
     user.email = tracing::field::Empty,
-    user.role = tracing::field::Empty,
-    enduser.id = tracing::field::Empty,
+    user.roles = tracing::field::Empty,
     // Auth operation context
     yauth.auth_method = tracing::field::Empty,
     yauth.session_found = tracing::field::Empty,
@@ -99,8 +98,7 @@ Fields are recorded using `tracing::Span::current().record("field", value)` from
 | `http.response.status_code` | After response | `200` |
 | `user.id` | After auth | `550e8400-e29b-41d4-a716-446655440000` |
 | `user.email` | After auth | `user@example.com` |
-| `user.role` | After auth | `admin` |
-| `enduser.id` | After auth | Same as `user.id` (OTel semantic convention) |
+| `user.roles` | After auth | `admin` |
 | `yauth.auth_method` | After auth | `session`, `bearer`, `api_key` |
 | `yauth.session_found` | After session lookup | `true` / `false` |
 | `yauth.rate_limited` | When rate limited | `true` |
@@ -211,7 +209,7 @@ Tempo generates RED metrics automatically from traces. Only add custom metrics f
 [SERVER] POST /api/auth/email/login
     user.id = "abc-123"
     user.email = "user@example.com"
-    user.role = "user"
+    user.roles = "user"
     yauth.auth_method = "session"
     yauth.session_found = true
     yauth.rate_limited = false
@@ -239,7 +237,7 @@ Compare with the old approach that created 5+ child spans — the wide event cap
 [SERVER] GET /api/guitars
     user.id = "abc-123"
     user.email = "user@example.com"
-    user.role = "user"
+    user.roles = "user"
     yauth.auth_method = "session"
     yauth.session_found = true
     http.response.status_code = 200
@@ -305,7 +303,7 @@ tracing_subscriber::registry()
 - [ ] `OTEL_SERVICE_NAME` set in deployment manifest
 - [ ] `trace_middleware` applied as Axum layer — creates wide SERVER span with auth Empty fields
 - [ ] SERVER spans named `{METHOD} {route}` with route templates
-- [ ] Auth middleware records `user.id`, `user.email`, `user.role`, `yauth.auth_method` on SERVER span
+- [ ] Auth middleware records `user.id`, `user.email`, `user.roles`, `yauth.auth_method` on SERVER span
 - [ ] Session validation records `yauth.session_found` on SERVER span
 - [ ] Rate limiter records `yauth.rate_limited` on SERVER span when blocked
 - [ ] Password hash/verify have their own child spans (CPU-bound)

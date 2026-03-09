@@ -1,3 +1,9 @@
+## 0.1.52 (2026-03-09)
+
+### Fixes
+
+- republish with allow_signups and config endpoint (v0.1.51 was stale)
+
 ## 0.1.51 (2026-03-09)
 
 ### Features

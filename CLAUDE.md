@@ -26,7 +26,7 @@
 
 ### Pentest Suite (`pentest/`)
 
-`pentest-yauth.sh` — comprehensive OWASP security test suite (172+ cases).
+`pentest-yauth.sh` — comprehensive OWASP security test suite (255+ cases).
 
 ## Key Commands
 
@@ -51,7 +51,7 @@ bun generate:check                   # Fail if generated client is out of date (
 
 # Integration / Pentest
 docker compose up -d                 # Start PostgreSQL + Mailpit
-bash pentest/pentest-yauth.sh        # Run full pentest suite (172+ cases, 0 FAIL expected)
+bash pentest/pentest-yauth.sh        # Run full pentest suite (255+ cases, 0 FAIL expected)
 ```
 
 ## Feature Flags

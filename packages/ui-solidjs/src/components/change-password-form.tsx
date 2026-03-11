@@ -23,7 +23,15 @@ export const ChangePasswordForm: Component<ChangePasswordFormProps> = (
 		setError(null);
 		setSuccess(false);
 
-		if (newPassword() !== confirmPassword()) {
+		const form = e.currentTarget as HTMLFormElement;
+		const formData = new FormData(form);
+		const currentPw =
+			(formData.get("current_password") as string) || currentPassword();
+		const newPw = (formData.get("new_password") as string) || newPassword();
+		const confirmPw =
+			(formData.get("confirm_password") as string) || confirmPassword();
+
+		if (newPw !== confirmPw) {
 			setError("Passwords do not match");
 			return;
 		}
@@ -31,10 +39,7 @@ export const ChangePasswordForm: Component<ChangePasswordFormProps> = (
 		setLoading(true);
 
 		try {
-			await client.emailPassword.changePassword(
-				currentPassword(),
-				newPassword(),
-			);
+			await client.emailPassword.changePassword(currentPw, newPw);
 			setSuccess(true);
 			setCurrentPassword("");
 			setNewPassword("");
@@ -73,6 +78,7 @@ export const ChangePasswordForm: Component<ChangePasswordFormProps> = (
 				<input
 					class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 md:text-sm"
 					id="yauth-current-password"
+					name="current_password"
 					type="password"
 					value={currentPassword()}
 					onInput={(e) => setCurrentPassword(e.currentTarget.value)}
@@ -92,6 +98,7 @@ export const ChangePasswordForm: Component<ChangePasswordFormProps> = (
 				<input
 					class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 md:text-sm"
 					id="yauth-new-password"
+					name="new_password"
 					type="password"
 					value={newPassword()}
 					onInput={(e) => setNewPassword(e.currentTarget.value)}
@@ -111,6 +118,7 @@ export const ChangePasswordForm: Component<ChangePasswordFormProps> = (
 				<input
 					class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 md:text-sm"
 					id="yauth-confirm-password"
+					name="confirm_password"
 					type="password"
 					value={confirmPassword()}
 					onInput={(e) => setConfirmPassword(e.currentTarget.value)}

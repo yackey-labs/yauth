@@ -24,9 +24,11 @@ export const LoginForm: Component<LoginFormProps> = (props) => {
 		setLoading(true);
 
 		try {
+			const form = e.currentTarget as HTMLFormElement;
+			const formData = new FormData(form);
 			const result = await client.emailPassword.login({
-				email: email(),
-				password: password(),
+				email: (formData.get("email") as string) || email(),
+				password: (formData.get("password") as string) || password(),
 			});
 
 			if ("mfa_required" in result && result.mfa_required) {
@@ -61,6 +63,7 @@ export const LoginForm: Component<LoginFormProps> = (props) => {
 				<input
 					class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 md:text-sm"
 					id="yauth-login-email"
+					name="email"
 					type="email"
 					value={email()}
 					on:input={(e) => setEmail(e.currentTarget.value)}
@@ -80,6 +83,7 @@ export const LoginForm: Component<LoginFormProps> = (props) => {
 				<input
 					class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 md:text-sm"
 					id="yauth-login-password"
+					name="password"
 					type="password"
 					value={password()}
 					on:input={(e) => setPassword(e.currentTarget.value)}

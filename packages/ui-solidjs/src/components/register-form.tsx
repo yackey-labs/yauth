@@ -21,10 +21,14 @@ export const RegisterForm: Component<RegisterFormProps> = (props) => {
 		setLoading(true);
 
 		try {
+			const form = e.currentTarget as HTMLFormElement;
+			const formData = new FormData(form);
+			const formDisplayName =
+				(formData.get("display_name") as string) || displayName();
 			const result = await client.emailPassword.register({
-				email: email(),
-				password: password(),
-				display_name: displayName() || undefined,
+				email: (formData.get("email") as string) || email(),
+				password: (formData.get("password") as string) || password(),
+				display_name: formDisplayName || undefined,
 			});
 			props.onSuccess?.(result.message);
 		} catch (err) {
@@ -54,6 +58,7 @@ export const RegisterForm: Component<RegisterFormProps> = (props) => {
 				<input
 					class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 md:text-sm"
 					id="yauth-register-email"
+					name="email"
 					type="email"
 					value={email()}
 					onInput={(e) => setEmail(e.currentTarget.value)}
@@ -73,6 +78,7 @@ export const RegisterForm: Component<RegisterFormProps> = (props) => {
 				<input
 					class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 md:text-sm"
 					id="yauth-register-password"
+					name="password"
 					type="password"
 					value={password()}
 					onInput={(e) => setPassword(e.currentTarget.value)}
@@ -92,6 +98,7 @@ export const RegisterForm: Component<RegisterFormProps> = (props) => {
 				<input
 					class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 md:text-sm"
 					id="yauth-register-display-name"
+					name="display_name"
 					type="text"
 					value={displayName()}
 					onInput={(e) => setDisplayName(e.currentTarget.value)}

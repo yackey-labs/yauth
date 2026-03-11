@@ -96,7 +96,11 @@ export const ProfileSettings: Component = () => {
 		setMfaLoading(true);
 
 		try {
-			await client.mfa.confirm(mfaCode());
+			const form = e.currentTarget as HTMLFormElement;
+			const formData = new FormData(form);
+			await client.mfa.confirm(
+				(formData.get("mfa_code") as string) || mfaCode(),
+			);
 			setMfaStep("done");
 		} catch (err) {
 			const error = err instanceof Error ? err : new Error(String(err));
@@ -353,6 +357,7 @@ export const ProfileSettings: Component = () => {
 											<input
 												class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 md:text-sm"
 												id="yauth-profile-mfa-code"
+												name="mfa_code"
 												type="text"
 												inputmode="numeric"
 												autocomplete="one-time-code"

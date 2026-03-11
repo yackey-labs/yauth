@@ -22,7 +22,11 @@ export const ForgotPasswordForm: Component<ForgotPasswordFormProps> = (
 		setLoading(true);
 
 		try {
-			const result = await client.emailPassword.forgotPassword(email());
+			const form = e.currentTarget as HTMLFormElement;
+			const formData = new FormData(form);
+			const result = await client.emailPassword.forgotPassword(
+				(formData.get("email") as string) || email(),
+			);
 			setSuccess(result.message);
 			props.onSuccess?.(result.message);
 		} catch (err) {
@@ -57,6 +61,7 @@ export const ForgotPasswordForm: Component<ForgotPasswordFormProps> = (
 				<input
 					class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 md:text-sm"
 					id="yauth-forgot-password-email"
+					name="email"
 					type="email"
 					value={email()}
 					onInput={(e) => setEmail(e.currentTarget.value)}

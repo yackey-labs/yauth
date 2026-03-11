@@ -1,3 +1,10 @@
+## 0.1.53 (2026-03-11)
+
+### Fixes
+
+- republish with allow_signups and config endpoint (v0.1.51 was stale)
+- read form values from FormData at submit time for autofill compatibility
+
 ## 0.1.52 (2026-03-09)
 
 ### Fixes

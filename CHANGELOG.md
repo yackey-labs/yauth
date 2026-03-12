@@ -1,3 +1,9 @@
+## 0.1.55 (2026-03-12)
+
+### Fixes
+
+- resolve refetch promise after resource signal updates
+
 ## 0.1.54 (2026-03-12)
 
 ### Fixes

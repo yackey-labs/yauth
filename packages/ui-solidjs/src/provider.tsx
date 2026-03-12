@@ -2,6 +2,7 @@ import type { YAuthClient } from "@yauth/client";
 import type { AuthUser } from "@yauth/shared";
 import {
 	createContext,
+	createEffect,
 	createResource,
 	type ParentComponent,
 	useContext,
@@ -24,18 +25,21 @@ export const YAuthProvider: ParentComponent<{ client: YAuthClient }> = (
 	const [session, { refetch }] = createResource(async () => {
 		try {
 			const result = await props.client.getSession();
-			const user = result.user;
-			if (resolveRefetch) {
-				resolveRefetch(user);
-				resolveRefetch = null;
-			}
-			return user;
+			return result.user;
 		} catch {
-			if (resolveRefetch) {
-				resolveRefetch(null);
-				resolveRefetch = null;
-			}
 			return null;
+		}
+	});
+
+	// Resolve pending refetch promises only after the resource signal
+	// has been updated by SolidJS. Resolving inside the fetcher (before
+	// `return`) causes a race: the caller resumes before session() updates.
+	createEffect(() => {
+		const loading = session.loading;
+		if (!loading && resolveRefetch) {
+			const resolve = resolveRefetch;
+			resolveRefetch = null;
+			resolve(session() ?? null);
 		}
 	});
 

@@ -18,7 +18,8 @@
 	],
 	"scripts": {
 		"build": "vite build",
-		"typecheck": "tsc --noEmit"
+		"typecheck": "tsc --noEmit",
+		"test": "bun test --conditions browser"
 	},
 	"dependencies": {
 		"@simplewebauthn/browser": "^13.0.0",

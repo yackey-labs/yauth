@@ -11,7 +11,7 @@ interface YAuthContextValue {
 	client: YAuthClient;
 	user: () => AuthUser | null | undefined;
 	loading: () => boolean;
-	refetch: () => void;
+	refetch: () => Promise<AuthUser | null>;
 }
 
 const YAuthContext = createContext<YAuthContextValue>();
@@ -19,14 +19,32 @@ const YAuthContext = createContext<YAuthContextValue>();
 export const YAuthProvider: ParentComponent<{ client: YAuthClient }> = (
 	props,
 ) => {
+	let resolveRefetch: ((user: AuthUser | null) => void) | null = null;
+
 	const [session, { refetch }] = createResource(async () => {
 		try {
 			const result = await props.client.getSession();
-			return result.user;
+			const user = result.user;
+			if (resolveRefetch) {
+				resolveRefetch(user);
+				resolveRefetch = null;
+			}
+			return user;
 		} catch {
+			if (resolveRefetch) {
+				resolveRefetch(null);
+				resolveRefetch = null;
+			}
 			return null;
 		}
 	});
+
+	const refetchAsync = (): Promise<AuthUser | null> => {
+		return new Promise((resolve) => {
+			resolveRefetch = resolve;
+			refetch();
+		});
+	};
 
 	return (
 		<YAuthContext.Provider
@@ -34,7 +52,7 @@ export const YAuthProvider: ParentComponent<{ client: YAuthClient }> = (
 				client: props.client,
 				user: () => session(),
 				loading: () => session.loading,
-				refetch,
+				refetch: refetchAsync,
 			}}
 		>
 			{props.children}

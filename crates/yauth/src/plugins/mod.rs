@@ -72,11 +72,19 @@ pub fn core_public_routes() -> Router<YAuthState> {
 pub struct AuthConfigResponse {
     /// Whether new user registration is allowed.
     pub allow_signups: bool,
+    /// Whether newly registered users must verify their email before logging in.
+    pub require_email_verification: bool,
 }
 
 async fn get_config(State(state): State<YAuthState>) -> Json<AuthConfigResponse> {
+    #[cfg(feature = "email-password")]
+    let require_email_verification = state.email_password_config.require_email_verification;
+    #[cfg(not(feature = "email-password"))]
+    let require_email_verification = false;
+
     Json(AuthConfigResponse {
         allow_signups: state.config.allow_signups,
+        require_email_verification,
     })
 }
 

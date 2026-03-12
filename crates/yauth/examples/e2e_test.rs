@@ -1323,7 +1323,7 @@ async fn start_server(db: DatabaseConnection) -> u16 {
             base_url: "http://127.0.0.1:0".into(),
             session_cookie_name: "session".into(),
             session_ttl: Duration::from_secs(3600),
-            cookie_domain: None,
+
             secure_cookies: false,
             trusted_origins: vec!["http://127.0.0.1".into()],
             smtp: Some(yauth::config::SmtpConfig {
@@ -1380,7 +1380,7 @@ async fn start_server_with_audience(db: DatabaseConnection, audience: &str) -> u
             base_url: "http://127.0.0.1:0".into(),
             session_cookie_name: "session_aud".into(),
             session_ttl: Duration::from_secs(3600),
-            cookie_domain: None,
+
             secure_cookies: false,
             trusted_origins: vec!["http://127.0.0.1".into()],
             smtp: None,
@@ -1444,7 +1444,7 @@ async fn start_server_with_oauth2(db: DatabaseConnection) -> u16 {
             base_url: "http://127.0.0.1:0".into(),
             session_cookie_name: "session_oauth2".into(),
             session_ttl: Duration::from_secs(3600),
-            cookie_domain: None,
+
             secure_cookies: false,
             trusted_origins: vec!["http://127.0.0.1".into()],
             smtp: None,

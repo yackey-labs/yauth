@@ -1,13 +1,67 @@
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
+/// Controls the `Domain` attribute on session cookies.
+///
+/// - `Auto` (default): No `Domain` attribute — the cookie is scoped to the exact
+///   origin only. This is the most secure default and prevents subdomain leakage
+///   (e.g. PR preview deployments won't receive production cookies).
+/// - `Explicit("example.com")`: Sets `Domain=example.com`. Use only when cookies
+///   must be shared across subdomains (e.g. API on `api.example.com`, frontend
+///   on `app.example.com`). **Warning**: all subdomains will receive this cookie.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum CookieDomainPolicy {
+    /// Set `Domain` to the given value. Use for cross-subdomain cookie sharing.
+    Explicit(String),
+    /// No `Domain` attribute — exact origin scoping (most secure).
+    Auto,
+}
+
+impl Default for CookieDomainPolicy {
+    fn default() -> Self {
+        Self::Auto
+    }
+}
+
+impl CookieDomainPolicy {
+    /// Returns the domain string to set on the cookie, or `None` for exact-origin scoping.
+    pub fn domain(&self) -> Option<&str> {
+        match self {
+            Self::Explicit(d) if !d.is_empty() => Some(d.as_str()),
+            _ => None,
+        }
+    }
+}
+
+/// Backwards-compatible: accepts `Option<String>` (null/string) or `CookieDomainPolicy`
+/// from JSON. `null` or missing → `Auto`, `"example.com"` → `Explicit("example.com")`,
+/// `""` → `Auto`.
+impl From<Option<String>> for CookieDomainPolicy {
+    fn from(opt: Option<String>) -> Self {
+        match opt {
+            Some(s) if !s.is_empty() => Self::Explicit(s),
+            _ => Self::Auto,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct YAuthConfig {
     pub base_url: String,
     pub session_cookie_name: String,
     #[serde(with = "duration_secs")]
     pub session_ttl: Duration,
-    pub cookie_domain: Option<String>,
+    /// Cookie domain policy. Defaults to `Auto` (no `Domain` attribute — cookie
+    /// scopes to the exact origin, which is the most secure default).
+    /// Set to `Explicit("example.com")` only when you need cookies shared across
+    /// subdomains (e.g. `app.example.com` + `api.example.com`).
+    ///
+    /// **Warning**: Setting a `Domain` attribute causes the cookie to be sent to ALL
+    /// subdomains, which can cause session collisions in PR preview deployments
+    /// (e.g. `pr-5.app.example.com` receives the production cookie).
+    #[serde(default)]
+    pub cookie_domain: CookieDomainPolicy,
     pub secure_cookies: bool,
     pub trusted_origins: Vec<String>,
     pub smtp: Option<SmtpConfig>,
@@ -40,7 +94,7 @@ impl Default for YAuthConfig {
             base_url: "http://localhost:3000".into(),
             session_cookie_name: "session".into(),
             session_ttl: Duration::from_secs(7 * 24 * 3600),
-            cookie_domain: None,
+            cookie_domain: CookieDomainPolicy::Auto,
             secure_cookies: false,
             trusted_origins: vec!["http://localhost:3000".into()],
             smtp: None,

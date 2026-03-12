@@ -132,7 +132,7 @@ async fn main() {
             base_url: base_url.clone(),
             session_cookie_name,
             session_ttl: Duration::from_secs(7 * 24 * 3600), // 1 week
-            cookie_domain: None,
+            cookie_domain: env::var("COOKIE_DOMAIN").ok().into(),
             secure_cookies: !base_url.starts_with("http://localhost"),
             trusted_origins: vec![base_url.clone()],
             smtp: smtp_config,

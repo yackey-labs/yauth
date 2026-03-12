@@ -1,3 +1,10 @@
+## 0.1.54 (2026-03-12)
+
+### Fixes
+
+- read form values from FormData at submit time for autofill compatibility
+- make provider refetch awaitable to prevent login redirect race
+
 ## 0.1.53 (2026-03-11)
 
 ### Fixes

@@ -1,3 +1,13 @@
+## 0.1.57 (2026-03-12)
+
+### Features
+
+- add CookieDomainPolicy and expose require_email_verification in config
+
+### Fixes
+
+- use derive(Default) for CookieDomainPolicy to fix clippy CI (#13)
+
 ## 0.1.56 (2026-03-12)
 
 ### Features

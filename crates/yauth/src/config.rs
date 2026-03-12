@@ -9,19 +9,14 @@ use std::time::Duration;
 /// - `Explicit("example.com")`: Sets `Domain=example.com`. Use only when cookies
 ///   must be shared across subdomains (e.g. API on `api.example.com`, frontend
 ///   on `app.example.com`). **Warning**: all subdomains will receive this cookie.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(untagged)]
 pub enum CookieDomainPolicy {
     /// Set `Domain` to the given value. Use for cross-subdomain cookie sharing.
     Explicit(String),
     /// No `Domain` attribute — exact origin scoping (most secure).
+    #[default]
     Auto,
-}
-
-impl Default for CookieDomainPolicy {
-    fn default() -> Self {
-        Self::Auto
-    }
 }
 
 impl CookieDomainPolicy {

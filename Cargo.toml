@@ -3,15 +3,15 @@ members = ["crates/*"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.55"
+version = "0.1.56"
 edition = "2024"
 license = "MIT"
 repository = "https://forgejo.yackey.cloud/yauth/yauth"
 
 [workspace.dependencies]
 # Internal crates
-yauth-entity = { version = "0.1.55", path = "crates/yauth-entity", registry = "yauth" }
-yauth-migration = { version = "0.1.55", path = "crates/yauth-migration", registry = "yauth" }
+yauth-entity = { version = "0.1.56", path = "crates/yauth-entity", registry = "yauth" }
+yauth-migration = { version = "0.1.56", path = "crates/yauth-migration", registry = "yauth" }
 
 # Web framework
 axum = { version = "0.8", features = ["macros"] }

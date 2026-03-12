@@ -1,3 +1,9 @@
+## 0.1.56 (2026-03-12)
+
+### Features
+
+- add CookieDomainPolicy and expose require_email_verification in config
+
 ## 0.1.55 (2026-03-12)
 
 ### Fixes

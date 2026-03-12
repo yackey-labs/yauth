@@ -15,13 +15,8 @@
  * The fix uses createEffect to resolve only after the resource signal
  * has been updated by SolidJS.
  */
-import { describe, expect, it, mock } from "bun:test";
-import {
-	createEffect,
-	createResource,
-	createRoot,
-	createSignal,
-} from "solid-js";
+import { describe, expect, it } from "bun:test";
+import { createEffect, createResource, createRoot } from "solid-js";
 
 // Minimal AuthUser shape for testing
 type AuthUser = { id: string; email: string };
@@ -51,7 +46,11 @@ function createBrokenProvider(getSessionFn: () => Promise<AuthUser | null>) {
 		});
 	};
 
-	return { user: () => session() ?? null, loading: () => session.loading, refetchAsync };
+	return {
+		user: () => session() ?? null,
+		loading: () => session.loading,
+		refetchAsync,
+	};
 }
 
 /**
@@ -86,7 +85,11 @@ function createFixedProvider(getSessionFn: () => Promise<AuthUser | null>) {
 		});
 	};
 
-	return { user: () => session() ?? null, loading: () => session.loading, refetchAsync };
+	return {
+		user: () => session() ?? null,
+		loading: () => session.loading,
+		refetchAsync,
+	};
 }
 
 describe("provider refetch timing", () => {
@@ -98,23 +101,24 @@ describe("provider refetch timing", () => {
 			return callCount === 1 ? null : testUser;
 		};
 
-		const result = await new Promise<{ promiseUser: AuthUser | null; signalUser: AuthUser | null }>(
-			(done) => {
-				createRoot(async (dispose) => {
-					const provider = createBrokenProvider(getSession);
+		const result = await new Promise<{
+			promiseUser: AuthUser | null;
+			signalUser: AuthUser | null;
+		}>((done) => {
+			createRoot(async (dispose) => {
+				const provider = createBrokenProvider(getSession);
 
-					// Wait for initial resource load
-					await new Promise((r) => setTimeout(r, 10));
+				// Wait for initial resource load
+				await new Promise((r) => setTimeout(r, 10));
 
-					// Simulate login → refetch
-					const promiseUser = await provider.refetchAsync();
-					const signalUser = provider.user();
+				// Simulate login → refetch
+				const promiseUser = await provider.refetchAsync();
+				const signalUser = provider.user();
 
-					done({ promiseUser, signalUser });
-					dispose();
-				});
-			},
-		);
+				done({ promiseUser, signalUser });
+				dispose();
+			});
+		});
 
 		// The Promise resolved with the user...
 		expect(result.promiseUser).toEqual(testUser);
@@ -129,23 +133,24 @@ describe("provider refetch timing", () => {
 			return callCount === 1 ? null : testUser;
 		};
 
-		const result = await new Promise<{ promiseUser: AuthUser | null; signalUser: AuthUser | null }>(
-			(done) => {
-				createRoot(async (dispose) => {
-					const provider = createFixedProvider(getSession);
+		const result = await new Promise<{
+			promiseUser: AuthUser | null;
+			signalUser: AuthUser | null;
+		}>((done) => {
+			createRoot(async (dispose) => {
+				const provider = createFixedProvider(getSession);
 
-					// Wait for initial resource load
-					await new Promise((r) => setTimeout(r, 10));
+				// Wait for initial resource load
+				await new Promise((r) => setTimeout(r, 10));
 
-					// Simulate login → refetch
-					const promiseUser = await provider.refetchAsync();
-					const signalUser = provider.user();
+				// Simulate login → refetch
+				const promiseUser = await provider.refetchAsync();
+				const signalUser = provider.user();
 
-					done({ promiseUser, signalUser });
-					dispose();
-				});
-			},
-		);
+				done({ promiseUser, signalUser });
+				dispose();
+			});
+		});
 
 		// Both the Promise AND the reactive signal have the user
 		expect(result.promiseUser).toEqual(testUser);

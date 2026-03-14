@@ -31,7 +31,7 @@ Set these in your deployment manifest:
 
 ```yaml
 - name: OTEL_EXPORTER_OTLP_ENDPOINT
-  value: "http://alloy.observability.svc.cluster.local:4317"
+  value: "http://otel.observability.svc.cluster.local:4317"
 - name: OTEL_SERVICE_NAME
   value: "<your-app-name>"
 - name: OTEL_RESOURCE_ATTRIBUTES

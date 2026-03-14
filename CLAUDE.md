@@ -143,7 +143,7 @@ This project uses `axum-ts-client` to auto-generate `@yauth/client` from Rust ty
 
 ## Telemetry
 
-See `OTel_Rules.md` for full instrumentation conventions. Key points:
+Uses the honeycomb plugin for OTel instrumentation guidance. Key points:
 - `tracing` + `tracing-opentelemetry` for Rust spans
 - `@opentelemetry/sdk-trace-web` for frontend
 - CORS must include `traceparent` and `tracestate` headers

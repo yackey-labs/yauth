@@ -16,7 +16,7 @@ env:
 jobs:
   lint:
     name: Lint
-    runs-on: arc-runner-set
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -49,7 +49,7 @@ jobs:
 
   test:
     name: Test
-    runs-on: arc-runner-set
+    runs-on: ubuntu-latest
     services:
       postgres:
         image: postgres:17
@@ -86,7 +86,7 @@ jobs:
 
   test-diesel:
     name: Test (diesel-async)
-    runs-on: arc-runner-set
+    runs-on: ubuntu-latest
     services:
       postgres:
         image: postgres:17
@@ -129,7 +129,7 @@ jobs:
 
   pentest:
     name: Security Pentest
-    runs-on: arc-runner-set
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -143,7 +143,7 @@ jobs:
 
   build:
     name: Build
-    runs-on: arc-runner-set
+    runs-on: ubuntu-latest
     needs: [lint, test, test-diesel, pentest]
     steps:
       - uses: actions/checkout@v4

@@ -1,3 +1,14 @@
+## 0.1.58 (2026-03-17)
+
+### Features
+
+- migrate from Forgejo to GitHub
+
+### Fixes
+
+- sync stale bun.lock, regenerate AuthConfigResponse binding, fix biome formatting
+- use GitHub-hosted runners for public repo
+
 ## 0.1.57 (2026-03-12)
 
 ### Features

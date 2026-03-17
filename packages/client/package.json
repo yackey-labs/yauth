@@ -1,6 +1,6 @@
 {
 	"name": "@yackey-labs/client",
-	"version": "0.1.57",
+	"version": "0.1.58",
 	"type": "module",
 	"main": "dist/index.js",
 	"module": "dist/index.js",
@@ -22,7 +22,7 @@
 		"test": "bun test"
 	},
 	"dependencies": {
-		"@yackey-labs/shared": "0.1.57"
+		"@yackey-labs/shared": "0.1.58"
 	},
 	"devDependencies": {
 		"typescript": "^5.7.2"

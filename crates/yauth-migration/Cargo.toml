@@ -4,7 +4,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-publish = false
+description = "Database migrations for yauth — modular authentication for Axum"
+keywords = ["axum", "authentication", "migration", "seaorm"]
+categories = ["authentication", "web-programming"]
+publish = true
 
 [features]
 default = ["seaorm", "email-password"]

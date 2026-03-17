@@ -4,7 +4,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-publish = false
+description = "Modular, plugin-based authentication for Axum — passkey, MFA, OAuth, JWT, API keys"
+keywords = ["axum", "authentication", "webauthn", "totp", "oauth"]
+categories = ["authentication", "web-programming"]
+publish = true
 
 [features]
 default = ["seaorm", "email-password"]

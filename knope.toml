@@ -46,20 +46,33 @@ type = "Command"
 command = "bun run build"
 shell = true
 
-# Publish npm packages (GitHub Packages)
+# Publish Rust crates to crates.io (entity first, then migration, then yauth)
 [[workflows.steps]]
 type = "Command"
-command = "cd packages/shared && bun publish --access public"
+command = "cargo publish -p yauth-entity"
+
+[[workflows.steps]]
+type = "Command"
+command = "cargo publish -p yauth-migration"
+
+[[workflows.steps]]
+type = "Command"
+command = "cargo publish -p yauth"
+
+# Publish npm packages to npmjs.com
+[[workflows.steps]]
+type = "Command"
+command = "cd packages/shared && bun publish --access public --provenance"
 shell = true
 
 [[workflows.steps]]
 type = "Command"
-command = "cd packages/client && bun publish --access public"
+command = "cd packages/client && bun publish --access public --provenance"
 shell = true
 
 [[workflows.steps]]
 type = "Command"
-command = "cd packages/ui-solidjs && bun publish --access public"
+command = "cd packages/ui-solidjs && bun publish --access public --provenance"
 shell = true
 
 # Push and create release after all packages are published

@@ -4,7 +4,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-publish = false
+description = "SeaORM entities for yauth — modular authentication for Axum"
+keywords = ["axum", "authentication", "seaorm", "webauthn", "totp"]
+categories = ["authentication", "web-programming"]
+publish = true
 
 [features]
 default = ["seaorm", "email-password"]

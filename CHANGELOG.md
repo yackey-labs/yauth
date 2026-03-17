@@ -1,3 +1,9 @@
+## 0.1.59 (2026-03-17)
+
+### Fixes
+
+- rename npm packages to @yackey-labs/yauth-*
+
 ## 0.1.58 (2026-03-17)
 
 ### Features

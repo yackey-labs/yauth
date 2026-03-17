@@ -1,6 +1,6 @@
 {
 	"name": "@yackey-labs/yauth-shared",
-	"version": "0.1.58",
+	"version": "0.1.59",
 	"type": "module",
 	"main": "dist/index.js",
 	"module": "dist/index.js",

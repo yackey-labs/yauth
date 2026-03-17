@@ -248,6 +248,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
+name = "axfetchum"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b23667f8224ea632dbd7951f4dc9df422f8c3af9d6f24969b4fe00e2d0687552"
+
+[[package]]
 name = "axum"
 version = "0.8.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -332,12 +338,6 @@ dependencies = [
  "quote",
  "syn 2.0.117",
 ]
-
-[[package]]
-name = "axum-ts-client"
-version = "0.1.5"
-source = "sparse+https://forgejo.yackey.cloud/api/packages/yackey-cloud/cargo/"
-checksum = "23eaedd7da7280d7790194d60fc4f93ea744d986cdd4ddb49d9863b760a1e835"
 
 [[package]]
 name = "base16ct"
@@ -5688,9 +5688,9 @@ version = "0.1.59"
 dependencies = [
  "argon2",
  "async-trait",
+ "axfetchum",
  "axum",
  "axum-extra",
- "axum-ts-client",
  "base64 0.22.1",
  "chrono",
  "diesel",

@@ -4,7 +4,7 @@
 //! aggregates them respecting feature gates. This module is used by
 //! `axum-ts-client` to generate typed TypeScript API clients.
 
-use axum_ts_client::{RouteCollection, api_routes};
+use axfetchum::{RouteCollection, api_routes};
 
 /// Core routes (always available): config, session, logout, profile update.
 pub fn core_routes() -> RouteCollection {

@@ -1,4 +1,4 @@
-use axum_ts_client::GeneratorConfig;
+use axfetchum::GeneratorConfig;
 
 fn config() -> GeneratorConfig {
     // Paths are relative to the crate root (crates/yauth/)
@@ -20,12 +20,12 @@ fn config() -> GeneratorConfig {
 #[test]
 fn generate_ts_client() {
     let routes = yauth::routes_meta::all_route_meta();
-    axum_ts_client::generate_to_file(&routes, &config()).unwrap();
+    axfetchum::generate_to_file(&routes, &config()).unwrap();
 }
 
 #[test]
 fn check_ts_client_up_to_date() {
     let routes = yauth::routes_meta::all_route_meta();
-    axum_ts_client::check(&routes, &config())
+    axfetchum::check(&routes, &config())
         .expect("Generated TypeScript client is out of date! Run: bun generate");
 }

@@ -109,7 +109,7 @@ Authenticated user is injected as `Extension<AuthUser>` on the request.
 
 ## Generated TypeScript Client
 
-This project uses `axum-ts-client` to auto-generate `@yackey-labs/yauth-client` from Rust types + route metadata.
+This project uses `axfetchum` to auto-generate `@yackey-labs/yauth-client` from Rust types + route metadata.
 
 **When modifying any API endpoint or request/response type:**
 1. Update the route metadata in `crates/yauth/src/routes_meta.rs`

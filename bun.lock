@@ -11,29 +11,29 @@
       },
     },
     "packages/client": {
-      "name": "@yauth/client",
+      "name": "@yackey-labs/client",
       "version": "0.1.57",
       "dependencies": {
-        "@yauth/shared": "0.1.37",
+        "@yackey-labs/shared": "0.1.57",
       },
       "devDependencies": {
         "typescript": "^5.7.2",
       },
     },
     "packages/shared": {
-      "name": "@yauth/shared",
+      "name": "@yackey-labs/shared",
       "version": "0.1.57",
       "devDependencies": {
         "typescript": "^5.7.2",
       },
     },
     "packages/ui-solidjs": {
-      "name": "@yauth/ui-solidjs",
+      "name": "@yackey-labs/ui-solidjs",
       "version": "0.1.57",
       "dependencies": {
         "@simplewebauthn/browser": "^13.0.0",
-        "@yauth/client": "0.1.37",
-        "@yauth/shared": "0.1.37",
+        "@yackey-labs/client": "0.1.57",
+        "@yackey-labs/shared": "0.1.57",
         "solid-js": "^1.9.5",
       },
       "devDependencies": {
@@ -226,11 +226,11 @@
 
     "@types/node": ["@types/node@25.2.3", "", { "dependencies": { "undici-types": "~7.16.0" } }, "sha512-m0jEgYlYz+mDJZ2+F4v8D1AyQb+QzsNqRuI7xg1VQX/KlKS0qT9r1Mo16yo5F/MtifXFgaofIFsdFMox2SxIbQ=="],
 
-    "@yauth/client": ["@yauth/client@workspace:packages/client"],
+    "@yackey-labs/client": ["@yackey-labs/client@workspace:packages/client"],
 
-    "@yauth/shared": ["@yauth/shared@workspace:packages/shared"],
+    "@yackey-labs/shared": ["@yackey-labs/shared@workspace:packages/shared"],
 
-    "@yauth/ui-solidjs": ["@yauth/ui-solidjs@workspace:packages/ui-solidjs"],
+    "@yackey-labs/ui-solidjs": ["@yackey-labs/ui-solidjs@workspace:packages/ui-solidjs"],
 
     "babel-plugin-jsx-dom-expressions": ["babel-plugin-jsx-dom-expressions@0.40.3", "", { "dependencies": { "@babel/helper-module-imports": "7.18.6", "@babel/plugin-syntax-jsx": "^7.18.6", "@babel/types": "^7.20.7", "html-entities": "2.3.3", "parse5": "^7.1.2" }, "peerDependencies": { "@babel/core": "^7.20.12" } }, "sha512-5HOwwt0BYiv/zxl7j8Pf2bGL6rDXfV6nUhLs8ygBX+EFJXzBPHM/euj9j/6deMZ6wa52Wb2PBaAV5U/jKwIY1w=="],
 

@@ -6,12 +6,12 @@ resolver = "2"
 version = "0.1.57"
 edition = "2024"
 license = "MIT"
-repository = "https://forgejo.yackey.cloud/yauth/yauth"
+repository = "https://github.com/yackey-labs/yauth"
 
 [workspace.dependencies]
 # Internal crates
-yauth-entity = { version = "0.1.57", path = "crates/yauth-entity", registry = "yauth" }
-yauth-migration = { version = "0.1.57", path = "crates/yauth-migration", registry = "yauth" }
+yauth-entity = { version = "0.1.57", path = "crates/yauth-entity" }
+yauth-migration = { version = "0.1.57", path = "crates/yauth-migration" }
 
 # Web framework
 axum = { version = "0.8", features = ["macros"] }
@@ -77,7 +77,7 @@ opentelemetry-semantic-conventions = { version = "0.31" }
 
 # Code generation
 ts-rs = { version = "11", features = ["serde-compat", "uuid-impl", "chrono-impl"] }
-axum-ts-client = { version = "0.1", registry = "yackey-cloud" }
+axum-ts-client = { git = "https://github.com/yackey-labs/axum-ts-client.git", tag = "v0.1.7" }
 
 # Misc
 async-trait = "0.1"

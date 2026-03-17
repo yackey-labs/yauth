@@ -1,5 +1,5 @@
 {
-	"name": "@yauth/client",
+	"name": "@yackey-labs/client",
 	"version": "0.1.57",
 	"type": "module",
 	"main": "dist/index.js",
@@ -22,7 +22,7 @@
 		"test": "bun test"
 	},
 	"dependencies": {
-		"@yauth/shared": "0.1.57"
+		"@yackey-labs/shared": "0.1.57"
 	},
 	"devDependencies": {
 		"typescript": "^5.7.2"

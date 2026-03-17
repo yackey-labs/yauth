@@ -1,5 +1,5 @@
 {
-	"name": "@yauth/shared",
+	"name": "@yackey-labs/shared",
 	"version": "0.1.57",
 	"type": "module",
 	"main": "dist/index.js",

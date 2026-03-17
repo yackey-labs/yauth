@@ -11,14 +11,12 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  REGISTRY: forgejo.yackey.cloud
   CARGO_TERM_COLOR: always
-  CARGO_REGISTRIES_YACKEY_CLOUD_TOKEN: "token ${{ secrets.RELEASE_PAT }}"
 
 jobs:
   lint:
     name: Lint
-    runs-on: ubuntu-latest
+    runs-on: arc-runner-set
     steps:
       - uses: actions/checkout@v4
 
@@ -51,7 +49,7 @@ jobs:
 
   test:
     name: Test
-    runs-on: ubuntu-latest
+    runs-on: arc-runner-set
     services:
       postgres:
         image: postgres:17
@@ -88,7 +86,7 @@ jobs:
 
   test-diesel:
     name: Test (diesel-async)
-    runs-on: ubuntu-latest
+    runs-on: arc-runner-set
     services:
       postgres:
         image: postgres:17
@@ -131,7 +129,7 @@ jobs:
 
   pentest:
     name: Security Pentest
-    runs-on: ubuntu-latest
+    runs-on: arc-runner-set
     steps:
       - uses: actions/checkout@v4
 
@@ -145,7 +143,7 @@ jobs:
 
   build:
     name: Build
-    runs-on: ubuntu-latest
+    runs-on: arc-runner-set
     needs: [lint, test, test-diesel, pentest]
     steps:
       - uses: actions/checkout@v4

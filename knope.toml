@@ -7,18 +7,17 @@ versioned_files = [
     "packages/shared/package.json",
     "packages/client/package.json",
     "packages/ui-solidjs/package.json",
-    { path = "packages/client/package.json", dependency = "@yauth/shared" },
-    { path = "packages/ui-solidjs/package.json", dependency = "@yauth/client" },
-    { path = "packages/ui-solidjs/package.json", dependency = "@yauth/shared" },
+    { path = "packages/client/package.json", dependency = "@yackey-labs/shared" },
+    { path = "packages/ui-solidjs/package.json", dependency = "@yackey-labs/client" },
+    { path = "packages/ui-solidjs/package.json", dependency = "@yackey-labs/shared" },
     { path = "Cargo.toml", dependency = "yauth-entity" },
     { path = "Cargo.toml", dependency = "yauth-migration" },
 ]
 changelog = "CHANGELOG.md"
 
-[gitea]
-owner = "yauth"
+[github]
+owner = "yackey-labs"
 repo = "yauth"
-host = "https://forgejo.yackey.cloud"
 
 [[workflows]]
 name = "release"
@@ -41,32 +40,13 @@ command = "git add packages/shared/package.json packages/client/package.json pac
 type = "Command"
 command = "git commit -m \"chore: prepare release $version\""
 
-# Build and publish BEFORE git push — the push triggers a new CI run
-# that may cancel this job, so all publishing must complete first.
-
-# Build TS packages
+# Build TS packages before publishing
 [[workflows.steps]]
 type = "Command"
 command = "bun run build"
 shell = true
 
-# Publish Cargo crates (order matters: entity → migration → yauth)
-[[workflows.steps]]
-type = "Command"
-command = "cargo publish -p yauth-entity --registry yauth --no-verify --allow-dirty"
-shell = true
-
-[[workflows.steps]]
-type = "Command"
-command = "cargo publish -p yauth-migration --registry yauth --no-verify --allow-dirty"
-shell = true
-
-[[workflows.steps]]
-type = "Command"
-command = "cargo publish -p yauth --registry yauth --no-verify --allow-dirty"
-shell = true
-
-# Publish npm packages
+# Publish npm packages (GitHub Packages)
 [[workflows.steps]]
 type = "Command"
 command = "cd packages/shared && bun publish --access public"

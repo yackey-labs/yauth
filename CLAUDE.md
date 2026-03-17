@@ -20,9 +20,9 @@
 
 | Package | Purpose |
 |---|---|
-| `@yauth/shared` | Shared types (`AuthUser`, `AuthSession`, AAGUID map) |
-| `@yauth/client` | HTTP client for all auth endpoints |
-| `@yauth/ui-solidjs` | SolidJS components (LoginForm, RegisterForm, etc.) |
+| `@yackey-labs/shared` | Shared types (`AuthUser`, `AuthSession`, AAGUID map) |
+| `@yackey-labs/client` | HTTP client for all auth endpoints |
+| `@yackey-labs/ui-solidjs` | SolidJS components (LoginForm, RegisterForm, etc.) |
 
 ### Pentest Suite (`pentest/`)
 
@@ -109,7 +109,7 @@ Authenticated user is injected as `Extension<AuthUser>` on the request.
 
 ## Generated TypeScript Client
 
-This project uses `axum-ts-client` to auto-generate `@yauth/client` from Rust types + route metadata.
+This project uses `axum-ts-client` to auto-generate `@yackey-labs/client` from Rust types + route metadata.
 
 **When modifying any API endpoint or request/response type:**
 1. Update the route metadata in `crates/yauth/src/routes_meta.rs`

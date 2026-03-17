@@ -1,5 +1,5 @@
-import type { YAuthClient } from "@yauth/client";
-import type { AuthUser } from "@yauth/shared";
+import type { YAuthClient } from "@yackey-labs/client";
+import type { AuthUser } from "@yackey-labs/shared";
 import {
 	createContext,
 	createEffect,

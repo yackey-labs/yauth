@@ -324,12 +324,12 @@ Supported grant types: `authorization_code` (with PKCE S256), `refresh_token`, `
 
 ## TypeScript Packages
 
-### @yauth/client
+### @yackey-labs/client
 
 Zero-dependency HTTP client auto-generated from Rust types and route metadata via `axum-ts-client`.
 
 ```typescript
-import { createClient } from "@yauth/client";
+import { createClient } from "@yackey-labs/client";
 
 const auth = createClient({ baseUrl: "https://myapp.example.com/auth" });
 
@@ -345,11 +345,11 @@ await auth.logout();
 // — all available as namespaced methods on the client
 ```
 
-### @yauth/shared
+### @yackey-labs/shared
 
 Shared TypeScript types (`AuthUser`, `AuthSession`, etc.) and an AAGUID authenticator map.
 
-### @yauth/ui-solidjs
+### @yackey-labs/ui-solidjs
 
 Pre-built SolidJS components:
 

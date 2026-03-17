@@ -11,13 +11,16 @@ concurrency:
 jobs:
   release:
     name: Release
-    runs-on: ubuntu-latest
+    runs-on: arc-runner-set
     if: "!startsWith(github.event.head_commit.message, 'chore:')"
+    permissions:
+      contents: write
+      packages: write
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.RELEASE_PAT }}
+          token: ${{ secrets.INFRA_DEPLOY_TOKEN }}
 
       - name: Install Rust
         run: |
@@ -38,14 +41,17 @@ jobs:
 
       - name: Configure git
         run: |
-          git config user.name "forgejo-actions[bot]"
-          git config user.email "forgejo-actions[bot]@noreply.forgejo.yackey.cloud"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Configure npm registry
+        env:
+          NPM_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "//npm.pkg.github.com/:_authToken=${NPM_TOKEN}" >> .npmrc
+          echo "@yackey-labs:registry=https://npm.pkg.github.com" >> .npmrc
 
       - name: Release
         env:
-          GITEA_TOKEN: ${{ secrets.RELEASE_PAT }}
-          CARGO_REGISTRIES_YAUTH_TOKEN: "token ${{ secrets.REGISTRY_TOKEN }}"
-          CARGO_REGISTRIES_YACKEY_CLOUD_TOKEN: "token ${{ secrets.REGISTRY_TOKEN }}"
-          CARGO_REGISTRY_GLOBAL_CREDENTIAL_PROVIDERS: "cargo:token"
-          NPM_REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.INFRA_DEPLOY_TOKEN }}
         run: knope release || echo "No unreleased changes"

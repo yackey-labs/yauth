@@ -2,7 +2,7 @@ import {
 	startAuthentication,
 	startRegistration,
 } from "@simplewebauthn/browser";
-import type { AuthUser } from "@yauth/shared";
+import type { AuthUser } from "@yackey-labs/shared";
 import { type Component, createSignal } from "solid-js";
 import { Show } from "solid-js/web";
 import { useYAuth } from "../provider";

@@ -7,9 +7,9 @@ versioned_files = [
     "packages/shared/package.json",
     "packages/client/package.json",
     "packages/ui-solidjs/package.json",
-    { path = "packages/client/package.json", dependency = "@yackey-labs/shared" },
-    { path = "packages/ui-solidjs/package.json", dependency = "@yackey-labs/client" },
-    { path = "packages/ui-solidjs/package.json", dependency = "@yackey-labs/shared" },
+    { path = "packages/client/package.json", dependency = "@yackey-labs/yauth-shared" },
+    { path = "packages/ui-solidjs/package.json", dependency = "@yackey-labs/yauth-client" },
+    { path = "packages/ui-solidjs/package.json", dependency = "@yackey-labs/yauth-shared" },
     { path = "Cargo.toml", dependency = "yauth-entity" },
     { path = "Cargo.toml", dependency = "yauth-migration" },
 ]

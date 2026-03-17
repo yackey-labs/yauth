@@ -1,5 +1,5 @@
 {
-	"name": "@yackey-labs/ui-solidjs",
+	"name": "@yackey-labs/yauth-ui-solidjs",
 	"version": "0.1.58",
 	"type": "module",
 	"main": "dist/index.js",
@@ -23,8 +23,8 @@
 	},
 	"dependencies": {
 		"@simplewebauthn/browser": "^13.0.0",
-		"@yackey-labs/client": "0.1.58",
-		"@yackey-labs/shared": "0.1.58",
+		"@yackey-labs/yauth-client": "0.1.58",
+		"@yackey-labs/yauth-shared": "0.1.58",
 		"solid-js": "^1.9.5"
 	},
 	"devDependencies": {

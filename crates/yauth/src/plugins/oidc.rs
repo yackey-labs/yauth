@@ -149,30 +149,7 @@ pub(crate) fn encode_id_token_jwt(
         .map_err(|e| format!("Failed to encode id_token: {}", e))
 }
 
-/// Generate an OIDC id_token for the given user. Called from the oauth2_server
-/// token endpoint when the `openid` scope is present.
-#[cfg(feature = "seaorm")]
-pub fn generate_id_token(
-    user: &yauth_entity::users::Model,
-    state: &YAuthState,
-    client_id: &str,
-    nonce: Option<&str>,
-) -> Result<String, String> {
-    encode_id_token_jwt(
-        &state.oidc_config.issuer,
-        &user.id.to_string(),
-        client_id,
-        &user.email,
-        user.email_verified,
-        user.display_name.as_deref(),
-        nonce,
-        state.oidc_config.id_token_ttl,
-        &state.bearer_config.jwt_secret,
-    )
-}
-
-/// Generate an OIDC id_token from individual user fields (diesel-async compatible).
-#[cfg(feature = "diesel-async")]
+/// Generate an OIDC id_token from individual user fields.
 pub fn generate_id_token_from_fields(
     user_id: &uuid::Uuid,
     email: &str,

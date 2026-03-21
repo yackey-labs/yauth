@@ -4,21 +4,8 @@
 //! no external database or `DATABASE_URL` required.
 //!
 //! ```text
-//! cargo test --workspace --no-default-features \
-//!   --features "diesel-async,email-password" -- diesel
+//! cargo test --workspace --features "email-password" -- diesel
 //! ```
-//!
-//! ## Compile-time exclusivity
-//!
-//! The `seaorm` and `diesel-async` features are mutually exclusive —
-//! `crates/yauth/src/state.rs` contains:
-//!
-//! ```ignore
-//! #[cfg(all(feature = "seaorm", feature = "diesel-async"))]
-//! compile_error!("Features `seaorm` and `diesel-async` are mutually exclusive.");
-//! ```
-
-#![cfg(feature = "diesel-async")]
 
 use std::time::Duration;
 

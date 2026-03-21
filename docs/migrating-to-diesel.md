@@ -1,41 +1,32 @@
 # Migrating from SeaORM to diesel-async
 
-This guide walks through migrating an app that uses yauth from the default SeaORM backend to diesel-async. The diesel-async backend enables the `diesel-full-text-search` plugin, gives you lower-level SQL control, and aligns with apps that already use diesel for their own data layer.
+> **Note:** As of yauth v0.2.0, diesel-async is the only supported database backend. SeaORM has been fully removed. This guide is preserved for users migrating their own app code from SeaORM to diesel-async.
 
 ## Prerequisites
 
-- **PostgreSQL 14+** (same as SeaORM backend)
+- **PostgreSQL 14+**
 - **diesel CLI** (for generating app-side migrations and schema):
   ```bash
   cargo install diesel_cli --no-default-features --features postgres
   ```
-- An existing app using yauth with the default SeaORM backend
 
 ## Step 1: Update Cargo.toml
 
-The `seaorm` and `diesel-async` features are mutually exclusive. Enabling both produces a `compile_error!`.
-
-Remove the default features (which include `seaorm`) and enable `diesel-async` instead:
-
-```diff
- [dependencies]
--yauth = { version = "0.1", features = ["email-password", "passkey", "mfa"] }
-+yauth = { version = "0.1", default-features = false, features = [
-+    "diesel-async",
-+    "email-password",
-+    "passkey",
-+    "mfa",
-+] }
-+
-+# Direct deps for your own app queries
-+diesel = { version = "2", features = ["postgres", "uuid", "chrono", "serde_json"] }
-+diesel-async = { version = "0.5", features = ["postgres", "deadpool"] }
-```
-
-The `diesel-full` convenience feature enables `diesel-async` plus every yauth plugin:
+Starting with yauth v0.2.0, diesel-async is the default — no feature flags needed for the backend:
 
 ```toml
-yauth = { version = "0.1", default-features = false, features = ["diesel-full"] }
+[dependencies]
+yauth = { version = "0.2", features = ["email-password", "passkey", "mfa"] }
+
+# Direct deps for your own app queries
+diesel = { version = "2", features = ["postgres", "uuid", "chrono", "serde_json"] }
+diesel-async = { version = "0.5", features = ["postgres", "deadpool"] }
+```
+
+The `full` convenience feature enables all yauth plugins:
+
+```toml
+yauth = { version = "0.2", features = ["full"] }
 ```
 
 ## Step 2: Update DB Pool Initialization
@@ -55,7 +46,7 @@ Replace SeaORM's `Database::connect()` with a deadpool-diesel connection pool:
 
 ## Step 3: Update AppState
 
-yauth re-exports the pool type as `yauth::DieselPool` and the connection type as `yauth::AsyncPgConnection` for convenience. The internal `DbPool` type alias automatically resolves to the diesel pool when the `diesel-async` feature is active.
+yauth re-exports the pool type as `yauth::DieselPool` and the connection type as `yauth::AsyncPgConnection` for convenience. The internal `DbPool` type alias resolves to the diesel pool.
 
 If your AppState previously held a `sea_orm::DatabaseConnection`, replace it:
 
@@ -70,7 +61,7 @@ If your AppState previously held a `sea_orm::DatabaseConnection`, replace it:
  }
 ```
 
-No changes are needed to `YAuthBuilder` -- it accepts `DbPool` which resolves correctly under either backend:
+No changes are needed to `YAuthBuilder` -- it accepts `DbPool` which resolves to the diesel pool:
 
 ```rust
 let yauth = YAuthBuilder::new(pool.clone(), yauth_config)
@@ -310,37 +301,9 @@ let items = items::table.load::<Item>(&mut conn).await?;
 
 No data migration is needed. Both SeaORM and diesel-async talk to the same PostgreSQL tables with the same column names, types, and constraints. Switching the ORM backend does not change the schema. The `yauth_` tables created by SeaORM migrations are identical to those created by diesel migrations.
 
-If you already have data in your database, just switch the feature flag and redeploy. The diesel migrations use `CREATE TABLE IF NOT EXISTS`, so they will not conflict with existing tables.
-
-## Rollback
-
-To switch back to SeaORM, re-enable the default features and remove the diesel-async flag:
-
-```diff
--yauth = { version = "0.1", default-features = false, features = [
--    "diesel-async",
--    "email-password",
--    "passkey",
--    "mfa",
--] }
-+yauth = { version = "0.1", features = ["email-password", "passkey", "mfa"] }
-```
-
-Remove the direct `diesel` and `diesel-async` dependencies from your `Cargo.toml` and revert your pool initialization and query code to SeaORM.
+If you already have data in your database, just switch to yauth v0.2.0 and redeploy. The diesel migrations use `CREATE TABLE IF NOT EXISTS`, so they will not conflict with existing tables.
 
 ## Troubleshooting
-
-### `compile_error!` -- both backends enabled
-
-```
-error: Features `seaorm` and `diesel-async` are mutually exclusive. Enable only one.
-```
-
-This means both `seaorm` and `diesel-async` are active. The most common cause is forgetting `default-features = false` in your `Cargo.toml` (since `seaorm` is a default feature). Fix:
-
-```toml
-yauth = { version = "0.1", default-features = false, features = ["diesel-async", ...] }
-```
 
 ### `deadpool::PoolError::Timeout` -- pool exhausted
 

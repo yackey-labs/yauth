@@ -141,32 +141,6 @@ pub async fn auth_middleware(
     api_err(StatusCode::UNAUTHORIZED, "Authentication required").into_response()
 }
 
-#[cfg(feature = "seaorm")]
-async fn lookup_user(
-    state: &YAuthState,
-    user_id: Uuid,
-    method: AuthMethod,
-) -> Result<AuthUser, String> {
-    use sea_orm::EntityTrait;
-    let user = yauth_entity::users::Entity::find_by_id(user_id)
-        .one(&state.db)
-        .await
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "User not found".to_string())?;
-
-    Ok(AuthUser {
-        id: user.id,
-        email: user.email,
-        display_name: user.display_name,
-        email_verified: user.email_verified,
-        role: user.role,
-        banned: user.banned,
-        auth_method: method,
-        scopes: None,
-    })
-}
-
-#[cfg(feature = "diesel-async")]
 async fn lookup_user(
     state: &YAuthState,
     user_id: Uuid,

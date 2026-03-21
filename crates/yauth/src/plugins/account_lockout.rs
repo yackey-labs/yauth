@@ -6,8 +6,6 @@ use axum::{
     routing::post,
 };
 use chrono::Utc;
-#[cfg(feature = "seaorm")]
-use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 use ts_rs::TS;
@@ -24,7 +22,6 @@ use crate::state::YAuthState;
 // Diesel-async helpers
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "diesel-async")]
 mod diesel_db {
     use diesel::result::OptionalExtension;
     use diesel_async_crate::RunQueryDsl;
@@ -327,162 +324,6 @@ impl YAuthPlugin for AccountLockoutPlugin {
 // ---------------------------------------------------------------------------
 
 /// Check if account is locked, increment failed count, lock if threshold exceeded.
-#[cfg(feature = "seaorm")]
-async fn handle_login_failed(
-    db: &sea_orm::DatabaseConnection,
-    config: &AccountLockoutConfig,
-    email: &str,
-) -> EventResponse {
-    // Find user by email
-    let user = match yauth_entity::users::Entity::find()
-        .filter(yauth_entity::users::Column::Email.eq(email))
-        .one(db)
-        .await
-    {
-        Ok(Some(u)) => u,
-        Ok(None) => return EventResponse::Continue, // Unknown user, nothing to lock
-        Err(e) => {
-            tracing::error!("DB error looking up user for lockout: {}", e);
-            return EventResponse::Continue;
-        }
-    };
-
-    let now = Utc::now().fixed_offset();
-
-    // Find or create account lock record
-    let lock_record = yauth_entity::account_locks::Entity::find()
-        .filter(yauth_entity::account_locks::Column::UserId.eq(user.id))
-        .one(db)
-        .await;
-
-    let lock_record = match lock_record {
-        Ok(Some(r)) => r,
-        Ok(None) => {
-            // Create a new lock record with failed_count = 0
-            let new_lock = yauth_entity::account_locks::ActiveModel {
-                id: Set(Uuid::new_v4()),
-                user_id: Set(user.id),
-                failed_count: Set(0),
-                locked_until: Set(None),
-                lock_count: Set(0),
-                locked_reason: Set(None),
-                created_at: Set(now),
-                updated_at: Set(now),
-            };
-            match new_lock.insert(db).await {
-                Ok(r) => r,
-                Err(e) => {
-                    tracing::error!("Failed to create account lock record: {}", e);
-                    return EventResponse::Continue;
-                }
-            }
-        }
-        Err(e) => {
-            tracing::error!("DB error checking account lock: {}", e);
-            return EventResponse::Continue;
-        }
-    };
-
-    // Check if already locked and not expired
-    if let Some(locked_until) = lock_record.locked_until {
-        if now < locked_until {
-            warn!(
-                event = "yauth.lockout.blocked",
-                email = %email,
-                locked_until = %locked_until,
-                "Login attempt on locked account"
-            );
-            return EventResponse::Block {
-                status: 423,
-                message: format!(
-                    "Account is locked. Try again after {}.",
-                    locked_until.format("%Y-%m-%d %H:%M:%S UTC")
-                ),
-            };
-        }
-        // Lock has expired and auto_unlock is on - reset the lock state
-        // (but keep the lock_count for exponential backoff)
-        if config.auto_unlock {
-            let mut active: yauth_entity::account_locks::ActiveModel = lock_record.clone().into();
-            active.failed_count = Set(0);
-            active.locked_until = Set(None);
-            active.locked_reason = Set(None);
-            active.updated_at = Set(now);
-            if let Err(e) = active.update(db).await {
-                tracing::error!("Failed to auto-unlock expired lock: {}", e);
-            }
-        }
-    }
-
-    // Re-read lock record after potential auto-unlock reset
-    let lock_record = match yauth_entity::account_locks::Entity::find()
-        .filter(yauth_entity::account_locks::Column::UserId.eq(user.id))
-        .one(db)
-        .await
-    {
-        Ok(Some(r)) => r,
-        Ok(None) => return EventResponse::Continue,
-        Err(e) => {
-            tracing::error!("DB error re-reading account lock: {}", e);
-            return EventResponse::Continue;
-        }
-    };
-
-    // Check if we are within the attempt window
-    let window_start = now - chrono::Duration::seconds(config.attempt_window.as_secs() as i64);
-    let new_failed_count = if lock_record.updated_at < window_start {
-        // Outside the window - reset counter
-        1
-    } else {
-        lock_record.failed_count + 1
-    };
-
-    let mut active: yauth_entity::account_locks::ActiveModel = lock_record.clone().into();
-    active.failed_count = Set(new_failed_count);
-    active.updated_at = Set(now);
-
-    // Check if we have exceeded the threshold
-    if new_failed_count >= config.max_failed_attempts as i32 {
-        let new_lock_count = lock_record.lock_count + 1;
-        let lockout_duration = calculate_lockout_duration(config, new_lock_count as u32);
-        let locked_until = now + chrono::Duration::seconds(lockout_duration.as_secs() as i64);
-
-        active.locked_until = Set(Some(locked_until));
-        active.lock_count = Set(new_lock_count);
-        active.locked_reason = Set(Some("Too many failed login attempts".to_string()));
-
-        if let Err(e) = active.update(db).await {
-            tracing::error!("Failed to update account lock: {}", e);
-            return EventResponse::Continue;
-        }
-
-        warn!(
-            event = "yauth.lockout.locked",
-            email = %email,
-            user_id = %user.id,
-            lock_count = new_lock_count,
-            locked_until = %locked_until,
-            "Account locked due to too many failed attempts"
-        );
-
-        return EventResponse::Block {
-            status: 423,
-            message: format!(
-                "Account has been locked due to too many failed login attempts. Try again after {}.",
-                locked_until.format("%Y-%m-%d %H:%M:%S UTC")
-            ),
-        };
-    }
-
-    // Just increment - not yet locked
-    if let Err(e) = active.update(db).await {
-        tracing::error!("Failed to update failed count: {}", e);
-    }
-
-    EventResponse::Continue
-}
-
-#[cfg(feature = "diesel-async")]
 async fn handle_login_failed(
     db: &crate::state::DbPool,
     config: &AccountLockoutConfig,
@@ -618,64 +459,6 @@ async fn handle_login_failed(
 }
 
 /// On successful login, check if account is locked first. If not, reset failed count.
-#[cfg(feature = "seaorm")]
-async fn handle_login_succeeded(
-    db: &sea_orm::DatabaseConnection,
-    _config: &AccountLockoutConfig,
-    user_id: Uuid,
-) -> EventResponse {
-    let now = Utc::now().fixed_offset();
-
-    let lock_record = match yauth_entity::account_locks::Entity::find()
-        .filter(yauth_entity::account_locks::Column::UserId.eq(user_id))
-        .one(db)
-        .await
-    {
-        Ok(Some(r)) => r,
-        Ok(None) => return EventResponse::Continue, // No lock record, allow login
-        Err(e) => {
-            tracing::error!("DB error checking account lock on success: {}", e);
-            return EventResponse::Continue;
-        }
-    };
-
-    // Check if account is currently locked
-    if let Some(locked_until) = lock_record.locked_until
-        && now < locked_until
-    {
-        // Account is still locked - block even though credentials are valid
-        warn!(
-            event = "yauth.lockout.blocked_valid_creds",
-            user_id = %user_id,
-            locked_until = %locked_until,
-            "Valid credentials but account is locked"
-        );
-        return EventResponse::Block {
-            status: 423,
-            message: format!(
-                "Account is locked. Try again after {}.",
-                locked_until.format("%Y-%m-%d %H:%M:%S UTC")
-            ),
-        };
-        // Lock expired - fall through to reset
-    }
-
-    // Reset failed count on successful login
-    let mut active: yauth_entity::account_locks::ActiveModel = lock_record.into();
-    active.failed_count = Set(0);
-    active.locked_until = Set(None);
-    active.locked_reason = Set(None);
-    // Keep lock_count for exponential backoff history (only reset on explicit unlock)
-    active.updated_at = Set(now);
-
-    if let Err(e) = active.update(db).await {
-        tracing::error!("Failed to reset account lock on success: {}", e);
-    }
-
-    EventResponse::Continue
-}
-
-#[cfg(feature = "diesel-async")]
 async fn handle_login_succeeded(
     db: &crate::state::DbPool,
     _config: &AccountLockoutConfig,
@@ -802,7 +585,6 @@ async fn request_unlock(
         return Err(api_err(StatusCode::TOO_MANY_REQUESTS, "Too many requests"));
     }
 
-    #[cfg(feature = "diesel-async")]
     let mut conn = state
         .db
         .get()
@@ -814,19 +596,6 @@ async fn request_unlock(
     }
 
     // Look up user (don't leak whether user exists)
-    #[cfg(feature = "seaorm")]
-    let user_opt = {
-        yauth_entity::users::Entity::find()
-            .filter(yauth_entity::users::Column::Email.eq(&email))
-            .one(&state.db)
-            .await
-            .map_err(|e| {
-                tracing::error!("DB error: {}", e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?
-            .map(|u| FoundUser { id: u.id })
-    };
-    #[cfg(feature = "diesel-async")]
     let user_opt = {
         diesel_db::find_user_by_email_id(&mut conn, &email)
             .await
@@ -839,24 +608,6 @@ async fn request_unlock(
 
     if let Some(user) = user_opt {
         // Check if account is actually locked
-        #[cfg(feature = "seaorm")]
-        let is_locked = {
-            let lock_record = yauth_entity::account_locks::Entity::find()
-                .filter(yauth_entity::account_locks::Column::UserId.eq(user.id))
-                .one(&state.db)
-                .await
-                .map_err(|e| {
-                    tracing::error!("DB error: {}", e);
-                    api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-                })?;
-
-            lock_record
-                .as_ref()
-                .and_then(|r| r.locked_until)
-                .map(|until| Utc::now().fixed_offset() < until)
-                .unwrap_or(false)
-        };
-        #[cfg(feature = "diesel-async")]
         let is_locked = {
             let lock_record = diesel_db::find_lock_by_user(&mut conn, user.id)
                 .await
@@ -874,18 +625,7 @@ async fn request_unlock(
 
         if is_locked {
             // Delete any existing unlock tokens for this user
-            #[cfg(feature = "seaorm")]
-            {
-                yauth_entity::unlock_tokens::Entity::delete_many()
-                    .filter(yauth_entity::unlock_tokens::Column::UserId.eq(user.id))
-                    .exec(&state.db)
-                    .await
-                    .ok();
-            }
-            #[cfg(feature = "diesel-async")]
-            {
-                let _ = diesel_db::delete_unlock_tokens_for_user(&mut conn, user.id).await;
-            }
+            let _ = diesel_db::delete_unlock_tokens_for_user(&mut conn, user.id).await;
 
             // Generate unlock token
             let token = crypto::generate_token();
@@ -893,37 +633,19 @@ async fn request_unlock(
             let now = Utc::now().fixed_offset();
             let expires_at = now + chrono::Duration::hours(1);
 
-            #[cfg(feature = "seaorm")]
-            {
-                let unlock_token = yauth_entity::unlock_tokens::ActiveModel {
-                    id: Set(Uuid::new_v4()),
-                    user_id: Set(user.id),
-                    token_hash: Set(token_hash),
-                    expires_at: Set(expires_at),
-                    created_at: Set(now),
-                };
-
-                if let Err(e) = unlock_token.insert(&state.db).await {
-                    tracing::error!("Failed to store unlock token: {}", e);
-                    return Err(api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"));
-                }
-            }
-            #[cfg(feature = "diesel-async")]
-            {
-                diesel_db::insert_unlock_token(
-                    &mut conn,
-                    Uuid::new_v4(),
-                    user.id,
-                    &token_hash,
-                    expires_at,
-                    now,
-                )
-                .await
-                .map_err(|e| {
-                    tracing::error!("Failed to store unlock token: {}", e);
-                    api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-                })?;
-            }
+            diesel_db::insert_unlock_token(
+                &mut conn,
+                Uuid::new_v4(),
+                user.id,
+                &token_hash,
+                expires_at,
+                now,
+            )
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to store unlock token: {}", e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?;
 
             // Send unlock email if SMTP is configured
             if let Some(ref email_service) = state.email_service {
@@ -976,7 +698,6 @@ async fn unlock_account(
         expires_at: chrono::DateTime<chrono::FixedOffset>,
     }
 
-    #[cfg(feature = "diesel-async")]
     let mut conn = state
         .db
         .get()
@@ -984,31 +705,6 @@ async fn unlock_account(
         .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
     // Find the unlock token
-    #[cfg(feature = "seaorm")]
-    let unlock_token = {
-        let found = yauth_entity::unlock_tokens::Entity::find()
-            .filter(yauth_entity::unlock_tokens::Column::TokenHash.eq(&token_hash))
-            .one(&state.db)
-            .await
-            .map_err(|e| {
-                tracing::error!("DB error: {}", e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
-        match found {
-            Some(t) => FoundToken {
-                id: t.id,
-                user_id: t.user_id,
-                expires_at: t.expires_at,
-            },
-            None => {
-                return Err(api_err(
-                    StatusCode::BAD_REQUEST,
-                    "Invalid or expired unlock token",
-                ));
-            }
-        }
-    };
-    #[cfg(feature = "diesel-async")]
     let unlock_token = {
         let found = diesel_db::find_unlock_token_by_hash(&mut conn, &token_hash)
             .await
@@ -1034,17 +730,7 @@ async fn unlock_account(
     // Check expiry
     if now > unlock_token.expires_at {
         // Delete the expired token
-        #[cfg(feature = "seaorm")]
-        {
-            yauth_entity::unlock_tokens::Entity::delete_by_id(unlock_token.id)
-                .exec(&state.db)
-                .await
-                .ok();
-        }
-        #[cfg(feature = "diesel-async")]
-        {
-            let _ = diesel_db::delete_unlock_token(&mut conn, unlock_token.id).await;
-        }
+        let _ = diesel_db::delete_unlock_token(&mut conn, unlock_token.id).await;
         return Err(api_err(
             StatusCode::BAD_REQUEST,
             "Invalid or expired unlock token",
@@ -1054,37 +740,15 @@ async fn unlock_account(
     let user_id = unlock_token.user_id;
 
     // Delete the token (one-time use)
-    #[cfg(feature = "seaorm")]
-    {
-        yauth_entity::unlock_tokens::Entity::delete_by_id(unlock_token.id)
-            .exec(&state.db)
-            .await
-            .ok();
-    }
-    #[cfg(feature = "diesel-async")]
-    {
-        let _ = diesel_db::delete_unlock_token(&mut conn, unlock_token.id).await;
-    }
+    let _ = diesel_db::delete_unlock_token(&mut conn, unlock_token.id).await;
 
     // Reset the account lock (keep lock_count for exponential backoff history)
-    #[cfg(feature = "seaorm")]
-    {
-        reset_account_lock(&state.db, user_id, false)
-            .await
-            .map_err(|e| {
-                tracing::error!("Failed to reset account lock: {}", e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
-    }
-    #[cfg(feature = "diesel-async")]
-    {
-        reset_account_lock_diesel(&mut conn, user_id, false)
-            .await
-            .map_err(|e| {
-                tracing::error!("Failed to reset account lock: {}", e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
-    }
+    reset_account_lock_diesel(&mut conn, user_id, false)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to reset account lock: {}", e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
 
     info!(
         event = "yauth.lockout.unlocked",
@@ -1116,7 +780,6 @@ async fn admin_unlock(
     axum::Extension(auth_user): axum::Extension<crate::middleware::AuthUser>,
     Path(user_id): Path<Uuid>,
 ) -> Result<Json<AccountLockoutMessageResponse>, (StatusCode, Json<serde_json::Value>)> {
-    #[cfg(feature = "diesel-async")]
     let mut conn = state
         .db
         .get()
@@ -1124,66 +787,26 @@ async fn admin_unlock(
         .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
     // Verify target user exists
-    #[cfg(feature = "seaorm")]
-    {
-        let user = yauth_entity::users::Entity::find_by_id(user_id)
-            .one(&state.db)
-            .await
-            .map_err(|e| {
-                tracing::error!("DB error: {}", e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
-
-        if user.is_none() {
-            return Err(api_err(StatusCode::NOT_FOUND, "User not found"));
-        }
-    }
-    #[cfg(feature = "diesel-async")]
-    {
-        let exists = diesel_db::find_user_exists(&mut conn, user_id)
-            .await
-            .map_err(|e| {
-                tracing::error!("DB error: {}", e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
-        if !exists {
-            return Err(api_err(StatusCode::NOT_FOUND, "User not found"));
-        }
+    let exists = diesel_db::find_user_exists(&mut conn, user_id)
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error: {}", e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
+    if !exists {
+        return Err(api_err(StatusCode::NOT_FOUND, "User not found"));
     }
 
     // Reset the account lock fully (including lock_count for admin unlock)
-    #[cfg(feature = "seaorm")]
-    {
-        reset_account_lock(&state.db, user_id, true)
-            .await
-            .map_err(|e| {
-                tracing::error!("Failed to reset account lock: {}", e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
-    }
-    #[cfg(feature = "diesel-async")]
-    {
-        reset_account_lock_diesel(&mut conn, user_id, true)
-            .await
-            .map_err(|e| {
-                tracing::error!("Failed to reset account lock: {}", e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
-    }
+    reset_account_lock_diesel(&mut conn, user_id, true)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to reset account lock: {}", e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
 
     // Delete any pending unlock tokens
-    #[cfg(feature = "seaorm")]
-    {
-        yauth_entity::unlock_tokens::Entity::delete_many()
-            .filter(yauth_entity::unlock_tokens::Column::UserId.eq(user_id))
-            .exec(&state.db)
-            .await
-            .ok();
-    }
-    #[cfg(feature = "diesel-async")]
-    {
-        let _ = diesel_db::delete_unlock_tokens_for_user(&mut conn, user_id).await;
-    }
+    let _ = diesel_db::delete_unlock_tokens_for_user(&mut conn, user_id).await;
 
     info!(
         event = "yauth.lockout.unlocked",
@@ -1216,35 +839,6 @@ async fn admin_unlock(
 
 /// Reset the account lock. When `reset_lock_count` is true, also resets the
 /// lock_count (used for admin unlock to clear exponential backoff history).
-#[cfg(feature = "seaorm")]
-async fn reset_account_lock(
-    db: &sea_orm::DatabaseConnection,
-    user_id: Uuid,
-    reset_lock_count: bool,
-) -> Result<(), sea_orm::DbErr> {
-    let now = Utc::now().fixed_offset();
-
-    let lock_record = yauth_entity::account_locks::Entity::find()
-        .filter(yauth_entity::account_locks::Column::UserId.eq(user_id))
-        .one(db)
-        .await?;
-
-    if let Some(record) = lock_record {
-        let mut active: yauth_entity::account_locks::ActiveModel = record.into();
-        active.failed_count = Set(0);
-        active.locked_until = Set(None);
-        active.locked_reason = Set(None);
-        if reset_lock_count {
-            active.lock_count = Set(0);
-        }
-        active.updated_at = Set(now);
-        active.update(db).await?;
-    }
-
-    Ok(())
-}
-
-#[cfg(feature = "diesel-async")]
 async fn reset_account_lock_diesel(
     conn: &mut diesel_async_crate::AsyncPgConnection,
     user_id: Uuid,

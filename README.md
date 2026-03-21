@@ -22,9 +22,10 @@ Every feature is behind a **feature flag** — enable only what you need.
 | `webhooks` | HMAC-signed HTTP callbacks on auth events with retry + delivery history | When external systems need real-time auth event notifications |
 | `oidc` | OpenID Connect Provider — id_token issuance, OIDC discovery, JWKS, /userinfo | When downstream apps need OIDC-compliant SSO |
 | `telemetry` | OpenTelemetry tracing bridge | When you need distributed tracing |
+| `diesel-async` | Diesel-async database backend (deadpool) | Yes (default) |
 | `full` | All of the above | Development/testing |
 
-Only `email-password` is enabled by default.
+`diesel-async` and `email-password` are enabled by default.
 
 ## Quick Start
 
@@ -32,7 +33,7 @@ Add yauth to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-yauth = { version = "0.1", features = ["email-password", "passkey", "mfa"] }
+yauth = { version = "0.2", features = ["email-password", "passkey", "mfa"] }
 ```
 
 Configure and build:
@@ -380,30 +381,22 @@ Pre-built SolidJS components:
 
 ## Database Backend
 
-yauth supports two database backends, selectable via feature flags:
-
-| Backend | Feature | Default | Description |
-|---------|---------|---------|-------------|
-| **SeaORM** | `seaorm` | Yes | Async ORM with entity-based queries. Enabled by default. |
-| **diesel-async** | `diesel-async` | No | Async diesel with deadpool. Enables `diesel-full-text-search` and lower-level SQL control. |
-
-The two backends are **mutually exclusive** — enabling both produces a compile error. To switch to diesel-async, disable default features and add `diesel-async`:
+yauth uses **diesel-async** with deadpool as its database backend. This is the default and only supported backend.
 
 ```toml
-yauth = { version = "0.1", default-features = false, features = ["diesel-async", "email-password"] }
+yauth = { version = "0.2", features = ["email-password", "passkey", "mfa"] }
 ```
 
-See [docs/migrating-to-diesel.md](docs/migrating-to-diesel.md) for a complete migration guide with before/after code examples.
+See [docs/migrating-to-diesel.md](docs/migrating-to-diesel.md) for a migration guide if upgrading from yauth v0.1.x (which supported SeaORM).
 
 ## Database Schema
 
 yauth uses PostgreSQL. All tables are prefixed with `yauth_`. Migrations are feature-gated — only tables for enabled features are created.
 
-Run migrations:
+Run migrations at startup:
 
-```bash
-# Via the migration crate
-cargo run -p yauth-migration -- up
+```rust
+yauth::migration::diesel_migrations::run_migrations(&pool).await?;
 ```
 
 ### Schema by Plugin

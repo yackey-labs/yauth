@@ -40,7 +40,6 @@
 //! - `/api/auth/...`          — all yauth auth routes (register, login, session, etc.)
 
 use axum::{Extension, Json, Router, http::StatusCode, response::IntoResponse, routing::get};
-use sea_orm_migration::MigratorTrait;
 use serde_json::json;
 use std::env;
 use std::net::SocketAddr;
@@ -113,12 +112,14 @@ async fn main() {
     // 3. Connect to the database and run migrations
     // -----------------------------------------------------------------------
     tracing::info!("Connecting to database...");
-    let db = sea_orm::Database::connect(&database_url)
-        .await
-        .expect("Failed to connect to database");
+    let config =
+        yauth::AsyncDieselConnectionManager::<yauth::AsyncPgConnection>::new(&database_url);
+    let pool = yauth::DieselPool::builder(config)
+        .build()
+        .expect("Failed to create connection pool");
 
     tracing::info!("Running migrations...");
-    yauth::migration::Migrator::up(&db, None)
+    yauth::migration::diesel_migrations::run_migrations(&pool)
         .await
         .expect("Failed to run migrations");
     tracing::info!("Migrations complete.");
@@ -127,7 +128,7 @@ async fn main() {
     // 4. Build the YAuth instance with all plugins enabled
     // -----------------------------------------------------------------------
     let auth = YAuthBuilder::new(
-        db,
+        pool,
         yauth::config::YAuthConfig {
             base_url: base_url.clone(),
             session_cookie_name,

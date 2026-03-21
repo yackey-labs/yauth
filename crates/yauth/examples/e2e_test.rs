@@ -6,11 +6,11 @@
 //! Run:
 //!   cargo run --example e2e_test --features full
 
-use sea_orm::{ActiveModelTrait, DatabaseConnection, EntityTrait, Set};
-use sea_orm_migration::MigratorTrait;
 use std::time::Duration;
 use tokio::net::TcpListener;
 use totp_rs::{Algorithm, Secret, TOTP};
+
+type Pool = yauth::state::DbPool;
 
 const BASE_URL: &str = "http://127.0.0.1";
 const DB_URL: &str = "postgres://yauth:yauth@127.0.0.1:5433/yauth_test";
@@ -25,12 +25,21 @@ async fn main() {
 
     tracing::info!("=== YAuth E2E Test (Full) ===");
 
-    let db = sea_orm::Database::connect(DB_URL)
-        .await
-        .expect("Failed to connect to database");
+    let config = yauth::AsyncDieselConnectionManager::<yauth::AsyncPgConnection>::new(DB_URL);
+    let db = yauth::DieselPool::builder(config)
+        .build()
+        .expect("Failed to create connection pool");
 
     tracing::info!("Running migrations (fresh)...");
-    yauth::migration::Migrator::fresh(&db)
+    // Drop all yauth tables first for a fresh start
+    {
+        use yauth::RunQueryDsl;
+        let mut conn = db.get().await.expect("Failed to get connection");
+        let _ = diesel::sql_query("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+            .execute(&mut conn)
+            .await;
+    }
+    yauth::migration::diesel_migrations::run_migrations(&db)
         .await
         .expect("Migration failed");
 
@@ -777,14 +786,15 @@ async fn main() {
 
     // Promote user to admin directly in DB
     let user_uuid: uuid::Uuid = user_id.parse().unwrap();
-    let user_model = yauth_entity::users::Entity::find_by_id(user_uuid)
-        .one(&db)
-        .await
-        .unwrap()
-        .unwrap();
-    let mut active: yauth_entity::users::ActiveModel = user_model.into();
-    active.role = Set("admin".to_string());
-    active.update(&db).await.unwrap();
+    {
+        use yauth::RunQueryDsl;
+        let mut conn = db.get().await.expect("Failed to get connection");
+        diesel::sql_query("UPDATE yauth_users SET role = 'admin' WHERE id = $1")
+            .bind::<diesel::sql_types::Uuid, _>(user_uuid)
+            .execute(&mut conn)
+            .await
+            .expect("Failed to promote user to admin");
+    }
 
     // Re-login to get admin session
     let admin_client = reqwest::Client::builder()
@@ -1311,10 +1321,10 @@ async fn main() {
     // DONE
     // =========================================================================
     tracing::info!("\n=== All {} tests passed! ===", test_num);
-    db.close().await.ok();
+    drop(db);
 }
 
-async fn start_server(db: DatabaseConnection) -> u16 {
+async fn start_server(db: Pool) -> u16 {
     use yauth::prelude::*;
 
     let auth = YAuthBuilder::new(
@@ -1371,7 +1381,7 @@ async fn start_server(db: DatabaseConnection) -> u16 {
     port
 }
 
-async fn start_server_with_audience(db: DatabaseConnection, audience: &str) -> u16 {
+async fn start_server_with_audience(db: Pool, audience: &str) -> u16 {
     use yauth::prelude::*;
 
     let auth = YAuthBuilder::new(
@@ -1435,7 +1445,7 @@ async fn start_server_with_audience(db: DatabaseConnection, audience: &str) -> u
     port
 }
 
-async fn start_server_with_oauth2(db: DatabaseConnection) -> u16 {
+async fn start_server_with_oauth2(db: Pool) -> u16 {
     use yauth::prelude::*;
 
     let auth = YAuthBuilder::new(

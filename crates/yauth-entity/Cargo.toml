@@ -4,14 +4,13 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "SeaORM entities for yauth — modular authentication for Axum"
-keywords = ["axum", "authentication", "seaorm", "webauthn", "totp"]
+description = "Diesel entities for yauth — modular authentication for Axum"
+keywords = ["axum", "authentication", "diesel", "webauthn", "totp"]
 categories = ["authentication", "web-programming"]
 publish = true
 
 [features]
-default = ["seaorm", "email-password"]
-seaorm = ["dep:sea-orm"]
+default = ["diesel-async", "email-password"]
 diesel-async = ["dep:diesel", "dep:diesel-async-crate"]
 email-password = []
 passkey = []
@@ -24,10 +23,9 @@ oauth2-server = []
 account-lockout = []
 webhooks = []
 oidc = []
-full = ["seaorm", "email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link", "oauth2-server", "account-lockout", "webhooks", "oidc"]
+full = ["diesel-async", "email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link", "oauth2-server", "account-lockout", "webhooks", "oidc"]
 
 [dependencies]
-sea-orm = { workspace = true, optional = true }
 diesel = { workspace = true, optional = true }
 diesel-async-crate = { version = "0.5", features = ["postgres", "deadpool"], optional = true, package = "diesel-async" }
 serde = { workspace = true }

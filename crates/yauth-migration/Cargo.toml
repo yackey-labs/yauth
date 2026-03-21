@@ -5,13 +5,12 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Database migrations for yauth — modular authentication for Axum"
-keywords = ["axum", "authentication", "migration", "seaorm"]
+keywords = ["axum", "authentication", "migration", "diesel"]
 categories = ["authentication", "web-programming"]
 publish = true
 
 [features]
-default = ["seaorm", "email-password"]
-seaorm = ["dep:sea-orm-migration", "dep:async-trait"]
+default = ["diesel-async", "email-password"]
 diesel-async = ["dep:diesel", "dep:diesel-async-crate", "dep:tokio"]
 email-password = []
 passkey = []
@@ -24,11 +23,9 @@ oauth2-server = []
 account-lockout = []
 webhooks = []
 oidc = []
-full = ["seaorm", "email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link", "oauth2-server", "account-lockout", "webhooks", "oidc"]
+full = ["diesel-async", "email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link", "oauth2-server", "account-lockout", "webhooks", "oidc"]
 
 [dependencies]
-sea-orm-migration = { workspace = true, optional = true }
-async-trait = { workspace = true, optional = true }
 diesel = { workspace = true, optional = true }
 diesel-async-crate = { version = "0.5", features = ["postgres", "deadpool"], optional = true, package = "diesel-async" }
 tokio = { workspace = true, optional = true }

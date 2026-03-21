@@ -3,15 +3,15 @@ members = ["crates/*"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/yackey-labs/yauth"
 
 [workspace.dependencies]
 # Internal crates
-yauth-entity = { version = "0.1.0", path = "crates/yauth-entity", default-features = false }
-yauth-migration = { version = "0.1.0", path = "crates/yauth-migration", default-features = false }
+yauth-entity = { version = "0.2.0", path = "crates/yauth-entity", default-features = false }
+yauth-migration = { version = "0.2.0", path = "crates/yauth-migration", default-features = false }
 
 # Web framework
 axum = { version = "0.8", features = ["macros"] }
@@ -20,14 +20,11 @@ tokio = { version = "1", features = ["full"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace", "limit"] }
 
-# Database — SeaORM (default)
-sea-orm = { version = "1.1", features = ["sqlx-postgres", "runtime-tokio-rustls"] }
-sea-orm-migration = { version = "1.1", features = ["sqlx-postgres", "runtime-tokio-rustls"] }
-
-# Database — Diesel (optional alternative)
+# Database — Diesel
 diesel = { version = "2.2", features = ["postgres", "uuid", "chrono", "serde_json"] }
 diesel-async = { version = "0.5", features = ["postgres", "deadpool"] }
 diesel_migrations = { version = "2.2", features = ["postgres"] }
+pq-sys = { version = "0.7", features = ["bundled"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

@@ -29,6 +29,6 @@ diesel-full = ["full"]
 [dependencies]
 diesel = { workspace = true, optional = true }
 diesel-async-crate = { version = "0.5", features = ["postgres", "deadpool"], optional = true, package = "diesel-async" }
-futures-util = { version = "0.3", default-features = false, features = ["alloc"], optional = true }
+futures-util = { version = "0.3", default-features = false, features = ["alloc", "async-await-macro"], optional = true }
 tokio = { workspace = true, optional = true }
 uuid = { workspace = true }

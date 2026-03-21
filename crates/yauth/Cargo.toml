@@ -27,6 +27,7 @@ webhooks = ["yauth-entity/webhooks", "yauth-migration/webhooks", "dep:hmac"]
 oidc = ["bearer", "oauth2-server", "yauth-entity/oidc", "yauth-migration/oidc"]
 telemetry = ["dep:tracing-opentelemetry", "dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:opentelemetry-semantic-conventions"]
 full = ["diesel-async", "email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link", "admin", "status", "oauth2-server", "account-lockout", "webhooks", "oidc", "telemetry"]
+diesel-full = ["full"]
 
 [dependencies]
 yauth-entity = { workspace = true }

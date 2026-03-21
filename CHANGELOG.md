@@ -1,3 +1,21 @@
+## 0.2.0 (2026-03-21)
+
+### Breaking Changes
+
+- Remove SeaORM backend entirely — diesel-async is now the only supported database backend
+- Remove `seaorm` feature flag from all crates
+- Remove `diesel-full` convenience feature (use `full` instead, which now uses diesel-async)
+- `diesel-async` is now a default feature — no need for `default-features = false`
+- Remove all SeaORM entity files (`crates/yauth-entity/src/*.rs` except diesel module)
+- Remove all SeaORM migration files (`crates/yauth-migration/src/m*.rs`)
+- Remove `Migrator` struct (use `diesel_migrations::run_migrations()` instead)
+
+### Features
+
+- Make diesel-async the default and only ORM backend
+- Simplify feature flags: `full` now enables diesel-async + all plugins
+- Simplify CI to single test job
+
 ## 0.1.59 (2026-03-17)
 
 ### Fixes

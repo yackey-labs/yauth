@@ -5,16 +5,6 @@ use crate::stores::{ChallengeStore, RateLimitStore};
 use std::sync::Arc;
 use uuid::Uuid;
 
-#[cfg(all(feature = "seaorm", feature = "diesel-async"))]
-compile_error!("Features `seaorm` and `diesel-async` are mutually exclusive. Enable only one.");
-
-#[cfg(feature = "seaorm")]
-use sea_orm::{ActiveModelTrait, DatabaseConnection, EntityTrait, PaginatorTrait, Set};
-
-#[cfg(feature = "seaorm")]
-pub type DbPool = DatabaseConnection;
-
-#[cfg(feature = "diesel-async")]
 pub type DbPool =
     diesel_async_crate::pooled_connection::deadpool::Pool<diesel_async_crate::AsyncPgConnection>;
 
@@ -59,19 +49,6 @@ impl YAuthState {
         EventResponse::Continue
     }
 
-    #[cfg(feature = "seaorm")]
-    pub async fn should_auto_admin(&self) -> bool {
-        if !self.config.auto_admin_first_user {
-            return false;
-        }
-        let count = yauth_entity::users::Entity::find()
-            .count(&self.db)
-            .await
-            .unwrap_or(1);
-        count == 0
-    }
-
-    #[cfg(feature = "diesel-async")]
     pub async fn should_auto_admin(&self) -> bool {
         if !self.config.auto_admin_first_user {
             return false;
@@ -90,28 +67,6 @@ impl YAuthState {
         exists.is_none()
     }
 
-    #[cfg(feature = "seaorm")]
-    pub async fn write_audit_log(
-        &self,
-        user_id: Option<Uuid>,
-        event_type: &str,
-        metadata: Option<serde_json::Value>,
-        ip_address: Option<String>,
-    ) {
-        let entry = yauth_entity::audit_log::ActiveModel {
-            id: Set(Uuid::new_v4()),
-            user_id: Set(user_id),
-            event_type: Set(event_type.to_string()),
-            metadata: Set(metadata),
-            ip_address: Set(ip_address),
-            created_at: Set(chrono::Utc::now().fixed_offset()),
-        };
-        if let Err(e) = entry.insert(&self.db).await {
-            tracing::error!("Failed to write audit log: {}", e);
-        }
-    }
-
-    #[cfg(feature = "diesel-async")]
     pub async fn write_audit_log(
         &self,
         user_id: Option<Uuid>,
@@ -144,7 +99,6 @@ impl YAuthState {
     }
 }
 
-#[cfg(feature = "diesel-async")]
 #[derive(diesel::QueryableByName)]
 #[allow(dead_code)]
 struct ExistsRow {
@@ -152,5 +106,4 @@ struct ExistsRow {
     one: i32,
 }
 
-#[cfg(feature = "diesel-async")]
 use diesel::result::OptionalExtension;

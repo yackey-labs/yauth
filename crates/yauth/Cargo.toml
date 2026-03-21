@@ -10,8 +10,7 @@ categories = ["authentication", "web-programming"]
 publish = true
 
 [features]
-default = ["seaorm", "email-password"]
-seaorm = ["dep:sea-orm", "dep:sea-orm-migration", "yauth-entity/seaorm", "yauth-migration/seaorm"]
+default = ["diesel-async", "email-password"]
 diesel-async = ["dep:diesel", "dep:diesel-async-crate", "dep:futures-util", "yauth-entity/diesel-async", "yauth-migration/diesel-async"]
 email-password = ["yauth-entity/email-password", "yauth-migration/email-password"]
 passkey = ["yauth-entity/passkey", "yauth-migration/passkey", "dep:webauthn-rs", "dep:webauthn-rs-proto"]
@@ -27,8 +26,8 @@ account-lockout = ["yauth-entity/account-lockout", "yauth-migration/account-lock
 webhooks = ["yauth-entity/webhooks", "yauth-migration/webhooks", "dep:hmac"]
 oidc = ["bearer", "oauth2-server", "yauth-entity/oidc", "yauth-migration/oidc"]
 telemetry = ["dep:tracing-opentelemetry", "dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:opentelemetry-semantic-conventions"]
-full = ["seaorm", "email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link", "admin", "status", "oauth2-server", "account-lockout", "webhooks", "oidc", "telemetry"]
-diesel-full = ["diesel-async", "email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link", "admin", "status", "oauth2-server", "account-lockout", "webhooks", "oidc", "telemetry"]
+full = ["diesel-async", "email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link", "admin", "status", "oauth2-server", "account-lockout", "webhooks", "oidc", "telemetry"]
+diesel-full = ["full"]
 
 [dependencies]
 yauth-entity = { workspace = true }
@@ -40,12 +39,10 @@ tokio = { workspace = true }
 tower = { workspace = true }
 tower-http = { workspace = true }
 
-sea-orm = { workspace = true, optional = true }
-sea-orm-migration = { workspace = true, optional = true }
-
-# Diesel (optional alternative to SeaORM)
+# Diesel
 diesel = { workspace = true, optional = true }
 diesel-async-crate = { version = "0.5", features = ["postgres", "deadpool"], optional = true, package = "diesel-async" }
+pq-sys = { workspace = true }
 futures-util = { version = "0.3", optional = true }
 
 serde = { workspace = true }
@@ -103,8 +100,8 @@ testcontainers-modules = { version = "0.14", features = ["postgres"] }
 
 [[example]]
 name = "server"
-required-features = ["seaorm"]
+required-features = ["full"]
 
 [[example]]
 name = "e2e_test"
-required-features = ["seaorm"]
+required-features = ["full"]

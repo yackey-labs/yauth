@@ -4,7 +4,7 @@
 
 `yauth` is a modular, plugin-based authentication library for Rust (Axum) with TypeScript client + SolidJS UI packages. It provides email/password, passkey (WebAuthn), MFA (TOTP + backup codes), OAuth, bearer tokens (JWT), API keys, and admin endpoints — all behind feature flags.
 
-**Repo:** `forgejo.yackey.cloud/yauth/yauth`
+**Repo:** `github.com/yackey-labs/yauth`
 
 ## Workspace Structure
 
@@ -13,8 +13,8 @@
 | Crate | Purpose |
 |---|---|
 | `yauth` | Main library — plugins, middleware, builder, auth logic |
-| `yauth-entity` | SeaORM entities (all tables prefixed `yauth_`) |
-| `yauth-migration` | SeaORM migrations (feature-gated per plugin) |
+| `yauth-entity` | Diesel entities (all tables prefixed `yauth_`) |
+| `yauth-migration` | Diesel migrations (feature-gated per plugin) |
 
 ### TypeScript Packages (`packages/`)
 
@@ -32,7 +32,7 @@
 
 ```bash
 # Rust
-cargo test --features full          # Run all unit tests (91)
+cargo test --features full          # Run all unit tests
 cargo fmt --check                    # Format check
 cargo clippy --features full -- -D warnings  # Lint
 
@@ -58,6 +58,7 @@ bash pentest/pentest-yauth.sh        # Run full pentest suite (255+ cases, 0 FAI
 
 | Feature | What It Enables | Default |
 |---|---|---|
+| `diesel-async` | Diesel-async database backend (deadpool) | Yes |
 | `email-password` | Registration, login, verification, forgot/reset/change password | Yes |
 | `passkey` | WebAuthn registration + login | No |
 | `mfa` | TOTP setup/verify + backup codes | No |
@@ -82,7 +83,7 @@ Plugins implement the `YAuthPlugin` trait:
 ### Builder Pattern
 
 ```rust
-let yauth = YAuthBuilder::new(db, config)
+let yauth = YAuthBuilder::new(pool, config)
     .with_email_password(ep_config)
     .with_passkey(pk_config)
     .with_bearer(bearer_config)
@@ -121,11 +122,11 @@ This project uses `axfetchum` to auto-generate `@yackey-labs/yauth-client` from 
 
 ## Versioning
 
-- **Semantic versioning** is automated via [knope](https://knope.tech) + Forgejo CI
+- **Semantic versioning** is automated via [knope](https://knope.tech) + GitHub CI
 - **NEVER manually edit version numbers** in `Cargo.toml`, `Cargo.lock`, or `package.json` — knope manages all of them from conventional commits
 - All Rust crates and npm packages share a **single unified version** managed by `knope.toml`
 - `feat:` → minor bump, `fix:` → patch bump, `feat!:` / `fix!:` / `BREAKING CHANGE:` → major bump
-- Pushing to `main` triggers: `knope release` → version bump + changelog + Forgejo release + publish (Cargo + npm)
+- Pushing to `main` triggers: `knope release` → version bump + changelog + GitHub release + publish (Cargo + npm)
 - The `chore: prepare release` commit pushed by the release job is skipped by the `if: !startsWith(...)` guard
 - To preview what knope will do: `knope release --dry-run`
 

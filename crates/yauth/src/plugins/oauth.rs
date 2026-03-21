@@ -5,15 +5,11 @@ use axum::{
     response::{IntoResponse, Redirect},
     routing::{delete, get, post},
 };
-#[cfg(feature = "seaorm")]
-use oauth2::RefreshToken;
 use oauth2::basic::BasicClient;
 use oauth2::{
     AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, EndpointNotSet, EndpointSet,
     RedirectUrl, Scope, TokenResponse, TokenUrl,
 };
-#[cfg(feature = "seaorm")]
-use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 use ts_rs::TS;
@@ -33,7 +29,6 @@ const STATE_EXPIRY_MINUTES: i64 = 10;
 // Diesel-async helpers
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "diesel-async")]
 mod diesel_db {
     use diesel::result::OptionalExtension;
     use diesel_async_crate::RunQueryDsl;
@@ -431,23 +426,6 @@ async fn store_state(
     let expires_at =
         (chrono::Utc::now() + chrono::Duration::minutes(STATE_EXPIRY_MINUTES)).fixed_offset();
 
-    #[cfg(feature = "seaorm")]
-    {
-        let now = chrono::Utc::now().fixed_offset();
-        let oauth_state = yauth_entity::oauth_states::ActiveModel {
-            state: Set(state_token.to_string()),
-            provider: Set(provider.to_string()),
-            redirect_url: Set(redirect_url.map(|s| s.to_string())),
-            expires_at: Set(expires_at),
-            created_at: Set(now),
-        };
-
-        oauth_state.insert(&state.db).await.map_err(|e| {
-            tracing::error!("Failed to store OAuth state: {}", e);
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
-    }
-    #[cfg(feature = "diesel-async")]
     {
         let mut conn = state
             .db
@@ -479,39 +457,6 @@ async fn consume_state(
     state_token: &str,
     expected_provider: &str,
 ) -> Result<ConsumedState, ApiError> {
-    #[cfg(feature = "seaorm")]
-    let stored = {
-        let s = yauth_entity::oauth_states::Entity::find_by_id(state_token.to_string())
-            .one(&state.db)
-            .await
-            .map_err(|e| {
-                tracing::error!("DB error looking up OAuth state: {}", e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?
-            .ok_or_else(|| {
-                warn!(
-                    event = "yauth.oauth.state_invalid",
-                    "OAuth state parameter not found"
-                );
-                api_err(
-                    StatusCode::BAD_REQUEST,
-                    "Invalid or expired state parameter",
-                )
-            })?;
-
-        // Delete the state immediately (one-time use)
-        yauth_entity::oauth_states::Entity::delete_by_id(state_token.to_string())
-            .exec(&state.db)
-            .await
-            .ok();
-
-        ConsumedState {
-            provider: s.provider,
-            redirect_url: s.redirect_url,
-            expires_at: s.expires_at,
-        }
-    };
-    #[cfg(feature = "diesel-async")]
     let stored = {
         let mut conn = state
             .db
@@ -760,7 +705,6 @@ async fn handle_callback(
         userinfo.email = fetch_primary_email(emails_url, &access_token).await.ok();
     }
 
-    #[cfg(feature = "diesel-async")]
     let mut conn = state
         .db
         .get()
@@ -776,19 +720,6 @@ async fn handle_callback(
 
     if let Some(link_user_id) = link_to_user_id {
         // Account linking flow
-        #[cfg(feature = "seaorm")]
-        let existing_link = {
-            yauth_entity::oauth_accounts::Entity::find()
-                .filter(yauth_entity::oauth_accounts::Column::Provider.eq(provider))
-                .filter(yauth_entity::oauth_accounts::Column::ProviderUserId.eq(&userinfo.id))
-                .one(&state.db)
-                .await
-                .map_err(|e| {
-                    tracing::error!("DB error: {}", e);
-                    api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-                })?
-        };
-        #[cfg(feature = "diesel-async")]
         let existing_link = {
             diesel_db::find_oauth_account_by_provider(&mut conn, provider, &userinfo.id)
                 .await
@@ -805,26 +736,6 @@ async fn handle_callback(
             ));
         }
 
-        #[cfg(feature = "seaorm")]
-        {
-            let now = chrono::Utc::now().fixed_offset();
-            let oauth_account = yauth_entity::oauth_accounts::ActiveModel {
-                id: Set(Uuid::new_v4()),
-                user_id: Set(link_user_id),
-                provider: Set(provider.to_string()),
-                provider_user_id: Set(userinfo.id.clone()),
-                access_token_enc: Set(Some(access_token.clone())),
-                refresh_token_enc: Set(refresh_token.clone()),
-                created_at: Set(now),
-                expires_at: Set(expires_at),
-                updated_at: Set(now),
-            };
-            oauth_account.insert(&state.db).await.map_err(|e| {
-                tracing::error!("Failed to link OAuth account: {}", e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
-        }
-        #[cfg(feature = "diesel-async")]
         {
             diesel_db::insert_oauth_account(
                 &mut conn,
@@ -850,24 +761,6 @@ async fn handle_callback(
             email_verified: bool,
         }
 
-        #[cfg(feature = "seaorm")]
-        let user = {
-            let u = yauth_entity::users::Entity::find_by_id(link_user_id)
-                .one(&state.db)
-                .await
-                .map_err(|e| {
-                    tracing::error!("DB error: {}", e);
-                    api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-                })?
-                .ok_or_else(|| api_err(StatusCode::INTERNAL_SERVER_ERROR, "User not found"))?;
-            LinkUserInfo {
-                id: u.id,
-                email: u.email,
-                display_name: u.display_name,
-                email_verified: u.email_verified,
-            }
-        };
-        #[cfg(feature = "diesel-async")]
         let user = {
             let u = diesel_db::find_user_by_id(&mut conn, link_user_id)
                 .await
@@ -913,19 +806,6 @@ async fn handle_callback(
     }
 
     // 7. Look up existing OAuth account
-    #[cfg(feature = "seaorm")]
-    let existing_account = {
-        yauth_entity::oauth_accounts::Entity::find()
-            .filter(yauth_entity::oauth_accounts::Column::Provider.eq(provider))
-            .filter(yauth_entity::oauth_accounts::Column::ProviderUserId.eq(&userinfo.id))
-            .one(&state.db)
-            .await
-            .map_err(|e| {
-                tracing::error!("DB error: {}", e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?
-    };
-    #[cfg(feature = "diesel-async")]
     let existing_account = {
         diesel_db::find_oauth_account_by_provider(&mut conn, provider, &userinfo.id)
             .await
@@ -944,19 +824,6 @@ async fn handle_callback(
 
     let user_info = if let Some(account) = existing_account {
         // Existing OAuth account — update tokens
-        #[cfg(feature = "seaorm")]
-        {
-            let mut active: yauth_entity::oauth_accounts::ActiveModel = account.clone().into();
-            active.access_token_enc = Set(Some(access_token.clone()));
-            active.refresh_token_enc = Set(refresh_token.clone());
-            active.expires_at = Set(expires_at);
-            active.updated_at = Set(chrono::Utc::now().fixed_offset());
-            active.update(&state.db).await.map_err(|e| {
-                tracing::error!("Failed to update OAuth tokens: {}", e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
-        }
-        #[cfg(feature = "diesel-async")]
         {
             diesel_db::update_oauth_account_tokens(
                 &mut conn,
@@ -972,28 +839,6 @@ async fn handle_callback(
             })?;
         }
 
-        #[cfg(feature = "seaorm")]
-        let user = {
-            let u = yauth_entity::users::Entity::find_by_id(account.user_id)
-                .one(&state.db)
-                .await
-                .map_err(|e| {
-                    tracing::error!("DB error: {}", e);
-                    api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-                })?
-                .ok_or_else(|| api_err(StatusCode::INTERNAL_SERVER_ERROR, "User not found"))?;
-            if u.banned {
-                warn!(event = "yauth.oauth.login.banned", provider = %provider, user_id = %u.id, "OAuth login attempt by banned user");
-                return Err(api_err(StatusCode::FORBIDDEN, "Account suspended"));
-            }
-            CallbackUserInfo {
-                id: u.id,
-                email: u.email,
-                display_name: u.display_name,
-                email_verified: u.email_verified,
-            }
-        };
-        #[cfg(feature = "diesel-async")]
         let user = {
             let u = diesel_db::find_user_by_id(&mut conn, account.user_id)
                 .await
@@ -1033,18 +878,6 @@ async fn handle_callback(
         })?;
         let email = email.trim().to_lowercase();
 
-        #[cfg(feature = "seaorm")]
-        let existing_user = {
-            yauth_entity::users::Entity::find()
-                .filter(yauth_entity::users::Column::Email.eq(&email))
-                .one(&state.db)
-                .await
-                .map_err(|e| {
-                    tracing::error!("DB error: {}", e);
-                    api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-                })?
-        };
-        #[cfg(feature = "diesel-async")]
         let existing_user = {
             diesel_db::find_user_by_email(&mut conn, &email)
                 .await
@@ -1065,27 +898,6 @@ async fn handle_callback(
                 ));
             }
             let user_id = Uuid::new_v4();
-            #[cfg(feature = "seaorm")]
-            {
-                let now = chrono::Utc::now().fixed_offset();
-                let user = yauth_entity::users::ActiveModel {
-                    id: Set(user_id),
-                    email: Set(email.clone()),
-                    display_name: Set(userinfo.name.clone()),
-                    email_verified: Set(true),
-                    role: Set("user".to_string()),
-                    banned: Set(false),
-                    banned_reason: Set(None),
-                    banned_until: Set(None),
-                    created_at: Set(now),
-                    updated_at: Set(now),
-                };
-                user.insert(&state.db).await.map_err(|e| {
-                    tracing::error!("Failed to create user: {}", e);
-                    api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-                })?;
-            }
-            #[cfg(feature = "diesel-async")]
             {
                 diesel_db::insert_user(&mut conn, user_id, &email, userinfo.name.as_deref())
                     .await
@@ -1097,26 +909,6 @@ async fn handle_callback(
             (user_id, userinfo.name.clone(), true)
         };
 
-        #[cfg(feature = "seaorm")]
-        {
-            let now = chrono::Utc::now().fixed_offset();
-            let oauth_account = yauth_entity::oauth_accounts::ActiveModel {
-                id: Set(Uuid::new_v4()),
-                user_id: Set(uid),
-                provider: Set(provider.to_string()),
-                provider_user_id: Set(userinfo.id.clone()),
-                access_token_enc: Set(Some(access_token.clone())),
-                refresh_token_enc: Set(refresh_token.clone()),
-                created_at: Set(now),
-                expires_at: Set(expires_at),
-                updated_at: Set(now),
-            };
-            oauth_account.insert(&state.db).await.map_err(|e| {
-                tracing::error!("Failed to create OAuth account: {}", e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
-        }
-        #[cfg(feature = "diesel-async")]
         {
             diesel_db::insert_oauth_account(
                 &mut conn,
@@ -1180,81 +972,6 @@ async fn handle_callback(
 // ---------------------------------------------------------------------------
 // Token refresh
 // ---------------------------------------------------------------------------
-
-#[cfg(feature = "seaorm")]
-pub async fn refresh_oauth_token(
-    state: &YAuthState,
-    account: &yauth_entity::oauth_accounts::Model,
-) -> Result<String, ApiError> {
-    let access_token = account
-        .access_token_enc
-        .as_deref()
-        .ok_or_else(|| api_err(StatusCode::UNAUTHORIZED, "No access token available"))?;
-
-    let now = chrono::Utc::now().fixed_offset();
-    let buffer = chrono::Duration::minutes(5);
-    if let Some(expires_at) = account.expires_at {
-        if expires_at > now + buffer {
-            return Ok(access_token.to_string());
-        }
-    } else {
-        return Ok(access_token.to_string());
-    }
-
-    let refresh_token_str = account.refresh_token_enc.as_deref().ok_or_else(|| {
-        api_err(
-            StatusCode::UNAUTHORIZED,
-            "Token expired and no refresh token available. Please re-connect your account.",
-        )
-    })?;
-
-    let provider_config = find_provider_config(state, &account.provider)?;
-    let redirect_uri = format!(
-        "{}/oauth/{}/callback",
-        state.config.base_url.trim_end_matches('/'),
-        account.provider
-    );
-    let client = build_oauth_client(provider_config, &redirect_uri)?;
-
-    let http_client = reqwest::ClientBuilder::new()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|e| {
-            tracing::error!("Failed to build HTTP client for token refresh: {}", e);
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
-
-    let token_result = client
-        .exchange_refresh_token(&RefreshToken::new(refresh_token_str.to_string()))
-        .request_async(&http_client)
-        .await
-        .map_err(|e| {
-            tracing::error!(event = "yauth.oauth.token_refresh_error", provider = %account.provider, error = %e, "OAuth token refresh failed");
-            api_err(StatusCode::UNAUTHORIZED, "Token refresh failed. Please re-connect your account.")
-        })?;
-
-    let new_access_token = token_result.access_token().secret().clone();
-    let new_refresh_token = token_result.refresh_token().map(|t| t.secret().clone());
-    let new_expires_at = token_result.expires_in().map(|d| {
-        (chrono::Utc::now() + chrono::Duration::seconds(d.as_secs() as i64)).fixed_offset()
-    });
-
-    let mut active: yauth_entity::oauth_accounts::ActiveModel = account.clone().into();
-    active.access_token_enc = Set(Some(new_access_token.clone()));
-    if let Some(rt) = new_refresh_token {
-        active.refresh_token_enc = Set(Some(rt));
-    }
-    active.expires_at = Set(new_expires_at);
-    active.updated_at = Set(chrono::Utc::now().fixed_offset());
-    active.update(&state.db).await.map_err(|e| {
-        tracing::error!("Failed to update refreshed OAuth tokens: {}", e);
-        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-    })?;
-
-    info!(event = "yauth.oauth.token_refreshed", provider = %account.provider, user_id = %account.user_id, "OAuth token refreshed successfully");
-
-    Ok(new_access_token)
-}
 
 // ---------------------------------------------------------------------------
 // Public routes
@@ -1382,27 +1099,6 @@ async fn list_accounts(
     State(state): State<YAuthState>,
     Extension(user): Extension<AuthUser>,
 ) -> Result<Json<Vec<OAuthAccountResponse>>, ApiError> {
-    #[cfg(feature = "seaorm")]
-    let response = {
-        let accounts = yauth_entity::oauth_accounts::Entity::find()
-            .filter(yauth_entity::oauth_accounts::Column::UserId.eq(user.id))
-            .all(&state.db)
-            .await
-            .map_err(|e| {
-                tracing::error!("Failed to list OAuth accounts: {}", e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
-        accounts
-            .into_iter()
-            .map(|a| OAuthAccountResponse {
-                id: a.id.to_string(),
-                provider: a.provider,
-                provider_user_id: a.provider_user_id,
-                created_at: a.created_at.to_rfc3339(),
-            })
-            .collect::<Vec<_>>()
-    };
-    #[cfg(feature = "diesel-async")]
     let response = {
         let mut conn = state
             .db
@@ -1435,32 +1131,6 @@ async fn unlink_provider(
     Extension(user): Extension<AuthUser>,
     Path(provider): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    #[cfg(feature = "seaorm")]
-    {
-        let account = yauth_entity::oauth_accounts::Entity::find()
-            .filter(yauth_entity::oauth_accounts::Column::UserId.eq(user.id))
-            .filter(yauth_entity::oauth_accounts::Column::Provider.eq(&provider))
-            .one(&state.db)
-            .await
-            .map_err(|e| {
-                tracing::error!("Failed to find OAuth account: {}", e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?
-            .ok_or_else(|| {
-                api_err(
-                    StatusCode::NOT_FOUND,
-                    "OAuth provider not linked to your account",
-                )
-            })?;
-        yauth_entity::oauth_accounts::Entity::delete_by_id(account.id)
-            .exec(&state.db)
-            .await
-            .map_err(|e| {
-                tracing::error!("Failed to unlink OAuth account: {}", e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
-    }
-    #[cfg(feature = "diesel-async")]
     {
         let mut conn = state
             .db
@@ -1508,19 +1178,6 @@ async fn start_link(
 ) -> Result<Json<AuthorizeResponse>, ApiError> {
     let provider_config = find_provider_config(&state, &provider)?;
 
-    #[cfg(feature = "seaorm")]
-    let existing = {
-        yauth_entity::oauth_accounts::Entity::find()
-            .filter(yauth_entity::oauth_accounts::Column::UserId.eq(user.id))
-            .filter(yauth_entity::oauth_accounts::Column::Provider.eq(&provider))
-            .one(&state.db)
-            .await
-            .map_err(|e| {
-                tracing::error!("DB error: {}", e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?
-    };
-    #[cfg(feature = "diesel-async")]
     let existing = {
         let mut conn = state
             .db

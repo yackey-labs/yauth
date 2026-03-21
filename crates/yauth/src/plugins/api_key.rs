@@ -5,8 +5,6 @@ use axum::{
     response::IntoResponse,
     routing::{delete, get, post},
 };
-#[cfg(feature = "seaorm")]
-use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 use ts_rs::TS;
@@ -21,7 +19,6 @@ use crate::state::YAuthState;
 // Diesel-async helpers
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "diesel-async")]
 mod diesel_db {
     use diesel::result::OptionalExtension;
     use diesel_async_crate::RunQueryDsl;
@@ -254,26 +251,6 @@ async fn create_api_key(
 
     let api_key_id = Uuid::new_v4();
 
-    #[cfg(feature = "seaorm")]
-    {
-        let api_key = yauth_entity::api_keys::ActiveModel {
-            id: Set(api_key_id),
-            user_id: Set(user.id),
-            key_prefix: Set(prefix.clone()),
-            key_hash: Set(key_hash),
-            name: Set(name.clone()),
-            scopes: Set(scopes_json),
-            last_used_at: Set(None),
-            expires_at: Set(expires_at),
-            created_at: Set(now),
-        };
-
-        api_key.insert(&state.db).await.map_err(|e| {
-            tracing::error!("Failed to create API key: {}", e);
-            err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
-    }
-    #[cfg(feature = "diesel-async")]
     {
         let mut conn = state
             .db
@@ -335,36 +312,6 @@ async fn list_api_keys(
 ) -> Result<Json<Vec<ApiKeyResponse>>, (StatusCode, Json<serde_json::Value>)> {
     let err = |status: StatusCode, msg: &str| (status, Json(serde_json::json!({ "error": msg })));
 
-    #[cfg(feature = "seaorm")]
-    let response: Vec<ApiKeyResponse> = {
-        let keys = yauth_entity::api_keys::Entity::find()
-            .filter(yauth_entity::api_keys::Column::UserId.eq(user.id))
-            .all(&state.db)
-            .await
-            .map_err(|e| {
-                tracing::error!("Failed to list API keys: {}", e);
-                err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
-
-        keys.into_iter()
-            .map(|k| {
-                let scopes = k
-                    .scopes
-                    .and_then(|v| serde_json::from_value::<Vec<String>>(v).ok());
-                ApiKeyResponse {
-                    id: k.id,
-                    name: k.name,
-                    prefix: k.key_prefix,
-                    scopes,
-                    last_used_at: k.last_used_at,
-                    expires_at: k.expires_at,
-                    created_at: k.created_at,
-                }
-            })
-            .collect()
-    };
-
-    #[cfg(feature = "diesel-async")]
     let response: Vec<ApiKeyResponse> = {
         let mut conn = state
             .db
@@ -406,28 +353,6 @@ async fn delete_api_key(
 ) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
     let err = |status: StatusCode, msg: &str| (status, Json(serde_json::json!({ "error": msg })));
 
-    #[cfg(feature = "seaorm")]
-    {
-        let key = yauth_entity::api_keys::Entity::find_by_id(id)
-            .filter(yauth_entity::api_keys::Column::UserId.eq(user.id))
-            .one(&state.db)
-            .await
-            .map_err(|e| {
-                tracing::error!("Failed to find API key: {}", e);
-                err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
-
-        let key = key.ok_or_else(|| err(StatusCode::NOT_FOUND, "API key not found"))?;
-
-        yauth_entity::api_keys::Entity::delete_by_id(key.id)
-            .exec(&state.db)
-            .await
-            .map_err(|e| {
-                tracing::error!("Failed to delete API key: {}", e);
-                err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
-    }
-    #[cfg(feature = "diesel-async")]
     {
         let mut conn = state
             .db
@@ -501,7 +426,6 @@ pub async fn validate_api_key(key: &str, state: &YAuthState) -> Result<AuthUser,
         banned: bool,
     }
 
-    #[cfg(feature = "diesel-async")]
     let mut conn = state
         .db
         .get()
@@ -509,23 +433,6 @@ pub async fn validate_api_key(key: &str, state: &YAuthState) -> Result<AuthUser,
         .map_err(|e| format!("Pool error: {}", e))?;
 
     // Look up by prefix
-    #[cfg(feature = "seaorm")]
-    let api_key_info = {
-        let api_key = yauth_entity::api_keys::Entity::find()
-            .filter(yauth_entity::api_keys::Column::KeyPrefix.eq(prefix))
-            .one(&state.db)
-            .await
-            .map_err(|e| format!("Database error: {}", e))?
-            .ok_or_else(|| "Invalid API key".to_string())?;
-        ApiKeyInfo {
-            id: api_key.id,
-            user_id: api_key.user_id,
-            key_hash: api_key.key_hash,
-            scopes: api_key.scopes,
-            expires_at: api_key.expires_at,
-        }
-    };
-    #[cfg(feature = "diesel-async")]
     let api_key_info = {
         let api_key = diesel_db::find_api_key_by_prefix(&mut conn, prefix)
             .await
@@ -566,21 +473,6 @@ pub async fn validate_api_key(key: &str, state: &YAuthState) -> Result<AuthUser,
 
     // Update last_used_at (best-effort, don't fail auth if this errors)
     let now = chrono::Utc::now().fixed_offset();
-    #[cfg(feature = "seaorm")]
-    {
-        let mut active: yauth_entity::api_keys::ActiveModel =
-            yauth_entity::api_keys::Entity::find_by_id(api_key_info.id)
-                .one(&state.db)
-                .await
-                .map_err(|e| format!("Database error: {}", e))?
-                .ok_or_else(|| "API key not found".to_string())?
-                .into();
-        active.last_used_at = Set(Some(now));
-        if let Err(e) = active.update(&state.db).await {
-            tracing::error!("Failed to update API key last_used_at: {}", e);
-        }
-    }
-    #[cfg(feature = "diesel-async")]
     {
         if let Err(e) = diesel_db::update_api_key_last_used(&mut conn, api_key_info.id, now).await {
             tracing::error!("Failed to update API key last_used_at: {}", e);
@@ -588,23 +480,6 @@ pub async fn validate_api_key(key: &str, state: &YAuthState) -> Result<AuthUser,
     }
 
     // Look up the user
-    #[cfg(feature = "seaorm")]
-    let user_info = {
-        let user = yauth_entity::users::Entity::find_by_id(api_key_info.user_id)
-            .one(&state.db)
-            .await
-            .map_err(|e| format!("Database error: {}", e))?
-            .ok_or_else(|| "User not found".to_string())?;
-        UserInfo {
-            id: user.id,
-            email: user.email,
-            display_name: user.display_name,
-            email_verified: user.email_verified,
-            role: user.role,
-            banned: user.banned,
-        }
-    };
-    #[cfg(feature = "diesel-async")]
     let user_info = {
         let user = diesel_db::find_user_by_id(&mut conn, api_key_info.user_id)
             .await

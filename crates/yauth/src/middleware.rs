@@ -58,6 +58,11 @@ pub async fn auth_middleware(
     mut req: Request,
     next: Next,
 ) -> Response {
+    // If a prior middleware (e.g. API key auth) already set AuthUser, skip re-checking.
+    if req.extensions().get::<AuthUser>().is_some() {
+        return next.run(req).await;
+    }
+
     let request_ip = headers
         .get("x-forwarded-for")
         .and_then(|v| v.to_str().ok())

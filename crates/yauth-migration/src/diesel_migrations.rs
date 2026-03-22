@@ -51,23 +51,92 @@ const WEBHOOKS_UP: &str = include_str!("../diesel_migrations/00000000000014_webh
 #[cfg(feature = "oidc")]
 const OIDC_UP: &str = include_str!("../diesel_migrations/00000000000015_oidc/up.sql");
 
+const FIX_JSON_JSONB_UP: &str =
+    include_str!("../diesel_migrations/00000000000016_fix_json_to_jsonb/up.sql");
+
 async fn exec_sql(
     conn: &mut diesel_async_crate::AsyncPgConnection,
     sql: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // Split on semicolons and execute each statement individually
+    // Split on semicolons and execute each statement individually.
     // (diesel::sql_query doesn't support multi-statement queries)
-    for statement in sql.split(';') {
-        let trimmed = statement.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        diesel::sql_query(trimmed)
+    // Uses a dollar-quote aware splitter so DO $$ ... $$ blocks work correctly.
+    for statement in split_statements(sql) {
+        diesel::sql_query(statement)
             .execute(conn)
             .await
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
     }
     Ok(())
+}
+
+/// Split a SQL string into individual statements on `;`, skipping semicolons
+/// that appear inside dollar-quoted strings (`$$...$$`, `$tag$...$tag$`) or
+/// single-quoted string literals.
+fn split_statements(sql: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let b = sql.as_bytes();
+    let mut start = 0usize;
+    let mut i = 0usize;
+
+    while i < b.len() {
+        match b[i] {
+            b'$' => {
+                // Scan to the closing `$` of the opening dollar-quote tag.
+                let tag_start = i;
+                i += 1;
+                while i < b.len() && b[i] != b'$' {
+                    i += 1;
+                }
+                if i >= b.len() {
+                    break;
+                }
+                i += 1; // consume closing `$` of the tag
+                let tag = &b[tag_start..i]; // e.g. b"$$" or b"$body$"
+
+                // Find the matching closing tag.
+                while i + tag.len() <= b.len() {
+                    if &b[i..i + tag.len()] == tag {
+                        i += tag.len();
+                        break;
+                    }
+                    i += 1;
+                }
+            }
+            b'\'' => {
+                // Skip single-quoted literal, handling '' escape sequences.
+                i += 1;
+                while i < b.len() {
+                    if b[i] == b'\'' {
+                        if i + 1 < b.len() && b[i + 1] == b'\'' {
+                            i += 2;
+                        } else {
+                            i += 1;
+                            break;
+                        }
+                    } else {
+                        i += 1;
+                    }
+                }
+            }
+            b';' => {
+                let stmt = sql[start..i].trim();
+                if !stmt.is_empty() {
+                    out.push(stmt);
+                }
+                start = i + 1;
+                i += 1;
+            }
+            _ => {
+                i += 1;
+            }
+        }
+    }
+    let stmt = sql[start..].trim();
+    if !stmt.is_empty() {
+        out.push(stmt);
+    }
+    out
 }
 
 pub async fn run_migrations(pool: &Pool) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -114,6 +183,10 @@ pub async fn run_migrations(pool: &Pool) -> Result<(), Box<dyn std::error::Error
 
     #[cfg(feature = "oidc")]
     exec_sql(&mut conn, OIDC_UP).await?;
+
+    // Fix json → jsonb for columns created by old SeaORM migrations.
+    // This migration is unconditional: the DO $$ blocks inside are idempotent.
+    exec_sql(&mut conn, FIX_JSON_JSONB_UP).await?;
 
     Ok(())
 }

@@ -197,7 +197,7 @@ async fn diesel_session_create_validate_delete() {
     {
         let mut conn = db.pool.get().await.unwrap();
         diesel::sql_query(
-            "INSERT INTO yauth_users (id, display_name, email, role, is_banned, email_verified, created_at, updated_at) \
+            "INSERT INTO yauth_users (id, display_name, email, role, banned, email_verified, created_at, updated_at) \
              VALUES ($1, 'Test', 'test@example.com', 'user', false, true, NOW(), NOW())",
         )
         .bind::<diesel::sql_types::Uuid, _>(user_id)
@@ -280,7 +280,7 @@ async fn diesel_pool_sharing() {
     {
         let mut conn = db.pool.get().await.expect("direct pool connection");
         diesel::sql_query(
-            "INSERT INTO yauth_users (id, display_name, email, role, is_banned, email_verified, created_at, updated_at) \
+            "INSERT INTO yauth_users (id, display_name, email, role, banned, email_verified, created_at, updated_at) \
              VALUES ($1, 'Shared', 'shared@example.com', 'user', false, true, NOW(), NOW())",
         )
         .bind::<diesel::sql_types::Uuid, _>(Uuid::new_v4())

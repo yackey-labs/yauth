@@ -87,20 +87,8 @@ jobs:
   test-diesel:
     name: Test (diesel-async)
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:17
-        env:
-          POSTGRES_USER: yauth
-          POSTGRES_PASSWORD: yauth
-          POSTGRES_DB: yauth_test
-        ports:
-          - 5433:5432
-        options: >-
-          --health-cmd "pg_isready -U yauth"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 5
+    # No postgres service — integration tests use testcontainers (one fresh
+    # container per test) so each test is fully isolated and runs in parallel.
     steps:
       - uses: actions/checkout@v4
 
@@ -123,8 +111,6 @@ jobs:
         run: cargo clippy --workspace --no-default-features --features diesel-full -- -D warnings
 
       - name: Run tests (diesel-async)
-        env:
-          DATABASE_URL: postgres://yauth:yauth@localhost:5433/yauth_test
         run: cargo test --workspace --no-default-features --features diesel-full
 
   pentest:

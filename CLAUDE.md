@@ -124,11 +124,12 @@ This project uses `axfetchum` to auto-generate `@yackey-labs/yauth-client` from 
 
 - **Semantic versioning** is automated via [knope](https://knope.tech) + GitHub CI
 - **NEVER manually edit version numbers** in `Cargo.toml`, `Cargo.lock`, or `package.json` — knope manages all of them from conventional commits
+- **NEVER run `knope release` locally** — releases are triggered exclusively by pushing to `main` via CI (`.github/workflows/release.yml`)
 - All Rust crates and npm packages share a **single unified version** managed by `knope.toml`
 - `feat:` → minor bump, `fix:` → patch bump, `feat!:` / `fix!:` / `BREAKING CHANGE:` → major bump
 - Pushing to `main` triggers: `knope release` → version bump + changelog + GitHub release + publish (Cargo + npm)
 - The `chore: prepare release` commit pushed by the release job is skipped by the `if: !startsWith(...)` guard
-- To preview what knope will do: `knope release --dry-run`
+- To preview what knope will do: `knope release --dry-run` (dry-run only, never run the real thing locally)
 
 ## Conventions
 

@@ -1,5 +1,5 @@
 use diesel::QueryableByName;
-use diesel::sql_types::Text;
+use diesel::sql_types::{BigInt, Text};
 use diesel_async_crate::RunQueryDsl;
 
 type Pool =
@@ -60,9 +60,12 @@ async fn exec_sql(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Split on semicolons and execute each statement individually.
     // (diesel::sql_query doesn't support multi-statement queries)
-    // Uses a dollar-quote aware splitter so DO $$ ... $$ blocks work correctly.
-    for statement in split_statements(sql) {
-        diesel::sql_query(statement)
+    for statement in sql.split(';') {
+        let trimmed = statement.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        diesel::sql_query(trimmed)
             .execute(conn)
             .await
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
@@ -70,73 +73,32 @@ async fn exec_sql(
     Ok(())
 }
 
-/// Split a SQL string into individual statements on `;`, skipping semicolons
-/// that appear inside dollar-quoted strings (`$$...$$`, `$tag$...$tag$`) or
-/// single-quoted string literals.
-fn split_statements(sql: &str) -> Vec<&str> {
-    let mut out = Vec::new();
-    let b = sql.as_bytes();
-    let mut start = 0usize;
-    let mut i = 0usize;
+#[derive(QueryableByName)]
+struct CountRow {
+    #[diesel(sql_type = BigInt)]
+    count: i64,
+}
 
-    while i < b.len() {
-        match b[i] {
-            b'$' => {
-                // Scan to the closing `$` of the opening dollar-quote tag.
-                let tag_start = i;
-                i += 1;
-                while i < b.len() && b[i] != b'$' {
-                    i += 1;
-                }
-                if i >= b.len() {
-                    break;
-                }
-                i += 1; // consume closing `$` of the tag
-                let tag = &b[tag_start..i]; // e.g. b"$$" or b"$body$"
-
-                // Find the matching closing tag.
-                while i + tag.len() <= b.len() {
-                    if &b[i..i + tag.len()] == tag {
-                        i += tag.len();
-                        break;
-                    }
-                    i += 1;
-                }
-            }
-            b'\'' => {
-                // Skip single-quoted literal, handling '' escape sequences.
-                i += 1;
-                while i < b.len() {
-                    if b[i] == b'\'' {
-                        if i + 1 < b.len() && b[i + 1] == b'\'' {
-                            i += 2;
-                        } else {
-                            i += 1;
-                            break;
-                        }
-                    } else {
-                        i += 1;
-                    }
-                }
-            }
-            b';' => {
-                let stmt = sql[start..i].trim();
-                if !stmt.is_empty() {
-                    out.push(stmt);
-                }
-                start = i + 1;
-                i += 1;
-            }
-            _ => {
-                i += 1;
-            }
-        }
-    }
-    let stmt = sql[start..].trim();
-    if !stmt.is_empty() {
-        out.push(stmt);
-    }
-    out
+/// Returns the number of yauth columns that are still of type 'json' and need
+/// converting to 'jsonb'. Used to make migration 016 idempotent without DO blocks
+/// (which cannot be sent via PostgreSQL's extended/prepared-statement protocol).
+async fn json_columns_remaining(
+    conn: &mut diesel_async_crate::AsyncPgConnection,
+) -> Result<i64, Box<dyn std::error::Error + Send + Sync>> {
+    let rows: Vec<CountRow> = diesel::sql_query(
+        "SELECT COUNT(*)::bigint AS count \
+         FROM information_schema.columns \
+         WHERE table_schema = 'public' \
+           AND table_name IN (\
+             'yauth_oauth2_clients','yauth_authorization_codes','yauth_consents',\
+             'yauth_device_codes','yauth_webauthn_credentials','yauth_audit_log'\
+           ) \
+           AND data_type = 'json'",
+    )
+    .load(conn)
+    .await
+    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+    Ok(rows.into_iter().next().map(|r| r.count).unwrap_or(0))
 }
 
 pub async fn run_migrations(pool: &Pool) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -185,8 +147,12 @@ pub async fn run_migrations(pool: &Pool) -> Result<(), Box<dyn std::error::Error
     exec_sql(&mut conn, OIDC_UP).await?;
 
     // Fix json → jsonb for columns created by old SeaORM migrations.
-    // This migration is unconditional: the DO $$ blocks inside are idempotent.
-    exec_sql(&mut conn, FIX_JSON_JSONB_UP).await?;
+    // Check first so the ALTER TABLE (which is not idempotent) only runs when needed.
+    // DO $$ blocks cannot be used here because PostgreSQL rejects them via the
+    // extended (prepared-statement) query protocol that diesel uses.
+    if json_columns_remaining(&mut conn).await? > 0 {
+        exec_sql(&mut conn, FIX_JSON_JSONB_UP).await?;
+    }
 
     Ok(())
 }

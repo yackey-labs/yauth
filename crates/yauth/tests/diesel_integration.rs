@@ -10,6 +10,7 @@
 use std::time::Duration;
 
 use testcontainers::runners::AsyncRunner;
+use testcontainers::ImageExt;
 use testcontainers_modules::postgres::Postgres;
 use uuid::Uuid;
 use yauth::AsyncDieselConnectionManager;
@@ -60,7 +61,7 @@ impl TestDb {
         }
 
         // 2. Fall back to testcontainers.
-        let container = match Postgres::default().start().await {
+        let container = match Postgres::default().with_tag("17-alpine").start().await {
             Ok(c) => c,
             Err(e) => {
                 eprintln!("Cannot start testcontainer (Docker unavailable?): {e}");

@@ -99,7 +99,7 @@ function createRequest(options: YAuthClientOptions) {
 
     if (auth && options.getToken) {
       const token = await options.getToken();
-      if (token) headers["Authorization"] = `Bearer ${token}`;
+      if (token) headers.Authorization = `Bearer ${token}`;
     }
 
     const response = await fetchFn(url, {

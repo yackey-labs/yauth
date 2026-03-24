@@ -1,6 +1,6 @@
 {
 	"name": "@yackey-labs/yauth-client",
-	"version": "0.2.1",
+	"version": "0.2.2",
 	"type": "module",
 	"main": "dist/index.js",
 	"module": "dist/index.js",
@@ -22,7 +22,7 @@
 		"test": "bun test"
 	},
 	"dependencies": {
-		"@yackey-labs/yauth-shared": "0.2.1"
+		"@yackey-labs/yauth-shared": "0.2.2"
 	},
 	"devDependencies": {
 		"typescript": "^5.7.2"

@@ -131,6 +131,7 @@ This project uses `axfetchum` to auto-generate `@yackey-labs/yauth-client` from 
 - Pushing to `main` triggers: `knope release` → version bump + changelog + GitHub release + publish (Cargo + npm)
 - The `chore: prepare release` commit pushed by the release job is skipped by the `if: !startsWith(...)` guard
 - To preview what knope will do: `knope release --dry-run` (dry-run only, never run the real thing locally)
+- **Partial release recovery** — if CI publishes Rust crates but fails at npm (e.g., ENEEDAUTH), crates.io has version N but the `chore: prepare release N` commit was never pushed and no git tag exists. To recover: manually bump all version files to N, commit as `chore: prepare release N`, open a PR, merge it, then push `git tag vN <squash-sha> && git push origin vN`. Then open a `fix:` PR to trigger the next version.
 
 ## Conventions
 

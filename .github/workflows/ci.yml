@@ -35,7 +35,7 @@ jobs:
       - name: cargo fmt
         run: cargo fmt --check
 
-      - name: cargo clippy (seaorm)
+      - name: cargo clippy
         run: cargo clippy --workspace --features full -- -D warnings
 
       - name: cargo clippy (diesel-async)
@@ -50,20 +50,8 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:17
-        env:
-          POSTGRES_USER: yauth
-          POSTGRES_PASSWORD: yauth
-          POSTGRES_DB: yauth_test
-        ports:
-          - 5433:5432
-        options: >-
-          --health-cmd "pg_isready -U yauth"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 5
+    # No postgres service — unit tests need no DB; diesel integration tests
+    # use testcontainers (one fresh container per test).
     steps:
       - uses: actions/checkout@v4
 
@@ -80,15 +68,13 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Run tests
-        env:
-          DATABASE_URL: postgres://yauth:yauth@localhost:5433/yauth_test
-        run: cargo test --workspace --features full -- --skip diesel
+        run: cargo test --workspace --features full
 
   test-diesel:
     name: Test (diesel-async)
     runs-on: ubuntu-latest
-    # No postgres service — integration tests use testcontainers (one fresh
-    # container per test) so each test is fully isolated and runs in parallel.
+    # Verifies the diesel-only feature set compiles and tests correctly
+    # with no default (seaorm) features enabled.
     steps:
       - uses: actions/checkout@v4
 

@@ -23,6 +23,7 @@
 | `@yackey-labs/yauth-shared` | Shared types (`AuthUser`, `AuthSession`, AAGUID map) |
 | `@yackey-labs/yauth-client` | HTTP client for all auth endpoints |
 | `@yackey-labs/yauth-ui-solidjs` | SolidJS components (LoginForm, RegisterForm, etc.) |
+| `@yackey-labs/yauth-ui-vue` | Vue 3 components + composables (LoginForm, useAuth, etc.) |
 
 ### Pentest Suite (`pentest/`)
 

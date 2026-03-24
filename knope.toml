@@ -7,9 +7,12 @@ versioned_files = [
     "packages/shared/package.json",
     "packages/client/package.json",
     "packages/ui-solidjs/package.json",
+    "packages/ui-vue/package.json",
     { path = "packages/client/package.json", dependency = "@yackey-labs/yauth-shared" },
     { path = "packages/ui-solidjs/package.json", dependency = "@yackey-labs/yauth-client" },
     { path = "packages/ui-solidjs/package.json", dependency = "@yackey-labs/yauth-shared" },
+    { path = "packages/ui-vue/package.json", dependency = "@yackey-labs/yauth-client" },
+    { path = "packages/ui-vue/package.json", dependency = "@yackey-labs/yauth-shared" },
     { path = "Cargo.toml", dependency = "yauth-entity" },
     { path = "Cargo.toml", dependency = "yauth-migration" },
 ]
@@ -28,13 +31,13 @@ type = "PrepareRelease"
 # Reformat knope's 2-space JSON to match Biome tab convention
 [[workflows.steps]]
 type = "Command"
-command = "bun biome format --write packages/shared/package.json packages/client/package.json packages/ui-solidjs/package.json"
+command = "bun biome format --write packages/shared/package.json packages/client/package.json packages/ui-solidjs/package.json packages/ui-vue/package.json"
 shell = true
 
 # Stage the reformatted files (PrepareRelease staged the 2-space originals)
 [[workflows.steps]]
 type = "Command"
-command = "git add packages/shared/package.json packages/client/package.json packages/ui-solidjs/package.json"
+command = "git add packages/shared/package.json packages/client/package.json packages/ui-solidjs/package.json packages/ui-vue/package.json"
 
 [[workflows.steps]]
 type = "Command"
@@ -73,6 +76,11 @@ shell = true
 [[workflows.steps]]
 type = "Command"
 command = "cd packages/ui-solidjs && bun publish --access public --provenance"
+shell = true
+
+[[workflows.steps]]
+type = "Command"
+command = "cd packages/ui-vue && bun publish --access public --provenance"
 shell = true
 
 # Push and create release after all packages are published

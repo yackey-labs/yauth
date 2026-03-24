@@ -1,3 +1,9 @@
+## 0.2.4 (2026-03-24)
+
+### Fixes
+
+- document partial release recovery process in CLAUDE.md
+
 ## 0.2.3 (2026-03-24)
 
 ### Fixes

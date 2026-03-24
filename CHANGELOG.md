@@ -1,3 +1,10 @@
+## 0.2.2 (2026-03-24)
+
+### Fixes
+
+- clean up 0.2.1 release notes
+- switch npm publish from bun to npm CLI for OIDC trusted publishing support
+
 ## 0.2.1 (2026-03-24)
 
 ### Features

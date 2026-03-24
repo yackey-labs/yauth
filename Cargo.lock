@@ -4570,7 +4570,7 @@ dependencies = [
 
 [[package]]
 name = "yauth"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "argon2",
  "async-trait",
@@ -4621,7 +4621,7 @@ dependencies = [
 
 [[package]]
 name = "yauth-entity"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "chrono",
  "diesel",
@@ -4634,7 +4634,7 @@ dependencies = [
 
 [[package]]
 name = "yauth-migration"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "diesel",
  "diesel-async",

@@ -1,3 +1,20 @@
+## 0.2.1 (2026-03-24)
+
+### Features
+
+- add Vue 3 UI package (@yackey-labs/yauth-ui-vue)
+
+### Fixes
+
+- skip auth checks in auth_middleware if AuthUser already set
+- convert json columns to jsonb
+- wire migration 016 into runner and make exec_sql dollar-quote aware
+- avoid DO blocks — check json columns before ALTER TABLE
+- use ALTER TABLE IF EXISTS in migration 016
+- use testcontainers for diesel integration tests
+- pin testcontainer to postgres:17-alpine
+- remove stale SeaORM postgres service from CI; exclude test files from npm packages
+
 ## 0.2.0 (2026-03-21)
 
 ### Breaking Changes

@@ -1,3 +1,10 @@
+## 0.2.5 (2026-03-24)
+
+### Fixes
+
+- install Node.js LTS and update npm for OIDC trusted publishing
+- add repository field to all npm packages and reconcile v0.2.5
+
 ## 0.2.4 (2026-03-24)
 
 ### Fixes

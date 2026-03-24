@@ -13,7 +13,8 @@
 - use ALTER TABLE IF EXISTS in migration 016
 - use testcontainers for diesel integration tests
 - pin testcontainer to postgres:17-alpine
-- remove stale SeaORM postgres service from CI; exclude test files from npm packages
+- remove stale SeaORM postgres service from CI
+- exclude test files from published npm packages
 
 ## 0.2.0 (2026-03-21)
 

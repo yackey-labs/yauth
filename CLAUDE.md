@@ -134,7 +134,8 @@ This project uses `axfetchum` to auto-generate `@yackey-labs/yauth-client` from 
 
 ## Conventions
 
-- **Always use Bun** — `bun install`, `bun publish`, `bun run`, etc. Never use npm or yarn
+- **Always use Bun** — `bun install`, `bun run`, etc. Never use npm or yarn for running scripts
+- **npm publish uses npm CLI** — the release workflow uses `npm publish --provenance` (not `bun publish`) because only the npm CLI supports OIDC trusted publishing; no NPM_TOKEN is required
 - **Conventional commits** for all commit messages — this directly drives automated versioning
 - **Biome** for TypeScript linting/formatting (not ESLint)
 - **`cargo fmt` + `cargo clippy`** for Rust

@@ -82,7 +82,7 @@ jobs:
       - name: Run tests
         env:
           DATABASE_URL: postgres://yauth:yauth@localhost:5433/yauth_test
-        run: cargo test --workspace --features full
+        run: cargo test --workspace --features full -- --skip diesel
 
   test-diesel:
     name: Test (diesel-async)

@@ -14,7 +14,7 @@
 		"test": "bun run --filter '*' test",
 		"validate": "bun run lint:fix && bun run typecheck && bun run build",
 		"validate:ci": "bun run lint && bun run typecheck && bun run build && bun run generate:check",
-		"generate": "TS_RS_EXPORT_DIR=$PWD/packages/client/src/bindings cargo test --features full -p yauth -- export_bindings --nocapture && cargo test --features full -p yauth -- generate_openapi_spec --exact --nocapture && bunx orval",
+		"generate": "TS_RS_EXPORT_DIR=$PWD/packages/client/src/bindings cargo test --features full -p yauth -- export_bindings --nocapture && cargo test --features full -p yauth -- generate_openapi_spec --exact --nocapture --include-ignored && bunx orval",
 		"generate:check": "TS_RS_EXPORT_DIR=$PWD/packages/client/src/bindings cargo test --features full -p yauth -- export_bindings --nocapture && cargo test --features full -p yauth -- check_openapi_spec_up_to_date --exact --nocapture",
 		"clean": "rm -rf node_modules packages/*/node_modules packages/*/dist"
 	},

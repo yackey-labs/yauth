@@ -5,6 +5,7 @@ fn openapi_output_path() -> &'static str {
 }
 
 #[test]
+#[ignore] // Run explicitly via `bun generate`, not during `cargo test`
 fn generate_openapi_spec() {
     let spec = yauth::routes_meta::build_openapi_spec();
     let json = serde_json::to_string_pretty(&spec).expect("Failed to serialize OpenAPI spec");

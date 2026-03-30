@@ -7,7 +7,6 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
-use ts_rs::TS;
 use uuid::Uuid;
 use webauthn_rs::Webauthn;
 use webauthn_rs::prelude::*;
@@ -348,11 +347,9 @@ async fn register_begin(
     Ok(Json(ccr))
 }
 
-#[derive(Deserialize, TS)]
-#[ts(export)]
+#[derive(Deserialize)]
 pub struct RegisterFinishRequest {
     pub name: String,
-    #[ts(type = "unknown")]
     pub credential: RegisterPublicKeyCredential,
 }
 
@@ -450,8 +447,7 @@ async fn register_finish(
 
 // --- Authentication ---
 
-#[derive(Deserialize, TS)]
-#[ts(export)]
+#[derive(Deserialize)]
 pub struct PasskeyLoginBeginRequest {
     #[serde(default)]
     pub email: Option<String>,
@@ -622,11 +618,9 @@ async fn login_begin(
     }))
 }
 
-#[derive(Deserialize, TS)]
-#[ts(export)]
+#[derive(Deserialize)]
 pub struct PasskeyLoginFinishRequest {
     pub challenge_id: Uuid,
-    #[ts(type = "unknown")]
     pub credential: PublicKeyCredential,
 }
 
@@ -845,8 +839,7 @@ async fn update_credential_last_used(state: &YAuthState, user_id: Uuid) -> Resul
 
 // --- Passkey Management ---
 
-#[derive(Serialize, TS)]
-#[ts(export)]
+#[derive(Serialize)]
 pub struct PasskeyInfo {
     pub id: Uuid,
     pub name: String,

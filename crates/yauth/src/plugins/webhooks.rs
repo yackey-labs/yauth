@@ -11,7 +11,6 @@ use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use tracing::{error, info, warn};
-use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::config::WebhookConfig;
@@ -436,16 +435,14 @@ fn truncate_response(body: &str) -> String {
 // Request / Response types
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize, TS)]
-#[ts(export)]
+#[derive(Deserialize)]
 pub struct CreateWebhookRequest {
     pub url: String,
     pub events: Vec<String>,
     pub secret: Option<String>,
 }
 
-#[derive(Deserialize, TS)]
-#[ts(export)]
+#[derive(Deserialize)]
 pub struct UpdateWebhookRequest {
     pub url: Option<String>,
     pub events: Option<Vec<String>>,
@@ -453,8 +450,7 @@ pub struct UpdateWebhookRequest {
     pub active: Option<bool>,
 }
 
-#[derive(Serialize, TS)]
-#[ts(export)]
+#[derive(Serialize)]
 pub struct WebhookResponse {
     pub id: String,
     pub url: String,
@@ -464,15 +460,13 @@ pub struct WebhookResponse {
     pub updated_at: String,
 }
 
-#[derive(Serialize, TS)]
-#[ts(export)]
+#[derive(Serialize)]
 pub struct WebhookDetailResponse {
     pub webhook: WebhookResponse,
     pub recent_deliveries: Vec<WebhookDeliveryResponse>,
 }
 
-#[derive(Serialize, TS)]
-#[ts(export)]
+#[derive(Serialize)]
 pub struct WebhookDeliveryResponse {
     pub id: String,
     pub event_type: String,

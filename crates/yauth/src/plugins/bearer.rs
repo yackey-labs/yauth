@@ -6,7 +6,6 @@ use chrono::Utc;
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
-use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::auth::{crypto, password};
@@ -208,8 +207,7 @@ struct Claims {
 // Request / Response types
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize, TS)]
-#[ts(export)]
+#[derive(Deserialize)]
 pub struct TokenRequest {
     pub email: String,
     pub password: String,
@@ -218,20 +216,17 @@ pub struct TokenRequest {
     pub scope: Option<String>,
 }
 
-#[derive(Deserialize, TS)]
-#[ts(export)]
+#[derive(Deserialize)]
 pub struct RefreshRequest {
     pub refresh_token: String,
 }
 
-#[derive(Deserialize, TS)]
-#[ts(export)]
+#[derive(Deserialize)]
 pub struct RevokeRequest {
     pub refresh_token: String,
 }
 
-#[derive(Serialize, TS)]
-#[ts(export)]
+#[derive(Serialize)]
 pub struct TokenResponse {
     pub access_token: String,
     pub refresh_token: String,

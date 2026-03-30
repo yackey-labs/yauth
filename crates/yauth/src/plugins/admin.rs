@@ -9,7 +9,6 @@ use axum::{
 use chrono::{Duration, Utc};
 use serde::Deserialize;
 use tracing::{info, warn};
-use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::auth::{crypto, session};
@@ -331,31 +330,27 @@ impl YAuthPlugin for AdminPlugin {
 // Request / query types
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize, TS)]
-#[ts(export)]
+#[derive(Deserialize)]
 pub struct ListUsersQuery {
     pub page: Option<u64>,
     pub per_page: Option<u64>,
     pub search: Option<String>,
 }
 
-#[derive(Deserialize, TS)]
-#[ts(export)]
+#[derive(Deserialize)]
 pub struct ListSessionsQuery {
     pub page: Option<u64>,
     pub per_page: Option<u64>,
 }
 
-#[derive(Deserialize, TS)]
-#[ts(export)]
+#[derive(Deserialize)]
 pub struct UpdateUserRequest {
     pub display_name: Option<String>,
     pub role: Option<String>,
     pub email_verified: Option<bool>,
 }
 
-#[derive(Deserialize, TS)]
-#[ts(export)]
+#[derive(Deserialize)]
 pub struct BanRequest {
     pub reason: Option<String>,
     pub until: Option<String>,

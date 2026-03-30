@@ -501,8 +501,6 @@ cargo fmt --check
 # TypeScript
 bun install
 bun validate          # lint:fix + typecheck + build
-bun generate          # regenerate TS client from Rust types
-bun generate:check    # CI: fail if client is out of date
 
 # Integration testing
 docker compose up -d                 # PostgreSQL + Mailpit

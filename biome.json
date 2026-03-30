@@ -14,7 +14,8 @@
 			"!**/build",
 			"!**/*.gen.ts",
 			"!**/bindings",
-			"!**/generated.ts"
+			"!**/generated.ts",
+			"!openapi.json"
 		]
 	},
 	"formatter": {

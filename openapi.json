@@ -1,2354 +1,2704 @@
 {
-	"openapi": "3.1.0",
-	"info": {
-		"title": "yauth API",
-		"description": "Modular, plugin-based authentication API for Axum applications.",
-		"version": "0.2.5"
-	},
-	"paths": {
-		"/.well-known/jwks.json": {
-			"get": {
-				"tags": ["oidc"],
-				"operationId": "oidc_jwks",
-				"responses": {
-					"200": {
-						"description": "Success"
-					}
-				}
-			}
-		},
-		"/.well-known/oauth-authorization-server": {
-			"get": {
-				"tags": ["oauth2Server"],
-				"operationId": "oauth2Server_metadata",
-				"responses": {
-					"200": {
-						"description": "Success"
-					}
-				}
-			}
-		},
-		"/.well-known/openid-configuration": {
-			"get": {
-				"tags": ["oidc"],
-				"operationId": "oidc_openidConfiguration",
-				"responses": {
-					"200": {
-						"description": "Success"
-					}
-				}
-			}
-		},
-		"/account/request-unlock": {
-			"post": {
-				"tags": ["accountLockout"],
-				"operationId": "accountLockout_requestUnlock",
-				"requestBody": {
-					"content": {
-						"application/json": {
-							"schema": {
-								"$ref": "#/components/schemas/RequestUnlockRequest"
-							}
-						}
-					},
-					"required": true
-				},
-				"responses": {
-					"200": {
-						"description": "Success",
-						"content": {
-							"application/json": {
-								"schema": {
-									"$ref": "#/components/schemas/AccountLockoutMessageResponse"
-								}
-							}
-						}
-					}
-				}
-			}
-		},
-		"/account/unlock": {
-			"post": {
-				"tags": ["accountLockout"],
-				"operationId": "accountLockout_unlock",
-				"requestBody": {
-					"content": {
-						"application/json": {
-							"schema": {
-								"$ref": "#/components/schemas/UnlockAccountRequest"
-							}
-						}
-					},
-					"required": true
-				},
-				"responses": {
-					"200": {
-						"description": "Success",
-						"content": {
-							"application/json": {
-								"schema": {
-									"$ref": "#/components/schemas/AccountLockoutMessageResponse"
-								}
-							}
-						}
-					}
-				}
-			}
-		},
-		"/admin/sessions": {
-			"get": {
-				"tags": ["admin"],
-				"operationId": "admin_listSessions",
-				"responses": {
-					"200": {
-						"description": "Success"
-					}
-				},
-				"security": [
-					{
-						"cookieAuth": []
-					}
-				]
-			}
-		},
-		"/admin/sessions/{id}": {
-			"delete": {
-				"tags": ["admin"],
-				"operationId": "admin_deleteSession",
-				"parameters": [
-					{
-						"name": "id",
-						"in": "path",
-						"required": true,
-						"schema": {
-							"type": "string"
-						}
-					}
-				],
-				"responses": {
-					"200": {
-						"description": "Success"
-					}
-				},
-				"security": [
-					{
-						"cookieAuth": []
-					}
-				]
-			}
-		},
-		"/admin/users": {
-			"get": {
-				"tags": ["admin"],
-				"operationId": "admin_listUsers",
-				"responses": {
-					"200": {
-						"description": "Success"
-					}
-				},
-				"security": [
-					{
-						"cookieAuth": []
-					}
-				]
-			}
-		},
-		"/admin/users/{id}": {
-			"get": {
-				"tags": ["admin"],
-				"operationId": "admin_getUser",
-				"parameters": [
-					{
-						"name": "id",
-						"in": "path",
-						"required": true,
-						"schema": {
-							"type": "string"
-						}
-					}
-				],
-				"responses": {
-					"200": {
-						"description": "Success",
-						"content": {
-							"application/json": {
-								"schema": {
-									"$ref": "#/components/schemas/AuthUser"
-								}
-							}
-						}
-					}
-				},
-				"security": [
-					{
-						"cookieAuth": []
-					}
-				]
-			},
-			"put": {
-				"tags": ["admin"],
-				"operationId": "admin_updateUser",
-				"parameters": [
-					{
-						"name": "id",
-						"in": "path",
-						"required": true,
-						"schema": {
-							"type": "string"
-						}
-					}
-				],
-				"requestBody": {
-					"content": {
-						"application/json": {
-							"schema": {
-								"$ref": "#/components/schemas/UpdateUserRequest"
-							}
-						}
-					},
-					"required": true
-				},
-				"responses": {
-					"200": {
-						"description": "Success",
-						"content": {
-							"application/json": {
-								"schema": {
-									"$ref": "#/components/schemas/AuthUser"
-								}
-							}
-						}
-					}
-				},
-				"security": [
-					{
-						"cookieAuth": []
-					}
-				]
-			},
-			"delete": {
-				"tags": ["admin"],
-				"operationId": "admin_deleteUser",
-				"parameters": [
-					{
-						"name": "id",
-						"in": "path",
-						"required": true,
-						"schema": {
-							"type": "string"
-						}
-					}
-				],
-				"responses": {
-					"200": {
-						"description": "Success"
-					}
-				},
-				"security": [
-					{
-						"cookieAuth": []
-					}
-				]
-			}
-		},
-		"/admin/users/{id}/ban": {
-			"post": {
-				"tags": ["admin"],
-				"operationId": "admin_banUser",
-				"parameters": [
-					{
-						"name": "id",
-						"in": "path",
-						"required": true,
-						"schema": {
-							"type": "string"
-						}
-					}
-				],
-				"requestBody": {
-					"content": {
-						"application/json": {
-							"schema": {
-								"$ref": "#/components/schemas/BanRequest"
-							}
-						}
-					},
-					"required": true
-				},
-				"responses": {
-					"200": {
-						"description": "Success",
-						"content": {
-							"application/json": {
-								"schema": {
-									"$ref": "#/components/schemas/AuthUser"
-								}
-							}
-						}
-					}
-				},
-				"security": [
-					{
-						"cookieAuth": []
-					}
-				]
-			}
-		},
-		"/admin/users/{id}/impersonate": {
-			"post": {
-				"tags": ["admin"],
-				"operationId": "admin_impersonate",
-				"parameters": [
-					{
-						"name": "id",
-						"in": "path",
-						"required": true,
-						"schema": {
-							"type": "string"
-						}
-					}
-				],
-				"responses": {
-					"200": {
-						"description": "Success"
-					}
-				},
-				"security": [
-					{
-						"cookieAuth": []
-					}
-				]
-			}
-		},
-		"/admin/users/{id}/unban": {
-			"post": {
-				"tags": ["admin"],
-				"operationId": "admin_unbanUser",
-				"parameters": [
-					{
-						"name": "id",
-						"in": "path",
-						"required": true,
-						"schema": {
-							"type": "string"
-						}
-					}
-				],
-				"responses": {
-					"200": {
-						"description": "Success",
-						"content": {
-							"application/json": {
-								"schema": {
-									"$ref": "#/components/schemas/AuthUser"
-								}
-							}
-						}
-					}
-				},
-				"security": [
-					{
-						"cookieAuth": []
-					}
-				]
-			}
-		},
-		"/admin/users/{id}/unlock": {
-			"post": {
-				"tags": ["accountLockout"],
-				"operationId": "accountLockout_adminUnlock",
-				"parameters": [
-					{
-						"name": "id",
-						"in": "path",
-						"required": true,
-						"schema": {
-							"type": "string"
-						}
-					}
-				],
-				"responses": {
-					"200": {
-						"description": "Success",
-						"content": {
-							"application/json": {
-								"schema": {
-									"$ref": "#/components/schemas/AccountLockoutMessageResponse"
-								}
-							}
-						}
-					}
-				},
-				"security": [
-					{
-						"cookieAuth": []
-					}
-				]
-			}
-		},
-		"/api-keys": {
-			"get": {
-				"tags": ["apiKeys"],
-				"operationId": "apiKeys_list",
-				"responses": {
-					"200": {
-						"description": "Success",
-						"content": {
-							"application/json": {
-								"schema": {
-									"type": "array",
-									"items": {
-										"$ref": "#/components/schemas/ApiKeyResponse"
-									}
-								}
-							}
-						}
-					}
-				},
-				"security": [
-					{
-						"cookieAuth": []
-					}
-				]
-			},
-			"post": {
-				"tags": ["apiKeys"],
-				"operationId": "apiKeys_create",
-				"requestBody": {
-					"content": {
-						"application/json": {
-							"schema": {
-								"$ref": "#/components/schemas/CreateApiKeyRequest"
-							}
-						}
-					},
-					"required": true
-				},
-				"responses": {
-					"200": {
-						"description": "Success",
-						"content": {
-							"application/json": {
-								"schema": {
-									"$ref": "#/components/schemas/CreateApiKeyResponse"
-								}
-							}
-						}
-					}
-				},
-				"security": [
-					{
-						"cookieAuth": []
-					}
-				]
-			}
-		},
-		"/api-keys/{id}": {
-			"delete": {
-				"tags": ["apiKeys"],
-				"operationId": "apiKeys_delete",
-				"parameters": [
-					{
-						"name": "id",
-						"in": "path",
-						"required": true,
-						"schema": {
-							"type": "string"
-						}
-					}
-				],
-				"responses": {
-					"200": {
-						"description": "Success"
-					}
-				},
-				"security": [
-					{
-						"cookieAuth": []
-					}
-				]
-			}
-		},
-		"/change-password": {
-			"post": {
-				"tags": ["emailPassword"],
-				"operationId": "emailPassword_changePassword",
-				"requestBody": {
-					"content": {
-						"application/json": {
-							"schema": {
-								"$ref": "#/components/schemas/ChangePasswordRequest"
-							}
-						}
-					},
-					"required": true
-				},
-				"responses": {
-					"200": {
-						"description": "Success",
-						"content": {
-							"application/json": {
-								"schema": {
-									"$ref": "#/components/schemas/MessageResponse"
-								}
-							}
-						}
-					}
-				},
-				"security": [
-					{
-						"cookieAuth": []
-					}
-				]
-			}
-		},
-		"/config": {
-			"get": {
-				"tags": ["core"],
-				"operationId": "getConfig",
-				"responses": {
-					"200": {
-						"description": "Success",
-						"content": {
-							"application/json": {
-								"schema": {
-									"$ref": "#/components/schemas/AuthConfigResponse"
-								}
-							}
-						}
-					}
-				}
-			}
-		},
-		"/forgot-password": {
-			"post": {
-				"tags": ["emailPassword"],
-				"operationId": "emailPassword_forgotPassword",
-				"requestBody": {
-					"content": {
-						"application/json": {
-							"schema": {
-								"$ref": "#/components/schemas/ForgotPasswordRequest"
-							}
-						}
-					},
-					"required": true
-				},
-				"responses": {
-					"200": {
-						"description": "Success",
-						"content": {
-							"application/json": {
-								"schema": {
-									"$ref": "#/components/schemas/MessageResponse"
-								}
-							}
-						}
-					}
-				}
-			}
-		},
-		"/login": {
-			"post": {
-				"tags": ["emailPassword"],
-				"operationId": "emailPassword_login",
-				"requestBody": {
-					"content": {
-						"application/json": {
-							"schema": {
-								"$ref": "#/components/schemas/LoginRequest"
-							}
-						}
-					},
-					"required": true
-				},
-				"responses": {
-					"200": {
-						"description": "Success"
-					}
-				}
-			}
-		},
-		"/logout": {
-			"post": {
-				"tags": ["core"],
-				"operationId": "logout",
-				"responses": {
-					"200": {
-						"description": "Success"
-					}
-				},
-				"security": [
-					{
-						"cookieAuth": []
-					}
-				]
-			}
-		},
-		"/magic-link/send": {
-			"post": {
-				"tags": ["magicLink"],
-				"operationId": "magicLink_send",
-				"requestBody": {
-					"content": {
-						"application/json": {
-							"schema": {
-								"$ref": "#/components/schemas/MagicLinkSendRequest"
-							}
-						}
-					},
-					"required": true
-				},
-				"responses": {
-					"200": {
-						"description": "Success",
-						"content": {
-							"application/json": {
-								"schema": {
-									"$ref": "#/components/schemas/MagicLinkMessageResponse"
-								}
-							}
-						}
-					}
-				}
-			}
-		},
-		"/magic-link/verify": {
-			"post": {
-				"tags": ["magicLink"],
-				"operationId": "magicLink_verify",
-				"requestBody": {
-					"content": {
-						"application/json": {
-							"schema": {
-								"$ref": "#/components/schemas/MagicLinkVerifyRequest"
-							}
-						}
-					},
-					"required": true
-				},
-				"responses": {
-					"200": {
-						"description": "Success"
-					}
-				}
-			}
-		},
-		"/me": {
-			"patch": {
-				"tags": ["core"],
-				"operationId": "updateProfile",
-				"requestBody": {
-					"content": {
-						"application/json": {
-							"schema": {
-								"$ref": "#/components/schemas/UpdateProfileRequest"
-							}
-						}
-					},
-					"required": true
-				},
-				"responses": {
-					"200": {
-						"description": "Success",
-						"content": {
-							"application/json": {
-								"schema": {
-									"$ref": "#/components/schemas/AuthUser"
-								}
-							}
-						}
-					}
-				},
-				"security": [
-					{
-						"cookieAuth": []
-					}
-				]
-			}
-		},
-		"/mfa/backup-codes": {
-			"get": {
-				"tags": ["mfa"],
-				"operationId": "mfa_getBackupCodeCount",
-				"responses": {
-					"200": {
-						"description": "Success",
-						"content": {
-							"application/json": {
-								"schema": {
-									"$ref": "#/components/schemas/BackupCodeCountResponse"
-								}
-							}
-						}
-					}
-				},
-				"security": [
-					{
-						"cookieAuth": []
-					}
-				]
-			}
-		},
-		"/mfa/backup-codes/regenerate": {
-			"post": {
-				"tags": ["mfa"],
-				"operationId": "mfa_regenerateBackupCodes",
-				"responses": {
-					"200": {
-						"description": "Success",
-						"content": {
-							"application/json": {
-								"schema": {
-									"$ref": "#/components/schemas/BackupCodesResponse"
-								}
-							}
-						}
-					}
-				},
-				"security": [
-					{
-						"cookieAuth": []
-					}
-				]
-			}
-		},
-		"/mfa/totp": {
-			"delete": {
-				"tags": ["mfa"],
-				"operationId": "mfa_disable",
-				"responses": {
-					"200": {
-						"description": "Success",
-						"content": {
-							"application/json": {
-								"schema": {
-									"$ref": "#/components/schemas/MfaMessageResponse"
-								}
-							}
-						}
-					}
-				},
-				"security": [
-					{
-						"cookieAuth": []
-					}
-				]
-			}
-		},
-		"/mfa/totp/confirm": {
-			"post": {
-				"tags": ["mfa"],
-				"operationId": "mfa_confirm",
-				"requestBody": {
-					"content": {
-						"application/json": {
-							"schema": {
-								"$ref": "#/components/schemas/ConfirmTotpRequest"
-							}
-						}
-					},
-					"required": true
-				},
-				"responses": {
-					"200": {
-						"description": "Success",
-						"content": {
-							"application/json": {
-								"schema": {
-									"$ref": "#/components/schemas/MfaMessageResponse"
-								}
-							}
-						}
-					}
-				},
-				"security": [
-					{
-						"cookieAuth": []
-					}
-				]
-			}
-		},
-		"/mfa/totp/setup": {
-			"post": {
-				"tags": ["mfa"],
-				"operationId": "mfa_setup",
-				"responses": {
-					"200": {
-						"description": "Success",
-						"content": {
-							"application/json": {
-								"schema": {
-									"$ref": "#/components/schemas/SetupTotpResponse"
-								}
-							}
-						}
-					}
-				},
-				"security": [
-					{
-						"cookieAuth": []
-					}
-				]
-			}
-		},
-		"/mfa/verify": {
-			"post": {
-				"tags": ["mfa"],
-				"operationId": "mfa_verify",
-				"requestBody": {
-					"content": {
-						"application/json": {
-							"schema": {
-								"$ref": "#/components/schemas/VerifyMfaRequest"
-							}
-						}
-					},
-					"required": true
-				},
-				"responses": {
-					"200": {
-						"description": "Success",
-						"content": {
-							"application/json": {
-								"schema": {
-									"$ref": "#/components/schemas/MfaAuthResponse"
-								}
-							}
-						}
-					}
-				}
-			}
-		},
-		"/oauth/accounts": {
-			"get": {
-				"tags": ["oauth"],
-				"operationId": "oauth_accounts",
-				"responses": {
-					"200": {
-						"description": "Success",
-						"content": {
-							"application/json": {
-								"schema": {
-									"type": "array",
-									"items": {
-										"$ref": "#/components/schemas/OAuthAccountResponse"
-									}
-								}
-							}
-						}
-					}
-				},
-				"security": [
-					{
-						"cookieAuth": []
-					}
-				]
-			}
-		},
-		"/oauth/authorize": {
-			"get": {
-				"tags": ["oauth2Server"],
-				"operationId": "oauth2Server_authorize",
-				"responses": {
-					"200": {
-						"description": "Success"
-					}
-				}
-			},
-			"post": {
-				"tags": ["oauth2Server"],
-				"operationId": "oauth2Server_authorizeConsent",
-				"responses": {
-					"200": {
-						"description": "Success"
-					}
-				}
-			}
-		},
-		"/oauth/device": {
-			"get": {
-				"tags": ["oauth2Server"],
-				"operationId": "oauth2Server_deviceVerify",
-				"responses": {
-					"200": {
-						"description": "Success"
-					}
-				}
-			},
-			"post": {
-				"tags": ["oauth2Server"],
-				"operationId": "oauth2Server_deviceApprove",
-				"responses": {
-					"200": {
-						"description": "Success"
-					}
-				}
-			}
-		},
-		"/oauth/device/code": {
-			"post": {
-				"tags": ["oauth2Server"],
-				"operationId": "oauth2Server_deviceAuthorize",
-				"responses": {
-					"200": {
-						"description": "Success"
-					}
-				}
-			}
-		},
-		"/oauth/introspect": {
-			"post": {
-				"tags": ["oauth2Server"],
-				"operationId": "oauth2Server_introspect",
-				"responses": {
-					"200": {
-						"description": "Success"
-					}
-				}
-			}
-		},
-		"/oauth/register": {
-			"post": {
-				"tags": ["oauth2Server"],
-				"operationId": "oauth2Server_register",
-				"responses": {
-					"200": {
-						"description": "Success"
-					}
-				}
-			}
-		},
-		"/oauth/revoke": {
-			"post": {
-				"tags": ["oauth2Server"],
-				"operationId": "oauth2Server_revoke",
-				"responses": {
-					"200": {
-						"description": "Success"
-					}
-				}
-			}
-		},
-		"/oauth/token": {
-			"post": {
-				"tags": ["oauth2Server"],
-				"operationId": "oauth2Server_token",
-				"responses": {
-					"200": {
-						"description": "Success"
-					}
-				}
-			}
-		},
-		"/oauth/{provider}": {
-			"delete": {
-				"tags": ["oauth"],
-				"operationId": "oauth_unlink",
-				"parameters": [
-					{
-						"name": "provider",
-						"in": "path",
-						"required": true,
-						"schema": {
-							"type": "string"
-						}
-					}
-				],
-				"responses": {
-					"200": {
-						"description": "Success"
-					}
-				},
-				"security": [
-					{
-						"cookieAuth": []
-					}
-				]
-			}
-		},
-		"/oauth/{provider}/authorize": {
-			"get": {
-				"tags": ["oauth"],
-				"operationId": "oauth_authorize",
-				"parameters": [
-					{
-						"name": "provider",
-						"in": "path",
-						"required": true,
-						"schema": {
-							"type": "string"
-						}
-					}
-				],
-				"responses": {
-					"200": {
-						"description": "Success"
-					}
-				}
-			}
-		},
-		"/oauth/{provider}/callback": {
-			"post": {
-				"tags": ["oauth"],
-				"operationId": "oauth_callback",
-				"parameters": [
-					{
-						"name": "provider",
-						"in": "path",
-						"required": true,
-						"schema": {
-							"type": "string"
-						}
-					}
-				],
-				"requestBody": {
-					"content": {
-						"application/json": {
-							"schema": {
-								"$ref": "#/components/schemas/CallbackBody"
-							}
-						}
-					},
-					"required": true
-				},
-				"responses": {
-					"200": {
-						"description": "Success",
-						"content": {
-							"application/json": {
-								"schema": {
-									"$ref": "#/components/schemas/OAuthAuthResponse"
-								}
-							}
-						}
-					}
-				}
-			}
-		},
-		"/oauth/{provider}/link": {
-			"post": {
-				"tags": ["oauth"],
-				"operationId": "oauth_link",
-				"parameters": [
-					{
-						"name": "provider",
-						"in": "path",
-						"required": true,
-						"schema": {
-							"type": "string"
-						}
-					}
-				],
-				"responses": {
-					"200": {
-						"description": "Success",
-						"content": {
-							"application/json": {
-								"schema": {
-									"$ref": "#/components/schemas/AuthorizeResponse"
-								}
-							}
-						}
-					}
-				},
-				"security": [
-					{
-						"cookieAuth": []
-					}
-				]
-			}
-		},
-		"/passkey/login/begin": {
-			"post": {
-				"tags": ["passkey"],
-				"operationId": "passkey_loginBegin",
-				"requestBody": {
-					"content": {
-						"application/json": {
-							"schema": {
-								"$ref": "#/components/schemas/PasskeyLoginBeginRequest"
-							}
-						}
-					},
-					"required": true
-				},
-				"responses": {
-					"200": {
-						"description": "Success"
-					}
-				}
-			}
-		},
-		"/passkey/login/finish": {
-			"post": {
-				"tags": ["passkey"],
-				"operationId": "passkey_loginFinish",
-				"requestBody": {
-					"content": {
-						"application/json": {
-							"schema": {
-								"$ref": "#/components/schemas/PasskeyLoginFinishRequest"
-							}
-						}
-					},
-					"required": true
-				},
-				"responses": {
-					"200": {
-						"description": "Success"
-					}
-				}
-			}
-		},
-		"/passkeys": {
-			"get": {
-				"tags": ["passkey"],
-				"operationId": "passkey_list",
-				"responses": {
-					"200": {
-						"description": "Success",
-						"content": {
-							"application/json": {
-								"schema": {
-									"type": "array",
-									"items": {
-										"$ref": "#/components/schemas/PasskeyInfo"
-									}
-								}
-							}
-						}
-					}
-				},
-				"security": [
-					{
-						"cookieAuth": []
-					}
-				]
-			}
-		},
-		"/passkeys/register/begin": {
-			"post": {
-				"tags": ["passkey"],
-				"operationId": "passkey_registerBegin",
-				"responses": {
-					"200": {
-						"description": "Success"
-					}
-				},
-				"security": [
-					{
-						"cookieAuth": []
-					}
-				]
-			}
-		},
-		"/passkeys/register/finish": {
-			"post": {
-				"tags": ["passkey"],
-				"operationId": "passkey_registerFinish",
-				"requestBody": {
-					"content": {
-						"application/json": {
-							"schema": {
-								"$ref": "#/components/schemas/RegisterFinishRequest"
-							}
-						}
-					},
-					"required": true
-				},
-				"responses": {
-					"200": {
-						"description": "Success"
-					}
-				},
-				"security": [
-					{
-						"cookieAuth": []
-					}
-				]
-			}
-		},
-		"/passkeys/{id}": {
-			"delete": {
-				"tags": ["passkey"],
-				"operationId": "passkey_delete",
-				"parameters": [
-					{
-						"name": "id",
-						"in": "path",
-						"required": true,
-						"schema": {
-							"type": "string"
-						}
-					}
-				],
-				"responses": {
-					"200": {
-						"description": "Success"
-					}
-				},
-				"security": [
-					{
-						"cookieAuth": []
-					}
-				]
-			}
-		},
-		"/register": {
-			"post": {
-				"tags": ["emailPassword"],
-				"operationId": "emailPassword_register",
-				"requestBody": {
-					"content": {
-						"application/json": {
-							"schema": {
-								"$ref": "#/components/schemas/RegisterRequest"
-							}
-						}
-					},
-					"required": true
-				},
-				"responses": {
-					"200": {
-						"description": "Success",
-						"content": {
-							"application/json": {
-								"schema": {
-									"$ref": "#/components/schemas/MessageResponse"
-								}
-							}
-						}
-					}
-				}
-			}
-		},
-		"/resend-verification": {
-			"post": {
-				"tags": ["emailPassword"],
-				"operationId": "emailPassword_resendVerification",
-				"requestBody": {
-					"content": {
-						"application/json": {
-							"schema": {
-								"$ref": "#/components/schemas/ResendVerificationRequest"
-							}
-						}
-					},
-					"required": true
-				},
-				"responses": {
-					"200": {
-						"description": "Success",
-						"content": {
-							"application/json": {
-								"schema": {
-									"$ref": "#/components/schemas/MessageResponse"
-								}
-							}
-						}
-					}
-				}
-			}
-		},
-		"/reset-password": {
-			"post": {
-				"tags": ["emailPassword"],
-				"operationId": "emailPassword_resetPassword",
-				"requestBody": {
-					"content": {
-						"application/json": {
-							"schema": {
-								"$ref": "#/components/schemas/ResetPasswordRequest"
-							}
-						}
-					},
-					"required": true
-				},
-				"responses": {
-					"200": {
-						"description": "Success",
-						"content": {
-							"application/json": {
-								"schema": {
-									"$ref": "#/components/schemas/MessageResponse"
-								}
-							}
-						}
-					}
-				}
-			}
-		},
-		"/session": {
-			"get": {
-				"tags": ["core"],
-				"operationId": "getSession",
-				"responses": {
-					"200": {
-						"description": "Success",
-						"content": {
-							"application/json": {
-								"schema": {
-									"$ref": "#/components/schemas/AuthUser"
-								}
-							}
-						}
-					}
-				},
-				"security": [
-					{
-						"cookieAuth": []
-					}
-				]
-			}
-		},
-		"/token": {
-			"post": {
-				"tags": ["bearer"],
-				"operationId": "bearer_getToken",
-				"requestBody": {
-					"content": {
-						"application/json": {
-							"schema": {
-								"$ref": "#/components/schemas/TokenRequest"
-							}
-						}
-					},
-					"required": true
-				},
-				"responses": {
-					"200": {
-						"description": "Success",
-						"content": {
-							"application/json": {
-								"schema": {
-									"$ref": "#/components/schemas/TokenResponse"
-								}
-							}
-						}
-					}
-				}
-			}
-		},
-		"/token/refresh": {
-			"post": {
-				"tags": ["bearer"],
-				"operationId": "bearer_refresh",
-				"requestBody": {
-					"content": {
-						"application/json": {
-							"schema": {
-								"$ref": "#/components/schemas/RefreshRequest"
-							}
-						}
-					},
-					"required": true
-				},
-				"responses": {
-					"200": {
-						"description": "Success",
-						"content": {
-							"application/json": {
-								"schema": {
-									"$ref": "#/components/schemas/TokenResponse"
-								}
-							}
-						}
-					}
-				}
-			}
-		},
-		"/token/revoke": {
-			"post": {
-				"tags": ["bearer"],
-				"operationId": "bearer_revoke",
-				"requestBody": {
-					"content": {
-						"application/json": {
-							"schema": {
-								"$ref": "#/components/schemas/RevokeRequest"
-							}
-						}
-					},
-					"required": true
-				},
-				"responses": {
-					"200": {
-						"description": "Success"
-					}
-				},
-				"security": [
-					{
-						"cookieAuth": []
-					}
-				]
-			}
-		},
-		"/userinfo": {
-			"get": {
-				"tags": ["oidc"],
-				"operationId": "oidc_userinfo",
-				"responses": {
-					"200": {
-						"description": "Success"
-					}
-				},
-				"security": [
-					{
-						"cookieAuth": []
-					}
-				]
-			}
-		},
-		"/verify-email": {
-			"post": {
-				"tags": ["emailPassword"],
-				"operationId": "emailPassword_verifyEmail",
-				"requestBody": {
-					"content": {
-						"application/json": {
-							"schema": {
-								"$ref": "#/components/schemas/VerifyEmailRequest"
-							}
-						}
-					},
-					"required": true
-				},
-				"responses": {
-					"200": {
-						"description": "Success",
-						"content": {
-							"application/json": {
-								"schema": {
-									"$ref": "#/components/schemas/MessageResponse"
-								}
-							}
-						}
-					}
-				}
-			}
-		},
-		"/webhooks": {
-			"get": {
-				"tags": ["webhooks"],
-				"operationId": "webhooks_list",
-				"responses": {
-					"200": {
-						"description": "Success",
-						"content": {
-							"application/json": {
-								"schema": {
-									"type": "array",
-									"items": {
-										"$ref": "#/components/schemas/WebhookResponse"
-									}
-								}
-							}
-						}
-					}
-				},
-				"security": [
-					{
-						"cookieAuth": []
-					}
-				]
-			},
-			"post": {
-				"tags": ["webhooks"],
-				"operationId": "webhooks_create",
-				"requestBody": {
-					"content": {
-						"application/json": {
-							"schema": {
-								"$ref": "#/components/schemas/CreateWebhookRequest"
-							}
-						}
-					},
-					"required": true
-				},
-				"responses": {
-					"200": {
-						"description": "Success",
-						"content": {
-							"application/json": {
-								"schema": {
-									"$ref": "#/components/schemas/WebhookResponse"
-								}
-							}
-						}
-					}
-				},
-				"security": [
-					{
-						"cookieAuth": []
-					}
-				]
-			}
-		},
-		"/webhooks/{id}": {
-			"get": {
-				"tags": ["webhooks"],
-				"operationId": "webhooks_get",
-				"parameters": [
-					{
-						"name": "id",
-						"in": "path",
-						"required": true,
-						"schema": {
-							"type": "string"
-						}
-					}
-				],
-				"responses": {
-					"200": {
-						"description": "Success",
-						"content": {
-							"application/json": {
-								"schema": {
-									"$ref": "#/components/schemas/WebhookDetailResponse"
-								}
-							}
-						}
-					}
-				},
-				"security": [
-					{
-						"cookieAuth": []
-					}
-				]
-			},
-			"put": {
-				"tags": ["webhooks"],
-				"operationId": "webhooks_update",
-				"parameters": [
-					{
-						"name": "id",
-						"in": "path",
-						"required": true,
-						"schema": {
-							"type": "string"
-						}
-					}
-				],
-				"requestBody": {
-					"content": {
-						"application/json": {
-							"schema": {
-								"$ref": "#/components/schemas/UpdateWebhookRequest"
-							}
-						}
-					},
-					"required": true
-				},
-				"responses": {
-					"200": {
-						"description": "Success",
-						"content": {
-							"application/json": {
-								"schema": {
-									"$ref": "#/components/schemas/WebhookResponse"
-								}
-							}
-						}
-					}
-				},
-				"security": [
-					{
-						"cookieAuth": []
-					}
-				]
-			},
-			"delete": {
-				"tags": ["webhooks"],
-				"operationId": "webhooks_delete",
-				"parameters": [
-					{
-						"name": "id",
-						"in": "path",
-						"required": true,
-						"schema": {
-							"type": "string"
-						}
-					}
-				],
-				"responses": {
-					"200": {
-						"description": "Success"
-					}
-				},
-				"security": [
-					{
-						"cookieAuth": []
-					}
-				]
-			}
-		},
-		"/webhooks/{id}/test": {
-			"post": {
-				"tags": ["webhooks"],
-				"operationId": "webhooks_test",
-				"parameters": [
-					{
-						"name": "id",
-						"in": "path",
-						"required": true,
-						"schema": {
-							"type": "string"
-						}
-					}
-				],
-				"responses": {
-					"200": {
-						"description": "Success"
-					}
-				},
-				"security": [
-					{
-						"cookieAuth": []
-					}
-				]
-			}
-		}
-	},
-	"components": {
-		"schemas": {
-			"AccountLockoutMessageResponse": {
-				"type": "object",
-				"required": ["message"],
-				"properties": {
-					"message": {
-						"type": "string"
-					}
-				}
-			},
-			"ApiKeyResponse": {
-				"type": "object",
-				"required": ["id", "name", "prefix", "created_at"],
-				"properties": {
-					"created_at": {
-						"type": "string",
-						"format": "date-time"
-					},
-					"expires_at": {
-						"type": ["string", "null"],
-						"format": "date-time"
-					},
-					"id": {
-						"type": "string",
-						"format": "uuid"
-					},
-					"last_used_at": {
-						"type": ["string", "null"],
-						"format": "date-time"
-					},
-					"name": {
-						"type": "string"
-					},
-					"prefix": {
-						"type": "string"
-					},
-					"scopes": {
-						"type": ["array", "null"],
-						"items": {
-							"type": "string"
-						}
-					}
-				}
-			},
-			"AuthConfigResponse": {
-				"type": "object",
-				"description": "Server-side auth configuration exposed to frontends via `GET /config`.",
-				"required": ["allow_signups", "require_email_verification"],
-				"properties": {
-					"allow_signups": {
-						"type": "boolean",
-						"description": "Whether new user registration is allowed."
-					},
-					"require_email_verification": {
-						"type": "boolean",
-						"description": "Whether newly registered users must verify their email before logging in."
-					}
-				}
-			},
-			"AuthMethod": {
-				"type": "string",
-				"enum": ["Session", "Bearer", "ApiKey"]
-			},
-			"AuthUser": {
-				"type": "object",
-				"required": [
-					"id",
-					"email",
-					"email_verified",
-					"role",
-					"banned",
-					"auth_method"
-				],
-				"properties": {
-					"auth_method": {
-						"$ref": "#/components/schemas/AuthMethod"
-					},
-					"banned": {
-						"type": "boolean"
-					},
-					"display_name": {
-						"type": ["string", "null"]
-					},
-					"email": {
-						"type": "string"
-					},
-					"email_verified": {
-						"type": "boolean"
-					},
-					"id": {
-						"type": "string",
-						"format": "uuid"
-					},
-					"role": {
-						"type": "string"
-					},
-					"scopes": {
-						"type": ["array", "null"],
-						"items": {
-							"type": "string"
-						}
-					}
-				}
-			},
-			"AuthorizeQuery": {
-				"type": "object",
-				"properties": {
-					"redirect_url": {
-						"type": ["string", "null"]
-					}
-				}
-			},
-			"AuthorizeResponse": {
-				"type": "object",
-				"required": ["auth_url"],
-				"properties": {
-					"auth_url": {
-						"type": "string"
-					}
-				}
-			},
-			"BackupCodeCountResponse": {
-				"type": "object",
-				"required": ["remaining"],
-				"properties": {
-					"remaining": {
-						"type": "integer",
-						"minimum": 0
-					}
-				}
-			},
-			"BackupCodesResponse": {
-				"type": "object",
-				"required": ["backup_codes"],
-				"properties": {
-					"backup_codes": {
-						"type": "array",
-						"items": {
-							"type": "string"
-						}
-					}
-				}
-			},
-			"BanRequest": {
-				"type": "object",
-				"properties": {
-					"reason": {
-						"type": ["string", "null"]
-					},
-					"until": {
-						"type": ["string", "null"]
-					}
-				}
-			},
-			"CallbackBody": {
-				"type": "object",
-				"required": ["code", "state"],
-				"properties": {
-					"code": {
-						"type": "string"
-					},
-					"state": {
-						"type": "string"
-					}
-				}
-			},
-			"ChangePasswordRequest": {
-				"type": "object",
-				"required": ["current_password", "new_password"],
-				"properties": {
-					"current_password": {
-						"type": "string"
-					},
-					"new_password": {
-						"type": "string"
-					}
-				}
-			},
-			"ConfirmTotpRequest": {
-				"type": "object",
-				"required": ["code"],
-				"properties": {
-					"code": {
-						"type": "string"
-					}
-				}
-			},
-			"CreateApiKeyRequest": {
-				"type": "object",
-				"required": ["name"],
-				"properties": {
-					"expires_in_days": {
-						"type": ["integer", "null"],
-						"format": "int32",
-						"minimum": 0
-					},
-					"name": {
-						"type": "string"
-					},
-					"scopes": {
-						"type": ["array", "null"],
-						"items": {
-							"type": "string"
-						}
-					}
-				}
-			},
-			"CreateApiKeyResponse": {
-				"type": "object",
-				"required": ["id", "key", "name", "prefix", "created_at"],
-				"properties": {
-					"created_at": {
-						"type": "string",
-						"format": "date-time"
-					},
-					"expires_at": {
-						"type": ["string", "null"],
-						"format": "date-time"
-					},
-					"id": {
-						"type": "string",
-						"format": "uuid"
-					},
-					"key": {
-						"type": "string"
-					},
-					"name": {
-						"type": "string"
-					},
-					"prefix": {
-						"type": "string"
-					},
-					"scopes": {
-						"type": ["array", "null"],
-						"items": {
-							"type": "string"
-						}
-					}
-				}
-			},
-			"CreateWebhookRequest": {
-				"type": "object",
-				"required": ["url", "events"],
-				"properties": {
-					"events": {
-						"type": "array",
-						"items": {
-							"type": "string"
-						}
-					},
-					"secret": {
-						"type": ["string", "null"]
-					},
-					"url": {
-						"type": "string"
-					}
-				}
-			},
-			"ForgotPasswordRequest": {
-				"type": "object",
-				"required": ["email"],
-				"properties": {
-					"email": {
-						"type": "string"
-					}
-				}
-			},
-			"ListSessionsQuery": {
-				"type": "object",
-				"properties": {
-					"page": {
-						"type": ["integer", "null"],
-						"format": "int64",
-						"minimum": 0
-					},
-					"per_page": {
-						"type": ["integer", "null"],
-						"format": "int64",
-						"minimum": 0
-					}
-				}
-			},
-			"ListUsersQuery": {
-				"type": "object",
-				"properties": {
-					"page": {
-						"type": ["integer", "null"],
-						"format": "int64",
-						"minimum": 0
-					},
-					"per_page": {
-						"type": ["integer", "null"],
-						"format": "int64",
-						"minimum": 0
-					},
-					"search": {
-						"type": ["string", "null"]
-					}
-				}
-			},
-			"LoginRequest": {
-				"type": "object",
-				"required": ["email", "password"],
-				"properties": {
-					"email": {
-						"type": "string"
-					},
-					"password": {
-						"type": "string"
-					},
-					"remember_me": {
-						"type": ["boolean", "null"]
-					}
-				}
-			},
-			"MagicLinkMessageResponse": {
-				"type": "object",
-				"required": ["message"],
-				"properties": {
-					"message": {
-						"type": "string"
-					}
-				}
-			},
-			"MagicLinkSendRequest": {
-				"type": "object",
-				"required": ["email"],
-				"properties": {
-					"email": {
-						"type": "string"
-					}
-				}
-			},
-			"MagicLinkVerifyRequest": {
-				"type": "object",
-				"required": ["token"],
-				"properties": {
-					"token": {
-						"type": "string"
-					}
-				}
-			},
-			"MessageResponse": {
-				"type": "object",
-				"required": ["message"],
-				"properties": {
-					"message": {
-						"type": "string"
-					}
-				}
-			},
-			"MfaAuthResponse": {
-				"type": "object",
-				"required": ["user_id", "email", "email_verified"],
-				"properties": {
-					"display_name": {
-						"type": ["string", "null"]
-					},
-					"email": {
-						"type": "string"
-					},
-					"email_verified": {
-						"type": "boolean"
-					},
-					"user_id": {
-						"type": "string"
-					}
-				}
-			},
-			"MfaMessageResponse": {
-				"type": "object",
-				"required": ["message"],
-				"properties": {
-					"message": {
-						"type": "string"
-					}
-				}
-			},
-			"OAuthAccountResponse": {
-				"type": "object",
-				"required": ["id", "provider", "provider_user_id", "created_at"],
-				"properties": {
-					"created_at": {
-						"type": "string"
-					},
-					"id": {
-						"type": "string"
-					},
-					"provider": {
-						"type": "string"
-					},
-					"provider_user_id": {
-						"type": "string"
-					}
-				}
-			},
-			"OAuthAuthResponse": {
-				"type": "object",
-				"required": ["user_id", "email", "email_verified"],
-				"properties": {
-					"display_name": {
-						"type": ["string", "null"]
-					},
-					"email": {
-						"type": "string"
-					},
-					"email_verified": {
-						"type": "boolean"
-					},
-					"user_id": {
-						"type": "string"
-					}
-				}
-			},
-			"PasskeyInfo": {
-				"type": "object",
-				"required": ["id", "name", "created_at"],
-				"properties": {
-					"created_at": {
-						"type": "string",
-						"format": "date-time"
-					},
-					"id": {
-						"type": "string",
-						"format": "uuid"
-					},
-					"last_used_at": {
-						"type": ["string", "null"],
-						"format": "date-time"
-					},
-					"name": {
-						"type": "string"
-					}
-				}
-			},
-			"PasskeyLoginBeginRequest": {
-				"type": "object",
-				"properties": {
-					"email": {
-						"type": ["string", "null"]
-					}
-				}
-			},
-			"PasskeyLoginFinishRequest": {
-				"type": "object",
-				"required": ["challenge_id", "credential"],
-				"properties": {
-					"challenge_id": {
-						"type": "string",
-						"format": "uuid"
-					},
-					"credential": {
-						"type": "object"
-					}
-				}
-			},
-			"RefreshRequest": {
-				"type": "object",
-				"required": ["refresh_token"],
-				"properties": {
-					"refresh_token": {
-						"type": "string"
-					}
-				}
-			},
-			"RegisterFinishRequest": {
-				"type": "object",
-				"required": ["name", "credential"],
-				"properties": {
-					"credential": {
-						"type": "object"
-					},
-					"name": {
-						"type": "string"
-					}
-				}
-			},
-			"RegisterRequest": {
-				"type": "object",
-				"required": ["email", "password"],
-				"properties": {
-					"display_name": {
-						"type": ["string", "null"]
-					},
-					"email": {
-						"type": "string"
-					},
-					"password": {
-						"type": "string"
-					}
-				}
-			},
-			"RequestUnlockRequest": {
-				"type": "object",
-				"required": ["email"],
-				"properties": {
-					"email": {
-						"type": "string"
-					}
-				}
-			},
-			"ResendVerificationRequest": {
-				"type": "object",
-				"required": ["email"],
-				"properties": {
-					"email": {
-						"type": "string"
-					}
-				}
-			},
-			"ResetPasswordRequest": {
-				"type": "object",
-				"required": ["token", "password"],
-				"properties": {
-					"password": {
-						"type": "string"
-					},
-					"token": {
-						"type": "string"
-					}
-				}
-			},
-			"RevokeRequest": {
-				"type": "object",
-				"required": ["refresh_token"],
-				"properties": {
-					"refresh_token": {
-						"type": "string"
-					}
-				}
-			},
-			"SetupTotpResponse": {
-				"type": "object",
-				"required": ["otpauth_url", "secret", "backup_codes"],
-				"properties": {
-					"backup_codes": {
-						"type": "array",
-						"items": {
-							"type": "string"
-						}
-					},
-					"otpauth_url": {
-						"type": "string"
-					},
-					"secret": {
-						"type": "string"
-					}
-				}
-			},
-			"TokenRequest": {
-				"type": "object",
-				"required": ["email", "password"],
-				"properties": {
-					"email": {
-						"type": "string"
-					},
-					"password": {
-						"type": "string"
-					},
-					"scope": {
-						"type": ["string", "null"],
-						"description": "Optional space-separated OAuth2 scopes (e.g. \"read:runs write:runs\")."
-					}
-				}
-			},
-			"TokenResponse": {
-				"type": "object",
-				"required": [
-					"access_token",
-					"refresh_token",
-					"token_type",
-					"expires_in"
-				],
-				"properties": {
-					"access_token": {
-						"type": "string"
-					},
-					"expires_in": {
-						"type": "integer",
-						"format": "int64",
-						"minimum": 0
-					},
-					"refresh_token": {
-						"type": "string"
-					},
-					"token_type": {
-						"type": "string"
-					}
-				}
-			},
-			"UnlockAccountRequest": {
-				"type": "object",
-				"required": ["token"],
-				"properties": {
-					"token": {
-						"type": "string"
-					}
-				}
-			},
-			"UpdateProfileRequest": {
-				"type": "object",
-				"properties": {
-					"display_name": {
-						"type": ["string", "null"]
-					}
-				}
-			},
-			"UpdateUserRequest": {
-				"type": "object",
-				"properties": {
-					"display_name": {
-						"type": ["string", "null"]
-					},
-					"email_verified": {
-						"type": ["boolean", "null"]
-					},
-					"role": {
-						"type": ["string", "null"]
-					}
-				}
-			},
-			"UpdateWebhookRequest": {
-				"type": "object",
-				"properties": {
-					"active": {
-						"type": ["boolean", "null"]
-					},
-					"events": {
-						"type": ["array", "null"],
-						"items": {
-							"type": "string"
-						}
-					},
-					"secret": {
-						"type": ["string", "null"]
-					},
-					"url": {
-						"type": ["string", "null"]
-					}
-				}
-			},
-			"VerifyEmailRequest": {
-				"type": "object",
-				"required": ["token"],
-				"properties": {
-					"token": {
-						"type": "string"
-					}
-				}
-			},
-			"VerifyMfaRequest": {
-				"type": "object",
-				"required": ["pending_session_id", "code"],
-				"properties": {
-					"code": {
-						"type": "string"
-					},
-					"pending_session_id": {
-						"type": "string",
-						"format": "uuid"
-					}
-				}
-			},
-			"WebhookDeliveryResponse": {
-				"type": "object",
-				"required": ["id", "event_type", "success", "attempt", "created_at"],
-				"properties": {
-					"attempt": {
-						"type": "integer",
-						"format": "int32"
-					},
-					"created_at": {
-						"type": "string"
-					},
-					"event_type": {
-						"type": "string"
-					},
-					"id": {
-						"type": "string"
-					},
-					"status_code": {
-						"type": ["integer", "null"],
-						"format": "int32"
-					},
-					"success": {
-						"type": "boolean"
-					}
-				}
-			},
-			"WebhookDetailResponse": {
-				"type": "object",
-				"required": ["webhook", "recent_deliveries"],
-				"properties": {
-					"recent_deliveries": {
-						"type": "array",
-						"items": {
-							"$ref": "#/components/schemas/WebhookDeliveryResponse"
-						}
-					},
-					"webhook": {
-						"$ref": "#/components/schemas/WebhookResponse"
-					}
-				}
-			},
-			"WebhookResponse": {
-				"type": "object",
-				"required": [
-					"id",
-					"url",
-					"events",
-					"active",
-					"created_at",
-					"updated_at"
-				],
-				"properties": {
-					"active": {
-						"type": "boolean"
-					},
-					"created_at": {
-						"type": "string"
-					},
-					"events": {
-						"type": "array",
-						"items": {
-							"type": "string"
-						}
-					},
-					"id": {
-						"type": "string"
-					},
-					"updated_at": {
-						"type": "string"
-					},
-					"url": {
-						"type": "string"
-					}
-				}
-			}
-		}
-	}
+  "openapi": "3.1.0",
+  "info": {
+    "title": "yauth API",
+    "description": "Modular, plugin-based authentication API for Axum applications.",
+    "version": "0.2.5"
+  },
+  "paths": {
+    "/.well-known/jwks.json": {
+      "get": {
+        "tags": [
+          "oidc"
+        ],
+        "operationId": "oidc_jwks",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/.well-known/oauth-authorization-server": {
+      "get": {
+        "tags": [
+          "oauth2Server"
+        ],
+        "operationId": "oauth2Server_metadata",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/.well-known/openid-configuration": {
+      "get": {
+        "tags": [
+          "oidc"
+        ],
+        "operationId": "oidc_openidConfiguration",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/account/request-unlock": {
+      "post": {
+        "tags": [
+          "accountLockout"
+        ],
+        "operationId": "accountLockout_requestUnlock",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestUnlockRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountLockoutMessageResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/account/unlock": {
+      "post": {
+        "tags": [
+          "accountLockout"
+        ],
+        "operationId": "accountLockout_unlock",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnlockAccountRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountLockoutMessageResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/sessions": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "admin_listSessions",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      }
+    },
+    "/admin/sessions/{id}": {
+      "delete": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "admin_deleteSession",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      }
+    },
+    "/admin/users": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "admin_listUsers",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      }
+    },
+    "/admin/users/{id}": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "admin_getUser",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthUser"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "admin_updateUser",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateUserRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthUser"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "admin_deleteUser",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      }
+    },
+    "/admin/users/{id}/ban": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "admin_banUser",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthUser"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      }
+    },
+    "/admin/users/{id}/impersonate": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "admin_impersonate",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      }
+    },
+    "/admin/users/{id}/unban": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "admin_unbanUser",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthUser"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      }
+    },
+    "/admin/users/{id}/unlock": {
+      "post": {
+        "tags": [
+          "accountLockout"
+        ],
+        "operationId": "accountLockout_adminUnlock",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountLockoutMessageResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      }
+    },
+    "/api-keys": {
+      "get": {
+        "tags": [
+          "apiKeys"
+        ],
+        "operationId": "apiKeys_list",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ApiKeyResponse"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "apiKeys"
+        ],
+        "operationId": "apiKeys_create",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateApiKeyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateApiKeyResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      }
+    },
+    "/api-keys/{id}": {
+      "delete": {
+        "tags": [
+          "apiKeys"
+        ],
+        "operationId": "apiKeys_delete",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      }
+    },
+    "/change-password": {
+      "post": {
+        "tags": [
+          "emailPassword"
+        ],
+        "operationId": "emailPassword_changePassword",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      }
+    },
+    "/config": {
+      "get": {
+        "tags": [
+          "core"
+        ],
+        "operationId": "getConfig",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthConfigResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/forgot-password": {
+      "post": {
+        "tags": [
+          "emailPassword"
+        ],
+        "operationId": "emailPassword_forgotPassword",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ForgotPasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/login": {
+      "post": {
+        "tags": [
+          "emailPassword"
+        ],
+        "operationId": "emailPassword_login",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/logout": {
+      "post": {
+        "tags": [
+          "core"
+        ],
+        "operationId": "logout",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      }
+    },
+    "/magic-link/send": {
+      "post": {
+        "tags": [
+          "magicLink"
+        ],
+        "operationId": "magicLink_send",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MagicLinkSendRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MagicLinkMessageResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/magic-link/verify": {
+      "post": {
+        "tags": [
+          "magicLink"
+        ],
+        "operationId": "magicLink_verify",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MagicLinkVerifyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/me": {
+      "patch": {
+        "tags": [
+          "core"
+        ],
+        "operationId": "updateProfile",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProfileRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthUser"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      }
+    },
+    "/mfa/backup-codes": {
+      "get": {
+        "tags": [
+          "mfa"
+        ],
+        "operationId": "mfa_getBackupCodeCount",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupCodeCountResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      }
+    },
+    "/mfa/backup-codes/regenerate": {
+      "post": {
+        "tags": [
+          "mfa"
+        ],
+        "operationId": "mfa_regenerateBackupCodes",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupCodesResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      }
+    },
+    "/mfa/totp": {
+      "delete": {
+        "tags": [
+          "mfa"
+        ],
+        "operationId": "mfa_disable",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MfaMessageResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      }
+    },
+    "/mfa/totp/confirm": {
+      "post": {
+        "tags": [
+          "mfa"
+        ],
+        "operationId": "mfa_confirm",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmTotpRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MfaMessageResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      }
+    },
+    "/mfa/totp/setup": {
+      "post": {
+        "tags": [
+          "mfa"
+        ],
+        "operationId": "mfa_setup",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetupTotpResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      }
+    },
+    "/mfa/verify": {
+      "post": {
+        "tags": [
+          "mfa"
+        ],
+        "operationId": "mfa_verify",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyMfaRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MfaAuthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/oauth/accounts": {
+      "get": {
+        "tags": [
+          "oauth"
+        ],
+        "operationId": "oauth_accounts",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OAuthAccountResponse"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      }
+    },
+    "/oauth/authorize": {
+      "get": {
+        "tags": [
+          "oauth2Server"
+        ],
+        "operationId": "oauth2Server_authorize",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "oauth2Server"
+        ],
+        "operationId": "oauth2Server_authorizeConsent",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/oauth/device": {
+      "get": {
+        "tags": [
+          "oauth2Server"
+        ],
+        "operationId": "oauth2Server_deviceVerify",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "oauth2Server"
+        ],
+        "operationId": "oauth2Server_deviceApprove",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/oauth/device/code": {
+      "post": {
+        "tags": [
+          "oauth2Server"
+        ],
+        "operationId": "oauth2Server_deviceAuthorize",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/oauth/introspect": {
+      "post": {
+        "tags": [
+          "oauth2Server"
+        ],
+        "operationId": "oauth2Server_introspect",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/oauth/register": {
+      "post": {
+        "tags": [
+          "oauth2Server"
+        ],
+        "operationId": "oauth2Server_register",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/oauth/revoke": {
+      "post": {
+        "tags": [
+          "oauth2Server"
+        ],
+        "operationId": "oauth2Server_revoke",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/oauth/token": {
+      "post": {
+        "tags": [
+          "oauth2Server"
+        ],
+        "operationId": "oauth2Server_token",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/oauth/{provider}": {
+      "delete": {
+        "tags": [
+          "oauth"
+        ],
+        "operationId": "oauth_unlink",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      }
+    },
+    "/oauth/{provider}/authorize": {
+      "get": {
+        "tags": [
+          "oauth"
+        ],
+        "operationId": "oauth_authorize",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/oauth/{provider}/callback": {
+      "post": {
+        "tags": [
+          "oauth"
+        ],
+        "operationId": "oauth_callback",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CallbackBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthAuthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/oauth/{provider}/link": {
+      "post": {
+        "tags": [
+          "oauth"
+        ],
+        "operationId": "oauth_link",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthorizeResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      }
+    },
+    "/passkey/login/begin": {
+      "post": {
+        "tags": [
+          "passkey"
+        ],
+        "operationId": "passkey_loginBegin",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasskeyLoginBeginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/passkey/login/finish": {
+      "post": {
+        "tags": [
+          "passkey"
+        ],
+        "operationId": "passkey_loginFinish",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasskeyLoginFinishRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/passkeys": {
+      "get": {
+        "tags": [
+          "passkey"
+        ],
+        "operationId": "passkey_list",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PasskeyInfo"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      }
+    },
+    "/passkeys/register/begin": {
+      "post": {
+        "tags": [
+          "passkey"
+        ],
+        "operationId": "passkey_registerBegin",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      }
+    },
+    "/passkeys/register/finish": {
+      "post": {
+        "tags": [
+          "passkey"
+        ],
+        "operationId": "passkey_registerFinish",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterFinishRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      }
+    },
+    "/passkeys/{id}": {
+      "delete": {
+        "tags": [
+          "passkey"
+        ],
+        "operationId": "passkey_delete",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      }
+    },
+    "/register": {
+      "post": {
+        "tags": [
+          "emailPassword"
+        ],
+        "operationId": "emailPassword_register",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/resend-verification": {
+      "post": {
+        "tags": [
+          "emailPassword"
+        ],
+        "operationId": "emailPassword_resendVerification",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResendVerificationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/reset-password": {
+      "post": {
+        "tags": [
+          "emailPassword"
+        ],
+        "operationId": "emailPassword_resetPassword",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResetPasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/session": {
+      "get": {
+        "tags": [
+          "core"
+        ],
+        "operationId": "getSession",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthUser"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      }
+    },
+    "/token": {
+      "post": {
+        "tags": [
+          "bearer"
+        ],
+        "operationId": "bearer_getToken",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/token/refresh": {
+      "post": {
+        "tags": [
+          "bearer"
+        ],
+        "operationId": "bearer_refresh",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/token/revoke": {
+      "post": {
+        "tags": [
+          "bearer"
+        ],
+        "operationId": "bearer_revoke",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      }
+    },
+    "/userinfo": {
+      "get": {
+        "tags": [
+          "oidc"
+        ],
+        "operationId": "oidc_userinfo",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      }
+    },
+    "/verify-email": {
+      "post": {
+        "tags": [
+          "emailPassword"
+        ],
+        "operationId": "emailPassword_verifyEmail",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyEmailRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/webhooks": {
+      "get": {
+        "tags": [
+          "webhooks"
+        ],
+        "operationId": "webhooks_list",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/WebhookResponse"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "operationId": "webhooks_create",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWebhookRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      }
+    },
+    "/webhooks/{id}": {
+      "get": {
+        "tags": [
+          "webhooks"
+        ],
+        "operationId": "webhooks_get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookDetailResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "webhooks"
+        ],
+        "operationId": "webhooks_update",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateWebhookRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "webhooks"
+        ],
+        "operationId": "webhooks_delete",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      }
+    },
+    "/webhooks/{id}/test": {
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "operationId": "webhooks_test",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AccountLockoutMessageResponse": {
+        "type": "object",
+        "required": [
+          "message"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "ApiKeyResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "prefix",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "last_used_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "name": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "scopes": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "AuthConfigResponse": {
+        "type": "object",
+        "description": "Server-side auth configuration exposed to frontends via `GET /config`.",
+        "required": [
+          "allow_signups",
+          "require_email_verification"
+        ],
+        "properties": {
+          "allow_signups": {
+            "type": "boolean",
+            "description": "Whether new user registration is allowed."
+          },
+          "require_email_verification": {
+            "type": "boolean",
+            "description": "Whether newly registered users must verify their email before logging in."
+          }
+        }
+      },
+      "AuthMethod": {
+        "type": "string",
+        "enum": [
+          "Session",
+          "Bearer",
+          "ApiKey"
+        ]
+      },
+      "AuthUser": {
+        "type": "object",
+        "required": [
+          "id",
+          "email",
+          "email_verified",
+          "role",
+          "banned",
+          "auth_method"
+        ],
+        "properties": {
+          "auth_method": {
+            "$ref": "#/components/schemas/AuthMethod"
+          },
+          "banned": {
+            "type": "boolean"
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "email": {
+            "type": "string"
+          },
+          "email_verified": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "role": {
+            "type": "string"
+          },
+          "scopes": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "AuthorizeQuery": {
+        "type": "object",
+        "properties": {
+          "redirect_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "AuthorizeResponse": {
+        "type": "object",
+        "required": [
+          "auth_url"
+        ],
+        "properties": {
+          "auth_url": {
+            "type": "string"
+          }
+        }
+      },
+      "BackupCodeCountResponse": {
+        "type": "object",
+        "required": [
+          "remaining"
+        ],
+        "properties": {
+          "remaining": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "BackupCodesResponse": {
+        "type": "object",
+        "required": [
+          "backup_codes"
+        ],
+        "properties": {
+          "backup_codes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "BanRequest": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "until": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "CallbackBody": {
+        "type": "object",
+        "required": [
+          "code",
+          "state"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          }
+        }
+      },
+      "ChangePasswordRequest": {
+        "type": "object",
+        "required": [
+          "current_password",
+          "new_password"
+        ],
+        "properties": {
+          "current_password": {
+            "type": "string"
+          },
+          "new_password": {
+            "type": "string"
+          }
+        }
+      },
+      "ConfirmTotpRequest": {
+        "type": "object",
+        "required": [
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateApiKeyRequest": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "expires_in_days": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "scopes": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "CreateApiKeyResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "key",
+          "name",
+          "prefix",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "scopes": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "CreateWebhookRequest": {
+        "type": "object",
+        "required": [
+          "url",
+          "events"
+        ],
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "secret": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
+      "ForgotPasswordRequest": {
+        "type": "object",
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          }
+        }
+      },
+      "ListSessionsQuery": {
+        "type": "object",
+        "properties": {
+          "page": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "per_page": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "ListUsersQuery": {
+        "type": "object",
+        "properties": {
+          "page": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "per_page": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "search": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "LoginRequest": {
+        "type": "object",
+        "required": [
+          "email",
+          "password"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          },
+          "remember_me": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        }
+      },
+      "MagicLinkMessageResponse": {
+        "type": "object",
+        "required": [
+          "message"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "MagicLinkSendRequest": {
+        "type": "object",
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          }
+        }
+      },
+      "MagicLinkVerifyRequest": {
+        "type": "object",
+        "required": [
+          "token"
+        ],
+        "properties": {
+          "token": {
+            "type": "string"
+          }
+        }
+      },
+      "MessageResponse": {
+        "type": "object",
+        "required": [
+          "message"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "MfaAuthResponse": {
+        "type": "object",
+        "required": [
+          "user_id",
+          "email",
+          "email_verified"
+        ],
+        "properties": {
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "email": {
+            "type": "string"
+          },
+          "email_verified": {
+            "type": "boolean"
+          },
+          "user_id": {
+            "type": "string"
+          }
+        }
+      },
+      "MfaMessageResponse": {
+        "type": "object",
+        "required": [
+          "message"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "OAuthAccountResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "provider",
+          "provider_user_id",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "provider_user_id": {
+            "type": "string"
+          }
+        }
+      },
+      "OAuthAuthResponse": {
+        "type": "object",
+        "required": [
+          "user_id",
+          "email",
+          "email_verified"
+        ],
+        "properties": {
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "email": {
+            "type": "string"
+          },
+          "email_verified": {
+            "type": "boolean"
+          },
+          "user_id": {
+            "type": "string"
+          }
+        }
+      },
+      "PasskeyInfo": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "last_used_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "PasskeyLoginBeginRequest": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "PasskeyLoginFinishRequest": {
+        "type": "object",
+        "required": [
+          "challenge_id",
+          "credential"
+        ],
+        "properties": {
+          "challenge_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "credential": {
+            "type": "object"
+          }
+        }
+      },
+      "RefreshRequest": {
+        "type": "object",
+        "required": [
+          "refresh_token"
+        ],
+        "properties": {
+          "refresh_token": {
+            "type": "string"
+          }
+        }
+      },
+      "RegisterFinishRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "credential"
+        ],
+        "properties": {
+          "credential": {
+            "type": "object"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "RegisterRequest": {
+        "type": "object",
+        "required": [
+          "email",
+          "password"
+        ],
+        "properties": {
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "email": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          }
+        }
+      },
+      "RequestUnlockRequest": {
+        "type": "object",
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          }
+        }
+      },
+      "ResendVerificationRequest": {
+        "type": "object",
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          }
+        }
+      },
+      "ResetPasswordRequest": {
+        "type": "object",
+        "required": [
+          "token",
+          "password"
+        ],
+        "properties": {
+          "password": {
+            "type": "string"
+          },
+          "token": {
+            "type": "string"
+          }
+        }
+      },
+      "RevokeRequest": {
+        "type": "object",
+        "required": [
+          "refresh_token"
+        ],
+        "properties": {
+          "refresh_token": {
+            "type": "string"
+          }
+        }
+      },
+      "SetupTotpResponse": {
+        "type": "object",
+        "required": [
+          "otpauth_url",
+          "secret",
+          "backup_codes"
+        ],
+        "properties": {
+          "backup_codes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "otpauth_url": {
+            "type": "string"
+          },
+          "secret": {
+            "type": "string"
+          }
+        }
+      },
+      "TokenRequest": {
+        "type": "object",
+        "required": [
+          "email",
+          "password"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          },
+          "scope": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional space-separated OAuth2 scopes (e.g. \"read:runs write:runs\")."
+          }
+        }
+      },
+      "TokenResponse": {
+        "type": "object",
+        "required": [
+          "access_token",
+          "refresh_token",
+          "token_type",
+          "expires_in"
+        ],
+        "properties": {
+          "access_token": {
+            "type": "string"
+          },
+          "expires_in": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "refresh_token": {
+            "type": "string"
+          },
+          "token_type": {
+            "type": "string"
+          }
+        }
+      },
+      "UnlockAccountRequest": {
+        "type": "object",
+        "required": [
+          "token"
+        ],
+        "properties": {
+          "token": {
+            "type": "string"
+          }
+        }
+      },
+      "UpdateProfileRequest": {
+        "type": "object",
+        "properties": {
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "UpdateUserRequest": {
+        "type": "object",
+        "properties": {
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "email_verified": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "UpdateWebhookRequest": {
+        "type": "object",
+        "properties": {
+          "active": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "events": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "secret": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "VerifyEmailRequest": {
+        "type": "object",
+        "required": [
+          "token"
+        ],
+        "properties": {
+          "token": {
+            "type": "string"
+          }
+        }
+      },
+      "VerifyMfaRequest": {
+        "type": "object",
+        "required": [
+          "pending_session_id",
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "pending_session_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "WebhookDeliveryResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "event_type",
+          "success",
+          "attempt",
+          "created_at"
+        ],
+        "properties": {
+          "attempt": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "event_type": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "status_code": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
+      "WebhookDetailResponse": {
+        "type": "object",
+        "required": [
+          "webhook",
+          "recent_deliveries"
+        ],
+        "properties": {
+          "recent_deliveries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WebhookDeliveryResponse"
+            }
+          },
+          "webhook": {
+            "$ref": "#/components/schemas/WebhookResponse"
+          }
+        }
+      },
+      "WebhookResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "url",
+          "events",
+          "active",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "id": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
 }

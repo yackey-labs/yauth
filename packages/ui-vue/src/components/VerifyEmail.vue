@@ -17,7 +17,7 @@ const errorMessage = ref("");
 
 onMounted(async () => {
 	try {
-		const result = await client.emailPassword.verify(props.token);
+		const result = await client.emailPassword.verify({ token: props.token });
 		message.value = result.message;
 		state.value = "success";
 		props.onSuccess?.();

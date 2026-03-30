@@ -13,7 +13,8 @@
 			"!**/dist",
 			"!**/build",
 			"!**/*.gen.ts",
-			"!**/bindings"
+			"!**/bindings",
+			"!**/generated.ts"
 		]
 	},
 	"formatter": {

@@ -67,7 +67,7 @@ pub fn core_public_routes() -> Router<YAuthState> {
 }
 
 /// Server-side auth configuration exposed to frontends via `GET /config`.
-#[derive(Serialize, TS)]
+#[derive(Serialize, TS, utoipa::ToSchema)]
 #[ts(export)]
 pub struct AuthConfigResponse {
     /// Whether new user registration is allowed.
@@ -102,7 +102,7 @@ async fn get_session(Extension(user): Extension<AuthUser>) -> Json<serde_json::V
     }))
 }
 
-#[derive(Deserialize, TS)]
+#[derive(Deserialize, TS, utoipa::ToSchema)]
 #[ts(export)]
 pub struct UpdateProfileRequest {
     pub display_name: Option<String>,

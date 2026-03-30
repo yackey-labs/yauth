@@ -20,16 +20,26 @@ export function useAuth() {
 		error.value = null;
 		submitting.value = true;
 		try {
-			const result = await client.emailPassword.login({ email, password });
-			if ("mfa_required" in result && result.mfa_required) {
-				return {
-					mfaRequired: true,
-					pendingSessionId: result.pending_session_id,
-				};
-			}
+			await client.emailPassword.login({ email, password });
 			const u = await refetch();
 			return u ? { user: u } : null;
-		} catch (err) {
+		} catch (err: unknown) {
+			// Check if MFA is required (server returns an error with mfa_required in body)
+			if (
+				err &&
+				typeof err === "object" &&
+				"body" in err &&
+				err.body &&
+				typeof err.body === "object" &&
+				"mfa_required" in err.body &&
+				(err.body as Record<string, unknown>).mfa_required
+			) {
+				const body = err.body as Record<string, unknown>;
+				return {
+					mfaRequired: true,
+					pendingSessionId: body.pending_session_id as string,
+				};
+			}
 			error.value = err instanceof Error ? err.message : String(err);
 			return null;
 		} finally {
@@ -78,7 +88,7 @@ export function useAuth() {
 		error.value = null;
 		submitting.value = true;
 		try {
-			const result = await client.emailPassword.forgotPassword(email);
+			const result = await client.emailPassword.forgotPassword({ email });
 			return result.message;
 		} catch (err) {
 			error.value = err instanceof Error ? err.message : String(err);
@@ -95,7 +105,10 @@ export function useAuth() {
 		error.value = null;
 		submitting.value = true;
 		try {
-			const result = await client.emailPassword.resetPassword(token, password);
+			const result = await client.emailPassword.resetPassword({
+				token,
+				password,
+			});
 			return result.message;
 		} catch (err) {
 			error.value = err instanceof Error ? err.message : String(err);
@@ -112,7 +125,10 @@ export function useAuth() {
 		error.value = null;
 		submitting.value = true;
 		try {
-			await client.emailPassword.changePassword(currentPassword, newPassword);
+			await client.emailPassword.changePassword({
+				current_password: currentPassword,
+				new_password: newPassword,
+			});
 			return true;
 		} catch (err) {
 			error.value = err instanceof Error ? err.message : String(err);

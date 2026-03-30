@@ -20,10 +20,10 @@ const handleSubmit = async (e: Event) => {
 	loading.value = true;
 
 	try {
-		const result = await client.emailPassword.resetPassword(
-			props.token,
-			password.value,
-		);
+		const result = await client.emailPassword.resetPassword({
+			token: props.token,
+			password: password.value,
+		});
 		success.value = result.message;
 		props.onSuccess?.(result.message);
 	} catch (err) {

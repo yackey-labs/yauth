@@ -536,19 +536,19 @@ pub fn calculate_lockout_duration(
 // Request / response types
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize, TS)]
+#[derive(Deserialize, TS, utoipa::ToSchema)]
 #[ts(export)]
 pub struct RequestUnlockRequest {
     pub email: String,
 }
 
-#[derive(Deserialize, TS)]
+#[derive(Deserialize, TS, utoipa::ToSchema)]
 #[ts(export)]
 pub struct UnlockAccountRequest {
     pub token: String,
 }
 
-#[derive(Serialize, TS)]
+#[derive(Serialize, TS, utoipa::ToSchema)]
 #[ts(export)]
 pub struct AccountLockoutMessageResponse {
     pub message: String,

@@ -22,9 +22,9 @@ export const MagicLinkForm: Component<MagicLinkFormProps> = (props) => {
 		try {
 			const form = e.currentTarget as HTMLFormElement;
 			const formData = new FormData(form);
-			const result = await client.magicLink.send(
-				(formData.get("email") as string) || email(),
-			);
+			const result = await client.magicLink.send({
+				email: (formData.get("email") as string) || email(),
+			});
 			setSuccess(result.message);
 			props.onSuccess?.(result.message);
 		} catch (err) {

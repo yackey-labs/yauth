@@ -1,31 +1,28 @@
-use axfetchum::GeneratorConfig;
+use std::path::Path;
 
-fn config() -> GeneratorConfig {
-    // Paths are relative to the crate root (crates/yauth/)
-    // ts-rs generates bindings to ./bindings (crates/yauth/bindings/)
-    // Import prefix: from packages/client/src/ to crates/yauth/bindings/
-    GeneratorConfig {
-        bindings_dir: "../../packages/client/src/bindings".into(),
-        output_path: "../../packages/client/src/generated.ts".into(),
-        factory_name: "createYAuthClient".into(),
-        enable_groups: true,
-        error_class_name: "YAuthError".into(),
-        options_interface_name: "YAuthClientOptions".into(),
-        default_credentials: "include".into(),
-        type_import_prefix: "./bindings".into(),
-        format_command: Some("bun biome check --write --unsafe".into()),
-    }
+fn openapi_output_path() -> &'static str {
+    "../../openapi.json"
 }
 
 #[test]
-fn generate_ts_client() {
-    let routes = yauth::routes_meta::all_route_meta();
-    axfetchum::generate_to_file(&routes, &config()).unwrap();
+fn generate_openapi_spec() {
+    let spec = yauth::routes_meta::build_openapi_spec();
+    let json = serde_json::to_string_pretty(&spec).expect("Failed to serialize OpenAPI spec");
+    std::fs::write(openapi_output_path(), &json).expect("Failed to write openapi.json");
+    println!("OpenAPI spec written to {}", openapi_output_path());
 }
 
 #[test]
-fn check_ts_client_up_to_date() {
-    let routes = yauth::routes_meta::all_route_meta();
-    axfetchum::check(&routes, &config())
-        .expect("Generated TypeScript client is out of date! Run: bun generate");
+fn check_openapi_spec_up_to_date() {
+    let spec = yauth::routes_meta::build_openapi_spec();
+    let expected = serde_json::to_string_pretty(&spec).expect("Failed to serialize OpenAPI spec");
+
+    let path = Path::new(openapi_output_path());
+    let current = std::fs::read_to_string(path).expect("openapi.json not found! Run: bun generate");
+
+    assert_eq!(
+        current.trim(),
+        expected.trim(),
+        "OpenAPI spec is out of date! Run: bun generate"
+    );
 }

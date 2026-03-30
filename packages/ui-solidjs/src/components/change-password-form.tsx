@@ -39,7 +39,10 @@ export const ChangePasswordForm: Component<ChangePasswordFormProps> = (
 		setLoading(true);
 
 		try {
-			await client.emailPassword.changePassword(currentPw, newPw);
+			await client.emailPassword.changePassword({
+				current_password: currentPw,
+				new_password: newPw,
+			});
 			setSuccess(true);
 			setCurrentPassword("");
 			setNewPassword("");

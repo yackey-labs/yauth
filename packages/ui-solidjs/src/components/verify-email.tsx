@@ -18,7 +18,7 @@ export const VerifyEmail: Component<VerifyEmailProps> = (props) => {
 
 	createEffect(async () => {
 		try {
-			const result = await client.emailPassword.verify(props.token);
+			const result = await client.emailPassword.verify({ token: props.token });
 			setMessage(result.message);
 			setState("success");
 			props.onSuccess?.();

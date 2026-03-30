@@ -28,10 +28,10 @@ const handleSubmit = async (e: Event) => {
 	loading.value = true;
 
 	try {
-		await client.emailPassword.changePassword(
-			currentPassword.value,
-			newPassword.value,
-		);
+		await client.emailPassword.changePassword({
+			current_password: currentPassword.value,
+			new_password: newPassword.value,
+		});
 		success.value = true;
 		currentPassword.value = "";
 		newPassword.value = "";

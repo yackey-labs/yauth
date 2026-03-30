@@ -23,12 +23,12 @@ export const MfaChallenge: Component<MfaChallengeProps> = (props) => {
 		try {
 			const form = e.currentTarget as HTMLFormElement;
 			const formData = new FormData(form);
-			await client.mfa.verify(
-				props.pendingSessionId,
-				(formData.get("code") as string) || code(),
-			);
+			await client.mfa.verify({
+				pending_session_id: props.pendingSessionId,
+				code: (formData.get("code") as string) || code(),
+			});
 			const session = await client.getSession();
-			props.onSuccess?.(session.user);
+			props.onSuccess?.(session as unknown as AuthUser);
 		} catch (err) {
 			const error = err instanceof Error ? err : new Error(String(err));
 			setError(error.message);

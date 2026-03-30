@@ -1,419 +1,248 @@
-import type { AuthUser } from "@yackey-labs/yauth-shared";
-
 export type { AuthSession, AuthUser } from "@yackey-labs/yauth-shared";
+// Re-export all generated types and functions for direct use
+export * from "./generated";
+export {
+	configureClient,
+	type YAuthClientOptions,
+	YAuthError,
+} from "./mutator";
 
-export interface YAuthClientOptions {
-	/** Base URL for auth endpoints (e.g., '/api/auth' or 'https://api.example.com/api/auth') */
-	baseUrl: string;
-	/** Custom fetch function (default: window.fetch) */
-	fetch?: typeof fetch;
-	/** Include credentials in requests (default: true for cookies) */
-	credentials?: RequestCredentials;
-}
+import type {
+	BanRequest,
+	CallbackBody,
+	ChangePasswordRequest,
+	ConfirmTotpRequest,
+	CreateApiKeyRequest,
+	CreateWebhookRequest,
+	ForgotPasswordRequest,
+	LoginRequest,
+	MagicLinkSendRequest,
+	MagicLinkVerifyRequest,
+	PasskeyLoginBeginRequest,
+	PasskeyLoginFinishRequest,
+	RefreshRequest,
+	RegisterFinishRequest,
+	RegisterRequest,
+	RequestUnlockRequest,
+	ResendVerificationRequest,
+	ResetPasswordRequest,
+	RevokeRequest,
+	TokenRequest,
+	UnlockAccountRequest,
+	UpdateProfileRequest,
+	UpdateUserRequest,
+	UpdateWebhookRequest,
+	VerifyEmailRequest,
+	VerifyMfaRequest,
+} from "./generated";
+import {
+	accountLockoutAdminUnlock,
+	accountLockoutRequestUnlock,
+	accountLockoutUnlock,
+	adminBanUser,
+	adminDeleteSession,
+	adminDeleteUser,
+	adminGetUser,
+	adminImpersonate,
+	adminListSessions,
+	adminListUsers,
+	adminUnbanUser,
+	adminUpdateUser,
+	apiKeysCreate,
+	apiKeysDelete,
+	apiKeysList,
+	bearerGetToken,
+	bearerRefresh,
+	bearerRevoke,
+	emailPasswordChangePassword,
+	emailPasswordForgotPassword,
+	emailPasswordLogin,
+	emailPasswordRegister,
+	emailPasswordResendVerification,
+	emailPasswordResetPassword,
+	emailPasswordVerifyEmail,
+	getConfig,
+	getOauthAuthorizeUrl,
+	getSession,
+	logout,
+	magicLinkSend,
+	magicLinkVerify,
+	mfaConfirm,
+	mfaDisable,
+	mfaGetBackupCodeCount,
+	mfaRegenerateBackupCodes,
+	mfaSetup,
+	mfaVerify,
+	oauth2ServerAuthorize,
+	oauth2ServerAuthorizeConsent,
+	oauth2ServerDeviceApprove,
+	oauth2ServerDeviceAuthorize,
+	oauth2ServerDeviceVerify,
+	oauth2ServerIntrospect,
+	oauth2ServerMetadata,
+	oauth2ServerRegister,
+	oauth2ServerRevoke,
+	oauth2ServerToken,
+	oauthAccounts,
+	oauthCallback,
+	oauthLink,
+	oauthUnlink,
+	oidcJwks,
+	oidcOpenidConfiguration,
+	oidcUserinfo,
+	passkeyDelete,
+	passkeyList,
+	passkeyLoginBegin,
+	passkeyLoginFinish,
+	passkeyRegisterBegin,
+	passkeyRegisterFinish,
+	updateProfile,
+	webhooksCreate,
+	webhooksDelete,
+	webhooksGet,
+	webhooksList,
+	webhooksTest,
+	webhooksUpdate,
+} from "./generated";
+import { configureClient, type YAuthClientOptions } from "./mutator";
 
-type RequestOptions = {
-	method?: string;
-	body?: unknown;
-	headers?: Record<string, string>;
-};
-
-function createClient(opts: YAuthClientOptions) {
-	const { baseUrl, credentials = "include" } = opts;
-	const fetchFn = opts.fetch ?? globalThis.fetch;
-
-	async function request<T>(
-		path: string,
-		options: RequestOptions = {},
-	): Promise<T> {
-		const { method = "GET", body, headers = {} } = options;
-
-		const response = await fetchFn(`${baseUrl}${path}`, {
-			method,
-			credentials,
-			headers: {
-				"Content-Type": "application/json",
-				...headers,
-			},
-			body: body ? JSON.stringify(body) : undefined,
-		});
-
-		if (!response.ok) {
-			const text = await response.text();
-			let error: string;
-			try {
-				const json = JSON.parse(text);
-				error = json.error ?? json.message ?? text;
-			} catch {
-				error = text;
-			}
-			throw new YAuthError(error, response.status);
-		}
-
-		const text = await response.text();
-		return (text ? JSON.parse(text) : undefined) as T;
-	}
+/**
+ * Create and configure a yauth client with a backward-compatible API shape.
+ *
+ * @example
+ * ```ts
+ * const client = createYAuthClient({ baseUrl: "/api/auth" });
+ * const session = await client.getSession();
+ * ```
+ */
+export function createYAuthClient(options: YAuthClientOptions) {
+	configureClient(options);
 
 	return {
-		/** Core auth operations */
-		getSession: () => request<{ user: AuthUser }>("/session"),
+		getConfig: () => getConfig(),
+		getSession: () => getSession(),
+		logout: () => logout(),
+		updateProfile: (body: UpdateProfileRequest) => updateProfile(body),
 
-		logout: () => request<{ success: boolean }>("/logout", { method: "POST" }),
-
-		updateProfile: (data: { display_name?: string }) =>
-			request<{ user: AuthUser }>("/me", { method: "PATCH", body: data }),
-
-		/** Email/password operations */
 		emailPassword: {
-			register: (data: {
-				email: string;
-				password: string;
-				display_name?: string;
-			}) =>
-				request<{ message: string }>("/register", {
-					method: "POST",
-					body: data,
-				}),
-
-			login: (data: { email: string; password: string }) =>
-				request<
-					| {
-							user_id: string;
-							email: string;
-							display_name: string | null;
-							email_verified: boolean;
-					  }
-					| { mfa_required: true; pending_session_id: string }
-				>("/login", { method: "POST", body: data }),
-
-			verify: (token: string) =>
-				request<{ message: string }>("/verify-email", {
-					method: "POST",
-					body: { token },
-				}),
-
-			resendVerification: (email: string) =>
-				request<{ message: string }>("/resend-verification", {
-					method: "POST",
-					body: { email },
-				}),
-
-			forgotPassword: (email: string) =>
-				request<{ message: string }>("/forgot-password", {
-					method: "POST",
-					body: { email },
-				}),
-
-			resetPassword: (token: string, password: string) =>
-				request<{ message: string }>("/reset-password", {
-					method: "POST",
-					body: { token, password },
-				}),
-
-			changePassword: (currentPassword: string, newPassword: string) =>
-				request<{ message: string }>("/change-password", {
-					method: "POST",
-					body: {
-						current_password: currentPassword,
-						new_password: newPassword,
-					},
-				}),
+			register: (body: RegisterRequest) => emailPasswordRegister(body),
+			login: (body: LoginRequest) => emailPasswordLogin(body),
+			verify: (body: VerifyEmailRequest) => emailPasswordVerifyEmail(body),
+			verifyEmail: (body: VerifyEmailRequest) => emailPasswordVerifyEmail(body),
+			resendVerification: (body: ResendVerificationRequest) =>
+				emailPasswordResendVerification(body),
+			forgotPassword: (body: ForgotPasswordRequest) =>
+				emailPasswordForgotPassword(body),
+			resetPassword: (body: ResetPasswordRequest) =>
+				emailPasswordResetPassword(body),
+			changePassword: (body: ChangePasswordRequest) =>
+				emailPasswordChangePassword(body),
 		},
 
-		/** Passkey (WebAuthn) operations */
 		passkey: {
-			loginBegin: (email?: string) =>
-				request<{ challenge_id: string; options: unknown }>(
-					"/passkey/login/begin",
-					{
-						method: "POST",
-						body: email ? { email } : {},
-					},
-				),
-
-			loginFinish: (challenge_id: string, credential: unknown) =>
-				request<{
-					user_id: string;
-					email: string;
-					display_name: string | null;
-					email_verified: boolean;
-				}>("/passkey/login/finish", {
-					method: "POST",
-					body: { challenge_id, credential },
-				}),
-
-			registerBegin: () =>
-				request<unknown>("/passkeys/register/begin", {
-					method: "POST",
-				}),
-
-			registerFinish: (credential: unknown, name: string) =>
-				request<void>("/passkeys/register/finish", {
-					method: "POST",
-					body: { credential, name },
-				}),
-
-			list: () =>
-				request<
-					Array<{
-						id: string;
-						name: string;
-						created_at: string;
-						last_used_at: string | null;
-					}>
-				>("/passkeys"),
-
-			delete: (id: string) =>
-				request<{ message: string }>(`/passkeys/${id}`, {
-					method: "DELETE",
-				}),
+			loginBegin: (body: PasskeyLoginBeginRequest) => passkeyLoginBegin(body),
+			loginFinish: (body: PasskeyLoginFinishRequest) =>
+				passkeyLoginFinish(body),
+			registerBegin: () => passkeyRegisterBegin(),
+			registerFinish: (body: RegisterFinishRequest) =>
+				passkeyRegisterFinish(body),
+			list: () => passkeyList(),
+			delete: (id: string) => passkeyDelete(id),
 		},
 
-		/** MFA (TOTP + backup codes) operations */
 		mfa: {
-			setup: () =>
-				request<{
-					otpauth_url: string;
-					secret: string;
-					backup_codes: string[];
-				}>("/mfa/totp/setup", { method: "POST" }),
-
-			confirm: (code: string) =>
-				request<{ message: string }>("/mfa/totp/confirm", {
-					method: "POST",
-					body: { code },
-				}),
-
-			verify: (pending_session_id: string, code: string) =>
-				request<{
-					user_id: string;
-					email: string;
-					display_name: string | null;
-					email_verified: boolean;
-				}>("/mfa/verify", {
-					method: "POST",
-					body: { pending_session_id, code },
-				}),
-
-			disable: () =>
-				request<{ message: string }>("/mfa/totp", { method: "DELETE" }),
-
-			getBackupCodeCount: () =>
-				request<{ remaining: number }>("/mfa/backup-codes"),
-
-			regenerateBackupCodes: () =>
-				request<{ backup_codes: string[] }>("/mfa/backup-codes/regenerate", {
-					method: "POST",
-				}),
+			setup: () => mfaSetup(),
+			confirm: (body: ConfirmTotpRequest) => mfaConfirm(body),
+			disable: () => mfaDisable(),
+			verify: (body: VerifyMfaRequest) => mfaVerify(body),
+			getBackupCodeCount: () => mfaGetBackupCodeCount(),
+			regenerateBackupCodes: () => mfaRegenerateBackupCodes(),
 		},
 
-		/** OAuth operations */
 		oauth: {
-			authorize: (provider: string, redirect_url?: string) => {
-				const params = redirect_url
-					? `?redirect_url=${encodeURIComponent(redirect_url)}`
-					: "";
-				window.location.href = `${baseUrl}/oauth/${provider}/authorize${params}`;
+			authorize: (
+				provider: string,
+				query?: { redirect_url?: string | null },
+			) => {
+				let url = `${options.baseUrl}${getOauthAuthorizeUrl(provider)}`;
+				if (query?.redirect_url) {
+					url += `?redirect_url=${encodeURIComponent(query.redirect_url)}`;
+				}
+				return url;
 			},
-
-			callback: (provider: string, code: string, state: string) =>
-				request<{
-					user_id: string;
-					email: string;
-					display_name: string | null;
-					email_verified: boolean;
-				}>(`/oauth/${provider}/callback`, {
-					method: "POST",
-					body: { code, state },
-				}),
-
-			accounts: () =>
-				request<
-					Array<{
-						id: string;
-						provider: string;
-						provider_user_id: string;
-						created_at: string;
-					}>
-				>("/oauth/accounts"),
-
-			unlink: (provider: string) =>
-				request<{ message: string }>(`/oauth/${provider}`, {
-					method: "DELETE",
-				}),
-
-			link: (provider: string) =>
-				request<{ authorize_url: string }>(`/oauth/${provider}/link`, {
-					method: "POST",
-				}),
+			callback: (provider: string, body: CallbackBody) =>
+				oauthCallback(provider, body),
+			accounts: () => oauthAccounts(),
+			unlink: (provider: string) => oauthUnlink(provider),
+			link: (provider: string) => oauthLink(provider),
 		},
 
-		/** Magic link (passwordless email login) */
-		magicLink: {
-			send: (email: string) =>
-				request<{ message: string }>("/magic-link/send", {
-					method: "POST",
-					body: { email },
-				}),
-
-			verify: (token: string) =>
-				request<{
-					user_id: string;
-					email: string;
-					display_name: string | null;
-					email_verified: boolean;
-					is_new_user: boolean;
-				}>("/magic-link/verify", {
-					method: "POST",
-					body: { token },
-				}),
-		},
-
-		/** Bearer token operations (for mobile/CLI/MCP) */
 		bearer: {
-			getToken: (email: string, password: string) =>
-				request<{
-					access_token: string;
-					refresh_token: string;
-					token_type: string;
-					expires_in: number;
-				}>("/token", { method: "POST", body: { email, password } }),
-
-			refresh: (refresh_token: string) =>
-				request<{
-					access_token: string;
-					refresh_token: string;
-					token_type: string;
-					expires_in: number;
-				}>("/token/refresh", { method: "POST", body: { refresh_token } }),
-
-			revoke: (refresh_token: string) =>
-				request<{ success: boolean }>("/token/revoke", {
-					method: "POST",
-					body: { refresh_token },
-				}),
+			getToken: (body: TokenRequest) => bearerGetToken(body),
+			refresh: (body: RefreshRequest) => bearerRefresh(body),
+			revoke: (body: RevokeRequest) => bearerRevoke(body),
 		},
 
-		/** API key operations */
 		apiKeys: {
-			create: (data: {
-				name: string;
-				scopes?: string[];
-				expires_in_days?: number;
-			}) =>
-				request<{
-					id: string;
-					key: string;
-					name: string;
-					prefix: string;
-					scopes: string[] | null;
-					expires_at: string | null;
-					created_at: string;
-				}>("/api-keys", { method: "POST", body: data }),
-
-			list: () =>
-				request<
-					Array<{
-						id: string;
-						name: string;
-						prefix: string;
-						scopes: string[] | null;
-						last_used_at: string | null;
-						expires_at: string | null;
-						created_at: string;
-					}>
-				>("/api-keys"),
-
-			delete: (id: string) =>
-				request<void>(`/api-keys/${id}`, { method: "DELETE" }),
+			create: (body: CreateApiKeyRequest) => apiKeysCreate(body),
+			list: () => apiKeysList(),
+			delete: (id: string) => apiKeysDelete(id),
 		},
 
-		/** Admin operations (requires admin role) */
+		magicLink: {
+			send: (body: MagicLinkSendRequest) => magicLinkSend(body),
+			verify: (body: MagicLinkVerifyRequest) => magicLinkVerify(body),
+		},
+
 		admin: {
-			listUsers: (params?: {
-				page?: number;
-				per_page?: number;
-				search?: string;
-			}) => {
-				const query = new URLSearchParams();
-				if (params?.page) query.set("page", String(params.page));
-				if (params?.per_page) query.set("per_page", String(params.per_page));
-				if (params?.search) query.set("search", params.search);
-				const qs = query.toString();
-				return request<{
-					users: AuthUser[];
-					total: number;
-					page: number;
-					per_page: number;
-				}>(`/admin/users${qs ? `?${qs}` : ""}`);
-			},
+			listUsers: () => adminListUsers(),
+			getUser: (id: string) => adminGetUser(id),
+			updateUser: (id: string, body: UpdateUserRequest) =>
+				adminUpdateUser(id, body),
+			deleteUser: (id: string) => adminDeleteUser(id),
+			banUser: (id: string, body: BanRequest) => adminBanUser(id, body),
+			unbanUser: (id: string) => adminUnbanUser(id),
+			impersonate: (id: string) => adminImpersonate(id),
+			listSessions: () => adminListSessions(),
+			deleteSession: (id: string) => adminDeleteSession(id),
+		},
 
-			getUser: (id: string) => request<AuthUser>(`/admin/users/${id}`),
+		oauth2Server: {
+			metadata: () => oauth2ServerMetadata(),
+			authorize: () => oauth2ServerAuthorize(),
+			authorizeConsent: () => oauth2ServerAuthorizeConsent(),
+			token: () => oauth2ServerToken(),
+			introspect: () => oauth2ServerIntrospect(),
+			revoke: () => oauth2ServerRevoke(),
+			register: () => oauth2ServerRegister(),
+			deviceAuthorize: () => oauth2ServerDeviceAuthorize(),
+			deviceVerify: () => oauth2ServerDeviceVerify(),
+			deviceApprove: () => oauth2ServerDeviceApprove(),
+		},
 
-			updateUser: (
-				id: string,
-				data: Partial<{
-					role: string;
-					display_name: string;
-					email_verified: boolean;
-				}>,
-			) =>
-				request<AuthUser>(`/admin/users/${id}`, { method: "PUT", body: data }),
+		webhooks: {
+			create: (body: CreateWebhookRequest) => webhooksCreate(body),
+			list: () => webhooksList(),
+			get: (id: string) => webhooksGet(id),
+			update: (id: string, body: UpdateWebhookRequest) =>
+				webhooksUpdate(id, body),
+			delete: (id: string) => webhooksDelete(id),
+			test: (id: string) => webhooksTest(id),
+		},
 
-			deleteUser: (id: string) =>
-				request<void>(`/admin/users/${id}`, {
-					method: "DELETE",
-				}),
+		accountLockout: {
+			requestUnlock: (body: RequestUnlockRequest) =>
+				accountLockoutRequestUnlock(body),
+			unlock: (body: UnlockAccountRequest) => accountLockoutUnlock(body),
+			adminUnlock: (id: string) => accountLockoutAdminUnlock(id),
+		},
 
-			banUser: (id: string, data?: { reason?: string; until?: string }) =>
-				request<AuthUser>(`/admin/users/${id}/ban`, {
-					method: "POST",
-					body: data ?? {},
-				}),
-
-			unbanUser: (id: string) =>
-				request<AuthUser>(`/admin/users/${id}/unban`, {
-					method: "POST",
-				}),
-
-			impersonate: (id: string) =>
-				request<{ token: string; session_id: string; expires_at: string }>(
-					`/admin/users/${id}/impersonate`,
-					{ method: "POST" },
-				),
-
-			listSessions: (params?: { page?: number; per_page?: number }) => {
-				const query = new URLSearchParams();
-				if (params?.page) query.set("page", String(params.page));
-				if (params?.per_page) query.set("per_page", String(params.per_page));
-				const qs = query.toString();
-				return request<{
-					sessions: unknown[];
-					total: number;
-					page: number;
-					per_page: number;
-				}>(`/admin/sessions${qs ? `?${qs}` : ""}`);
-			},
-
-			deleteSession: (id: string) =>
-				request<void>(`/admin/sessions/${id}`, {
-					method: "DELETE",
-				}),
+		oidc: {
+			openidConfiguration: () => oidcOpenidConfiguration(),
+			jwks: () => oidcJwks(),
+			userinfo: () => oidcUserinfo(),
 		},
 	};
-}
-
-export class YAuthError extends Error {
-	constructor(
-		message: string,
-		public status: number,
-	) {
-		super(message);
-		this.name = "YAuthError";
-	}
-}
-
-export function createYAuthClient(options: YAuthClientOptions) {
-	return createClient(options);
 }
 
 export type YAuthClient = ReturnType<typeof createYAuthClient>;

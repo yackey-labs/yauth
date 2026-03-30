@@ -208,7 +208,7 @@ struct Claims {
 // Request / Response types
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize, TS)]
+#[derive(Deserialize, TS, utoipa::ToSchema)]
 #[ts(export)]
 pub struct TokenRequest {
     pub email: String,
@@ -218,19 +218,19 @@ pub struct TokenRequest {
     pub scope: Option<String>,
 }
 
-#[derive(Deserialize, TS)]
+#[derive(Deserialize, TS, utoipa::ToSchema)]
 #[ts(export)]
 pub struct RefreshRequest {
     pub refresh_token: String,
 }
 
-#[derive(Deserialize, TS)]
+#[derive(Deserialize, TS, utoipa::ToSchema)]
 #[ts(export)]
 pub struct RevokeRequest {
     pub refresh_token: String,
 }
 
-#[derive(Serialize, TS)]
+#[derive(Serialize, TS, utoipa::ToSchema)]
 #[ts(export)]
 pub struct TokenResponse {
     pub access_token: String,

@@ -54,7 +54,7 @@ impl YAuthPlugin for EmailPasswordPlugin {
 
 use crate::auth::session::session_set_cookie;
 
-#[derive(Deserialize, TS)]
+#[derive(Deserialize, TS, utoipa::ToSchema)]
 #[ts(export)]
 pub struct RegisterRequest {
     pub email: String,
@@ -62,7 +62,7 @@ pub struct RegisterRequest {
     pub display_name: Option<String>,
 }
 
-#[derive(Deserialize, TS)]
+#[derive(Deserialize, TS, utoipa::ToSchema)]
 #[ts(export)]
 pub struct LoginRequest {
     pub email: String,
@@ -71,38 +71,38 @@ pub struct LoginRequest {
     pub remember_me: Option<bool>,
 }
 
-#[derive(Serialize, TS)]
+#[derive(Serialize, TS, utoipa::ToSchema)]
 #[ts(export)]
 pub struct MessageResponse {
     pub message: String,
 }
 
-#[derive(Deserialize, TS)]
+#[derive(Deserialize, TS, utoipa::ToSchema)]
 #[ts(export)]
 pub struct VerifyEmailRequest {
     pub token: String,
 }
 
-#[derive(Deserialize, TS)]
+#[derive(Deserialize, TS, utoipa::ToSchema)]
 #[ts(export)]
 pub struct ResendVerificationRequest {
     pub email: String,
 }
 
-#[derive(Deserialize, TS)]
+#[derive(Deserialize, TS, utoipa::ToSchema)]
 #[ts(export)]
 pub struct ForgotPasswordRequest {
     pub email: String,
 }
 
-#[derive(Deserialize, TS)]
+#[derive(Deserialize, TS, utoipa::ToSchema)]
 #[ts(export)]
 pub struct ResetPasswordRequest {
     pub token: String,
     pub password: String,
 }
 
-#[derive(Deserialize, TS)]
+#[derive(Deserialize, TS, utoipa::ToSchema)]
 #[ts(export)]
 pub struct ChangePasswordRequest {
     pub current_password: String,

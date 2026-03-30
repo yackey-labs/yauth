@@ -19,20 +19,28 @@ const error = ref<string | null>(null);
 const loading = ref(false);
 
 const handleLogin = async () => {
-	const beginResult = await client.passkey.loginBegin(props.email || undefined);
-	const rcr = beginResult.options as { publicKey: unknown };
+	const beginResult = await client.passkey.loginBegin({
+		email: props.email || undefined,
+	});
+	const rcr = beginResult as unknown as {
+		options: { publicKey: unknown };
+		challenge_id: string;
+	};
 	const credential = await startAuthentication({
-		optionsJSON: rcr.publicKey as Parameters<
+		optionsJSON: rcr.options.publicKey as Parameters<
 			typeof startAuthentication
 		>[0]["optionsJSON"],
 	});
-	await client.passkey.loginFinish(beginResult.challenge_id, credential);
+	await client.passkey.loginFinish({
+		challenge_id: rcr.challenge_id,
+		credential: credential as unknown as Record<string, unknown>,
+	});
 	const session = await client.getSession();
-	props.onSuccess?.(session.user);
+	props.onSuccess?.(session as unknown as AuthUser);
 };
 
 const handleRegister = async () => {
-	const ccr = (await client.passkey.registerBegin()) as {
+	const ccr = (await client.passkey.registerBegin()) as unknown as {
 		publicKey: unknown;
 	};
 	const credential = await startRegistration({
@@ -40,7 +48,10 @@ const handleRegister = async () => {
 			typeof startRegistration
 		>[0]["optionsJSON"],
 	});
-	await client.passkey.registerFinish(credential, "Passkey");
+	await client.passkey.registerFinish({
+		credential: credential as unknown as Record<string, unknown>,
+		name: "Passkey",
+	});
 	props.onSuccess?.(undefined as unknown as AuthUser);
 };
 

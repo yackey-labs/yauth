@@ -26,18 +26,14 @@ export const LoginForm: Component<LoginFormProps> = (props) => {
 		try {
 			const form = e.currentTarget as HTMLFormElement;
 			const formData = new FormData(form);
-			const result = await client.emailPassword.login({
+			await client.emailPassword.login({
 				email: (formData.get("email") as string) || email(),
 				password: (formData.get("password") as string) || password(),
 			});
 
-			if ("mfa_required" in result && result.mfa_required) {
-				props.onMfaRequired?.(result.pending_session_id);
-			} else {
-				// Session cookie is set — refetch and await so reactive store updates
-				const user = await refetch();
-				props.onSuccess?.(user!);
-			}
+			// Session cookie is set — refetch and await so reactive store updates
+			const user = await refetch();
+			props.onSuccess?.(user!);
 		} catch (err) {
 			const error = err instanceof Error ? err : new Error(String(err));
 			setError(error.message);

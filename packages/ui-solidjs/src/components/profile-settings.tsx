@@ -98,9 +98,9 @@ export const ProfileSettings: Component = () => {
 		try {
 			const form = e.currentTarget as HTMLFormElement;
 			const formData = new FormData(form);
-			await client.mfa.confirm(
-				(formData.get("mfa_code") as string) || mfaCode(),
-			);
+			await client.mfa.confirm({
+				code: (formData.get("mfa_code") as string) || mfaCode(),
+			});
 			setMfaStep("done");
 		} catch (err) {
 			const error = err instanceof Error ? err : new Error(String(err));

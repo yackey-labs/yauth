@@ -25,7 +25,7 @@ export const YAuthProvider: ParentComponent<{ client: YAuthClient }> = (
 	const [session, { refetch }] = createResource(async () => {
 		try {
 			const result = await props.client.getSession();
-			return result.user;
+			return result as unknown as AuthUser;
 		} catch {
 			return null;
 		}

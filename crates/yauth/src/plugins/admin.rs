@@ -331,7 +331,7 @@ impl YAuthPlugin for AdminPlugin {
 // Request / query types
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize, TS)]
+#[derive(Deserialize, TS, utoipa::ToSchema)]
 #[ts(export)]
 pub struct ListUsersQuery {
     pub page: Option<u64>,
@@ -339,14 +339,14 @@ pub struct ListUsersQuery {
     pub search: Option<String>,
 }
 
-#[derive(Deserialize, TS)]
+#[derive(Deserialize, TS, utoipa::ToSchema)]
 #[ts(export)]
 pub struct ListSessionsQuery {
     pub page: Option<u64>,
     pub per_page: Option<u64>,
 }
 
-#[derive(Deserialize, TS)]
+#[derive(Deserialize, TS, utoipa::ToSchema)]
 #[ts(export)]
 pub struct UpdateUserRequest {
     pub display_name: Option<String>,
@@ -354,7 +354,7 @@ pub struct UpdateUserRequest {
     pub email_verified: Option<bool>,
 }
 
-#[derive(Deserialize, TS)]
+#[derive(Deserialize, TS, utoipa::ToSchema)]
 #[ts(export)]
 pub struct BanRequest {
     pub reason: Option<String>,

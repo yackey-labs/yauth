@@ -108,7 +108,7 @@ const handleMfaConfirm = async (e: Event) => {
 	mfaLoading.value = true;
 
 	try {
-		await client.mfa.confirm(mfaCode.value);
+		await client.mfa.confirm({ code: mfaCode.value });
 		mfaStep.value = "done";
 	} catch (err) {
 		const e = err instanceof Error ? err : new Error(String(err));

@@ -111,15 +111,25 @@ Authenticated user is injected as `Extension<AuthUser>` on the request.
 
 ## Generated TypeScript Client
 
-This project uses `axfetchum` to auto-generate `@yackey-labs/yauth-client` from Rust types + route metadata.
+This project uses `utoipa` (OpenAPI 3.1 spec generation) + `orval` (TypeScript client generation from OpenAPI) to auto-generate `@yackey-labs/yauth-client`.
+
+**Pipeline:** Rust types derive `ToSchema` → `routes_meta.rs` builds OpenAPI spec programmatically → `openapi.json` → orval generates `packages/client/src/generated.ts` → `packages/client/src/index.ts` wraps generated functions into backward-compatible `createYAuthClient()` factory.
+
+**Key files:**
+- `crates/yauth/src/routes_meta.rs` — OpenAPI spec builder (paths + schemas per feature flag)
+- `openapi.json` — generated OpenAPI 3.1 spec (committed)
+- `orval.config.ts` — orval configuration
+- `packages/client/src/mutator.ts` — custom fetch wrapper (credentials, error handling, bearer tokens)
+- `packages/client/src/generated.ts` — orval-generated functions (committed, do not edit manually)
+- `packages/client/src/index.ts` — `createYAuthClient()` wrapper providing grouped API
 
 **When modifying any API endpoint or request/response type:**
 1. Update the route metadata in `crates/yauth/src/routes_meta.rs`
-2. Ensure request/response types have `#[derive(TS)] #[ts(export)]`
-3. Run `bun generate` to regenerate the TypeScript client
-4. Commit the regenerated `packages/client/src/generated.ts` alongside Rust changes
+2. Ensure request/response types have `#[derive(TS, ToSchema)] #[ts(export)]`
+3. Run `bun generate` to regenerate `openapi.json` and the TypeScript client
+4. Commit the regenerated `openapi.json` and `packages/client/src/generated.ts` alongside Rust changes
 
-**CI check:** `bun generate:check` (part of `bun validate:ci`) fails if the generated client is out of date.
+**CI check:** `bun generate:check` (part of `bun validate:ci`) fails if the OpenAPI spec is out of date.
 
 ## Versioning
 

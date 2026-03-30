@@ -31,8 +31,8 @@ export const YAuthPlugin = {
 			loading.value = true;
 			try {
 				const result = await options.client.getSession();
-				user.value = result.user;
-				return result.user;
+				user.value = result as unknown as AuthUser;
+				return result as unknown as AuthUser;
 			} catch {
 				user.value = null;
 				return null;

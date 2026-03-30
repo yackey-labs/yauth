@@ -23,10 +23,10 @@ export const ResetPasswordForm: Component<ResetPasswordFormProps> = (props) => {
 		try {
 			const form = e.currentTarget as HTMLFormElement;
 			const formData = new FormData(form);
-			const result = await client.emailPassword.resetPassword(
-				props.token,
-				(formData.get("password") as string) || password(),
-			);
+			const result = await client.emailPassword.resetPassword({
+				token: props.token,
+				password: (formData.get("password") as string) || password(),
+			});
 			setSuccess(result.message);
 			props.onSuccess?.(result.message);
 		} catch (err) {

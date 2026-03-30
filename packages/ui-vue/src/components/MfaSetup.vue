@@ -41,7 +41,7 @@ const handleConfirm = async (e: Event) => {
 	loading.value = true;
 
 	try {
-		await client.mfa.confirm(code.value);
+		await client.mfa.confirm({ code: code.value });
 		step.value = "done";
 		props.onComplete?.(backupCodes.value);
 	} catch (err) {

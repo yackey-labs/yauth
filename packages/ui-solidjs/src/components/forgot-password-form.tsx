@@ -24,9 +24,9 @@ export const ForgotPasswordForm: Component<ForgotPasswordFormProps> = (
 		try {
 			const form = e.currentTarget as HTMLFormElement;
 			const formData = new FormData(form);
-			const result = await client.emailPassword.forgotPassword(
-				(formData.get("email") as string) || email(),
-			);
+			const result = await client.emailPassword.forgotPassword({
+				email: (formData.get("email") as string) || email(),
+			});
 			setSuccess(result.message);
 			props.onSuccess?.(result.message);
 		} catch (err) {

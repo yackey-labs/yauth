@@ -44,7 +44,9 @@ export const MfaSetup: Component<MfaSetupProps> = (props) => {
 		try {
 			const form = e.currentTarget as HTMLFormElement;
 			const formData = new FormData(form);
-			await client.mfa.confirm((formData.get("code") as string) || code());
+			await client.mfa.confirm({
+				code: (formData.get("code") as string) || code(),
+			});
 			setStep("done");
 			props.onComplete?.(backupCodes());
 		} catch (err) {

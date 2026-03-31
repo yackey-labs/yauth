@@ -53,11 +53,11 @@ async fn db_insert_api_key(
 }
 
 async fn db_list_api_keys_by_user(conn: &mut Conn, user_id: Uuid) -> DbResult<Vec<ApiKey>> {
+    // No pagination — API key count per user is naturally small
     yauth_api_keys::table
         .filter(yauth_api_keys::user_id.eq(user_id))
         .order(yauth_api_keys::created_at.desc())
         .select(ApiKey::as_select())
-        .limit(100)
         .load(conn)
         .await
         .map_err(|e| e.to_string())

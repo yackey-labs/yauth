@@ -132,7 +132,9 @@ impl YAuth {
             middleware::auth_middleware,
         ));
 
-        public_router.merge(protected_router)
+        public_router
+            .merge(protected_router)
+            .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024)) // 1 MB
     }
 
     pub fn state(&self) -> &YAuthState {

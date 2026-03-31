@@ -64,7 +64,6 @@ lettre = { workspace = true }
 reqwest = { workspace = true }
 
 async-trait = { workspace = true }
-ts-rs = { workspace = true }
 utoipa = { workspace = true, optional = true }
 
 # Feature-gated

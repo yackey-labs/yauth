@@ -7,7 +7,6 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
-use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::auth::session::session_set_cookie;
@@ -190,23 +189,20 @@ mod diesel_db {
 // Types
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize, TS)]
+#[derive(Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[ts(export)]
 pub struct MagicLinkSendRequest {
     pub email: String,
 }
 
-#[derive(Deserialize, TS)]
+#[derive(Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[ts(export)]
 pub struct MagicLinkVerifyRequest {
     pub token: String,
 }
 
-#[derive(Serialize, TS)]
+#[derive(Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[ts(export)]
 pub struct MagicLinkMessageResponse {
     pub message: String,
 }

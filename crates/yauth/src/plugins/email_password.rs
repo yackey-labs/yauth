@@ -8,7 +8,6 @@ use axum::{
 use axum_extra::extract::cookie::CookieJar;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
-use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::auth::{crypto, hibp, input, password, password_policy, session};
@@ -54,18 +53,16 @@ impl YAuthPlugin for EmailPasswordPlugin {
 
 use crate::auth::session::session_set_cookie;
 
-#[derive(Deserialize, TS)]
+#[derive(Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[ts(export)]
 pub struct RegisterRequest {
     pub email: String,
     pub password: String,
     pub display_name: Option<String>,
 }
 
-#[derive(Deserialize, TS)]
+#[derive(Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[ts(export)]
 pub struct LoginRequest {
     pub email: String,
     pub password: String,
@@ -73,45 +70,39 @@ pub struct LoginRequest {
     pub remember_me: Option<bool>,
 }
 
-#[derive(Serialize, TS)]
+#[derive(Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[ts(export)]
 pub struct MessageResponse {
     pub message: String,
 }
 
-#[derive(Deserialize, TS)]
+#[derive(Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[ts(export)]
 pub struct VerifyEmailRequest {
     pub token: String,
 }
 
-#[derive(Deserialize, TS)]
+#[derive(Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[ts(export)]
 pub struct ResendVerificationRequest {
     pub email: String,
 }
 
-#[derive(Deserialize, TS)]
+#[derive(Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[ts(export)]
 pub struct ForgotPasswordRequest {
     pub email: String,
 }
 
-#[derive(Deserialize, TS)]
+#[derive(Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[ts(export)]
 pub struct ResetPasswordRequest {
     pub token: String,
     pub password: String,
 }
 
-#[derive(Deserialize, TS)]
+#[derive(Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[ts(export)]
 pub struct ChangePasswordRequest {
     pub current_password: String,
     pub new_password: String,

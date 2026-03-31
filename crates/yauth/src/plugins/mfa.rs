@@ -7,7 +7,6 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
-use ts_rs::TS;
 use uuid::Uuid;
 
 use totp_rs::{Algorithm, Secret, TOTP};
@@ -319,54 +318,47 @@ impl YAuthPlugin for MfaPlugin {
 // Request / response types
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize, TS)]
+#[derive(Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[ts(export)]
 pub struct ConfirmTotpRequest {
     pub code: String,
 }
 
-#[derive(Deserialize, TS)]
+#[derive(Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[ts(export)]
 pub struct VerifyMfaRequest {
     pub pending_session_id: Uuid,
     pub code: String,
 }
 
-#[derive(Serialize, TS)]
+#[derive(Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[ts(export)]
 pub struct SetupTotpResponse {
     pub otpauth_url: String,
     pub secret: String,
     pub backup_codes: Vec<String>,
 }
 
-#[derive(Serialize, TS)]
+#[derive(Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[ts(export)]
 pub struct MfaMessageResponse {
     pub message: String,
 }
 
-#[derive(Serialize, TS)]
+#[derive(Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[ts(export)]
 pub struct BackupCodeCountResponse {
     pub remaining: usize,
 }
 
-#[derive(Serialize, TS)]
+#[derive(Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[ts(export)]
 pub struct BackupCodesResponse {
     pub backup_codes: Vec<String>,
 }
 
-#[derive(Serialize, TS)]
+#[derive(Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[ts(export)]
 pub struct MfaAuthResponse {
     pub user_id: String,
     pub email: String,

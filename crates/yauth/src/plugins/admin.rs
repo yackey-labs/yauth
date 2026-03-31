@@ -9,7 +9,6 @@ use axum::{
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
-use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::auth::{crypto, session};
@@ -329,44 +328,39 @@ impl YAuthPlugin for AdminPlugin {
 // Request / query types
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize, TS)]
+#[derive(Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[ts(export)]
 pub struct ListUsersQuery {
     pub page: Option<u64>,
     pub per_page: Option<u64>,
     pub search: Option<String>,
 }
 
-#[derive(Deserialize, TS)]
+#[derive(Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[ts(export)]
 pub struct ListSessionsQuery {
     pub page: Option<u64>,
     pub per_page: Option<u64>,
 }
 
-#[derive(Deserialize, TS)]
+#[derive(Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[ts(export)]
 pub struct UpdateUserRequest {
     pub display_name: Option<String>,
     pub role: Option<String>,
     pub email_verified: Option<bool>,
 }
 
-#[derive(Deserialize, TS)]
+#[derive(Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[ts(export)]
 pub struct BanRequest {
     pub reason: Option<String>,
     pub until: Option<String>,
 }
 
 /// Response type for `GET /admin/users` (schema-only, used for OpenAPI spec).
-#[derive(Serialize, TS)]
+#[derive(Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[ts(export)]
 pub struct PaginatedUsersResponse {
     pub users: Vec<AdminUserInfo>,
     pub total: u64,
@@ -375,9 +369,8 @@ pub struct PaginatedUsersResponse {
 }
 
 /// User info returned by admin list endpoint.
-#[derive(Serialize, TS)]
+#[derive(Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[ts(export)]
 pub struct AdminUserInfo {
     pub id: String,
     pub email: String,
@@ -392,9 +385,8 @@ pub struct AdminUserInfo {
 }
 
 /// Response type for `GET /admin/sessions` (schema-only, used for OpenAPI spec).
-#[derive(Serialize, TS)]
+#[derive(Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[ts(export)]
 pub struct PaginatedSessionsResponse {
     pub sessions: Vec<AdminSessionInfo>,
     pub total: u64,
@@ -403,9 +395,8 @@ pub struct PaginatedSessionsResponse {
 }
 
 /// Session info returned by admin list endpoint.
-#[derive(Serialize, TS)]
+#[derive(Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[ts(export)]
 pub struct AdminSessionInfo {
     pub id: String,
     pub user_id: String,

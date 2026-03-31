@@ -7,7 +7,6 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
-use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::auth::crypto;
@@ -192,18 +191,16 @@ impl YAuthPlugin for ApiKeyPlugin {
     }
 }
 
-#[derive(Deserialize, TS)]
+#[derive(Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[ts(export)]
 pub struct CreateApiKeyRequest {
     pub name: String,
     pub scopes: Option<Vec<String>>,
     pub expires_in_days: Option<u32>,
 }
 
-#[derive(Serialize, TS)]
+#[derive(Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[ts(export)]
 pub struct CreateApiKeyResponse {
     pub id: Uuid,
     pub key: String,
@@ -214,9 +211,8 @@ pub struct CreateApiKeyResponse {
     pub created_at: chrono::DateTime<chrono::FixedOffset>,
 }
 
-#[derive(Serialize, TS)]
+#[derive(Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[ts(export)]
 pub struct ApiKeyResponse {
     pub id: Uuid,
     pub name: String,

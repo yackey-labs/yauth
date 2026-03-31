@@ -73,7 +73,6 @@ opentelemetry-otlp = { version = "0.31", features = ["grpc-tonic"] }
 opentelemetry-semantic-conventions = { version = "0.31" }
 
 # Code generation
-ts-rs = { version = "11", features = ["serde-compat", "uuid-impl", "chrono-impl"] }
 utoipa = { version = "5", features = ["axum_extras", "uuid", "chrono"] }
 
 # Misc

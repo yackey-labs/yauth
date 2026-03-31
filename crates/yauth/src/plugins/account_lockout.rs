@@ -8,7 +8,6 @@ use axum::{
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
-use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::auth::crypto;
@@ -536,23 +535,20 @@ pub fn calculate_lockout_duration(
 // Request / response types
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize, TS)]
+#[derive(Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[ts(export)]
 pub struct RequestUnlockRequest {
     pub email: String,
 }
 
-#[derive(Deserialize, TS)]
+#[derive(Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[ts(export)]
 pub struct UnlockAccountRequest {
     pub token: String,
 }
 
-#[derive(Serialize, TS)]
+#[derive(Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[ts(export)]
 pub struct AccountLockoutMessageResponse {
     pub message: String,
 }

@@ -6,15 +6,13 @@ use axum::{
 };
 use axum_extra::extract::cookie::CookieJar;
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::error::api_err;
 use crate::state::YAuthState;
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[ts(export)]
 pub struct AuthUser {
     pub id: Uuid,
     pub email: String,
@@ -28,9 +26,8 @@ pub struct AuthUser {
     pub scopes: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[ts(export)]
 pub enum AuthMethod {
     Session,
     Bearer,

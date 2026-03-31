@@ -12,7 +12,6 @@ use oauth2::{
 };
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
-use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::auth::session::session_set_cookie;
@@ -315,9 +314,8 @@ impl YAuthPlugin for OAuthPlugin {
 // Types
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize, TS)]
+#[derive(Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[ts(export)]
 pub struct AuthorizeQuery {
     pub redirect_url: Option<String>,
 }
@@ -330,9 +328,8 @@ struct CallbackQuery {
     error_description: Option<String>,
 }
 
-#[derive(Deserialize, TS)]
+#[derive(Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[ts(export)]
 pub struct CallbackBody {
     pub code: String,
     pub state: String,
@@ -346,9 +343,8 @@ struct ProviderUserInfo {
     name: Option<String>,
 }
 
-#[derive(Serialize, TS)]
+#[derive(Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[ts(export)]
 pub struct OAuthAccountResponse {
     pub id: String,
     pub provider: String,
@@ -356,9 +352,8 @@ pub struct OAuthAccountResponse {
     pub created_at: String,
 }
 
-#[derive(Serialize, TS)]
+#[derive(Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[ts(export)]
 pub struct OAuthAuthResponse {
     pub user_id: String,
     pub email: String,
@@ -366,9 +361,8 @@ pub struct OAuthAuthResponse {
     pub email_verified: bool,
 }
 
-#[derive(Serialize, TS)]
+#[derive(Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[ts(export)]
 pub struct AuthorizeResponse {
     pub auth_url: String,
 }

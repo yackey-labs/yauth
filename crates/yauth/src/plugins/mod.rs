@@ -45,7 +45,6 @@ use axum::{
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
 use crate::middleware::AuthUser;
 use crate::plugin::PluginContext;
@@ -67,9 +66,8 @@ pub fn core_public_routes() -> Router<YAuthState> {
 }
 
 /// Server-side auth configuration exposed to frontends via `GET /config`.
-#[derive(Serialize, TS)]
+#[derive(Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[ts(export)]
 pub struct AuthConfigResponse {
     /// Whether new user registration is allowed.
     pub allow_signups: bool,
@@ -101,9 +99,8 @@ async fn get_session(Extension(user): Extension<AuthUser>) -> Json<serde_json::V
     }))
 }
 
-#[derive(Deserialize, TS)]
+#[derive(Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[ts(export)]
 pub struct UpdateProfileRequest {
     pub display_name: Option<String>,
 }

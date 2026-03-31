@@ -973,22 +973,6 @@ async fn handle_authorization_code_grant(
     // Find authorization code
     let code_hash = crypto::hash_token(code);
 
-    // Stored code info
-    #[allow(dead_code)]
-    struct StoredCode {
-        id: Uuid,
-        code_hash: String,
-        client_id: String,
-        user_id: Uuid,
-        scopes: Option<serde_json::Value>,
-        redirect_uri: String,
-        code_challenge: String,
-        code_challenge_method: String,
-        expires_at: chrono::NaiveDateTime,
-        used: bool,
-        nonce: Option<String>,
-    }
-
     let stored_code = {
         let mut conn = state.db.get().await.map_err(|_| {
             oauth2_error(
@@ -997,7 +981,7 @@ async fn handle_authorization_code_grant(
                 "Internal error",
             )
         })?;
-        let row = db_find_auth_code_by_hash(&mut conn, &code_hash)
+        db_find_auth_code_by_hash(&mut conn, &code_hash)
             .await
             .map_err(|e| {
                 tracing::error!("DB error: {}", e);
@@ -1017,20 +1001,7 @@ async fn handle_authorization_code_grant(
                     "invalid_grant",
                     "Invalid authorization code",
                 )
-            })?;
-        StoredCode {
-            id: row.id,
-            code_hash: row.code_hash,
-            client_id: row.client_id,
-            user_id: row.user_id,
-            scopes: row.scopes,
-            redirect_uri: row.redirect_uri,
-            code_challenge: row.code_challenge,
-            code_challenge_method: row.code_challenge_method,
-            expires_at: row.expires_at,
-            used: row.used,
-            nonce: row.nonce,
-        }
+            })?
     };
 
     // Check if code was already used
@@ -1124,16 +1095,6 @@ async fn handle_authorization_code_grant(
     }
 
     // Look up user
-    #[allow(dead_code)]
-    struct AuthCodeUser {
-        id: Uuid,
-        email: String,
-        display_name: Option<String>,
-        email_verified: bool,
-        role: String,
-        banned: bool,
-    }
-
     let user = {
         let mut conn = state.db.get().await.map_err(|_| {
             oauth2_error(
@@ -1142,7 +1103,7 @@ async fn handle_authorization_code_grant(
                 "Internal error",
             )
         })?;
-        let u = db_find_user_by_id(&mut conn, stored_code.user_id)
+        db_find_user_by_id(&mut conn, stored_code.user_id)
             .await
             .map_err(|e| {
                 tracing::error!("DB error: {}", e);
@@ -1154,15 +1115,7 @@ async fn handle_authorization_code_grant(
             })?
             .ok_or_else(|| {
                 oauth2_error(StatusCode::BAD_REQUEST, "invalid_grant", "User not found")
-            })?;
-        AuthCodeUser {
-            id: u.id,
-            email: u.email,
-            display_name: u.display_name,
-            email_verified: u.email_verified,
-            role: u.role,
-            banned: u.banned,
-        }
+            })?
     };
 
     if user.banned {
@@ -1422,16 +1375,6 @@ async fn handle_oauth2_refresh_token(
         }
 
         // Look up user
-        #[allow(dead_code)]
-        struct RefreshUser {
-            id: Uuid,
-            email: String,
-            display_name: Option<String>,
-            email_verified: bool,
-            role: String,
-            banned: bool,
-        }
-
         let user = {
             let mut conn = state.db.get().await.map_err(|_| {
                 oauth2_error(
@@ -1440,7 +1383,7 @@ async fn handle_oauth2_refresh_token(
                     "Internal error",
                 )
             })?;
-            let u = db_find_user_by_id(&mut conn, user_id)
+            db_find_user_by_id(&mut conn, user_id)
                 .await
                 .map_err(|e| {
                     tracing::error!("DB error: {}", e);
@@ -1452,15 +1395,7 @@ async fn handle_oauth2_refresh_token(
                 })?
                 .ok_or_else(|| {
                     oauth2_error(StatusCode::BAD_REQUEST, "invalid_grant", "User not found")
-                })?;
-            RefreshUser {
-                id: u.id,
-                email: u.email,
-                display_name: u.display_name,
-                email_verified: u.email_verified,
-                role: u.role,
-                banned: u.banned,
-            }
+                })?
         };
 
         if user.banned {
@@ -2252,16 +2187,6 @@ async fn handle_device_code_grant(
     }
 
     // Look up user
-    #[allow(dead_code)]
-    struct DeviceCodeUser {
-        id: Uuid,
-        email: String,
-        display_name: Option<String>,
-        email_verified: bool,
-        role: String,
-        banned: bool,
-    }
-
     let user = {
         let mut conn = state.db.get().await.map_err(|_| {
             oauth2_error(
@@ -2270,7 +2195,7 @@ async fn handle_device_code_grant(
                 "Internal error",
             )
         })?;
-        let u = db_find_user_by_id(&mut conn, user_id)
+        db_find_user_by_id(&mut conn, user_id)
             .await
             .map_err(|e| {
                 tracing::error!("DB error: {}", e);
@@ -2282,15 +2207,7 @@ async fn handle_device_code_grant(
             })?
             .ok_or_else(|| {
                 oauth2_error(StatusCode::BAD_REQUEST, "invalid_grant", "User not found")
-            })?;
-        DeviceCodeUser {
-            id: u.id,
-            email: u.email,
-            display_name: u.display_name,
-            email_verified: u.email_verified,
-            role: u.role,
-            banned: u.banned,
-        }
+            })?
     };
 
     if user.banned {
@@ -2571,14 +2488,7 @@ async fn revoke_endpoint(
             "refresh_token" => {
                 let token_hash = crypto::hash_token(token);
 
-                #[allow(dead_code)]
-                struct RevokeInfo {
-                    id: Uuid,
-                    family_id: Uuid,
-                    revoked: bool,
-                }
-
-                let rt_opt: Option<RevokeInfo> = {
+                let rt_opt = {
                     let mut conn = match state.db.get().await {
                         Ok(c) => c,
                         Err(_) => {
@@ -2589,11 +2499,6 @@ async fn revoke_endpoint(
                         .await
                         .ok()
                         .flatten()
-                        .map(|s| RevokeInfo {
-                            id: s.id,
-                            family_id: s.family_id,
-                            revoked: s.revoked,
-                        })
                 };
 
                 if let Some(stored) = rt_opt {
@@ -2916,48 +2821,25 @@ fn validate_authorize_params_from_consent(input: &AuthorizeConsentRequest) -> Re
     Ok(())
 }
 
-/// Common client info struct.
-struct ClientInfo {
-    client_id: String,
-    client_secret_hash: Option<String>,
-    redirect_uris: serde_json::Value,
-    client_name: Option<String>,
-    grant_types: serde_json::Value,
-    scopes: Option<serde_json::Value>,
-    #[allow(dead_code)]
-    is_public: bool,
-}
-
-async fn lookup_client(state: &YAuthState, client_id: &str) -> Result<ClientInfo, ApiError> {
-    {
-        let mut conn = state
-            .db
-            .get()
-            .await
-            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-        let m = db_find_client_by_client_id(&mut conn, client_id)
-            .await
-            .map_err(|e| {
-                tracing::error!("DB error looking up client: {}", e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?
-            .ok_or_else(|| api_err(StatusCode::BAD_REQUEST, "Unknown client_id"))?;
-        Ok(ClientInfo {
-            client_id: m.client_id,
-            client_secret_hash: m.client_secret_hash,
-            redirect_uris: m.redirect_uris,
-            client_name: m.client_name,
-            grant_types: m.grant_types,
-            scopes: m.scopes,
-            is_public: m.is_public,
-        })
-    }
+async fn lookup_client(state: &YAuthState, client_id: &str) -> Result<Oauth2Client, ApiError> {
+    let mut conn = state
+        .db
+        .get()
+        .await
+        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
+    db_find_client_by_client_id(&mut conn, client_id)
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error looking up client: {}", e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?
+        .ok_or_else(|| api_err(StatusCode::BAD_REQUEST, "Unknown client_id"))
 }
 
 /// Resolve redirect_uri: if provided, validate against registered URIs.
 /// If omitted, default to the client's single registered URI (RFC 6749 §3.1.2.3).
 fn resolve_redirect_uri(
-    client: &ClientInfo,
+    client: &Oauth2Client,
     redirect_uri: Option<&str>,
 ) -> Result<String, ApiError> {
     let empty = vec![];
@@ -2992,7 +2874,7 @@ fn resolve_redirect_uri(
     }
 }
 
-fn validate_redirect_uri(client: &ClientInfo, redirect_uri: &str) -> Result<(), ApiError> {
+fn validate_redirect_uri(client: &Oauth2Client, redirect_uri: &str) -> Result<(), ApiError> {
     resolve_redirect_uri(client, Some(redirect_uri)).map(|_| ())
 }
 

@@ -86,18 +86,6 @@ pub struct NewSession {
 // Core: yauth_audit_log
 // ──────────────────────────────────────────────
 
-#[derive(Debug, Clone, Queryable, Selectable, Serialize, Deserialize)]
-#[diesel(table_name = yauth_audit_log)]
-#[diesel(check_for_backend(diesel::pg::Pg))]
-pub struct AuditLog {
-    pub id: Uuid,
-    pub user_id: Option<Uuid>,
-    pub event_type: String,
-    pub metadata: Option<serde_json::Value>,
-    pub ip_address: Option<String>,
-    pub created_at: NaiveDateTime,
-}
-
 #[derive(Debug, Clone, Insertable, Serialize, Deserialize)]
 #[diesel(table_name = yauth_audit_log)]
 pub struct NewAuditLog {
@@ -122,14 +110,6 @@ pub struct Challenge {
     pub expires_at: NaiveDateTime,
 }
 
-#[derive(Debug, Clone, Insertable, Serialize, Deserialize)]
-#[diesel(table_name = yauth_challenges)]
-pub struct NewChallenge {
-    pub key: String,
-    pub value: serde_json::Value,
-    pub expires_at: NaiveDateTime,
-}
-
 // ──────────────────────────────────────────────
 // email-password: yauth_passwords
 // ──────────────────────────────────────────────
@@ -149,13 +129,6 @@ pub struct Password {
 pub struct NewPassword {
     pub user_id: Uuid,
     pub password_hash: String,
-}
-
-#[cfg(feature = "email-password")]
-#[derive(Debug, Clone, AsChangeset, Serialize, Deserialize)]
-#[diesel(table_name = yauth_passwords)]
-pub struct UpdatePassword {
-    pub password_hash: Option<String>,
 }
 
 // ──────────────────────────────────────────────
@@ -628,17 +601,6 @@ pub struct NewAccountLock {
     pub updated_at: NaiveDateTime,
 }
 
-#[cfg(feature = "account-lockout")]
-#[derive(Debug, Clone, AsChangeset, Serialize, Deserialize)]
-#[diesel(table_name = yauth_account_locks)]
-pub struct UpdateAccountLock {
-    pub failed_count: Option<i32>,
-    pub locked_until: Option<Option<NaiveDateTime>>,
-    pub lock_count: Option<i32>,
-    pub locked_reason: Option<Option<String>>,
-    pub updated_at: Option<NaiveDateTime>,
-}
-
 // ──────────────────────────────────────────────
 // account-lockout: yauth_unlock_tokens
 // ──────────────────────────────────────────────
@@ -743,27 +705,3 @@ pub struct NewWebhookDelivery {
     pub created_at: NaiveDateTime,
 }
 
-// ──────────────────────────────────────────────
-// oidc: yauth_oidc_nonces
-// ──────────────────────────────────────────────
-
-#[cfg(feature = "oidc")]
-#[derive(Debug, Clone, Queryable, Selectable, Serialize, Deserialize)]
-#[diesel(table_name = yauth_oidc_nonces)]
-#[diesel(check_for_backend(diesel::pg::Pg))]
-pub struct OidcNonce {
-    pub id: Uuid,
-    pub nonce_hash: String,
-    pub authorization_code_id: Uuid,
-    pub created_at: NaiveDateTime,
-}
-
-#[cfg(feature = "oidc")]
-#[derive(Debug, Clone, Insertable, Serialize, Deserialize)]
-#[diesel(table_name = yauth_oidc_nonces)]
-pub struct NewOidcNonce {
-    pub id: Uuid,
-    pub nonce_hash: String,
-    pub authorization_code_id: Uuid,
-    pub created_at: NaiveDateTime,
-}

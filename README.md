@@ -31,12 +31,10 @@ Every feature is behind a **feature flag** — enable only what you need.
 
 ### 1. Backend (Rust/Axum)
 
-```toml
-# Cargo.toml
-[dependencies]
-yauth = { version = "0.2", features = ["email-password"] }
-tokio = { version = "1", features = ["full"] }
-axum = "0.8"
+```bash
+cargo add yauth --features email-password
+cargo add tokio --features full
+cargo add axum
 ```
 
 ```rust
@@ -220,8 +218,8 @@ function Dashboard() {
 
 Enable additional plugins with feature flags:
 
-```toml
-yauth = { version = "0.2", features = ["email-password", "passkey", "mfa", "oauth"] }
+```bash
+cargo add yauth --features email-password,passkey,mfa,oauth
 ```
 
 ```rust
@@ -555,8 +553,8 @@ Pre-built SolidJS components:
 
 yauth uses **diesel-async** with deadpool as its database backend.
 
-```toml
-yauth = { version = "0.2", features = ["email-password", "passkey", "mfa"] }
+```bash
+cargo add yauth --features email-password,passkey,mfa
 ```
 
 See [docs/migrating-to-diesel.md](docs/migrating-to-diesel.md) for a migration guide if upgrading from yauth v0.1.x (which supported SeaORM).

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { useSession, useAuth } from "@yackey-labs/yauth-ui-vue";
+import { useAuth, useSession } from "@yackey-labs/yauth-ui-vue";
 import { useRouter } from "vue-router";
 
 const { user, isAuthenticated, loading } = useSession();
@@ -7,8 +7,8 @@ const { logout } = useAuth();
 const router = useRouter();
 
 const handleLogout = async () => {
-  await logout();
-  router.push("/login");
+	await logout();
+	router.push("/login");
 };
 </script>
 

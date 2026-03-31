@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { RegisterForm } from "@yackey-labs/yauth-ui-vue";
-import { useRouter } from "vue-router";
 import { ref } from "vue";
+import { useRouter } from "vue-router";
 
 const router = useRouter();
 const successMessage = ref<string | null>(null);
 
 const handleSuccess = (message: string) => {
-  successMessage.value = message || "Registration successful! Please log in.";
-  setTimeout(() => router.push("/login"), 2000);
+	successMessage.value = message || "Registration successful! Please log in.";
+	setTimeout(() => router.push("/login"), 2000);
 };
 </script>
 

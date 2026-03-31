@@ -181,31 +181,32 @@ async fn register(
         return Err(api_err(StatusCode::BAD_REQUEST, &breach_msg));
     }
 
-    // Get diesel connection for this handler
-    let mut conn = state
-        .db
-        .get()
-        .await
-        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
+    // Check if user exists (scoped DB connection)
+    {
+        let mut conn = state
+            .db
+            .get()
+            .await
+            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
-    // Check if user exists
-    let existing: Option<User> = yauth_users::table
-        .filter(yauth_users::email.eq(&email))
-        .select(User::as_select())
-        .first(&mut conn)
-        .await
-        .optional()
-        .map_err(|e| {
-            tracing::error!("DB error: {}", e);
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
+        let existing: Option<User> = yauth_users::table
+            .filter(yauth_users::email.eq(&email))
+            .select(User::as_select())
+            .first(&mut conn)
+            .await
+            .optional()
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?;
 
-    if existing.is_some() {
-        warn!(event = "yauth.register.duplicate", email = %email, "Registration attempt with existing email");
-        return Err(api_err(StatusCode::CONFLICT, "Registration failed"));
+        if existing.is_some() {
+            warn!(event = "yauth.register.duplicate", email = %email, "Registration attempt with existing email");
+            return Err(api_err(StatusCode::CONFLICT, "Registration failed"));
+        }
     }
-
-    let password_hash = password::hash_password(&pwd).map_err(|e| {
+    // conn dropped here — hash runs on blocking thread without holding a DB connection
+    let password_hash = password::hash_password(&pwd).await.map_err(|e| {
         tracing::error!("Password hash error: {}", e);
         api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
     })?;
@@ -232,6 +233,13 @@ async fn register(
         created_at: now,
         updated_at: now,
     };
+
+    // Re-acquire connection for insert operations
+    let mut conn = state
+        .db
+        .get()
+        .await
+        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
     diesel::insert_into(yauth_users::table)
         .values(&new_user)
@@ -378,7 +386,9 @@ async fn login(
         }
     };
 
-    let valid = password::verify_password(&password_input, &hash).unwrap_or(false);
+    let valid = password::verify_password(&password_input, &hash)
+        .await
+        .unwrap_or(false);
 
     match (user_opt, valid) {
         (Some(u), true) => {
@@ -833,10 +843,12 @@ async fn reset_password(
         ));
     }
 
-    let new_hash = password::hash_password(&reset_password).map_err(|e| {
-        tracing::error!("Password hash error: {}", e);
-        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-    })?;
+    let new_hash = password::hash_password(&reset_password)
+        .await
+        .map_err(|e| {
+            tracing::error!("Password hash error: {}", e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
 
     // Update password (upsert)
     let upsert_password = NewPassword {
@@ -934,31 +946,37 @@ async fn change_password(
         return Err(api_err(StatusCode::BAD_REQUEST, &violations.join("; ")));
     }
 
-    let mut conn = state
-        .db
-        .get()
+    // Fetch current password hash (scoped DB connection)
+    let (current_hash, has_record) = {
+        let mut conn = state
+            .db
+            .get()
+            .await
+            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
+
+        let pwd_record: Option<Password> = yauth_passwords::table
+            .find(user.id)
+            .select(Password::as_select())
+            .first(&mut conn)
+            .await
+            .optional()
+            .map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?;
+
+        let hash = pwd_record
+            .as_ref()
+            .map(|p| p.password_hash.clone())
+            .unwrap_or_else(|| state.dummy_hash.clone());
+        (hash, pwd_record.is_some())
+    };
+    // conn dropped here — verify runs on blocking thread without holding a DB connection
+
+    let valid = password::verify_password(&current_password, &current_hash)
         .await
-        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-
-    // Get current password hash
-    let pwd_record: Option<Password> = yauth_passwords::table
-        .find(user.id)
-        .select(Password::as_select())
-        .first(&mut conn)
-        .await
-        .optional()
-        .map_err(|e| {
-            tracing::error!("DB error: {}", e);
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
-
-    let current_hash = pwd_record
-        .as_ref()
-        .map(|p| p.password_hash.as_str())
-        .unwrap_or(&state.dummy_hash);
-
-    let valid = password::verify_password(&current_password, current_hash).unwrap_or(false);
-    if !valid || pwd_record.is_none() {
+        .unwrap_or(false);
+    if !valid || !has_record {
         warn!(event = "yauth.password.change_failed", user_id = %user.id, "Wrong current password");
         return Err(api_err(
             StatusCode::UNAUTHORIZED,
@@ -972,10 +990,18 @@ async fn change_password(
         return Err(api_err(StatusCode::BAD_REQUEST, &breach_msg));
     }
 
-    let new_hash = password::hash_password(&new_password).map_err(|e| {
+    // Hash runs on blocking thread without holding a DB connection
+    let new_hash = password::hash_password(&new_password).await.map_err(|e| {
         tracing::error!("Password hash error: {}", e);
         api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
     })?;
+
+    // Re-acquire connection for the update
+    let mut conn = state
+        .db
+        .get()
+        .await
+        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
     diesel::update(yauth_passwords::table.find(user.id))
         .set(yauth_passwords::password_hash.eq(&new_hash))

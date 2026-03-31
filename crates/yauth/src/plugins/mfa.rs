@@ -17,8 +17,8 @@ use diesel_async_crate::RunQueryDsl;
 
 use crate::auth::{crypto, session};
 use crate::config::MfaConfig;
-use crate::db::models::{BackupCode, NewBackupCode, NewTotpSecret, TotpSecret, User};
-use crate::db::schema::{yauth_backup_codes, yauth_totp_secrets, yauth_users};
+use crate::db::models::{BackupCode, NewBackupCode, NewTotpSecret, TotpSecret};
+use crate::db::schema::{yauth_backup_codes, yauth_totp_secrets};
 use crate::middleware::AuthUser;
 use crate::plugin::{AuthEvent, EventResponse, PluginContext, YAuthPlugin};
 use crate::state::YAuthState;
@@ -30,15 +30,7 @@ use crate::state::YAuthState;
 type Conn = diesel_async_crate::AsyncPgConnection;
 type DbResult<T> = Result<T, String>;
 
-async fn db_find_user_by_id(conn: &mut Conn, id: Uuid) -> DbResult<Option<User>> {
-    yauth_users::table
-        .find(id)
-        .select(User::as_select())
-        .first(conn)
-        .await
-        .optional()
-        .map_err(|e| e.to_string())
-}
+use crate::db::find_user_by_id;
 
 async fn db_find_totp_secret(
     conn: &mut Conn,
@@ -714,7 +706,7 @@ async fn verify_mfa(
     }
 
     let user = {
-        let u = db_find_user_by_id(&mut conn, user_id)
+        let u = find_user_by_id(&mut conn, user_id)
             .await
             .map_err(|e| {
                 tracing::error!("DB error: {}", e);

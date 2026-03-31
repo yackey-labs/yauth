@@ -259,10 +259,13 @@ async fn dispatch_webhooks_diesel(
     let event_type = event_type_name(&event);
     let payload = serde_json::to_value(&event)?;
 
-    let mut conn = pool.get().await.map_err(|e| e.to_string())?;
-    let webhooks = find_active_webhooks(&mut conn)
-        .await
-        .map_err(|e| e.to_string())?;
+    // Load webhooks in a scoped block so the connection is dropped before HTTP I/O
+    let webhooks = {
+        let mut conn = pool.get().await.map_err(|e| e.to_string())?;
+        find_active_webhooks(&mut conn)
+            .await
+            .map_err(|e| e.to_string())?
+    };
 
     let client = reqwest::Client::builder().timeout(timeout).build()?;
 

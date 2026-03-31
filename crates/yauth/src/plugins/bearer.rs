@@ -13,8 +13,8 @@ use uuid::Uuid;
 
 use crate::auth::{crypto, password};
 use crate::config::BearerConfig;
-use crate::db::models::{NewRefreshToken, RefreshToken, User};
-use crate::db::schema::{yauth_refresh_tokens, yauth_users};
+use crate::db::models::{NewRefreshToken, RefreshToken};
+use crate::db::schema::yauth_refresh_tokens;
 use crate::error::{ApiError, api_err};
 use crate::middleware::{AuthMethod, AuthUser};
 use crate::plugin::{PluginContext, YAuthPlugin};
@@ -57,25 +57,7 @@ impl YAuthPlugin for BearerPlugin {
 type Conn = diesel_async_crate::AsyncPgConnection;
 type DbResult<T> = Result<T, String>;
 
-async fn db_find_user_by_email(conn: &mut Conn, email: &str) -> DbResult<Option<User>> {
-    yauth_users::table
-        .filter(yauth_users::email.eq(email))
-        .select(User::as_select())
-        .first(conn)
-        .await
-        .optional()
-        .map_err(|e| e.to_string())
-}
-
-async fn db_find_user_by_id(conn: &mut Conn, id: Uuid) -> DbResult<Option<User>> {
-    yauth_users::table
-        .find(id)
-        .select(User::as_select())
-        .first(conn)
-        .await
-        .optional()
-        .map_err(|e| e.to_string())
-}
+use crate::db::{find_user_by_email, find_user_by_id};
 
 // Password table is gated behind email-password feature in schema.rs,
 // but bearer can be enabled independently. Keep as raw SQL to avoid
@@ -315,12 +297,10 @@ async fn create_token(
         .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
     let (user_opt, hash) = {
-        let user = db_find_user_by_email(&mut conn, &email)
-            .await
-            .map_err(|e| {
-                tracing::error!("DB error: {}", e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
+        let user = find_user_by_email(&mut conn, &email).await.map_err(|e| {
+            tracing::error!("DB error: {}", e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
 
         match &user {
             Some(u) => {
@@ -335,7 +315,9 @@ async fn create_token(
         }
     };
 
-    let valid = password::verify_password(&input.password, &hash).unwrap_or(false);
+    let valid = password::verify_password(&input.password, &hash)
+        .await
+        .unwrap_or(false);
 
     match (user_opt, valid) {
         (Some(u), true) => {
@@ -487,7 +469,7 @@ async fn refresh_token(
 
     // Look up user
     let user = {
-        db_find_user_by_id(&mut conn, user_id)
+        find_user_by_id(&mut conn, user_id)
             .await
             .map_err(|e| {
                 tracing::error!("DB error: {}", e);
@@ -633,7 +615,7 @@ pub async fn validate_jwt(token: &str, state: &YAuthState) -> Result<AuthUser, S
             .get()
             .await
             .map_err(|e| format!("Pool error: {}", e))?;
-        db_find_user_by_id(&mut conn, user_id)
+        find_user_by_id(&mut conn, user_id)
             .await
             .map_err(|e| format!("DB error during JWT validation: {}", e))?
             .ok_or_else(|| "User not found".to_string())?

@@ -150,19 +150,9 @@ async fn lookup_user(
     user_id: Uuid,
     method: AuthMethod,
 ) -> Result<AuthUser, String> {
-    use crate::db::schema::yauth_users;
-    use diesel::prelude::*;
-    use diesel::result::OptionalExtension;
-    use diesel_async_crate::RunQueryDsl;
-
     let mut conn = state.db.get().await.map_err(|e| e.to_string())?;
-    let user = yauth_users::table
-        .find(user_id)
-        .select(crate::db::models::User::as_select())
-        .first(&mut conn)
-        .await
-        .optional()
-        .map_err(|e| e.to_string())?
+    let user = crate::db::find_user_by_id(&mut conn, user_id)
+        .await?
         .ok_or_else(|| "User not found".to_string())?;
 
     Ok(AuthUser {

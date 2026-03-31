@@ -299,7 +299,7 @@ impl YAuthBuilder {
     #[allow(unused_mut)]
     pub fn build(mut self) -> YAuth {
         // Build dummy hash for timing-safe login
-        let dummy_hash = auth::password::hash_password("dummy-password-for-timing")
+        let dummy_hash = auth::password::hash_password_sync("dummy-password-for-timing")
             .expect("Failed to generate dummy hash");
 
         // Build rate limiter

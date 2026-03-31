@@ -54,15 +54,7 @@ impl YAuthPlugin for MagicLinkPlugin {
 type Conn = diesel_async_crate::AsyncPgConnection;
 type DbResult<T> = Result<T, String>;
 
-async fn db_find_user_by_email(conn: &mut Conn, email: &str) -> DbResult<Option<User>> {
-    yauth_users::table
-        .filter(yauth_users::email.eq(email))
-        .select(User::as_select())
-        .first(conn)
-        .await
-        .optional()
-        .map_err(|e| e.to_string())
-}
+use crate::db::find_user_by_email;
 
 async fn db_delete_unused_magic_links_for_email(conn: &mut Conn, email: &str) -> DbResult<()> {
     diesel::delete(
@@ -226,12 +218,10 @@ async fn send_magic_link(
         .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
     let user_opt = {
-        db_find_user_by_email(&mut conn, &email)
-            .await
-            .map_err(|e| {
-                tracing::error!("DB error: {}", e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?
+        find_user_by_email(&mut conn, &email).await.map_err(|e| {
+            tracing::error!("DB error: {}", e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?
     };
 
     if user_opt.is_none() && (!ml_config.allow_signup || !state.config.allow_signups) {
@@ -339,7 +329,7 @@ async fn verify_magic_link(
     let ml_config = &state.magic_link_config;
 
     let user_opt = {
-        db_find_user_by_email(&mut conn, email).await.map_err(|e| {
+        find_user_by_email(&mut conn, email).await.map_err(|e| {
             tracing::error!("DB error: {}", e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?

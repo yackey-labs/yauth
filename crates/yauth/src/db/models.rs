@@ -704,4 +704,3 @@ pub struct NewWebhookDelivery {
     pub attempt: i32,
     pub created_at: NaiveDateTime,
 }
-

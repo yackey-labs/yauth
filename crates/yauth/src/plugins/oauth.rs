@@ -21,7 +21,7 @@ use diesel_async_crate::RunQueryDsl;
 use crate::auth::session::session_set_cookie;
 use crate::auth::{crypto, session};
 use crate::config::OAuthProviderConfig;
-use crate::db::models::{NewOauthAccount, NewOauthState, NewUser, OauthAccount, OauthState, User};
+use crate::db::models::{NewOauthAccount, NewOauthState, NewUser, OauthAccount, OauthState};
 use crate::db::schema::{yauth_oauth_accounts, yauth_oauth_states, yauth_users};
 use crate::error::{ApiError, api_err};
 use crate::middleware::AuthUser;
@@ -37,25 +37,7 @@ const STATE_EXPIRY_MINUTES: i64 = 10;
 type Conn = diesel_async_crate::AsyncPgConnection;
 type DbResult<T> = Result<T, String>;
 
-async fn db_find_user_by_id(conn: &mut Conn, id: Uuid) -> DbResult<Option<User>> {
-    yauth_users::table
-        .find(id)
-        .select(User::as_select())
-        .first(conn)
-        .await
-        .optional()
-        .map_err(|e| e.to_string())
-}
-
-async fn db_find_user_by_email(conn: &mut Conn, email: &str) -> DbResult<Option<User>> {
-    yauth_users::table
-        .filter(yauth_users::email.eq(email))
-        .select(User::as_select())
-        .first(conn)
-        .await
-        .optional()
-        .map_err(|e| e.to_string())
-}
+use crate::db::{find_user_by_email, find_user_by_id};
 
 async fn db_insert_user(
     conn: &mut Conn,
@@ -713,7 +695,7 @@ async fn handle_callback(
         }
 
         let user = {
-            let u = db_find_user_by_id(&mut conn, link_user_id)
+            let u = find_user_by_id(&mut conn, link_user_id)
                 .await
                 .map_err(|e| {
                     tracing::error!("DB error: {}", e);
@@ -791,7 +773,7 @@ async fn handle_callback(
         }
 
         let user = {
-            let u = db_find_user_by_id(&mut conn, account.user_id)
+            let u = find_user_by_id(&mut conn, account.user_id)
                 .await
                 .map_err(|e| {
                     tracing::error!("DB error: {}", e);
@@ -830,12 +812,10 @@ async fn handle_callback(
         let email = email.trim().to_lowercase();
 
         let existing_user = {
-            db_find_user_by_email(&mut conn, &email)
-                .await
-                .map_err(|e| {
-                    tracing::error!("DB error: {}", e);
-                    api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-                })?
+            find_user_by_email(&mut conn, &email).await.map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?
         };
 
         let (uid, display_name, email_verified) = if let Some(existing) = existing_user {

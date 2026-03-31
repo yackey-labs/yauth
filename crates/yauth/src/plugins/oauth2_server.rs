@@ -19,11 +19,11 @@ use crate::auth::crypto;
 use crate::config::OAuth2ServerConfig;
 use crate::db::models::{
     AuthorizationCode, Consent, DeviceCode, NewAuthorizationCode, NewConsent, NewDeviceCode,
-    NewOauth2Client, NewRefreshToken, Oauth2Client, RefreshToken, User,
+    NewOauth2Client, NewRefreshToken, Oauth2Client, RefreshToken,
 };
 use crate::db::schema::{
     yauth_authorization_codes, yauth_consents, yauth_device_codes, yauth_oauth2_clients,
-    yauth_refresh_tokens, yauth_users,
+    yauth_refresh_tokens,
 };
 use crate::error::{ApiError, api_err};
 use crate::middleware::AuthUser;
@@ -307,15 +307,7 @@ async fn db_update_device_code_slow_down(
 
 // -- User operations --
 
-async fn db_find_user_by_id(conn: &mut Conn, id: Uuid) -> DbResult<Option<User>> {
-    yauth_users::table
-        .find(id)
-        .select(User::as_select())
-        .first(conn)
-        .await
-        .optional()
-        .map_err(|e| e.to_string())
-}
+use crate::db::find_user_by_id;
 
 // -- Refresh token operations --
 
@@ -1103,7 +1095,7 @@ async fn handle_authorization_code_grant(
                 "Internal error",
             )
         })?;
-        db_find_user_by_id(&mut conn, stored_code.user_id)
+        find_user_by_id(&mut conn, stored_code.user_id)
             .await
             .map_err(|e| {
                 tracing::error!("DB error: {}", e);
@@ -1383,7 +1375,7 @@ async fn handle_oauth2_refresh_token(
                     "Internal error",
                 )
             })?;
-            db_find_user_by_id(&mut conn, user_id)
+            find_user_by_id(&mut conn, user_id)
                 .await
                 .map_err(|e| {
                     tracing::error!("DB error: {}", e);
@@ -2195,7 +2187,7 @@ async fn handle_device_code_grant(
                 "Internal error",
             )
         })?;
-        db_find_user_by_id(&mut conn, user_id)
+        find_user_by_id(&mut conn, user_id)
             .await
             .map_err(|e| {
                 tracing::error!("DB error: {}", e);
@@ -2896,7 +2888,7 @@ async fn authenticate_user(
                     Ok(c) => c,
                     Err(_) => return Err(()),
                 };
-                if let Ok(Some(user)) = db_find_user_by_id(&mut conn, session_user.user_id).await {
+                if let Ok(Some(user)) = find_user_by_id(&mut conn, session_user.user_id).await {
                     if !user.banned {
                         return Ok(AuthUser {
                             id: user.id,

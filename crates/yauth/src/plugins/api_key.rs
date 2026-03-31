@@ -13,8 +13,8 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::auth::crypto;
-use crate::db::models::{ApiKey, NewApiKey, User};
-use crate::db::schema::{yauth_api_keys, yauth_users};
+use crate::db::models::{ApiKey, NewApiKey};
+use crate::db::schema::yauth_api_keys;
 use crate::middleware::{AuthMethod, AuthUser};
 use crate::plugin::{PluginContext, YAuthPlugin};
 use crate::state::YAuthState;
@@ -55,7 +55,9 @@ async fn db_insert_api_key(
 async fn db_list_api_keys_by_user(conn: &mut Conn, user_id: Uuid) -> DbResult<Vec<ApiKey>> {
     yauth_api_keys::table
         .filter(yauth_api_keys::user_id.eq(user_id))
+        .order(yauth_api_keys::created_at.desc())
         .select(ApiKey::as_select())
+        .limit(100)
         .load(conn)
         .await
         .map_err(|e| e.to_string())
@@ -110,15 +112,7 @@ async fn db_update_api_key_last_used(
     Ok(())
 }
 
-async fn db_find_user_by_id(conn: &mut Conn, id: Uuid) -> DbResult<Option<User>> {
-    yauth_users::table
-        .find(id)
-        .select(User::as_select())
-        .first(conn)
-        .await
-        .optional()
-        .map_err(|e| e.to_string())
-}
+use crate::db::find_user_by_id;
 
 pub struct ApiKeyPlugin;
 
@@ -402,7 +396,7 @@ pub async fn validate_api_key(key: &str, state: &YAuthState) -> Result<AuthUser,
     }
 
     // Look up the user
-    let user = db_find_user_by_id(&mut conn, api_key.user_id)
+    let user = find_user_by_id(&mut conn, api_key.user_id)
         .await
         .map_err(|e| format!("Database error: {}", e))?
         .ok_or_else(|| "User not found".to_string())?;

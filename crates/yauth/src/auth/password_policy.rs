@@ -156,7 +156,7 @@ pub fn validate(password: &str, config: &PasswordPolicyConfig) -> Vec<String> {
 /// Check if a password matches any of the given historical password hashes.
 pub fn check_password_history(password: &str, history_hashes: &[String]) -> bool {
     for hash in history_hashes {
-        if crate::auth::password::verify_password(password, hash).unwrap_or(false) {
+        if crate::auth::password::verify_password_sync(password, hash).unwrap_or(false) {
             return true;
         }
     }

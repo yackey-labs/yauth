@@ -16,8 +16,9 @@ use webauthn_rs::prelude::*;
 
 use crate::auth::session;
 use crate::config::PasskeyConfig;
-use crate::db::models::{NewWebauthnCredential, User, WebauthnCredential};
-use crate::db::schema::{yauth_users, yauth_webauthn_credentials};
+use crate::db::models::{NewWebauthnCredential, WebauthnCredential};
+use crate::db::schema::yauth_webauthn_credentials;
+use crate::error::{ApiError, api_err};
 use crate::middleware::AuthUser;
 use crate::plugin::{PluginContext, YAuthPlugin};
 use crate::state::YAuthState;
@@ -112,25 +113,7 @@ use crate::auth::session::session_set_cookie;
 type Conn = diesel_async_crate::AsyncPgConnection;
 type DbResult<T> = Result<T, String>;
 
-async fn db_find_user_by_id(conn: &mut Conn, id: Uuid) -> DbResult<Option<User>> {
-    yauth_users::table
-        .find(id)
-        .select(User::as_select())
-        .first(conn)
-        .await
-        .optional()
-        .map_err(|e| e.to_string())
-}
-
-async fn db_find_user_by_email(conn: &mut Conn, email: &str) -> DbResult<Option<User>> {
-    yauth_users::table
-        .filter(yauth_users::email.eq(email))
-        .select(User::as_select())
-        .first(conn)
-        .await
-        .optional()
-        .map_err(|e| e.to_string())
-}
+use crate::db::{find_user_by_email, find_user_by_id};
 
 async fn db_find_credentials_by_user(
     conn: &mut Conn,
@@ -212,24 +195,20 @@ async fn register_begin(
     State(state): State<YAuthState>,
     Extension(auth_user): Extension<AuthUser>,
     webauthn: Arc<Webauthn>,
-) -> Result<impl IntoResponse, (StatusCode, String)> {
-    let mut conn = state.db.get().await.map_err(|_| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Internal error".to_string(),
-        )
-    })?;
+) -> Result<impl IntoResponse, ApiError> {
+    let mut conn = state
+        .db
+        .get()
+        .await
+        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
-    let user = db_find_user_by_id(&mut conn, auth_user.id)
+    let user = find_user_by_id(&mut conn, auth_user.id)
         .await
         .map_err(|e| {
             tracing::error!("DB error: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Internal error".to_string(),
-            )
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?
-        .ok_or((StatusCode::NOT_FOUND, "User not found".to_string()))?;
+        .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "User not found"))?;
 
     // Get existing credentials to exclude
     let existing_passkeys: Vec<Passkey> = {
@@ -237,10 +216,7 @@ async fn register_begin(
             .await
             .map_err(|e| {
                 tracing::error!("DB error: {}", e);
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Internal error".to_string(),
-                )
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
         existing_creds
             .into_iter()
@@ -264,19 +240,13 @@ async fn register_begin(
         .start_passkey_registration(user.id, &user.email, display_name, exclude_opt)
         .map_err(|e| {
             tracing::error!("WebAuthn registration start error: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "WebAuthn error".to_string(),
-            )
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "WebAuthn error")
         })?;
 
     // Store registration state in challenge store
     let reg_state_json = serde_json::to_value(&reg_state).map_err(|e| {
         tracing::error!("Serialize error: {}", e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Internal error".to_string(),
-        )
+        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
     })?;
 
     let challenge_key = format!("passkey_reg:{}", user.id);
@@ -286,10 +256,7 @@ async fn register_begin(
         .await
         .map_err(|e| {
             tracing::error!("Challenge store error: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Internal error".to_string(),
-            )
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?;
 
     Ok(Json(ccr))
@@ -308,7 +275,7 @@ async fn register_finish(
     Extension(auth_user): Extension<AuthUser>,
     Json(input): Json<RegisterFinishRequest>,
     webauthn: Arc<Webauthn>,
-) -> Result<impl IntoResponse, (StatusCode, String)> {
+) -> Result<impl IntoResponse, ApiError> {
     let challenge_key = format!("passkey_reg:{}", auth_user.id);
     let reg_state_json = state
         .challenge_store
@@ -316,54 +283,38 @@ async fn register_finish(
         .await
         .map_err(|e| {
             tracing::error!("Challenge store error: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Internal error".to_string(),
-            )
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?
-        .ok_or((
-            StatusCode::BAD_REQUEST,
-            "No pending registration".to_string(),
-        ))?;
+        .ok_or_else(|| api_err(StatusCode::BAD_REQUEST, "No pending registration"))?;
 
     // Clean up challenge
     let _ = state.challenge_store.delete(&challenge_key).await;
 
     let reg_state: PasskeyRegistration = serde_json::from_value(reg_state_json).map_err(|e| {
         tracing::error!("Deserialize error: {}", e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Internal error".to_string(),
-        )
+        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
     })?;
 
     let passkey = webauthn
         .finish_passkey_registration(&input.credential, &reg_state)
         .map_err(|e| {
             tracing::error!("WebAuthn registration finish error: {}", e);
-            (
-                StatusCode::BAD_REQUEST,
-                "Registration verification failed".to_string(),
-            )
+            api_err(StatusCode::BAD_REQUEST, "Registration verification failed")
         })?;
 
     let credential_json = serde_json::to_value(&passkey).map_err(|e| {
         tracing::error!("Serialize error: {}", e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Internal error".to_string(),
-        )
+        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
     })?;
 
     let passkey_name = input.name;
 
     {
-        let mut conn = state.db.get().await.map_err(|_| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Internal error".to_string(),
-            )
-        })?;
+        let mut conn = state
+            .db
+            .get()
+            .await
+            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
         db_insert_credential(
             &mut conn,
             Uuid::new_v4(),
@@ -374,10 +325,7 @@ async fn register_finish(
         .await
         .map_err(|e| {
             tracing::error!("Failed to save credential: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Internal error".to_string(),
-            )
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?;
     }
 
@@ -414,15 +362,14 @@ async fn login_begin(
     State(state): State<YAuthState>,
     Json(input): Json<PasskeyLoginBeginRequest>,
     webauthn: Arc<Webauthn>,
-) -> Result<Json<PasskeyLoginBeginResponse>, (StatusCode, String)> {
+) -> Result<Json<PasskeyLoginBeginResponse>, ApiError> {
     let challenge_id = Uuid::new_v4();
 
-    let mut conn = state.db.get().await.map_err(|_| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Internal error".to_string(),
-        )
-    })?;
+    let mut conn = state
+        .db
+        .get()
+        .await
+        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
     let (rcr, challenge_data) = if let Some(ref email_raw) = input.email {
         // --- Email-based flow ---
@@ -434,26 +381,22 @@ async fn login_begin(
             .await
         {
             warn!(event = "yauth.passkey.login.rate_limited", email = %email, "Passkey login rate limited");
-            return Err((
-                StatusCode::TOO_MANY_REQUESTS,
-                "Too many requests".to_string(),
-            ));
+            return Err(api_err(StatusCode::TOO_MANY_REQUESTS, "Too many requests"));
         }
 
         let user = {
-            db_find_user_by_email(&mut conn, &email)
+            find_user_by_email(&mut conn, &email)
                 .await
                 .map_err(|e| {
                     tracing::error!("DB error: {}", e);
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "Internal error".to_string(),
+                    api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+                })?
+                .ok_or_else(|| {
+                    api_err(
+                        StatusCode::BAD_REQUEST,
+                        "No passkeys registered for this email",
                     )
                 })?
-                .ok_or((
-                    StatusCode::BAD_REQUEST,
-                    "No passkeys registered for this email".to_string(),
-                ))?
         };
 
         let creds: Vec<WebauthnCredential> = {
@@ -461,17 +404,14 @@ async fn login_begin(
                 .await
                 .map_err(|e| {
                     tracing::error!("DB error: {}", e);
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "Internal error".to_string(),
-                    )
+                    api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
                 })?
         };
 
         if creds.is_empty() {
-            return Err((
+            return Err(api_err(
                 StatusCode::BAD_REQUEST,
-                "No passkeys registered for this email".to_string(),
+                "No passkeys registered for this email",
             ));
         }
 
@@ -481,9 +421,9 @@ async fn login_begin(
             .collect();
 
         if passkeys.is_empty() {
-            return Err((
+            return Err(api_err(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to deserialize credentials".to_string(),
+                "Failed to deserialize credentials",
             ));
         }
 
@@ -491,18 +431,12 @@ async fn login_begin(
             .start_passkey_authentication(&passkeys)
             .map_err(|e| {
                 tracing::error!("WebAuthn auth start error: {}", e);
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "WebAuthn error".to_string(),
-                )
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "WebAuthn error")
             })?;
 
         let auth_state_json = serde_json::to_value(&auth_state).map_err(|e| {
             tracing::error!("Serialize error: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Internal error".to_string(),
-            )
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?;
 
         let data = serde_json::json!({
@@ -519,26 +453,17 @@ async fn login_begin(
                 event = "yauth.passkey.login.rate_limited",
                 "Discoverable passkey login rate limited"
             );
-            return Err((
-                StatusCode::TOO_MANY_REQUESTS,
-                "Too many requests".to_string(),
-            ));
+            return Err(api_err(StatusCode::TOO_MANY_REQUESTS, "Too many requests"));
         }
 
         let (rcr, auth_state) = webauthn.start_discoverable_authentication().map_err(|e| {
             tracing::error!("WebAuthn discoverable auth start error: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "WebAuthn error".to_string(),
-            )
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "WebAuthn error")
         })?;
 
         let auth_state_json = serde_json::to_value(&auth_state).map_err(|e| {
             tracing::error!("Serialize error: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Internal error".to_string(),
-            )
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?;
 
         let data = serde_json::json!({
@@ -556,10 +481,7 @@ async fn login_begin(
         .await
         .map_err(|e| {
             tracing::error!("Challenge store error: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Internal error".to_string(),
-            )
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?;
 
     Ok(Json(PasskeyLoginBeginResponse {
@@ -580,7 +502,7 @@ async fn login_finish(
     State(state): State<YAuthState>,
     Json(input): Json<PasskeyLoginFinishRequest>,
     webauthn: Arc<Webauthn>,
-) -> Result<impl IntoResponse, (StatusCode, String)> {
+) -> Result<impl IntoResponse, ApiError> {
     let challenge_key = format!("passkey_auth:{}", input.challenge_id);
     let challenge_data = state
         .challenge_store
@@ -588,15 +510,9 @@ async fn login_finish(
         .await
         .map_err(|e| {
             tracing::error!("Challenge store error: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Internal error".to_string(),
-            )
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?
-        .ok_or((
-            StatusCode::BAD_REQUEST,
-            "No pending authentication".to_string(),
-        ))?;
+        .ok_or_else(|| api_err(StatusCode::BAD_REQUEST, "No pending authentication"))?;
 
     // Clean up challenge
     let _ = state.challenge_store.delete(&challenge_key).await;
@@ -606,27 +522,23 @@ async fn login_finish(
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
-    let auth_state_json = challenge_data.get("auth_state").cloned().ok_or((
-        StatusCode::INTERNAL_SERVER_ERROR,
-        "Internal error".to_string(),
-    ))?;
+    let auth_state_json = challenge_data
+        .get("auth_state")
+        .cloned()
+        .ok_or_else(|| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
-    let mut conn = state.db.get().await.map_err(|_| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Internal error".to_string(),
-        )
-    })?;
+    let mut conn = state
+        .db
+        .get()
+        .await
+        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
     let user_id = if discoverable {
         // --- Discoverable flow ---
         let auth_state: DiscoverableAuthentication = serde_json::from_value(auth_state_json)
             .map_err(|e| {
                 tracing::error!("Deserialize error: {}", e);
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Internal error".to_string(),
-                )
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
 
         // Identify which user owns this credential
@@ -634,10 +546,7 @@ async fn login_finish(
             .identify_discoverable_authentication(&input.credential)
             .map_err(|e| {
                 tracing::error!("WebAuthn identify error: {}", e);
-                (
-                    StatusCode::UNAUTHORIZED,
-                    "Authentication failed".to_string(),
-                )
+                api_err(StatusCode::UNAUTHORIZED, "Authentication failed")
             })?;
 
         // Load user's passkeys from DB
@@ -645,16 +554,10 @@ async fn login_finish(
             .await
             .map_err(|e| {
                 tracing::error!("DB error: {}", e);
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Internal error".to_string(),
-                )
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
         if creds.is_empty() {
-            return Err((
-                StatusCode::UNAUTHORIZED,
-                "Authentication failed".to_string(),
-            ));
+            return Err(api_err(StatusCode::UNAUTHORIZED, "Authentication failed"));
         }
 
         let passkeys: Vec<Passkey> = creds
@@ -669,44 +572,31 @@ async fn login_finish(
             .finish_discoverable_authentication(&input.credential, auth_state, &discoverable_keys)
             .map_err(|e| {
                 tracing::error!("WebAuthn discoverable auth finish error: {}", e);
-                (
-                    StatusCode::UNAUTHORIZED,
-                    "Authentication failed".to_string(),
-                )
+                api_err(StatusCode::UNAUTHORIZED, "Authentication failed")
             })?;
 
         uid
     } else {
         // --- Email-based flow ---
-        let user_id: Uuid =
-            serde_json::from_value(challenge_data.get("user_id").cloned().ok_or((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Internal error".to_string(),
-            ))?)
-            .map_err(|_| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Internal error".to_string(),
-                )
-            })?;
+        let user_id: Uuid = serde_json::from_value(
+            challenge_data
+                .get("user_id")
+                .cloned()
+                .ok_or_else(|| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?,
+        )
+        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
         let auth_state: PasskeyAuthentication =
             serde_json::from_value(auth_state_json).map_err(|e| {
                 tracing::error!("Deserialize error: {}", e);
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Internal error".to_string(),
-                )
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
 
         let _auth_result = webauthn
             .finish_passkey_authentication(&input.credential, &auth_state)
             .map_err(|e| {
                 tracing::error!("WebAuthn auth finish error: {}", e);
-                (
-                    StatusCode::UNAUTHORIZED,
-                    "Authentication failed".to_string(),
-                )
+                api_err(StatusCode::UNAUTHORIZED, "Authentication failed")
             })?;
 
         user_id
@@ -720,22 +610,16 @@ async fn login_finish(
             .await
             .map_err(|e| {
                 tracing::error!("Failed to create session: {}", e);
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Internal error".to_string(),
-                )
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
 
-    let user = db_find_user_by_id(&mut conn, user_id)
+    let user = find_user_by_id(&mut conn, user_id)
         .await
         .map_err(|e| {
             tracing::error!("DB error: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Internal error".to_string(),
-            )
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?
-        .ok_or((StatusCode::NOT_FOUND, "User not found".to_string()))?;
+        .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "User not found"))?;
 
     info!(event = "yauth.passkey.login", user_id = %user.id, email = %user.email, "Passkey login successful");
 
@@ -784,22 +668,18 @@ pub struct PasskeyInfo {
 async fn list_passkeys(
     State(state): State<YAuthState>,
     Extension(auth_user): Extension<AuthUser>,
-) -> Result<Json<Vec<PasskeyInfo>>, (StatusCode, String)> {
+) -> Result<Json<Vec<PasskeyInfo>>, ApiError> {
     let passkeys = {
-        let mut conn = state.db.get().await.map_err(|_| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Internal error".to_string(),
-            )
-        })?;
+        let mut conn = state
+            .db
+            .get()
+            .await
+            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
         let creds = db_find_credentials_by_user(&mut conn, auth_user.id)
             .await
             .map_err(|e| {
                 tracing::error!("DB error: {}", e);
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Internal error".to_string(),
-                )
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
         creds
             .into_iter()
@@ -824,33 +704,26 @@ async fn delete_passkey(
     State(state): State<YAuthState>,
     Extension(auth_user): Extension<AuthUser>,
     Path(id): Path<Uuid>,
-) -> Result<StatusCode, (StatusCode, String)> {
+) -> Result<StatusCode, ApiError> {
     {
-        let mut conn = state.db.get().await.map_err(|_| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Internal error".to_string(),
-            )
-        })?;
+        let mut conn = state
+            .db
+            .get()
+            .await
+            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
         let cred = db_find_credential_by_id_and_user(&mut conn, id, auth_user.id)
             .await
             .map_err(|e| {
                 tracing::error!("DB error: {}", e);
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Internal error".to_string(),
-                )
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?
-            .ok_or((StatusCode::NOT_FOUND, "Passkey not found".to_string()))?;
+            .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "Passkey not found"))?;
 
         db_delete_credential(&mut conn, cred.id)
             .await
             .map_err(|e| {
                 tracing::error!("Failed to delete passkey: {}", e);
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Internal error".to_string(),
-                )
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
     }
 

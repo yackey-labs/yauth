@@ -111,6 +111,23 @@ pub struct AdminUserInfo {
     pub updated_at: String,
 }
 
+impl From<crate::db::models::User> for AdminUserInfo {
+    fn from(u: crate::db::models::User) -> Self {
+        AdminUserInfo {
+            id: u.id.to_string(),
+            email: u.email,
+            display_name: u.display_name,
+            email_verified: u.email_verified,
+            role: u.role,
+            banned: u.banned,
+            banned_reason: u.banned_reason,
+            banned_until: u.banned_until.map(|t| t.to_string()),
+            created_at: u.created_at.to_string(),
+            updated_at: u.updated_at.to_string(),
+        }
+    }
+}
+
 /// Response type for `GET /admin/sessions` (schema-only, used for OpenAPI spec).
 #[derive(Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -249,8 +266,10 @@ async fn list_users(
         }
     };
 
+    let user_infos: Vec<AdminUserInfo> = users.into_iter().map(AdminUserInfo::from).collect();
+
     Ok(Json(serde_json::json!({
-        "users": users,
+        "users": user_infos,
         "total": total,
         "page": page,
         "per_page": per_page,
@@ -284,7 +303,7 @@ async fn get_user(
         })?
         .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "User not found"))?;
 
-    Ok(Json(serde_json::json!(user)))
+    Ok(Json(AdminUserInfo::from(user)))
 }
 
 // ---------------------------------------------------------------------------
@@ -357,7 +376,7 @@ async fn update_user(
         )
         .await;
 
-    Ok(Json(serde_json::json!(updated)))
+    Ok(Json(AdminUserInfo::from(updated)))
 }
 
 // ---------------------------------------------------------------------------
@@ -513,7 +532,7 @@ async fn ban_user(
         )
         .await;
 
-    Ok(Json(serde_json::json!(updated)))
+    Ok(Json(AdminUserInfo::from(updated)))
 }
 
 // ---------------------------------------------------------------------------
@@ -584,7 +603,7 @@ async fn unban_user(
         )
         .await;
 
-    Ok(Json(serde_json::json!(updated)))
+    Ok(Json(AdminUserInfo::from(updated)))
 }
 
 // ---------------------------------------------------------------------------

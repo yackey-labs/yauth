@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/*"]
+members = ["crates/yauth"]
 resolver = "2"
 
 [workspace.package]
@@ -9,10 +9,6 @@ license = "MIT"
 repository = "https://github.com/yackey-labs/yauth"
 
 [workspace.dependencies]
-# Internal crates
-yauth-entity = { version = "0.2.5", path = "crates/yauth-entity", default-features = false }
-yauth-migration = { version = "0.2.5", path = "crates/yauth-migration", default-features = false }
-
 # Web framework
 axum = { version = "0.8", features = ["macros"] }
 axum-extra = { version = "0.12", features = ["cookie"] }

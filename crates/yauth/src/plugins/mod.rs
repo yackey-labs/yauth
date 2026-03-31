@@ -46,6 +46,8 @@ use axum::{
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
+use crate::db::models::User;
+use crate::db::schema::yauth_users;
 use crate::middleware::AuthUser;
 use crate::plugin::PluginContext;
 use crate::state::YAuthState;
@@ -110,6 +112,7 @@ async fn update_profile(
     Extension(user): Extension<AuthUser>,
     Json(input): Json<UpdateProfileRequest>,
 ) -> impl axum::response::IntoResponse {
+    use diesel::prelude::*;
     use diesel_async_crate::RunQueryDsl;
 
     let mut conn = match state.db.get().await {
@@ -128,30 +131,14 @@ async fn update_profile(
         .map(|n| n.trim().to_string())
         .filter(|n| !n.is_empty());
 
-    #[derive(diesel::QueryableByName)]
-    struct UpdatedUser {
-        #[diesel(sql_type = diesel::sql_types::Uuid)]
-        id: uuid::Uuid,
-        #[diesel(sql_type = diesel::sql_types::Text)]
-        email: String,
-        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
-        display_name: Option<String>,
-        #[diesel(sql_type = diesel::sql_types::Bool)]
-        email_verified: bool,
-        #[diesel(sql_type = diesel::sql_types::Text)]
-        role: String,
-        #[diesel(sql_type = diesel::sql_types::Bool)]
-        banned: bool,
-    }
-
-    let result: Result<UpdatedUser, _> = diesel::sql_query(
-        "UPDATE yauth_users SET display_name = $1, updated_at = $2 WHERE id = $3 RETURNING id, email, display_name, email_verified, role, banned",
-    )
-    .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(&display_name)
-    .bind::<diesel::sql_types::Timestamptz, _>(Utc::now())
-    .bind::<diesel::sql_types::Uuid, _>(user.id)
-    .get_result(&mut conn)
-    .await;
+    let result: Result<User, _> = diesel::update(yauth_users::table.find(user.id))
+        .set((
+            yauth_users::display_name.eq(&display_name),
+            yauth_users::updated_at.eq(Utc::now().naive_utc()),
+        ))
+        .returning(User::as_returning())
+        .get_result(&mut conn)
+        .await;
 
     match result {
         Ok(updated) => (

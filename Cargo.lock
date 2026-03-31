@@ -4580,32 +4580,6 @@ dependencies = [
  "uuid",
  "webauthn-rs",
  "webauthn-rs-proto",
- "yauth-entity",
- "yauth-migration",
-]
-
-[[package]]
-name = "yauth-entity"
-version = "0.2.5"
-dependencies = [
- "chrono",
- "diesel",
- "diesel-async",
- "futures-util",
- "serde",
- "serde_json",
- "uuid",
-]
-
-[[package]]
-name = "yauth-migration"
-version = "0.2.5"
-dependencies = [
- "diesel",
- "diesel-async",
- "futures-util",
- "tokio",
- "uuid",
 ]
 
 [[package]]

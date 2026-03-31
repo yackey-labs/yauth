@@ -4,6 +4,8 @@ use uuid::Uuid;
 
 use super::crypto;
 use crate::config::BindingAction;
+use crate::db::models::{NewSession, Session};
+use crate::db::schema::yauth_sessions;
 use crate::state::{DbPool, YAuthState};
 
 pub fn session_set_cookie(state: &YAuthState, token: &str, ttl: std::time::Duration) -> String {
@@ -80,34 +82,22 @@ pub async fn create_session(
 
     let mut conn = db.get().await?;
 
-    diesel::sql_query(
-        "INSERT INTO yauth_sessions (id, user_id, token_hash, ip_address, user_agent, expires_at, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)",
-    )
-    .bind::<diesel::sql_types::Uuid, _>(session_id)
-    .bind::<diesel::sql_types::Uuid, _>(user_id)
-    .bind::<diesel::sql_types::Text, _>(&token_hash)
-    .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(&ip_address)
-    .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(&user_agent)
-    .bind::<diesel::sql_types::Timestamptz, _>(expires_at)
-    .bind::<diesel::sql_types::Timestamptz, _>(now)
-    .execute(&mut conn)
-    .await?;
+    let new_session = NewSession {
+        id: session_id,
+        user_id,
+        token_hash,
+        ip_address,
+        user_agent,
+        expires_at: expires_at.naive_utc(),
+        created_at: now.naive_utc(),
+    };
+
+    diesel::insert_into(yauth_sessions::table)
+        .values(&new_session)
+        .execute(&mut conn)
+        .await?;
 
     Ok((token, session_id))
-}
-
-#[derive(diesel::QueryableByName)]
-struct SessionRow {
-    #[diesel(sql_type = diesel::sql_types::Uuid)]
-    id: Uuid,
-    #[diesel(sql_type = diesel::sql_types::Uuid)]
-    user_id: Uuid,
-    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
-    ip_address: Option<String>,
-    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
-    user_agent: Option<String>,
-    #[diesel(sql_type = diesel::sql_types::Timestamptz)]
-    expires_at: chrono::NaiveDateTime,
 }
 
 pub async fn validate_session(
@@ -116,19 +106,19 @@ pub async fn validate_session(
     request_ip: Option<&str>,
     request_ua: Option<&str>,
 ) -> Result<Option<SessionUser>, SessionError> {
+    use diesel::prelude::*;
     use diesel::result::OptionalExtension;
     use diesel_async_crate::RunQueryDsl;
 
     let token_hash = crypto::hash_token(token);
     let mut conn = state.db.get().await?;
 
-    let session: Option<SessionRow> = diesel::sql_query(
-        "SELECT id, user_id, ip_address, user_agent, expires_at FROM yauth_sessions WHERE token_hash = $1",
-    )
-    .bind::<diesel::sql_types::Text, _>(&token_hash)
-    .get_result(&mut conn)
-    .await
-    .optional()?;
+    let session: Option<Session> = yauth_sessions::table
+        .filter(yauth_sessions::token_hash.eq(&token_hash))
+        .select(Session::as_select())
+        .get_result(&mut conn)
+        .await
+        .optional()?;
 
     let span = tracing::Span::current();
     span.record("yauth.session_found", session.is_some());
@@ -137,8 +127,7 @@ pub async fn validate_session(
         Some(s) => {
             let now = Utc::now().naive_utc();
             if s.expires_at < now {
-                diesel::sql_query("DELETE FROM yauth_sessions WHERE id = $1")
-                    .bind::<diesel::sql_types::Uuid, _>(s.id)
+                diesel::delete(yauth_sessions::table.filter(yauth_sessions::id.eq(s.id)))
                     .execute(&mut conn)
                     .await?;
                 return Ok(None);
@@ -158,8 +147,7 @@ pub async fn validate_session(
                     "Session IP mismatch"
                 );
                 if binding.ip_mismatch_action == BindingAction::Invalidate {
-                    diesel::sql_query("DELETE FROM yauth_sessions WHERE id = $1")
-                        .bind::<diesel::sql_types::Uuid, _>(s.id)
+                    diesel::delete(yauth_sessions::table.filter(yauth_sessions::id.eq(s.id)))
                         .execute(&mut conn)
                         .await?;
                     return Ok(None);
@@ -176,8 +164,7 @@ pub async fn validate_session(
                     "Session User-Agent mismatch"
                 );
                 if binding.ua_mismatch_action == BindingAction::Invalidate {
-                    diesel::sql_query("DELETE FROM yauth_sessions WHERE id = $1")
-                        .bind::<diesel::sql_types::Uuid, _>(s.id)
+                    diesel::delete(yauth_sessions::table.filter(yauth_sessions::id.eq(s.id)))
                         .execute(&mut conn)
                         .await?;
                     return Ok(None);
@@ -194,23 +181,24 @@ pub async fn validate_session(
 }
 
 pub async fn delete_session(db: &DbPool, token: &str) -> Result<bool, SessionError> {
+    use diesel::prelude::*;
     use diesel_async_crate::RunQueryDsl;
 
     let token_hash = crypto::hash_token(token);
     let mut conn = db.get().await?;
-    let rows = diesel::sql_query("DELETE FROM yauth_sessions WHERE token_hash = $1")
-        .bind::<diesel::sql_types::Text, _>(&token_hash)
-        .execute(&mut conn)
-        .await?;
+    let rows =
+        diesel::delete(yauth_sessions::table.filter(yauth_sessions::token_hash.eq(&token_hash)))
+            .execute(&mut conn)
+            .await?;
     Ok(rows > 0)
 }
 
 pub async fn delete_all_user_sessions(db: &DbPool, user_id: Uuid) -> Result<u64, SessionError> {
+    use diesel::prelude::*;
     use diesel_async_crate::RunQueryDsl;
 
     let mut conn = db.get().await?;
-    let rows = diesel::sql_query("DELETE FROM yauth_sessions WHERE user_id = $1")
-        .bind::<diesel::sql_types::Uuid, _>(user_id)
+    let rows = diesel::delete(yauth_sessions::table.filter(yauth_sessions::user_id.eq(user_id)))
         .execute(&mut conn)
         .await?;
     Ok(rows as u64)
@@ -221,14 +209,16 @@ pub async fn delete_other_user_sessions(
     user_id: Uuid,
     keep_token_hash: &str,
 ) -> Result<u64, SessionError> {
+    use diesel::prelude::*;
     use diesel_async_crate::RunQueryDsl;
 
     let mut conn = db.get().await?;
-    let rows =
-        diesel::sql_query("DELETE FROM yauth_sessions WHERE user_id = $1 AND token_hash != $2")
-            .bind::<diesel::sql_types::Uuid, _>(user_id)
-            .bind::<diesel::sql_types::Text, _>(keep_token_hash)
-            .execute(&mut conn)
-            .await?;
+    let rows = diesel::delete(
+        yauth_sessions::table
+            .filter(yauth_sessions::user_id.eq(user_id))
+            .filter(yauth_sessions::token_hash.ne(keep_token_hash)),
+    )
+    .execute(&mut conn)
+    .await?;
     Ok(rows as u64)
 }

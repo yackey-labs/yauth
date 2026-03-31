@@ -12,289 +12,16 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::auth::{crypto, session};
+use crate::db::models::{NewAuditLog, NewSession, Session, UpdateUser, User};
+use crate::db::schema::{yauth_audit_log, yauth_sessions, yauth_users};
 use crate::error::{ApiError, api_err};
 use crate::middleware::{AuthUser, require_admin};
 use crate::plugin::{PluginContext, YAuthPlugin};
 use crate::state::YAuthState;
 
-// ---------------------------------------------------------------------------
-// Diesel-async helpers
-// ---------------------------------------------------------------------------
-
-mod diesel_db {
-    use diesel::result::OptionalExtension;
-    use diesel_async_crate::RunQueryDsl;
-    use uuid::Uuid;
-
-    type Conn = diesel_async_crate::AsyncPgConnection;
-    type DbResult<T> = Result<T, String>;
-
-    #[derive(diesel::QueryableByName, Clone, serde::Serialize)]
-    #[allow(dead_code)]
-    pub struct UserRow {
-        #[diesel(sql_type = diesel::sql_types::Uuid)]
-        pub id: Uuid,
-        #[diesel(sql_type = diesel::sql_types::Text)]
-        pub email: String,
-        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
-        pub display_name: Option<String>,
-        #[diesel(sql_type = diesel::sql_types::Bool)]
-        pub email_verified: bool,
-        #[diesel(sql_type = diesel::sql_types::Text)]
-        pub role: String,
-        #[diesel(sql_type = diesel::sql_types::Bool)]
-        pub banned: bool,
-        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
-        pub banned_reason: Option<String>,
-        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Timestamptz>)]
-        pub banned_until: Option<chrono::NaiveDateTime>,
-        #[diesel(sql_type = diesel::sql_types::Timestamptz)]
-        pub created_at: chrono::NaiveDateTime,
-        #[diesel(sql_type = diesel::sql_types::Timestamptz)]
-        pub updated_at: chrono::NaiveDateTime,
-    }
-
-    #[derive(diesel::QueryableByName, Clone, serde::Serialize)]
-    #[allow(dead_code)]
-    pub struct SessionRow {
-        #[diesel(sql_type = diesel::sql_types::Uuid)]
-        pub id: Uuid,
-        #[diesel(sql_type = diesel::sql_types::Uuid)]
-        pub user_id: Uuid,
-        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
-        pub ip_address: Option<String>,
-        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
-        pub user_agent: Option<String>,
-        #[diesel(sql_type = diesel::sql_types::Timestamptz)]
-        pub expires_at: chrono::NaiveDateTime,
-        #[diesel(sql_type = diesel::sql_types::Timestamptz)]
-        pub created_at: chrono::NaiveDateTime,
-    }
-
-    #[derive(diesel::QueryableByName, Clone)]
-    #[allow(dead_code)]
-    pub struct CountRow {
-        #[diesel(sql_type = diesel::sql_types::BigInt)]
-        pub count: i64,
-    }
-
-    pub async fn find_user_by_id(conn: &mut Conn, id: Uuid) -> DbResult<Option<UserRow>> {
-        diesel::sql_query(
-            "SELECT id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at FROM yauth_users WHERE id = $1",
-        )
-        .bind::<diesel::sql_types::Uuid, _>(id)
-        .get_result(conn)
-        .await
-        .optional()
-        .map_err(|e| e.to_string())
-    }
-
-    pub async fn list_users(
-        conn: &mut Conn,
-        search: Option<&str>,
-        limit: i64,
-        offset: i64,
-    ) -> DbResult<Vec<UserRow>> {
-        match search {
-            Some(pattern) => {
-                let like_pattern = format!("%{}%", pattern);
-                diesel::sql_query(
-                    "SELECT id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at FROM yauth_users WHERE email ILIKE $1 OR display_name ILIKE $1 ORDER BY created_at ASC LIMIT $2 OFFSET $3",
-                )
-                .bind::<diesel::sql_types::Text, _>(&like_pattern)
-                .bind::<diesel::sql_types::BigInt, _>(limit)
-                .bind::<diesel::sql_types::BigInt, _>(offset)
-                .load(conn)
-                .await
-                .map_err(|e| e.to_string())
-            }
-            None => {
-                diesel::sql_query(
-                    "SELECT id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at FROM yauth_users ORDER BY created_at ASC LIMIT $1 OFFSET $2",
-                )
-                .bind::<diesel::sql_types::BigInt, _>(limit)
-                .bind::<diesel::sql_types::BigInt, _>(offset)
-                .load(conn)
-                .await
-                .map_err(|e| e.to_string())
-            }
-        }
-    }
-
-    pub async fn count_users(conn: &mut Conn, search: Option<&str>) -> DbResult<u64> {
-        let row: CountRow = match search {
-            Some(pattern) => {
-                let like_pattern = format!("%{}%", pattern);
-                diesel::sql_query(
-                    "SELECT COUNT(*) AS count FROM yauth_users WHERE email ILIKE $1 OR display_name ILIKE $1",
-                )
-                .bind::<diesel::sql_types::Text, _>(&like_pattern)
-                .get_result(conn)
-                .await
-                .map_err(|e| e.to_string())?
-            }
-            None => diesel::sql_query("SELECT COUNT(*) AS count FROM yauth_users")
-                .get_result(conn)
-                .await
-                .map_err(|e| e.to_string())?,
-        };
-        Ok(row.count as u64)
-    }
-
-    pub async fn update_user(
-        conn: &mut Conn,
-        id: Uuid,
-        display_name: Option<&str>,
-        role: Option<&str>,
-        email_verified: Option<bool>,
-        updated_at: chrono::DateTime<chrono::FixedOffset>,
-    ) -> DbResult<UserRow> {
-        // Use COALESCE to keep existing values for NULL parameters
-        diesel::sql_query(
-            "UPDATE yauth_users SET display_name = COALESCE($1, display_name), role = COALESCE($2, role), email_verified = COALESCE($3, email_verified), updated_at = $4 WHERE id = $5 RETURNING id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at",
-        )
-        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(display_name)
-        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(role)
-        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Bool>, _>(email_verified)
-        .bind::<diesel::sql_types::Timestamptz, _>(updated_at)
-        .bind::<diesel::sql_types::Uuid, _>(id)
-        .get_result(conn)
-        .await
-        .map_err(|e| e.to_string())
-    }
-
-    pub async fn delete_user(conn: &mut Conn, id: Uuid) -> DbResult<()> {
-        diesel::sql_query("DELETE FROM yauth_users WHERE id = $1")
-            .bind::<diesel::sql_types::Uuid, _>(id)
-            .execute(conn)
-            .await
-            .map_err(|e| e.to_string())?;
-        Ok(())
-    }
-
-    pub async fn ban_user(
-        conn: &mut Conn,
-        id: Uuid,
-        reason: Option<&str>,
-        banned_until: Option<chrono::DateTime<chrono::FixedOffset>>,
-        updated_at: chrono::DateTime<chrono::FixedOffset>,
-    ) -> DbResult<UserRow> {
-        diesel::sql_query(
-            "UPDATE yauth_users SET banned = true, banned_reason = $1, banned_until = $2, updated_at = $3 WHERE id = $4 RETURNING id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at",
-        )
-        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(reason)
-        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Timestamptz>, _>(banned_until)
-        .bind::<diesel::sql_types::Timestamptz, _>(updated_at)
-        .bind::<diesel::sql_types::Uuid, _>(id)
-        .get_result(conn)
-        .await
-        .map_err(|e| e.to_string())
-    }
-
-    pub async fn unban_user(
-        conn: &mut Conn,
-        id: Uuid,
-        updated_at: chrono::DateTime<chrono::FixedOffset>,
-    ) -> DbResult<UserRow> {
-        diesel::sql_query(
-            "UPDATE yauth_users SET banned = false, banned_reason = NULL, banned_until = NULL, updated_at = $1 WHERE id = $2 RETURNING id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at",
-        )
-        .bind::<diesel::sql_types::Timestamptz, _>(updated_at)
-        .bind::<diesel::sql_types::Uuid, _>(id)
-        .get_result(conn)
-        .await
-        .map_err(|e| e.to_string())
-    }
-
-    pub async fn insert_session(
-        conn: &mut Conn,
-        id: Uuid,
-        user_id: Uuid,
-        token_hash: &str,
-        user_agent: Option<&str>,
-        expires_at: chrono::DateTime<chrono::FixedOffset>,
-        now: chrono::DateTime<chrono::FixedOffset>,
-    ) -> DbResult<()> {
-        diesel::sql_query(
-            "INSERT INTO yauth_sessions (id, user_id, token_hash, ip_address, user_agent, expires_at, created_at) VALUES ($1, $2, $3, NULL, $4, $5, $6)",
-        )
-        .bind::<diesel::sql_types::Uuid, _>(id)
-        .bind::<diesel::sql_types::Uuid, _>(user_id)
-        .bind::<diesel::sql_types::Text, _>(token_hash)
-        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(user_agent)
-        .bind::<diesel::sql_types::Timestamptz, _>(expires_at)
-        .bind::<diesel::sql_types::Timestamptz, _>(now)
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-        Ok(())
-    }
-
-    pub async fn insert_audit_log(
-        conn: &mut Conn,
-        id: Uuid,
-        user_id: Option<Uuid>,
-        event_type: &str,
-        metadata: Option<serde_json::Value>,
-        now: chrono::DateTime<chrono::FixedOffset>,
-    ) -> DbResult<()> {
-        diesel::sql_query(
-            "INSERT INTO yauth_audit_log (id, user_id, event_type, metadata, ip_address, created_at) VALUES ($1, $2, $3, $4, NULL, $5)",
-        )
-        .bind::<diesel::sql_types::Uuid, _>(id)
-        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Uuid>, _>(user_id)
-        .bind::<diesel::sql_types::Text, _>(event_type)
-        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Jsonb>, _>(metadata)
-        .bind::<diesel::sql_types::Timestamptz, _>(now)
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-        Ok(())
-    }
-
-    pub async fn list_sessions(
-        conn: &mut Conn,
-        limit: i64,
-        offset: i64,
-    ) -> DbResult<Vec<SessionRow>> {
-        diesel::sql_query(
-            "SELECT id, user_id, ip_address, user_agent, expires_at, created_at FROM yauth_sessions ORDER BY created_at DESC LIMIT $1 OFFSET $2",
-        )
-        .bind::<diesel::sql_types::BigInt, _>(limit)
-        .bind::<diesel::sql_types::BigInt, _>(offset)
-        .load(conn)
-        .await
-        .map_err(|e| e.to_string())
-    }
-
-    pub async fn count_sessions(conn: &mut Conn) -> DbResult<u64> {
-        let row: CountRow = diesel::sql_query("SELECT COUNT(*) AS count FROM yauth_sessions")
-            .get_result(conn)
-            .await
-            .map_err(|e| e.to_string())?;
-        Ok(row.count as u64)
-    }
-
-    pub async fn find_session_by_id(conn: &mut Conn, id: Uuid) -> DbResult<Option<SessionRow>> {
-        diesel::sql_query(
-            "SELECT id, user_id, ip_address, user_agent, expires_at, created_at FROM yauth_sessions WHERE id = $1",
-        )
-        .bind::<diesel::sql_types::Uuid, _>(id)
-        .get_result(conn)
-        .await
-        .optional()
-        .map_err(|e| e.to_string())
-    }
-
-    pub async fn delete_session(conn: &mut Conn, id: Uuid) -> DbResult<()> {
-        diesel::sql_query("DELETE FROM yauth_sessions WHERE id = $1")
-            .bind::<diesel::sql_types::Uuid, _>(id)
-            .execute(conn)
-            .await
-            .map_err(|e| e.to_string())?;
-        Ok(())
-    }
-}
+use diesel::prelude::*;
+use diesel::result::OptionalExtension;
+use diesel_async_crate::RunQueryDsl;
 
 pub struct AdminPlugin;
 
@@ -406,6 +133,30 @@ pub struct AdminSessionInfo {
     pub created_at: String,
 }
 
+/// Serializable session info (excludes token_hash for admin listing).
+#[derive(Serialize, Clone)]
+struct SessionInfo {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    pub ip_address: Option<String>,
+    pub user_agent: Option<String>,
+    pub expires_at: chrono::NaiveDateTime,
+    pub created_at: chrono::NaiveDateTime,
+}
+
+impl From<Session> for SessionInfo {
+    fn from(s: Session) -> Self {
+        Self {
+            id: s.id,
+            user_id: s.user_id,
+            ip_address: s.ip_address,
+            user_agent: s.user_agent,
+            expires_at: s.expires_at,
+            created_at: s.created_at,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -436,19 +187,67 @@ async fn list_users(
     let offset = ((page - 1) * per_page) as i64;
     let limit = per_page as i64;
 
-    let total = diesel_db::count_users(&mut conn, params.search.as_deref())
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error counting users: {}", e);
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
+    let (total, users) = match params.search.as_deref() {
+        Some(pattern) => {
+            let like_pattern = format!("%{}%", pattern);
+            let count: i64 = yauth_users::table
+                .filter(
+                    yauth_users::email
+                        .ilike(&like_pattern)
+                        .or(yauth_users::display_name.ilike(&like_pattern)),
+                )
+                .count()
+                .get_result(&mut conn)
+                .await
+                .map_err(|e| {
+                    tracing::error!("DB error counting users: {}", e);
+                    api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+                })?;
 
-    let users = diesel_db::list_users(&mut conn, params.search.as_deref(), limit, offset)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error listing users: {}", e);
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
+            let rows: Vec<User> = yauth_users::table
+                .filter(
+                    yauth_users::email
+                        .ilike(&like_pattern)
+                        .or(yauth_users::display_name.ilike(&like_pattern)),
+                )
+                .order(yauth_users::created_at.asc())
+                .limit(limit)
+                .offset(offset)
+                .select(User::as_select())
+                .load(&mut conn)
+                .await
+                .map_err(|e| {
+                    tracing::error!("DB error listing users: {}", e);
+                    api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+                })?;
+
+            (count as u64, rows)
+        }
+        None => {
+            let count: i64 = yauth_users::table
+                .count()
+                .get_result(&mut conn)
+                .await
+                .map_err(|e| {
+                    tracing::error!("DB error counting users: {}", e);
+                    api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+                })?;
+
+            let rows: Vec<User> = yauth_users::table
+                .order(yauth_users::created_at.asc())
+                .limit(limit)
+                .offset(offset)
+                .select(User::as_select())
+                .load(&mut conn)
+                .await
+                .map_err(|e| {
+                    tracing::error!("DB error listing users: {}", e);
+                    api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+                })?;
+
+            (count as u64, rows)
+        }
+    };
 
     Ok(Json(serde_json::json!({
         "users": users,
@@ -473,8 +272,12 @@ async fn get_user(
         .await
         .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
-    let user = diesel_db::find_user_by_id(&mut conn, id)
+    let user: User = yauth_users::table
+        .find(id)
+        .select(User::as_select())
+        .first(&mut conn)
         .await
+        .optional()
         .map_err(|e| {
             tracing::error!("DB error fetching user: {}", e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
@@ -502,27 +305,40 @@ async fn update_user(
             .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
         // Verify user exists
-        diesel_db::find_user_by_id(&mut conn, id)
+        yauth_users::table
+            .find(id)
+            .select(User::as_select())
+            .first(&mut conn)
             .await
+            .optional()
             .map_err(|e| {
                 tracing::error!("DB error fetching user: {}", e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?
             .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "User not found"))?;
 
-        diesel_db::update_user(
-            &mut conn,
-            id,
-            input.display_name.as_deref(),
-            input.role.as_deref(),
-            input.email_verified,
-            Utc::now().fixed_offset(),
-        )
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error updating user: {}", e);
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?
+        let changeset = UpdateUser {
+            email: None,
+            display_name: input.display_name.map(Some),
+            email_verified: input.email_verified,
+            role: input.role,
+            banned: None,
+            banned_reason: None,
+            banned_until: None,
+            updated_at: Some(Utc::now().naive_utc()),
+        };
+
+        let updated: User = diesel::update(yauth_users::table.find(id))
+            .set(&changeset)
+            .returning(User::as_returning())
+            .get_result(&mut conn)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error updating user: {}", e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?;
+
+        updated
     };
 
     info!(
@@ -564,18 +380,25 @@ async fn delete_user(
             .await
             .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
-        diesel_db::find_user_by_id(&mut conn, id)
+        yauth_users::table
+            .find(id)
+            .select(User::as_select())
+            .first(&mut conn)
             .await
+            .optional()
             .map_err(|e| {
                 tracing::error!("DB error fetching user: {}", e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?
             .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "User not found"))?;
 
-        diesel_db::delete_user(&mut conn, id).await.map_err(|e| {
-            tracing::error!("DB error deleting user: {}", e);
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
+        diesel::delete(yauth_users::table.find(id))
+            .execute(&mut conn)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error deleting user: {}", e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?;
     }
 
     info!(
@@ -631,26 +454,40 @@ async fn ban_user(
             .await
             .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
-        diesel_db::find_user_by_id(&mut conn, id)
+        yauth_users::table
+            .find(id)
+            .select(User::as_select())
+            .first(&mut conn)
             .await
+            .optional()
             .map_err(|e| {
                 tracing::error!("DB error fetching user: {}", e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?
             .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "User not found"))?;
 
-        diesel_db::ban_user(
-            &mut conn,
-            id,
-            input.reason.as_deref(),
-            banned_until,
-            Utc::now().fixed_offset(),
-        )
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error banning user: {}", e);
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?
+        let changeset = UpdateUser {
+            email: None,
+            display_name: None,
+            email_verified: None,
+            role: None,
+            banned: Some(true),
+            banned_reason: Some(input.reason.clone()),
+            banned_until: Some(banned_until.map(|t| t.naive_utc())),
+            updated_at: Some(Utc::now().naive_utc()),
+        };
+
+        let updated: User = diesel::update(yauth_users::table.find(id))
+            .set(&changeset)
+            .returning(User::as_returning())
+            .get_result(&mut conn)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error banning user: {}", e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?;
+
+        updated
     };
 
     // Delete all active sessions for the banned user
@@ -695,20 +532,40 @@ async fn unban_user(
             .await
             .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
-        diesel_db::find_user_by_id(&mut conn, id)
+        yauth_users::table
+            .find(id)
+            .select(User::as_select())
+            .first(&mut conn)
             .await
+            .optional()
             .map_err(|e| {
                 tracing::error!("DB error fetching user: {}", e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?
             .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "User not found"))?;
 
-        diesel_db::unban_user(&mut conn, id, Utc::now().fixed_offset())
+        let changeset = UpdateUser {
+            email: None,
+            display_name: None,
+            email_verified: None,
+            role: None,
+            banned: Some(false),
+            banned_reason: Some(None),
+            banned_until: Some(None),
+            updated_at: Some(Utc::now().naive_utc()),
+        };
+
+        let updated: User = diesel::update(yauth_users::table.find(id))
+            .set(&changeset)
+            .returning(User::as_returning())
+            .get_result(&mut conn)
             .await
             .map_err(|e| {
                 tracing::error!("DB error unbanning user: {}", e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?
+            })?;
+
+        updated
     };
 
     info!(
@@ -753,8 +610,12 @@ async fn impersonate_user(
         .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
     // Verify target user exists
-    diesel_db::find_user_by_id(&mut conn, id)
+    yauth_users::table
+        .find(id)
+        .select(User::as_select())
+        .first(&mut conn)
         .await
+        .optional()
         .map_err(|e| {
             tracing::error!("DB error fetching user: {}", e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
@@ -765,41 +626,49 @@ async fn impersonate_user(
     let token = crypto::generate_token();
     let token_hash = crypto::hash_token(&token);
     let session_id = Uuid::new_v4();
-    let now = Utc::now().fixed_offset();
-    let expires_at = (Utc::now() + Duration::hours(1)).fixed_offset();
+    let now = Utc::now();
+    let expires_at = now + Duration::hours(1);
 
-    diesel_db::insert_session(
-        &mut conn,
-        session_id,
-        id,
-        &token_hash,
-        Some("admin-impersonation"),
-        expires_at,
-        now,
-    )
-    .await
-    .map_err(|e| {
-        tracing::error!("DB error creating impersonation session: {}", e);
-        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-    })?;
+    let new_session = NewSession {
+        id: session_id,
+        user_id: id,
+        token_hash: token_hash.clone(),
+        ip_address: None,
+        user_agent: Some("admin-impersonation".to_string()),
+        expires_at: expires_at.naive_utc(),
+        created_at: now.naive_utc(),
+    };
 
-    diesel_db::insert_audit_log(
-        &mut conn,
-        Uuid::new_v4(),
-        Some(admin.id),
-        "admin_impersonate",
-        Some(serde_json::json!({
+    diesel::insert_into(yauth_sessions::table)
+        .values(&new_session)
+        .execute(&mut conn)
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error creating impersonation session: {}", e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
+
+    let new_audit = NewAuditLog {
+        id: Uuid::new_v4(),
+        user_id: Some(admin.id),
+        event_type: "admin_impersonate".to_string(),
+        metadata: Some(serde_json::json!({
             "admin_user_id": admin.id,
             "target_user_id": id,
             "session_id": session_id,
         })),
-        now,
-    )
-    .await
-    .map_err(|e| {
-        tracing::error!("DB error writing audit log: {}", e);
-        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-    })?;
+        ip_address: None,
+        created_at: now.naive_utc(),
+    };
+
+    diesel::insert_into(yauth_audit_log::table)
+        .values(&new_audit)
+        .execute(&mut conn)
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error writing audit log: {}", e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
 
     warn!(
         event = "yauth.admin.impersonate",
@@ -836,21 +705,33 @@ async fn list_sessions(
     let offset = ((page - 1) * per_page) as i64;
     let limit = per_page as i64;
 
-    let total = diesel_db::count_sessions(&mut conn).await.map_err(|e| {
-        tracing::error!("DB error counting sessions: {}", e);
-        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-    })?;
+    let total: i64 = yauth_sessions::table
+        .count()
+        .get_result(&mut conn)
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error counting sessions: {}", e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
 
-    let sessions = diesel_db::list_sessions(&mut conn, limit, offset)
+    let sessions: Vec<SessionInfo> = yauth_sessions::table
+        .order(yauth_sessions::created_at.desc())
+        .limit(limit)
+        .offset(offset)
+        .select(Session::as_select())
+        .load(&mut conn)
         .await
         .map_err(|e| {
             tracing::error!("DB error listing sessions: {}", e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
+        })?
+        .into_iter()
+        .map(SessionInfo::from)
+        .collect();
 
     Ok(Json(serde_json::json!({
         "sessions": sessions,
-        "total": total,
+        "total": total as u64,
         "page": page,
         "per_page": per_page,
     })))
@@ -872,8 +753,12 @@ async fn delete_session(
             .await
             .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
-        let session = diesel_db::find_session_by_id(&mut conn, id)
+        let session: Session = yauth_sessions::table
+            .find(id)
+            .select(Session::as_select())
+            .first(&mut conn)
             .await
+            .optional()
             .map_err(|e| {
                 tracing::error!("DB error fetching session: {}", e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
@@ -882,7 +767,8 @@ async fn delete_session(
 
         let uid = session.user_id;
 
-        diesel_db::delete_session(&mut conn, id)
+        diesel::delete(yauth_sessions::table.find(id))
+            .execute(&mut conn)
             .await
             .map_err(|e| {
                 tracing::error!("DB error deleting session: {}", e);

@@ -5,54 +5,55 @@ use diesel_async_crate::RunQueryDsl;
 type Pool =
     diesel_async_crate::pooled_connection::deadpool::Pool<diesel_async_crate::AsyncPgConnection>;
 
-const CORE_UP: &str = include_str!("../diesel_migrations/00000000000001_core/up.sql");
+const CORE_UP: &str = include_str!("../../diesel_migrations/00000000000001_core/up.sql");
 
 #[cfg(feature = "email-password")]
 const EMAIL_PASSWORD_UP: &str =
-    include_str!("../diesel_migrations/00000000000002_email_password/up.sql");
+    include_str!("../../diesel_migrations/00000000000002_email_password/up.sql");
 
 #[cfg(feature = "passkey")]
-const PASSKEY_UP: &str = include_str!("../diesel_migrations/00000000000003_passkey/up.sql");
+const PASSKEY_UP: &str = include_str!("../../diesel_migrations/00000000000003_passkey/up.sql");
 
 #[cfg(feature = "mfa")]
-const MFA_UP: &str = include_str!("../diesel_migrations/00000000000004_mfa/up.sql");
+const MFA_UP: &str = include_str!("../../diesel_migrations/00000000000004_mfa/up.sql");
 
 #[cfg(feature = "oauth")]
-const OAUTH_UP: &str = include_str!("../diesel_migrations/00000000000005_oauth/up.sql");
+const OAUTH_UP: &str = include_str!("../../diesel_migrations/00000000000005_oauth/up.sql");
 
 #[cfg(feature = "bearer")]
-const BEARER_UP: &str = include_str!("../diesel_migrations/00000000000006_bearer/up.sql");
+const BEARER_UP: &str = include_str!("../../diesel_migrations/00000000000006_bearer/up.sql");
 
 #[cfg(feature = "api-key")]
-const API_KEY_UP: &str = include_str!("../diesel_migrations/00000000000007_api_key/up.sql");
+const API_KEY_UP: &str = include_str!("../../diesel_migrations/00000000000007_api_key/up.sql");
 
 #[cfg(feature = "magic-link")]
-const MAGIC_LINK_UP: &str = include_str!("../diesel_migrations/00000000000008_magic_link/up.sql");
+const MAGIC_LINK_UP: &str =
+    include_str!("../../diesel_migrations/00000000000008_magic_link/up.sql");
 
 #[cfg(feature = "oauth")]
 const OAUTH_TOKEN_REFRESH_UP: &str =
-    include_str!("../diesel_migrations/00000000000009_oauth_token_refresh/up.sql");
+    include_str!("../../diesel_migrations/00000000000009_oauth_token_refresh/up.sql");
 
 #[cfg(feature = "oauth2-server")]
 const OAUTH2_SERVER_UP: &str =
-    include_str!("../diesel_migrations/00000000000010_oauth2_server/up.sql");
+    include_str!("../../diesel_migrations/00000000000010_oauth2_server/up.sql");
 
 #[cfg(feature = "oauth2-server")]
 const DEVICE_AUTHORIZATION_UP: &str =
-    include_str!("../diesel_migrations/00000000000011_device_authorization/up.sql");
+    include_str!("../../diesel_migrations/00000000000011_device_authorization/up.sql");
 
 #[cfg(feature = "account-lockout")]
 const ACCOUNT_LOCKOUT_UP: &str =
-    include_str!("../diesel_migrations/00000000000012_account_lockout/up.sql");
+    include_str!("../../diesel_migrations/00000000000012_account_lockout/up.sql");
 
 #[cfg(feature = "webhooks")]
-const WEBHOOKS_UP: &str = include_str!("../diesel_migrations/00000000000014_webhooks/up.sql");
+const WEBHOOKS_UP: &str = include_str!("../../diesel_migrations/00000000000014_webhooks/up.sql");
 
 #[cfg(feature = "oidc")]
-const OIDC_UP: &str = include_str!("../diesel_migrations/00000000000015_oidc/up.sql");
+const OIDC_UP: &str = include_str!("../../diesel_migrations/00000000000015_oidc/up.sql");
 
 const FIX_JSON_JSONB_UP: &str =
-    include_str!("../diesel_migrations/00000000000016_fix_json_to_jsonb/up.sql");
+    include_str!("../../diesel_migrations/00000000000016_fix_json_to_jsonb/up.sql");
 
 async fn exec_sql(
     conn: &mut diesel_async_crate::AsyncPgConnection,

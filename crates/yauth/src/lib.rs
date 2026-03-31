@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod config;
+pub mod db;
 pub mod error;
 pub mod middleware;
 pub mod plugin;
@@ -75,9 +76,13 @@ pub fn create_pool(
     }
 }
 
-// Re-export entity and migration crates
-pub use yauth_entity as entity;
-pub use yauth_migration as migration;
+// Backward-compatible re-exports for consumers using the old crate paths
+pub mod entity {
+    pub use crate::db::*;
+}
+pub mod migration {
+    pub use crate::db::migrations as diesel_migrations;
+}
 
 // Re-export diesel pool types for host app use
 pub use diesel_async_crate::AsyncPgConnection;

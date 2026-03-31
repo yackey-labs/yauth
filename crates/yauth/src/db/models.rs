@@ -110,6 +110,27 @@ pub struct NewAuditLog {
 }
 
 // ──────────────────────────────────────────────
+// Postgres store: yauth_challenges
+// ──────────────────────────────────────────────
+
+#[derive(Debug, Clone, Queryable, Selectable, Serialize, Deserialize)]
+#[diesel(table_name = yauth_challenges)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct Challenge {
+    pub key: String,
+    pub value: serde_json::Value,
+    pub expires_at: NaiveDateTime,
+}
+
+#[derive(Debug, Clone, Insertable, Serialize, Deserialize)]
+#[diesel(table_name = yauth_challenges)]
+pub struct NewChallenge {
+    pub key: String,
+    pub value: serde_json::Value,
+    pub expires_at: NaiveDateTime,
+}
+
+// ──────────────────────────────────────────────
 // email-password: yauth_passwords
 // ──────────────────────────────────────────────
 

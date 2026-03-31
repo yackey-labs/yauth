@@ -2,8 +2,6 @@
 versioned_files = [
     "Cargo.toml",
     { path = "Cargo.lock", dependency = "yauth" },
-    { path = "Cargo.lock", dependency = "yauth-entity" },
-    { path = "Cargo.lock", dependency = "yauth-migration" },
     "packages/shared/package.json",
     "packages/client/package.json",
     "packages/ui-solidjs/package.json",
@@ -13,8 +11,6 @@ versioned_files = [
     { path = "packages/ui-solidjs/package.json", dependency = "@yackey-labs/yauth-shared" },
     { path = "packages/ui-vue/package.json", dependency = "@yackey-labs/yauth-client" },
     { path = "packages/ui-vue/package.json", dependency = "@yackey-labs/yauth-shared" },
-    { path = "Cargo.toml", dependency = "yauth-entity" },
-    { path = "Cargo.toml", dependency = "yauth-migration" },
 ]
 changelog = "CHANGELOG.md"
 
@@ -49,15 +45,7 @@ type = "Command"
 command = "bun run build"
 shell = true
 
-# Publish Rust crates to crates.io (entity first, then migration, then yauth)
-[[workflows.steps]]
-type = "Command"
-command = "cargo publish -p yauth-entity"
-
-[[workflows.steps]]
-type = "Command"
-command = "cargo publish -p yauth-migration"
-
+# Publish Rust crate to crates.io
 [[workflows.steps]]
 type = "Command"
 command = "cargo publish -p yauth"

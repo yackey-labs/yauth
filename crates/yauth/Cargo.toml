@@ -11,27 +11,24 @@ publish = true
 
 [features]
 default = ["email-password"]
-email-password = ["yauth-entity/email-password", "yauth-migration/email-password"]
-passkey = ["yauth-entity/passkey", "yauth-migration/passkey", "dep:webauthn-rs", "dep:webauthn-rs-proto"]
-mfa = ["yauth-entity/mfa", "yauth-migration/mfa", "dep:totp-rs"]
-oauth = ["yauth-entity/oauth", "yauth-migration/oauth", "dep:oauth2"]
-bearer = ["yauth-entity/bearer", "yauth-migration/bearer", "dep:jsonwebtoken"]
-api-key = ["yauth-entity/api-key", "yauth-migration/api-key"]
-magic-link = ["yauth-entity/magic-link", "yauth-migration/magic-link"]
+email-password = []
+passkey = ["dep:webauthn-rs", "dep:webauthn-rs-proto"]
+mfa = ["dep:totp-rs"]
+oauth = ["dep:oauth2"]
+bearer = ["dep:jsonwebtoken"]
+api-key = []
+magic-link = []
 admin = []
 status = []
-oauth2-server = ["yauth-entity/oauth2-server", "yauth-migration/oauth2-server", "dep:url", "dep:base64", "dep:serde_urlencoded"]
-account-lockout = ["yauth-entity/account-lockout", "yauth-migration/account-lockout"]
-webhooks = ["yauth-entity/webhooks", "yauth-migration/webhooks", "dep:hmac"]
-oidc = ["bearer", "oauth2-server", "yauth-entity/oidc", "yauth-migration/oidc"]
+oauth2-server = ["dep:url", "dep:base64", "dep:serde_urlencoded"]
+account-lockout = []
+webhooks = ["dep:hmac"]
+oidc = ["bearer", "oauth2-server"]
 telemetry = ["dep:tracing-opentelemetry", "dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:opentelemetry-semantic-conventions"]
 openapi = ["dep:utoipa"]
 full = ["email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link", "admin", "status", "oauth2-server", "account-lockout", "webhooks", "oidc", "telemetry", "openapi"]
 
 [dependencies]
-yauth-entity = { workspace = true }
-yauth-migration = { workspace = true }
-
 axum = { workspace = true }
 axum-extra = { workspace = true }
 tokio = { workspace = true }

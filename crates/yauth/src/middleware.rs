@@ -150,35 +150,20 @@ async fn lookup_user(
     user_id: Uuid,
     method: AuthMethod,
 ) -> Result<AuthUser, String> {
+    use crate::db::schema::yauth_users;
+    use diesel::prelude::*;
     use diesel::result::OptionalExtension;
     use diesel_async_crate::RunQueryDsl;
 
-    #[derive(diesel::QueryableByName)]
-    struct UserRow {
-        #[diesel(sql_type = diesel::sql_types::Uuid)]
-        id: Uuid,
-        #[diesel(sql_type = diesel::sql_types::Text)]
-        email: String,
-        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
-        display_name: Option<String>,
-        #[diesel(sql_type = diesel::sql_types::Bool)]
-        email_verified: bool,
-        #[diesel(sql_type = diesel::sql_types::Text)]
-        role: String,
-        #[diesel(sql_type = diesel::sql_types::Bool)]
-        banned: bool,
-    }
-
     let mut conn = state.db.get().await.map_err(|e| e.to_string())?;
-    let user: UserRow = diesel::sql_query(
-        "SELECT id, email, display_name, email_verified, role, banned FROM yauth_users WHERE id = $1",
-    )
-    .bind::<diesel::sql_types::Uuid, _>(user_id)
-    .get_result(&mut conn)
-    .await
-    .optional()
-    .map_err(|e| e.to_string())?
-    .ok_or_else(|| "User not found".to_string())?;
+    let user = yauth_users::table
+        .find(user_id)
+        .select(crate::db::models::User::as_select())
+        .first(&mut conn)
+        .await
+        .optional()
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "User not found".to_string())?;
 
     Ok(AuthUser {
         id: user.id,

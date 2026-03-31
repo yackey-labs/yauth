@@ -6,12 +6,17 @@ use axum::{
     routing::post,
 };
 use chrono::Utc;
+use diesel::prelude::*;
+use diesel::result::OptionalExtension;
+use diesel_async_crate::RunQueryDsl;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::auth::crypto;
 use crate::config::AccountLockoutConfig;
+use crate::db::models::{AccountLock, NewAccountLock, NewUnlockToken, UnlockToken};
+use crate::db::schema::{yauth_account_locks, yauth_unlock_tokens, yauth_users};
 use crate::error::api_err;
 use crate::middleware::require_admin;
 use crate::plugin::{AuthEvent, EventResponse, PluginContext, YAuthPlugin};
@@ -21,247 +26,205 @@ use crate::state::YAuthState;
 // Diesel-async helpers
 // ---------------------------------------------------------------------------
 
-mod diesel_db {
-    use diesel::result::OptionalExtension;
-    use diesel_async_crate::RunQueryDsl;
-    use uuid::Uuid;
+type Conn = diesel_async_crate::AsyncPgConnection;
+type DbResult<T> = Result<T, String>;
 
-    type Conn = diesel_async_crate::AsyncPgConnection;
-    type DbResult<T> = Result<T, String>;
-
-    #[derive(diesel::QueryableByName, Clone)]
-    #[allow(dead_code)]
-    pub struct UserRow {
-        #[diesel(sql_type = diesel::sql_types::Uuid)]
-        pub id: Uuid,
-    }
-
-    #[derive(diesel::QueryableByName, Clone)]
-    #[allow(dead_code)]
-    pub struct AccountLockRow {
-        #[diesel(sql_type = diesel::sql_types::Uuid)]
-        pub id: Uuid,
-        #[diesel(sql_type = diesel::sql_types::Uuid)]
-        pub user_id: Uuid,
-        #[diesel(sql_type = diesel::sql_types::Int4)]
-        pub failed_count: i32,
-        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Timestamptz>)]
-        pub locked_until: Option<chrono::NaiveDateTime>,
-        #[diesel(sql_type = diesel::sql_types::Int4)]
-        pub lock_count: i32,
-        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
-        pub locked_reason: Option<String>,
-        #[diesel(sql_type = diesel::sql_types::Timestamptz)]
-        pub created_at: chrono::NaiveDateTime,
-        #[diesel(sql_type = diesel::sql_types::Timestamptz)]
-        pub updated_at: chrono::NaiveDateTime,
-    }
-
-    #[derive(diesel::QueryableByName, Clone)]
-    #[allow(dead_code)]
-    pub struct UnlockTokenRow {
-        #[diesel(sql_type = diesel::sql_types::Uuid)]
-        pub id: Uuid,
-        #[diesel(sql_type = diesel::sql_types::Uuid)]
-        pub user_id: Uuid,
-        #[diesel(sql_type = diesel::sql_types::Text)]
-        pub token_hash: String,
-        #[diesel(sql_type = diesel::sql_types::Timestamptz)]
-        pub expires_at: chrono::NaiveDateTime,
-        #[diesel(sql_type = diesel::sql_types::Timestamptz)]
-        pub created_at: chrono::NaiveDateTime,
-    }
-
-    pub async fn find_user_by_email_id(conn: &mut Conn, email: &str) -> DbResult<Option<Uuid>> {
-        let row: Option<UserRow> = diesel::sql_query("SELECT id FROM yauth_users WHERE email = $1")
-            .bind::<diesel::sql_types::Text, _>(email)
-            .get_result(conn)
-            .await
-            .optional()
-            .map_err(|e| e.to_string())?;
-        Ok(row.map(|r| r.id))
-    }
-
-    pub async fn find_user_exists(conn: &mut Conn, user_id: Uuid) -> DbResult<bool> {
-        let row: Option<UserRow> = diesel::sql_query("SELECT id FROM yauth_users WHERE id = $1")
-            .bind::<diesel::sql_types::Uuid, _>(user_id)
-            .get_result(conn)
-            .await
-            .optional()
-            .map_err(|e| e.to_string())?;
-        Ok(row.is_some())
-    }
-
-    pub async fn find_lock_by_user(
-        conn: &mut Conn,
-        user_id: Uuid,
-    ) -> DbResult<Option<AccountLockRow>> {
-        diesel::sql_query(
-            "SELECT id, user_id, failed_count, locked_until, lock_count, locked_reason, created_at, updated_at FROM yauth_account_locks WHERE user_id = $1",
-        )
-        .bind::<diesel::sql_types::Uuid, _>(user_id)
-        .get_result(conn)
+async fn find_user_by_email_id(conn: &mut Conn, email: &str) -> DbResult<Option<Uuid>> {
+    yauth_users::table
+        .filter(yauth_users::email.eq(email))
+        .select(yauth_users::id)
+        .first::<Uuid>(conn)
         .await
         .optional()
         .map_err(|e| e.to_string())
-    }
+}
 
-    pub async fn insert_lock(
-        conn: &mut Conn,
-        id: Uuid,
-        user_id: Uuid,
-        now: chrono::DateTime<chrono::FixedOffset>,
-    ) -> DbResult<AccountLockRow> {
-        diesel::sql_query(
-            "INSERT INTO yauth_account_locks (id, user_id, failed_count, locked_until, lock_count, locked_reason, created_at, updated_at) VALUES ($1, $2, 0, NULL, 0, NULL, $3, $3) RETURNING id, user_id, failed_count, locked_until, lock_count, locked_reason, created_at, updated_at",
-        )
-        .bind::<diesel::sql_types::Uuid, _>(id)
-        .bind::<diesel::sql_types::Uuid, _>(user_id)
-        .bind::<diesel::sql_types::Timestamptz, _>(now)
-        .get_result(conn)
+async fn find_user_exists(conn: &mut Conn, user_id: Uuid) -> DbResult<bool> {
+    let row: Option<Uuid> = yauth_users::table
+        .filter(yauth_users::id.eq(user_id))
+        .select(yauth_users::id)
+        .first(conn)
         .await
-        .map_err(|e| e.to_string())
-    }
-
-    pub async fn update_lock_auto_unlock(
-        conn: &mut Conn,
-        lock_id: Uuid,
-        now: chrono::DateTime<chrono::FixedOffset>,
-    ) -> DbResult<()> {
-        diesel::sql_query(
-            "UPDATE yauth_account_locks SET failed_count = 0, locked_until = NULL, locked_reason = NULL, updated_at = $1 WHERE id = $2",
-        )
-        .bind::<diesel::sql_types::Timestamptz, _>(now)
-        .bind::<diesel::sql_types::Uuid, _>(lock_id)
-        .execute(conn)
-        .await
+        .optional()
         .map_err(|e| e.to_string())?;
-        Ok(())
-    }
+    Ok(row.is_some())
+}
 
-    pub async fn update_lock_increment(
-        conn: &mut Conn,
-        lock_id: Uuid,
-        failed_count: i32,
-        now: chrono::DateTime<chrono::FixedOffset>,
-    ) -> DbResult<()> {
-        diesel::sql_query(
-            "UPDATE yauth_account_locks SET failed_count = $1, updated_at = $2 WHERE id = $3",
-        )
-        .bind::<diesel::sql_types::Int4, _>(failed_count)
-        .bind::<diesel::sql_types::Timestamptz, _>(now)
-        .bind::<diesel::sql_types::Uuid, _>(lock_id)
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-        Ok(())
-    }
-
-    pub async fn update_lock_locked(
-        conn: &mut Conn,
-        lock_id: Uuid,
-        failed_count: i32,
-        locked_until: chrono::DateTime<chrono::FixedOffset>,
-        lock_count: i32,
-        reason: &str,
-        now: chrono::DateTime<chrono::FixedOffset>,
-    ) -> DbResult<()> {
-        diesel::sql_query(
-            "UPDATE yauth_account_locks SET failed_count = $1, locked_until = $2, lock_count = $3, locked_reason = $4, updated_at = $5 WHERE id = $6",
-        )
-        .bind::<diesel::sql_types::Int4, _>(failed_count)
-        .bind::<diesel::sql_types::Timestamptz, _>(locked_until)
-        .bind::<diesel::sql_types::Int4, _>(lock_count)
-        .bind::<diesel::sql_types::Text, _>(reason)
-        .bind::<diesel::sql_types::Timestamptz, _>(now)
-        .bind::<diesel::sql_types::Uuid, _>(lock_id)
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-        Ok(())
-    }
-
-    pub async fn update_lock_reset(
-        conn: &mut Conn,
-        lock_id: Uuid,
-        reset_lock_count: bool,
-        now: chrono::DateTime<chrono::FixedOffset>,
-    ) -> DbResult<()> {
-        if reset_lock_count {
-            diesel::sql_query(
-                "UPDATE yauth_account_locks SET failed_count = 0, locked_until = NULL, locked_reason = NULL, lock_count = 0, updated_at = $1 WHERE id = $2",
-            )
-            .bind::<diesel::sql_types::Timestamptz, _>(now)
-            .bind::<diesel::sql_types::Uuid, _>(lock_id)
-            .execute(conn)
-            .await
-            .map_err(|e| e.to_string())?;
-        } else {
-            diesel::sql_query(
-                "UPDATE yauth_account_locks SET failed_count = 0, locked_until = NULL, locked_reason = NULL, updated_at = $1 WHERE id = $2",
-            )
-            .bind::<diesel::sql_types::Timestamptz, _>(now)
-            .bind::<diesel::sql_types::Uuid, _>(lock_id)
-            .execute(conn)
-            .await
-            .map_err(|e| e.to_string())?;
-        }
-        Ok(())
-    }
-
-    pub async fn find_unlock_token_by_hash(
-        conn: &mut Conn,
-        token_hash: &str,
-    ) -> DbResult<Option<UnlockTokenRow>> {
-        diesel::sql_query(
-            "SELECT id, user_id, token_hash, expires_at, created_at FROM yauth_unlock_tokens WHERE token_hash = $1",
-        )
-        .bind::<diesel::sql_types::Text, _>(token_hash)
-        .get_result(conn)
+async fn find_lock_by_user(conn: &mut Conn, user_id: Uuid) -> DbResult<Option<AccountLock>> {
+    yauth_account_locks::table
+        .filter(yauth_account_locks::user_id.eq(user_id))
+        .select(AccountLock::as_select())
+        .first(conn)
         .await
         .optional()
         .map_err(|e| e.to_string())
-    }
+}
 
-    pub async fn delete_unlock_token(conn: &mut Conn, id: Uuid) -> DbResult<()> {
-        diesel::sql_query("DELETE FROM yauth_unlock_tokens WHERE id = $1")
-            .bind::<diesel::sql_types::Uuid, _>(id)
-            .execute(conn)
-            .await
-            .map_err(|e| e.to_string())?;
-        Ok(())
-    }
+async fn insert_lock(
+    conn: &mut Conn,
+    id: Uuid,
+    user_id: Uuid,
+    now: chrono::DateTime<chrono::FixedOffset>,
+) -> DbResult<AccountLock> {
+    let new_lock = NewAccountLock {
+        id,
+        user_id,
+        failed_count: 0,
+        locked_until: None,
+        lock_count: 0,
+        locked_reason: None,
+        created_at: now.naive_utc(),
+        updated_at: now.naive_utc(),
+    };
+    diesel::insert_into(yauth_account_locks::table)
+        .values(&new_lock)
+        .returning(AccountLock::as_returning())
+        .get_result(conn)
+        .await
+        .map_err(|e| e.to_string())
+}
 
-    pub async fn delete_unlock_tokens_for_user(conn: &mut Conn, user_id: Uuid) -> DbResult<()> {
-        diesel::sql_query("DELETE FROM yauth_unlock_tokens WHERE user_id = $1")
-            .bind::<diesel::sql_types::Uuid, _>(user_id)
-            .execute(conn)
-            .await
-            .map_err(|e| e.to_string())?;
-        Ok(())
-    }
-
-    pub async fn insert_unlock_token(
-        conn: &mut Conn,
-        id: Uuid,
-        user_id: Uuid,
-        token_hash: &str,
-        expires_at: chrono::DateTime<chrono::FixedOffset>,
-        now: chrono::DateTime<chrono::FixedOffset>,
-    ) -> DbResult<()> {
-        diesel::sql_query(
-            "INSERT INTO yauth_unlock_tokens (id, user_id, token_hash, expires_at, created_at) VALUES ($1, $2, $3, $4, $5)",
-        )
-        .bind::<diesel::sql_types::Uuid, _>(id)
-        .bind::<diesel::sql_types::Uuid, _>(user_id)
-        .bind::<diesel::sql_types::Text, _>(token_hash)
-        .bind::<diesel::sql_types::Timestamptz, _>(expires_at)
-        .bind::<diesel::sql_types::Timestamptz, _>(now)
+async fn update_lock_auto_unlock(
+    conn: &mut Conn,
+    lock_id: Uuid,
+    now: chrono::DateTime<chrono::FixedOffset>,
+) -> DbResult<()> {
+    diesel::update(yauth_account_locks::table.filter(yauth_account_locks::id.eq(lock_id)))
+        .set((
+            yauth_account_locks::failed_count.eq(0),
+            yauth_account_locks::locked_until.eq(None::<chrono::NaiveDateTime>),
+            yauth_account_locks::locked_reason.eq(None::<String>),
+            yauth_account_locks::updated_at.eq(now.naive_utc()),
+        ))
         .execute(conn)
         .await
         .map_err(|e| e.to_string())?;
-        Ok(())
+    Ok(())
+}
+
+async fn update_lock_increment(
+    conn: &mut Conn,
+    lock_id: Uuid,
+    failed_count: i32,
+    now: chrono::DateTime<chrono::FixedOffset>,
+) -> DbResult<()> {
+    diesel::update(yauth_account_locks::table.filter(yauth_account_locks::id.eq(lock_id)))
+        .set((
+            yauth_account_locks::failed_count.eq(failed_count),
+            yauth_account_locks::updated_at.eq(now.naive_utc()),
+        ))
+        .execute(conn)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+async fn update_lock_locked(
+    conn: &mut Conn,
+    lock_id: Uuid,
+    failed_count: i32,
+    locked_until: chrono::DateTime<chrono::FixedOffset>,
+    lock_count: i32,
+    reason: &str,
+    now: chrono::DateTime<chrono::FixedOffset>,
+) -> DbResult<()> {
+    diesel::update(yauth_account_locks::table.filter(yauth_account_locks::id.eq(lock_id)))
+        .set((
+            yauth_account_locks::failed_count.eq(failed_count),
+            yauth_account_locks::locked_until.eq(Some(locked_until.naive_utc())),
+            yauth_account_locks::lock_count.eq(lock_count),
+            yauth_account_locks::locked_reason.eq(Some(reason.to_string())),
+            yauth_account_locks::updated_at.eq(now.naive_utc()),
+        ))
+        .execute(conn)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+async fn update_lock_reset(
+    conn: &mut Conn,
+    lock_id: Uuid,
+    reset_lock_count: bool,
+    now: chrono::DateTime<chrono::FixedOffset>,
+) -> DbResult<()> {
+    if reset_lock_count {
+        diesel::update(yauth_account_locks::table.filter(yauth_account_locks::id.eq(lock_id)))
+            .set((
+                yauth_account_locks::failed_count.eq(0),
+                yauth_account_locks::locked_until.eq(None::<chrono::NaiveDateTime>),
+                yauth_account_locks::locked_reason.eq(None::<String>),
+                yauth_account_locks::lock_count.eq(0),
+                yauth_account_locks::updated_at.eq(now.naive_utc()),
+            ))
+            .execute(conn)
+            .await
+            .map_err(|e| e.to_string())?;
+    } else {
+        diesel::update(yauth_account_locks::table.filter(yauth_account_locks::id.eq(lock_id)))
+            .set((
+                yauth_account_locks::failed_count.eq(0),
+                yauth_account_locks::locked_until.eq(None::<chrono::NaiveDateTime>),
+                yauth_account_locks::locked_reason.eq(None::<String>),
+                yauth_account_locks::updated_at.eq(now.naive_utc()),
+            ))
+            .execute(conn)
+            .await
+            .map_err(|e| e.to_string())?;
     }
+    Ok(())
+}
+
+async fn find_unlock_token_by_hash(
+    conn: &mut Conn,
+    token_hash: &str,
+) -> DbResult<Option<UnlockToken>> {
+    yauth_unlock_tokens::table
+        .filter(yauth_unlock_tokens::token_hash.eq(token_hash))
+        .select(UnlockToken::as_select())
+        .first(conn)
+        .await
+        .optional()
+        .map_err(|e| e.to_string())
+}
+
+async fn delete_unlock_token(conn: &mut Conn, id: Uuid) -> DbResult<()> {
+    diesel::delete(yauth_unlock_tokens::table.filter(yauth_unlock_tokens::id.eq(id)))
+        .execute(conn)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+async fn delete_unlock_tokens_for_user(conn: &mut Conn, user_id: Uuid) -> DbResult<()> {
+    diesel::delete(yauth_unlock_tokens::table.filter(yauth_unlock_tokens::user_id.eq(user_id)))
+        .execute(conn)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+async fn insert_unlock_token(
+    conn: &mut Conn,
+    id: Uuid,
+    user_id: Uuid,
+    token_hash: &str,
+    expires_at: chrono::DateTime<chrono::FixedOffset>,
+    now: chrono::DateTime<chrono::FixedOffset>,
+) -> DbResult<()> {
+    let new_token = NewUnlockToken {
+        id,
+        user_id,
+        token_hash: token_hash.to_string(),
+        expires_at: expires_at.naive_utc(),
+        created_at: now.naive_utc(),
+    };
+    diesel::insert_into(yauth_unlock_tokens::table)
+        .values(&new_token)
+        .execute(conn)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -337,7 +300,7 @@ async fn handle_login_failed(
     };
 
     // Find user by email
-    let user_id = match diesel_db::find_user_by_email_id(&mut conn, email).await {
+    let user_id = match find_user_by_email_id(&mut conn, email).await {
         Ok(Some(id)) => id,
         Ok(None) => return EventResponse::Continue,
         Err(e) => {
@@ -349,9 +312,9 @@ async fn handle_login_failed(
     let now = Utc::now().fixed_offset();
 
     // Find or create account lock record
-    let lock_record = match diesel_db::find_lock_by_user(&mut conn, user_id).await {
+    let lock_record = match find_lock_by_user(&mut conn, user_id).await {
         Ok(Some(r)) => r,
-        Ok(None) => match diesel_db::insert_lock(&mut conn, Uuid::new_v4(), user_id, now).await {
+        Ok(None) => match insert_lock(&mut conn, Uuid::new_v4(), user_id, now).await {
             Ok(r) => r,
             Err(e) => {
                 tracing::error!("Failed to create account lock record: {}", e);
@@ -383,14 +346,14 @@ async fn handle_login_failed(
             };
         }
         if config.auto_unlock
-            && let Err(e) = diesel_db::update_lock_auto_unlock(&mut conn, lock_record.id, now).await
+            && let Err(e) = update_lock_auto_unlock(&mut conn, lock_record.id, now).await
         {
             tracing::error!("Failed to auto-unlock expired lock: {}", e);
         }
     }
 
     // Re-read lock record after potential auto-unlock reset
-    let lock_record = match diesel_db::find_lock_by_user(&mut conn, user_id).await {
+    let lock_record = match find_lock_by_user(&mut conn, user_id).await {
         Ok(Some(r)) => r,
         Ok(None) => return EventResponse::Continue,
         Err(e) => {
@@ -414,7 +377,7 @@ async fn handle_login_failed(
         let lockout_duration = calculate_lockout_duration(config, new_lock_count as u32);
         let locked_until = now + chrono::Duration::seconds(lockout_duration.as_secs() as i64);
 
-        if let Err(e) = diesel_db::update_lock_locked(
+        if let Err(e) = update_lock_locked(
             &mut conn,
             lock_record.id,
             new_failed_count,
@@ -448,9 +411,7 @@ async fn handle_login_failed(
     }
 
     // Just increment - not yet locked
-    if let Err(e) =
-        diesel_db::update_lock_increment(&mut conn, lock_record.id, new_failed_count, now).await
-    {
+    if let Err(e) = update_lock_increment(&mut conn, lock_record.id, new_failed_count, now).await {
         tracing::error!("Failed to update failed count: {}", e);
     }
 
@@ -473,7 +434,7 @@ async fn handle_login_succeeded(
 
     let now = Utc::now().fixed_offset();
 
-    let lock_record = match diesel_db::find_lock_by_user(&mut conn, user_id).await {
+    let lock_record = match find_lock_by_user(&mut conn, user_id).await {
         Ok(Some(r)) => r,
         Ok(None) => return EventResponse::Continue,
         Err(e) => {
@@ -503,7 +464,7 @@ async fn handle_login_succeeded(
     }
 
     // Reset failed count on successful login
-    if let Err(e) = diesel_db::update_lock_auto_unlock(&mut conn, lock_record.id, now).await {
+    if let Err(e) = update_lock_auto_unlock(&mut conn, lock_record.id, now).await {
         tracing::error!("Failed to reset account lock on success: {}", e);
     }
 
@@ -596,7 +557,7 @@ async fn request_unlock(
 
     // Look up user (don't leak whether user exists)
     let user_opt = {
-        diesel_db::find_user_by_email_id(&mut conn, &email)
+        find_user_by_email_id(&mut conn, &email)
             .await
             .map_err(|e| {
                 tracing::error!("DB error: {}", e);
@@ -608,12 +569,10 @@ async fn request_unlock(
     if let Some(user) = user_opt {
         // Check if account is actually locked
         let is_locked = {
-            let lock_record = diesel_db::find_lock_by_user(&mut conn, user.id)
-                .await
-                .map_err(|e| {
-                    tracing::error!("DB error: {}", e);
-                    api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-                })?;
+            let lock_record = find_lock_by_user(&mut conn, user.id).await.map_err(|e| {
+                tracing::error!("DB error: {}", e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?;
 
             lock_record
                 .as_ref()
@@ -624,7 +583,7 @@ async fn request_unlock(
 
         if is_locked {
             // Delete any existing unlock tokens for this user
-            let _ = diesel_db::delete_unlock_tokens_for_user(&mut conn, user.id).await;
+            let _ = delete_unlock_tokens_for_user(&mut conn, user.id).await;
 
             // Generate unlock token
             let token = crypto::generate_token();
@@ -632,7 +591,7 @@ async fn request_unlock(
             let now = Utc::now().fixed_offset();
             let expires_at = now + chrono::Duration::hours(1);
 
-            diesel_db::insert_unlock_token(
+            insert_unlock_token(
                 &mut conn,
                 Uuid::new_v4(),
                 user.id,
@@ -705,7 +664,7 @@ async fn unlock_account(
 
     // Find the unlock token
     let unlock_token = {
-        let found = diesel_db::find_unlock_token_by_hash(&mut conn, &token_hash)
+        let found = find_unlock_token_by_hash(&mut conn, &token_hash)
             .await
             .map_err(|e| {
                 tracing::error!("DB error: {}", e);
@@ -729,7 +688,7 @@ async fn unlock_account(
     // Check expiry
     if now > unlock_token.expires_at {
         // Delete the expired token
-        let _ = diesel_db::delete_unlock_token(&mut conn, unlock_token.id).await;
+        let _ = delete_unlock_token(&mut conn, unlock_token.id).await;
         return Err(api_err(
             StatusCode::BAD_REQUEST,
             "Invalid or expired unlock token",
@@ -739,7 +698,7 @@ async fn unlock_account(
     let user_id = unlock_token.user_id;
 
     // Delete the token (one-time use)
-    let _ = diesel_db::delete_unlock_token(&mut conn, unlock_token.id).await;
+    let _ = delete_unlock_token(&mut conn, unlock_token.id).await;
 
     // Reset the account lock (keep lock_count for exponential backoff history)
     reset_account_lock_diesel(&mut conn, user_id, false)
@@ -786,12 +745,10 @@ async fn admin_unlock(
         .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
     // Verify target user exists
-    let exists = diesel_db::find_user_exists(&mut conn, user_id)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error: {}", e);
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
+    let exists = find_user_exists(&mut conn, user_id).await.map_err(|e| {
+        tracing::error!("DB error: {}", e);
+        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+    })?;
     if !exists {
         return Err(api_err(StatusCode::NOT_FOUND, "User not found"));
     }
@@ -805,7 +762,7 @@ async fn admin_unlock(
         })?;
 
     // Delete any pending unlock tokens
-    let _ = diesel_db::delete_unlock_tokens_for_user(&mut conn, user_id).await;
+    let _ = delete_unlock_tokens_for_user(&mut conn, user_id).await;
 
     info!(
         event = "yauth.lockout.unlocked",
@@ -845,10 +802,10 @@ async fn reset_account_lock_diesel(
 ) -> Result<(), String> {
     let now = Utc::now().fixed_offset();
 
-    let lock_record = diesel_db::find_lock_by_user(conn, user_id).await?;
+    let lock_record = find_lock_by_user(conn, user_id).await?;
 
     if let Some(record) = lock_record {
-        diesel_db::update_lock_reset(conn, record.id, reset_lock_count, now).await?;
+        update_lock_reset(conn, record.id, reset_lock_count, now).await?;
     }
 
     Ok(())

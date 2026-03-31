@@ -1,7 +1,11 @@
 use crate::auth::{email::EmailService, rate_limit::RateLimiter};
 use crate::config::YAuthConfig;
+use crate::db::models::NewAuditLog;
+use crate::db::schema::{yauth_audit_log, yauth_users};
 use crate::plugin::{AuthEvent, EventResponse, PluginContext, YAuthPlugin};
 use crate::stores::{ChallengeStore, RateLimitStore};
+use diesel::QueryDsl;
+use diesel::result::OptionalExtension;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -58,12 +62,12 @@ impl YAuthState {
             Err(_) => return false,
         };
         use diesel_async_crate::RunQueryDsl;
-        let exists: Option<ExistsRow> =
-            diesel::sql_query("SELECT 1 AS one FROM yauth_users LIMIT 1")
-                .get_result::<ExistsRow>(&mut conn)
-                .await
-                .optional()
-                .unwrap_or(Some(ExistsRow { one: 1 }));
+        let exists: Option<Uuid> = yauth_users::table
+            .select(yauth_users::id)
+            .first::<Uuid>(&mut conn)
+            .await
+            .optional()
+            .unwrap_or(Some(Uuid::nil()));
         exists.is_none()
     }
 
@@ -82,28 +86,20 @@ impl YAuthState {
             }
         };
         use diesel_async_crate::RunQueryDsl;
-        let result = diesel::sql_query(
-            "INSERT INTO yauth_audit_log (id, user_id, event_type, metadata, ip_address, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
-        )
-        .bind::<diesel::sql_types::Uuid, _>(Uuid::new_v4())
-        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Uuid>, _>(user_id)
-        .bind::<diesel::sql_types::Text, _>(event_type.to_string())
-        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Jsonb>, _>(metadata)
-        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(ip_address)
-        .bind::<diesel::sql_types::Timestamptz, _>(chrono::Utc::now())
-        .execute(&mut conn)
-        .await;
+        let new_log = NewAuditLog {
+            id: Uuid::new_v4(),
+            user_id,
+            event_type: event_type.to_string(),
+            metadata,
+            ip_address,
+            created_at: chrono::Utc::now().naive_utc(),
+        };
+        let result = diesel::insert_into(yauth_audit_log::table)
+            .values(&new_log)
+            .execute(&mut conn)
+            .await;
         if let Err(e) = result {
             tracing::error!("Failed to write audit log: {}", e);
         }
     }
 }
-
-#[derive(diesel::QueryableByName)]
-#[allow(dead_code)]
-struct ExistsRow {
-    #[diesel(sql_type = diesel::sql_types::Int4)]
-    one: i32,
-}
-
-use diesel::result::OptionalExtension;

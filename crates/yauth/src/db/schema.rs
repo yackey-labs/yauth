@@ -387,4 +387,28 @@ diesel::joinable!(yauth_webhook_deliveries -> yauth_webhooks (webhook_id));
 #[cfg(feature = "oidc")]
 diesel::joinable!(yauth_oidc_nonces -> yauth_authorization_codes (authorization_code_id));
 
+// ──────────────────────────────────────────────
+// Postgres store: yauth_challenges
+// ──────────────────────────────────────────────
+
+diesel::table! {
+    yauth_challenges (key) {
+        key -> Text,
+        value -> Jsonb,
+        expires_at -> Timestamptz,
+    }
+}
+
+// ──────────────────────────────────────────────
+// Postgres store: yauth_rate_limits
+// ──────────────────────────────────────────────
+
+diesel::table! {
+    yauth_rate_limits (key) {
+        key -> Text,
+        count -> Int4,
+        window_start -> Timestamptz,
+    }
+}
+
 diesel::allow_tables_to_appear_in_same_query!(yauth_users, yauth_sessions, yauth_audit_log,);

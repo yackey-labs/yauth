@@ -11,204 +11,163 @@ use uuid::Uuid;
 
 use totp_rs::{Algorithm, Secret, TOTP};
 
+use diesel::prelude::*;
+use diesel::result::OptionalExtension;
+use diesel_async_crate::RunQueryDsl;
+
 use crate::auth::{crypto, session};
 use crate::config::MfaConfig;
+use crate::db::models::{BackupCode, NewBackupCode, NewTotpSecret, TotpSecret, User};
+use crate::db::schema::{yauth_backup_codes, yauth_totp_secrets, yauth_users};
 use crate::middleware::AuthUser;
 use crate::plugin::{AuthEvent, EventResponse, PluginContext, YAuthPlugin};
 use crate::state::YAuthState;
 
 // ---------------------------------------------------------------------------
-// Diesel-async helpers
+// Database helpers
 // ---------------------------------------------------------------------------
 
-mod diesel_db {
-    use diesel::result::OptionalExtension;
-    use diesel_async_crate::RunQueryDsl;
-    use uuid::Uuid;
+type Conn = diesel_async_crate::AsyncPgConnection;
+type DbResult<T> = Result<T, String>;
 
-    type Conn = diesel_async_crate::AsyncPgConnection;
-    type DbResult<T> = Result<T, String>;
-
-    #[derive(diesel::QueryableByName, Clone)]
-    #[allow(dead_code)]
-    pub struct UserRow {
-        #[diesel(sql_type = diesel::sql_types::Uuid)]
-        pub id: Uuid,
-        #[diesel(sql_type = diesel::sql_types::Text)]
-        pub email: String,
-        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
-        pub display_name: Option<String>,
-        #[diesel(sql_type = diesel::sql_types::Bool)]
-        pub email_verified: bool,
-        #[diesel(sql_type = diesel::sql_types::Text)]
-        pub role: String,
-        #[diesel(sql_type = diesel::sql_types::Bool)]
-        pub banned: bool,
-    }
-
-    #[derive(diesel::QueryableByName, Clone)]
-    #[allow(dead_code)]
-    pub struct TotpSecretRow {
-        #[diesel(sql_type = diesel::sql_types::Uuid)]
-        pub id: Uuid,
-        #[diesel(sql_type = diesel::sql_types::Uuid)]
-        pub user_id: Uuid,
-        #[diesel(sql_type = diesel::sql_types::Text)]
-        pub encrypted_secret: String,
-        #[diesel(sql_type = diesel::sql_types::Bool)]
-        pub verified: bool,
-        #[diesel(sql_type = diesel::sql_types::Timestamptz)]
-        pub created_at: chrono::NaiveDateTime,
-    }
-
-    #[derive(diesel::QueryableByName, Clone)]
-    #[allow(dead_code)]
-    pub struct BackupCodeRow {
-        #[diesel(sql_type = diesel::sql_types::Uuid)]
-        pub id: Uuid,
-        #[diesel(sql_type = diesel::sql_types::Uuid)]
-        pub user_id: Uuid,
-        #[diesel(sql_type = diesel::sql_types::Text)]
-        pub code_hash: String,
-        #[diesel(sql_type = diesel::sql_types::Bool)]
-        pub used: bool,
-        #[diesel(sql_type = diesel::sql_types::Timestamptz)]
-        pub created_at: chrono::NaiveDateTime,
-    }
-
-    pub async fn find_user_by_id(conn: &mut Conn, id: Uuid) -> DbResult<Option<UserRow>> {
-        diesel::sql_query(
-            "SELECT id, email, display_name, email_verified, role, banned FROM yauth_users WHERE id = $1",
-        )
-        .bind::<diesel::sql_types::Uuid, _>(id)
-        .get_result(conn)
+async fn db_find_user_by_id(conn: &mut Conn, id: Uuid) -> DbResult<Option<User>> {
+    yauth_users::table
+        .find(id)
+        .select(User::as_select())
+        .first(conn)
         .await
         .optional()
         .map_err(|e| e.to_string())
-    }
+}
 
-    pub async fn find_totp_secret(
-        conn: &mut Conn,
-        user_id: Uuid,
-        verified: bool,
-    ) -> DbResult<Option<TotpSecretRow>> {
-        diesel::sql_query(
-            "SELECT id, user_id, encrypted_secret, verified, created_at FROM yauth_totp_secrets WHERE user_id = $1 AND verified = $2",
+async fn db_find_totp_secret(
+    conn: &mut Conn,
+    user_id: Uuid,
+    verified: bool,
+) -> DbResult<Option<TotpSecret>> {
+    yauth_totp_secrets::table
+        .filter(
+            yauth_totp_secrets::user_id
+                .eq(user_id)
+                .and(yauth_totp_secrets::verified.eq(verified)),
         )
-        .bind::<diesel::sql_types::Uuid, _>(user_id)
-        .bind::<diesel::sql_types::Bool, _>(verified)
-        .get_result(conn)
+        .select(TotpSecret::as_select())
+        .first(conn)
         .await
         .optional()
         .map_err(|e| e.to_string())
-    }
+}
 
-    pub async fn insert_totp_secret(
-        conn: &mut Conn,
-        id: Uuid,
-        user_id: Uuid,
-        encrypted_secret: &str,
-        verified: bool,
-    ) -> DbResult<()> {
-        let now = chrono::Utc::now();
-        diesel::sql_query(
-            "INSERT INTO yauth_totp_secrets (id, user_id, encrypted_secret, verified, created_at) VALUES ($1, $2, $3, $4, $5)",
-        )
-        .bind::<diesel::sql_types::Uuid, _>(id)
-        .bind::<diesel::sql_types::Uuid, _>(user_id)
-        .bind::<diesel::sql_types::Text, _>(encrypted_secret)
-        .bind::<diesel::sql_types::Bool, _>(verified)
-        .bind::<diesel::sql_types::Timestamptz, _>(now)
+async fn db_insert_totp_secret(
+    conn: &mut Conn,
+    id: Uuid,
+    user_id: Uuid,
+    encrypted_secret: &str,
+    verified: bool,
+) -> DbResult<()> {
+    let now = chrono::Utc::now().naive_utc();
+    let new_secret = NewTotpSecret {
+        id,
+        user_id,
+        encrypted_secret: encrypted_secret.to_string(),
+        verified,
+        created_at: now,
+    };
+    diesel::insert_into(yauth_totp_secrets::table)
+        .values(&new_secret)
         .execute(conn)
         .await
         .map_err(|e| e.to_string())?;
-        Ok(())
-    }
+    Ok(())
+}
 
-    pub async fn delete_totp_secrets_by_user(
-        conn: &mut Conn,
-        user_id: Uuid,
-        verified_filter: Option<bool>,
-    ) -> DbResult<u64> {
-        if let Some(v) = verified_filter {
-            let result = diesel::sql_query(
-                "DELETE FROM yauth_totp_secrets WHERE user_id = $1 AND verified = $2",
-            )
-            .bind::<diesel::sql_types::Uuid, _>(user_id)
-            .bind::<diesel::sql_types::Bool, _>(v)
-            .execute(conn)
-            .await
-            .map_err(|e| e.to_string())?;
-            Ok(result as u64)
-        } else {
-            let result = diesel::sql_query("DELETE FROM yauth_totp_secrets WHERE user_id = $1")
-                .bind::<diesel::sql_types::Uuid, _>(user_id)
-                .execute(conn)
-                .await
-                .map_err(|e| e.to_string())?;
-            Ok(result as u64)
-        }
-    }
-
-    pub async fn update_totp_secret_verified(conn: &mut Conn, id: Uuid) -> DbResult<()> {
-        diesel::sql_query("UPDATE yauth_totp_secrets SET verified = true WHERE id = $1")
-            .bind::<diesel::sql_types::Uuid, _>(id)
-            .execute(conn)
-            .await
-            .map_err(|e| e.to_string())?;
-        Ok(())
-    }
-
-    pub async fn find_unused_backup_codes(
-        conn: &mut Conn,
-        user_id: Uuid,
-    ) -> DbResult<Vec<BackupCodeRow>> {
-        diesel::sql_query(
-            "SELECT id, user_id, code_hash, used, created_at FROM yauth_backup_codes WHERE user_id = $1 AND used = false",
+async fn db_delete_totp_secrets_by_user(
+    conn: &mut Conn,
+    user_id: Uuid,
+    verified_filter: Option<bool>,
+) -> DbResult<u64> {
+    if let Some(v) = verified_filter {
+        let result = diesel::delete(
+            yauth_totp_secrets::table.filter(
+                yauth_totp_secrets::user_id
+                    .eq(user_id)
+                    .and(yauth_totp_secrets::verified.eq(v)),
+            ),
         )
-        .bind::<diesel::sql_types::Uuid, _>(user_id)
+        .execute(conn)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(result as u64)
+    } else {
+        let result = diesel::delete(
+            yauth_totp_secrets::table.filter(yauth_totp_secrets::user_id.eq(user_id)),
+        )
+        .execute(conn)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(result as u64)
+    }
+}
+
+async fn db_update_totp_secret_verified(conn: &mut Conn, id: Uuid) -> DbResult<()> {
+    diesel::update(yauth_totp_secrets::table.find(id))
+        .set(yauth_totp_secrets::verified.eq(true))
+        .execute(conn)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+async fn db_find_unused_backup_codes(conn: &mut Conn, user_id: Uuid) -> DbResult<Vec<BackupCode>> {
+    yauth_backup_codes::table
+        .filter(
+            yauth_backup_codes::user_id
+                .eq(user_id)
+                .and(yauth_backup_codes::used.eq(false)),
+        )
+        .select(BackupCode::as_select())
         .load(conn)
         .await
         .map_err(|e| e.to_string())
-    }
+}
 
-    pub async fn insert_backup_code(
-        conn: &mut Conn,
-        id: Uuid,
-        user_id: Uuid,
-        code_hash: &str,
-    ) -> DbResult<()> {
-        let now = chrono::Utc::now();
-        diesel::sql_query(
-            "INSERT INTO yauth_backup_codes (id, user_id, code_hash, used, created_at) VALUES ($1, $2, $3, false, $4)",
-        )
-        .bind::<diesel::sql_types::Uuid, _>(id)
-        .bind::<diesel::sql_types::Uuid, _>(user_id)
-        .bind::<diesel::sql_types::Text, _>(code_hash)
-        .bind::<diesel::sql_types::Timestamptz, _>(now)
+async fn db_insert_backup_code(
+    conn: &mut Conn,
+    id: Uuid,
+    user_id: Uuid,
+    code_hash: &str,
+) -> DbResult<()> {
+    let now = chrono::Utc::now().naive_utc();
+    let new_code = NewBackupCode {
+        id,
+        user_id,
+        code_hash: code_hash.to_string(),
+        used: false,
+        created_at: now,
+    };
+    diesel::insert_into(yauth_backup_codes::table)
+        .values(&new_code)
         .execute(conn)
         .await
         .map_err(|e| e.to_string())?;
-        Ok(())
-    }
+    Ok(())
+}
 
-    pub async fn delete_all_backup_codes(conn: &mut Conn, user_id: Uuid) -> DbResult<()> {
-        diesel::sql_query("DELETE FROM yauth_backup_codes WHERE user_id = $1")
-            .bind::<diesel::sql_types::Uuid, _>(user_id)
-            .execute(conn)
-            .await
-            .map_err(|e| e.to_string())?;
-        Ok(())
-    }
+async fn db_delete_all_backup_codes(conn: &mut Conn, user_id: Uuid) -> DbResult<()> {
+    diesel::delete(yauth_backup_codes::table.filter(yauth_backup_codes::user_id.eq(user_id)))
+        .execute(conn)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
 
-    pub async fn mark_backup_code_used(conn: &mut Conn, id: Uuid) -> DbResult<()> {
-        diesel::sql_query("UPDATE yauth_backup_codes SET used = true WHERE id = $1")
-            .bind::<diesel::sql_types::Uuid, _>(id)
-            .execute(conn)
-            .await
-            .map_err(|e| e.to_string())?;
-        Ok(())
-    }
+async fn db_mark_backup_code_used(conn: &mut Conn, id: Uuid) -> DbResult<()> {
+    diesel::update(yauth_backup_codes::table.find(id))
+        .set(yauth_backup_codes::used.eq(true))
+        .execute(conn)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -268,7 +227,7 @@ impl YAuthPlugin for MfaPlugin {
                                     return EventResponse::Continue;
                                 }
                             };
-                            match diesel_db::find_totp_secret(&mut conn, user_id, true).await {
+                            match db_find_totp_secret(&mut conn, user_id, true).await {
                                 Ok(Some(_)) => true,
                                 Ok(None) => false,
                                 Err(e) => {
@@ -427,7 +386,7 @@ async fn store_backup_codes(
 
     for code in &codes {
         let code_hash = crypto::hash_token(code);
-        diesel_db::insert_backup_code(conn, Uuid::new_v4(), user_id, &code_hash)
+        db_insert_backup_code(conn, Uuid::new_v4(), user_id, &code_hash)
             .await
             .map_err(|e| {
                 tracing::error!("Failed to store backup code: {}", e);
@@ -443,7 +402,7 @@ async fn delete_all_backup_codes(
     conn: &mut diesel_async_crate::AsyncPgConnection,
     user_id: Uuid,
 ) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
-    diesel_db::delete_all_backup_codes(conn, user_id)
+    db_delete_all_backup_codes(conn, user_id)
         .await
         .map_err(|e| {
             tracing::error!("Failed to delete backup codes: {}", e);
@@ -477,7 +436,7 @@ async fn setup_totp(
 
     // Check if user already has a verified TOTP secret
     let existing = {
-        diesel_db::find_totp_secret(&mut conn, user.id, true)
+        db_find_totp_secret(&mut conn, user.id, true)
             .await
             .map_err(|e| {
                 tracing::error!("DB error: {}", e);
@@ -494,7 +453,7 @@ async fn setup_totp(
 
     // Delete any existing unverified secret for this user (e.g. abandoned setup)
     {
-        let _ = diesel_db::delete_totp_secrets_by_user(&mut conn, user.id, Some(false)).await;
+        let _ = db_delete_totp_secrets_by_user(&mut conn, user.id, Some(false)).await;
     }
 
     // Generate TOTP secret
@@ -523,7 +482,7 @@ async fn setup_totp(
 
     // Store unverified TOTP secret
     {
-        diesel_db::insert_totp_secret(&mut conn, Uuid::new_v4(), user.id, &secret_base32, false)
+        db_insert_totp_secret(&mut conn, Uuid::new_v4(), user.id, &secret_base32, false)
             .await
             .map_err(|e| {
                 tracing::error!("Failed to store TOTP secret: {}", e);
@@ -571,7 +530,7 @@ async fn confirm_totp(
 
     // Find the unverified TOTP secret for this user
     let totp_record = {
-        diesel_db::find_totp_secret(&mut conn, user.id, false)
+        db_find_totp_secret(&mut conn, user.id, false)
             .await
             .map_err(|e| {
                 tracing::error!("DB error: {}", e);
@@ -608,7 +567,7 @@ async fn confirm_totp(
 
     // Mark the secret as verified
     {
-        diesel_db::update_totp_secret_verified(&mut conn, totp_record.id)
+        db_update_totp_secret_verified(&mut conn, totp_record.id)
             .await
             .map_err(|e| {
                 tracing::error!("Failed to verify TOTP secret: {}", e);
@@ -653,7 +612,7 @@ async fn disable_totp(
 
     // Delete TOTP secret (verified or not)
     let rows_affected = {
-        diesel_db::delete_totp_secrets_by_user(&mut conn, user.id, None)
+        db_delete_totp_secrets_by_user(&mut conn, user.id, None)
             .await
             .map_err(|e| {
                 tracing::error!("Failed to delete TOTP secret: {}", e);
@@ -738,7 +697,7 @@ async fn verify_mfa(
 
     // Load the user's verified TOTP secret
     let totp_record = {
-        diesel_db::find_totp_secret(&mut conn, user_id, true)
+        db_find_totp_secret(&mut conn, user_id, true)
             .await
             .map_err(|e| {
                 tracing::error!("DB error: {}", e);
@@ -755,7 +714,7 @@ async fn verify_mfa(
     }
 
     let user = {
-        let u = diesel_db::find_user_by_id(&mut conn, user_id)
+        let u = db_find_user_by_id(&mut conn, user_id)
             .await
             .map_err(|e| {
                 tracing::error!("DB error: {}", e);
@@ -789,7 +748,7 @@ async fn verify_mfa(
         let code_hash = crypto::hash_token(&input.code);
 
         let backup_codes = {
-            diesel_db::find_unused_backup_codes(&mut conn, user_id)
+            db_find_unused_backup_codes(&mut conn, user_id)
                 .await
                 .map_err(|e| {
                     tracing::error!("DB error: {}", e);
@@ -801,7 +760,7 @@ async fn verify_mfa(
             if crypto::constant_time_eq(bc.code_hash.as_bytes(), code_hash.as_bytes()) {
                 // Mark backup code as used
                 {
-                    diesel_db::mark_backup_code_used(&mut conn, bc.id)
+                    db_mark_backup_code_used(&mut conn, bc.id)
                         .await
                         .map_err(|e| {
                             tracing::error!("Failed to mark backup code as used: {}", e);
@@ -884,7 +843,7 @@ async fn get_backup_code_count(
             .get()
             .await
             .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-        let codes = diesel_db::find_unused_backup_codes(&mut conn, user.id)
+        let codes = db_find_unused_backup_codes(&mut conn, user.id)
             .await
             .map_err(|e| {
                 tracing::error!("DB error: {}", e);
@@ -914,7 +873,7 @@ async fn regenerate_backup_codes(
 
     // Ensure MFA is enabled
     let has_mfa = {
-        diesel_db::find_totp_secret(&mut conn, user.id, true)
+        db_find_totp_secret(&mut conn, user.id, true)
             .await
             .map_err(|e| {
                 tracing::error!("DB error: {}", e);

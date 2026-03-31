@@ -14,9 +14,15 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 use uuid::Uuid;
 
+use diesel::prelude::*;
+use diesel::result::OptionalExtension;
+use diesel_async_crate::RunQueryDsl;
+
 use crate::auth::session::session_set_cookie;
 use crate::auth::{crypto, session};
 use crate::config::OAuthProviderConfig;
+use crate::db::models::{NewOauthAccount, NewOauthState, NewUser, OauthAccount, OauthState, User};
+use crate::db::schema::{yauth_oauth_accounts, yauth_oauth_states, yauth_users};
 use crate::error::{ApiError, api_err};
 use crate::middleware::AuthUser;
 use crate::plugin::{PluginContext, YAuthPlugin};
@@ -25,263 +31,209 @@ use crate::state::YAuthState;
 const STATE_EXPIRY_MINUTES: i64 = 10;
 
 // ---------------------------------------------------------------------------
-// Diesel-async helpers
+// Database helpers
 // ---------------------------------------------------------------------------
 
-mod diesel_db {
-    use diesel::result::OptionalExtension;
-    use diesel_async_crate::RunQueryDsl;
-    use uuid::Uuid;
+type Conn = diesel_async_crate::AsyncPgConnection;
+type DbResult<T> = Result<T, String>;
 
-    type Conn = diesel_async_crate::AsyncPgConnection;
-    type DbResult<T> = Result<T, String>;
-
-    #[derive(diesel::QueryableByName, Clone)]
-    #[allow(dead_code)]
-    pub struct UserRow {
-        #[diesel(sql_type = diesel::sql_types::Uuid)]
-        pub id: Uuid,
-        #[diesel(sql_type = diesel::sql_types::Text)]
-        pub email: String,
-        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
-        pub display_name: Option<String>,
-        #[diesel(sql_type = diesel::sql_types::Bool)]
-        pub email_verified: bool,
-        #[diesel(sql_type = diesel::sql_types::Text)]
-        pub role: String,
-        #[diesel(sql_type = diesel::sql_types::Bool)]
-        pub banned: bool,
-    }
-
-    #[derive(diesel::QueryableByName, Clone)]
-    #[allow(dead_code)]
-    pub struct OauthAccountRow {
-        #[diesel(sql_type = diesel::sql_types::Uuid)]
-        pub id: Uuid,
-        #[diesel(sql_type = diesel::sql_types::Uuid)]
-        pub user_id: Uuid,
-        #[diesel(sql_type = diesel::sql_types::Text)]
-        pub provider: String,
-        #[diesel(sql_type = diesel::sql_types::Text)]
-        pub provider_user_id: String,
-        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
-        pub access_token_enc: Option<String>,
-        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
-        pub refresh_token_enc: Option<String>,
-        #[diesel(sql_type = diesel::sql_types::Timestamptz)]
-        pub created_at: chrono::NaiveDateTime,
-        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Timestamptz>)]
-        pub expires_at: Option<chrono::NaiveDateTime>,
-        #[diesel(sql_type = diesel::sql_types::Timestamptz)]
-        pub updated_at: chrono::NaiveDateTime,
-    }
-
-    #[derive(diesel::QueryableByName, Clone)]
-    #[allow(dead_code)]
-    pub struct OauthStateRow {
-        #[diesel(sql_type = diesel::sql_types::Text)]
-        pub state: String,
-        #[diesel(sql_type = diesel::sql_types::Text)]
-        pub provider: String,
-        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
-        pub redirect_url: Option<String>,
-        #[diesel(sql_type = diesel::sql_types::Timestamptz)]
-        pub expires_at: chrono::NaiveDateTime,
-        #[diesel(sql_type = diesel::sql_types::Timestamptz)]
-        pub created_at: chrono::NaiveDateTime,
-    }
-
-    pub async fn find_user_by_id(conn: &mut Conn, id: Uuid) -> DbResult<Option<UserRow>> {
-        diesel::sql_query(
-            "SELECT id, email, display_name, email_verified, role, banned FROM yauth_users WHERE id = $1",
-        )
-        .bind::<diesel::sql_types::Uuid, _>(id)
-        .get_result(conn)
+async fn db_find_user_by_id(conn: &mut Conn, id: Uuid) -> DbResult<Option<User>> {
+    yauth_users::table
+        .find(id)
+        .select(User::as_select())
+        .first(conn)
         .await
         .optional()
         .map_err(|e| e.to_string())
-    }
+}
 
-    pub async fn find_user_by_email(conn: &mut Conn, email: &str) -> DbResult<Option<UserRow>> {
-        diesel::sql_query(
-            "SELECT id, email, display_name, email_verified, role, banned FROM yauth_users WHERE email = $1",
-        )
-        .bind::<diesel::sql_types::Text, _>(email)
-        .get_result(conn)
+async fn db_find_user_by_email(conn: &mut Conn, email: &str) -> DbResult<Option<User>> {
+    yauth_users::table
+        .filter(yauth_users::email.eq(email))
+        .select(User::as_select())
+        .first(conn)
         .await
         .optional()
         .map_err(|e| e.to_string())
-    }
+}
 
-    pub async fn insert_user(
-        conn: &mut Conn,
-        id: Uuid,
-        email: &str,
-        display_name: Option<&str>,
-    ) -> DbResult<()> {
-        let now = chrono::Utc::now();
-        diesel::sql_query(
-            "INSERT INTO yauth_users (id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at) VALUES ($1, $2, $3, true, 'user', false, NULL, NULL, $4, $4)",
-        )
-        .bind::<diesel::sql_types::Uuid, _>(id)
-        .bind::<diesel::sql_types::Text, _>(email)
-        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(display_name)
-        .bind::<diesel::sql_types::Timestamptz, _>(now)
+async fn db_insert_user(
+    conn: &mut Conn,
+    id: Uuid,
+    email: &str,
+    display_name: Option<&str>,
+) -> DbResult<()> {
+    let now = chrono::Utc::now().naive_utc();
+    let new_user = NewUser {
+        id,
+        email: email.to_string(),
+        display_name: display_name.map(|s| s.to_string()),
+        email_verified: true,
+        role: "user".to_string(),
+        banned: false,
+        banned_reason: None,
+        banned_until: None,
+        created_at: now,
+        updated_at: now,
+    };
+    diesel::insert_into(yauth_users::table)
+        .values(&new_user)
         .execute(conn)
         .await
         .map_err(|e| e.to_string())?;
-        Ok(())
-    }
+    Ok(())
+}
 
-    pub async fn find_oauth_account_by_provider(
-        conn: &mut Conn,
-        provider: &str,
-        provider_user_id: &str,
-    ) -> DbResult<Option<OauthAccountRow>> {
-        diesel::sql_query(
-            "SELECT id, user_id, provider, provider_user_id, access_token_enc, refresh_token_enc, created_at, expires_at, updated_at FROM yauth_oauth_accounts WHERE provider = $1 AND provider_user_id = $2",
+async fn db_find_oauth_account_by_provider(
+    conn: &mut Conn,
+    provider: &str,
+    provider_user_id: &str,
+) -> DbResult<Option<OauthAccount>> {
+    yauth_oauth_accounts::table
+        .filter(
+            yauth_oauth_accounts::provider
+                .eq(provider)
+                .and(yauth_oauth_accounts::provider_user_id.eq(provider_user_id)),
         )
-        .bind::<diesel::sql_types::Text, _>(provider)
-        .bind::<diesel::sql_types::Text, _>(provider_user_id)
-        .get_result(conn)
+        .select(OauthAccount::as_select())
+        .first(conn)
         .await
         .optional()
         .map_err(|e| e.to_string())
-    }
+}
 
-    pub async fn find_oauth_accounts_by_user(
-        conn: &mut Conn,
-        user_id: Uuid,
-    ) -> DbResult<Vec<OauthAccountRow>> {
-        diesel::sql_query(
-            "SELECT id, user_id, provider, provider_user_id, access_token_enc, refresh_token_enc, created_at, expires_at, updated_at FROM yauth_oauth_accounts WHERE user_id = $1",
-        )
-        .bind::<diesel::sql_types::Uuid, _>(user_id)
+async fn db_find_oauth_accounts_by_user(
+    conn: &mut Conn,
+    user_id: Uuid,
+) -> DbResult<Vec<OauthAccount>> {
+    yauth_oauth_accounts::table
+        .filter(yauth_oauth_accounts::user_id.eq(user_id))
+        .select(OauthAccount::as_select())
         .load(conn)
         .await
         .map_err(|e| e.to_string())
-    }
+}
 
-    pub async fn find_oauth_account_by_user_and_provider(
-        conn: &mut Conn,
-        user_id: Uuid,
-        provider: &str,
-    ) -> DbResult<Option<OauthAccountRow>> {
-        diesel::sql_query(
-            "SELECT id, user_id, provider, provider_user_id, access_token_enc, refresh_token_enc, created_at, expires_at, updated_at FROM yauth_oauth_accounts WHERE user_id = $1 AND provider = $2",
+async fn db_find_oauth_account_by_user_and_provider(
+    conn: &mut Conn,
+    user_id: Uuid,
+    provider: &str,
+) -> DbResult<Option<OauthAccount>> {
+    yauth_oauth_accounts::table
+        .filter(
+            yauth_oauth_accounts::user_id
+                .eq(user_id)
+                .and(yauth_oauth_accounts::provider.eq(provider)),
         )
-        .bind::<diesel::sql_types::Uuid, _>(user_id)
-        .bind::<diesel::sql_types::Text, _>(provider)
-        .get_result(conn)
+        .select(OauthAccount::as_select())
+        .first(conn)
         .await
         .optional()
         .map_err(|e| e.to_string())
-    }
+}
 
-    #[allow(clippy::too_many_arguments)]
-    pub async fn insert_oauth_account(
-        conn: &mut Conn,
-        id: Uuid,
-        user_id: Uuid,
-        provider: &str,
-        provider_user_id: &str,
-        access_token_enc: Option<&str>,
-        refresh_token_enc: Option<&str>,
-        expires_at: Option<chrono::DateTime<chrono::FixedOffset>>,
-    ) -> DbResult<()> {
-        let now = chrono::Utc::now();
-        diesel::sql_query(
-            "INSERT INTO yauth_oauth_accounts (id, user_id, provider, provider_user_id, access_token_enc, refresh_token_enc, created_at, expires_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $7)",
-        )
-        .bind::<diesel::sql_types::Uuid, _>(id)
-        .bind::<diesel::sql_types::Uuid, _>(user_id)
-        .bind::<diesel::sql_types::Text, _>(provider)
-        .bind::<diesel::sql_types::Text, _>(provider_user_id)
-        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(access_token_enc)
-        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(refresh_token_enc)
-        .bind::<diesel::sql_types::Timestamptz, _>(now)
-        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Timestamptz>, _>(expires_at)
+#[allow(clippy::too_many_arguments)]
+async fn db_insert_oauth_account(
+    conn: &mut Conn,
+    id: Uuid,
+    user_id: Uuid,
+    provider: &str,
+    provider_user_id: &str,
+    access_token_enc: Option<&str>,
+    refresh_token_enc: Option<&str>,
+    expires_at: Option<chrono::DateTime<chrono::FixedOffset>>,
+) -> DbResult<()> {
+    let now = chrono::Utc::now().naive_utc();
+    let new_account = NewOauthAccount {
+        id,
+        user_id,
+        provider: provider.to_string(),
+        provider_user_id: provider_user_id.to_string(),
+        access_token_enc: access_token_enc.map(|s| s.to_string()),
+        refresh_token_enc: refresh_token_enc.map(|s| s.to_string()),
+        created_at: now,
+        expires_at: expires_at.map(|dt| dt.naive_utc()),
+        updated_at: now,
+    };
+    diesel::insert_into(yauth_oauth_accounts::table)
+        .values(&new_account)
         .execute(conn)
         .await
         .map_err(|e| e.to_string())?;
-        Ok(())
-    }
+    Ok(())
+}
 
-    pub async fn update_oauth_account_tokens(
-        conn: &mut Conn,
-        id: Uuid,
-        access_token_enc: Option<&str>,
-        refresh_token_enc: Option<&str>,
-        expires_at: Option<chrono::DateTime<chrono::FixedOffset>>,
-    ) -> DbResult<()> {
-        let now = chrono::Utc::now();
-        diesel::sql_query(
-            "UPDATE yauth_oauth_accounts SET access_token_enc = $2, refresh_token_enc = $3, expires_at = $4, updated_at = $5 WHERE id = $1",
-        )
-        .bind::<diesel::sql_types::Uuid, _>(id)
-        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(access_token_enc)
-        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(refresh_token_enc)
-        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Timestamptz>, _>(expires_at)
-        .bind::<diesel::sql_types::Timestamptz, _>(now)
+async fn db_update_oauth_account_tokens(
+    conn: &mut Conn,
+    id: Uuid,
+    access_token_enc: Option<&str>,
+    refresh_token_enc: Option<&str>,
+    expires_at: Option<chrono::DateTime<chrono::FixedOffset>>,
+) -> DbResult<()> {
+    let now = chrono::Utc::now().naive_utc();
+    diesel::update(yauth_oauth_accounts::table.find(id))
+        .set((
+            yauth_oauth_accounts::access_token_enc.eq(access_token_enc),
+            yauth_oauth_accounts::refresh_token_enc.eq(refresh_token_enc),
+            yauth_oauth_accounts::expires_at.eq(expires_at.map(|dt| dt.naive_utc())),
+            yauth_oauth_accounts::updated_at.eq(now),
+        ))
         .execute(conn)
         .await
         .map_err(|e| e.to_string())?;
-        Ok(())
-    }
+    Ok(())
+}
 
-    pub async fn delete_oauth_account(conn: &mut Conn, id: Uuid) -> DbResult<()> {
-        diesel::sql_query("DELETE FROM yauth_oauth_accounts WHERE id = $1")
-            .bind::<diesel::sql_types::Uuid, _>(id)
-            .execute(conn)
-            .await
-            .map_err(|e| e.to_string())?;
-        Ok(())
-    }
-
-    pub async fn insert_oauth_state(
-        conn: &mut Conn,
-        state_token: &str,
-        provider: &str,
-        redirect_url: Option<&str>,
-        expires_at: chrono::DateTime<chrono::FixedOffset>,
-    ) -> DbResult<()> {
-        let now = chrono::Utc::now();
-        diesel::sql_query(
-            "INSERT INTO yauth_oauth_states (state, provider, redirect_url, expires_at, created_at) VALUES ($1, $2, $3, $4, $5)",
-        )
-        .bind::<diesel::sql_types::Text, _>(state_token)
-        .bind::<diesel::sql_types::Text, _>(provider)
-        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(redirect_url)
-        .bind::<diesel::sql_types::Timestamptz, _>(expires_at)
-        .bind::<diesel::sql_types::Timestamptz, _>(now)
+async fn db_delete_oauth_account(conn: &mut Conn, id: Uuid) -> DbResult<()> {
+    diesel::delete(yauth_oauth_accounts::table.find(id))
         .execute(conn)
         .await
         .map_err(|e| e.to_string())?;
-        Ok(())
-    }
+    Ok(())
+}
 
-    pub async fn find_and_delete_oauth_state(
-        conn: &mut Conn,
-        state_token: &str,
-    ) -> DbResult<Option<OauthStateRow>> {
-        let row: Option<OauthStateRow> = diesel::sql_query(
-            "SELECT state, provider, redirect_url, expires_at, created_at FROM yauth_oauth_states WHERE state = $1",
-        )
-        .bind::<diesel::sql_types::Text, _>(state_token)
-        .get_result(conn)
+async fn db_insert_oauth_state(
+    conn: &mut Conn,
+    state_token: &str,
+    provider: &str,
+    redirect_url: Option<&str>,
+    expires_at: chrono::DateTime<chrono::FixedOffset>,
+) -> DbResult<()> {
+    let now = chrono::Utc::now().naive_utc();
+    let new_state = NewOauthState {
+        state: state_token.to_string(),
+        provider: provider.to_string(),
+        redirect_url: redirect_url.map(|s| s.to_string()),
+        expires_at: expires_at.naive_utc(),
+        created_at: now,
+    };
+    diesel::insert_into(yauth_oauth_states::table)
+        .values(&new_state)
+        .execute(conn)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+async fn db_find_and_delete_oauth_state(
+    conn: &mut Conn,
+    state_token: &str,
+) -> DbResult<Option<OauthState>> {
+    let row: Option<OauthState> = yauth_oauth_states::table
+        .find(state_token)
+        .select(OauthState::as_select())
+        .first(conn)
         .await
         .optional()
         .map_err(|e| e.to_string())?;
 
-        if row.is_some() {
-            let _ = diesel::sql_query("DELETE FROM yauth_oauth_states WHERE state = $1")
-                .bind::<diesel::sql_types::Text, _>(state_token)
-                .execute(conn)
-                .await;
-        }
-
-        Ok(row)
+    if row.is_some() {
+        let _ = diesel::delete(yauth_oauth_states::table.find(state_token))
+            .execute(conn)
+            .await;
     }
+
+    Ok(row)
 }
 
 pub struct OAuthPlugin;
@@ -431,7 +383,7 @@ async fn store_state(
             .get()
             .await
             .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-        diesel_db::insert_oauth_state(&mut conn, state_token, provider, redirect_url, expires_at)
+        db_insert_oauth_state(&mut conn, state_token, provider, redirect_url, expires_at)
             .await
             .map_err(|e| {
                 tracing::error!("Failed to store OAuth state: {}", e);
@@ -462,7 +414,7 @@ async fn consume_state(
             .get()
             .await
             .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-        let s = diesel_db::find_and_delete_oauth_state(&mut conn, state_token)
+        let s = db_find_and_delete_oauth_state(&mut conn, state_token)
             .await
             .map_err(|e| {
                 tracing::error!("DB error looking up OAuth state: {}", e);
@@ -720,7 +672,7 @@ async fn handle_callback(
     if let Some(link_user_id) = link_to_user_id {
         // Account linking flow
         let existing_link = {
-            diesel_db::find_oauth_account_by_provider(&mut conn, provider, &userinfo.id)
+            db_find_oauth_account_by_provider(&mut conn, provider, &userinfo.id)
                 .await
                 .map_err(|e| {
                     tracing::error!("DB error: {}", e);
@@ -736,7 +688,7 @@ async fn handle_callback(
         }
 
         {
-            diesel_db::insert_oauth_account(
+            db_insert_oauth_account(
                 &mut conn,
                 Uuid::new_v4(),
                 link_user_id,
@@ -761,7 +713,7 @@ async fn handle_callback(
         }
 
         let user = {
-            let u = diesel_db::find_user_by_id(&mut conn, link_user_id)
+            let u = db_find_user_by_id(&mut conn, link_user_id)
                 .await
                 .map_err(|e| {
                     tracing::error!("DB error: {}", e);
@@ -806,7 +758,7 @@ async fn handle_callback(
 
     // 7. Look up existing OAuth account
     let existing_account = {
-        diesel_db::find_oauth_account_by_provider(&mut conn, provider, &userinfo.id)
+        db_find_oauth_account_by_provider(&mut conn, provider, &userinfo.id)
             .await
             .map_err(|e| {
                 tracing::error!("DB error: {}", e);
@@ -824,7 +776,7 @@ async fn handle_callback(
     let user_info = if let Some(account) = existing_account {
         // Existing OAuth account — update tokens
         {
-            diesel_db::update_oauth_account_tokens(
+            db_update_oauth_account_tokens(
                 &mut conn,
                 account.id,
                 Some(&access_token),
@@ -839,7 +791,7 @@ async fn handle_callback(
         }
 
         let user = {
-            let u = diesel_db::find_user_by_id(&mut conn, account.user_id)
+            let u = db_find_user_by_id(&mut conn, account.user_id)
                 .await
                 .map_err(|e| {
                     tracing::error!("DB error: {}", e);
@@ -878,7 +830,7 @@ async fn handle_callback(
         let email = email.trim().to_lowercase();
 
         let existing_user = {
-            diesel_db::find_user_by_email(&mut conn, &email)
+            db_find_user_by_email(&mut conn, &email)
                 .await
                 .map_err(|e| {
                     tracing::error!("DB error: {}", e);
@@ -898,7 +850,7 @@ async fn handle_callback(
             }
             let user_id = Uuid::new_v4();
             {
-                diesel_db::insert_user(&mut conn, user_id, &email, userinfo.name.as_deref())
+                db_insert_user(&mut conn, user_id, &email, userinfo.name.as_deref())
                     .await
                     .map_err(|e| {
                         tracing::error!("Failed to create user: {}", e);
@@ -909,7 +861,7 @@ async fn handle_callback(
         };
 
         {
-            diesel_db::insert_oauth_account(
+            db_insert_oauth_account(
                 &mut conn,
                 Uuid::new_v4(),
                 uid,
@@ -1104,7 +1056,7 @@ async fn list_accounts(
             .get()
             .await
             .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-        let accounts = diesel_db::find_oauth_accounts_by_user(&mut conn, user.id)
+        let accounts = db_find_oauth_accounts_by_user(&mut conn, user.id)
             .await
             .map_err(|e| {
                 tracing::error!("Failed to list OAuth accounts: {}", e);
@@ -1136,20 +1088,19 @@ async fn unlink_provider(
             .get()
             .await
             .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-        let account =
-            diesel_db::find_oauth_account_by_user_and_provider(&mut conn, user.id, &provider)
-                .await
-                .map_err(|e| {
-                    tracing::error!("Failed to find OAuth account: {}", e);
-                    api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-                })?
-                .ok_or_else(|| {
-                    api_err(
-                        StatusCode::NOT_FOUND,
-                        "OAuth provider not linked to your account",
-                    )
-                })?;
-        diesel_db::delete_oauth_account(&mut conn, account.id)
+        let account = db_find_oauth_account_by_user_and_provider(&mut conn, user.id, &provider)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to find OAuth account: {}", e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?
+            .ok_or_else(|| {
+                api_err(
+                    StatusCode::NOT_FOUND,
+                    "OAuth provider not linked to your account",
+                )
+            })?;
+        db_delete_oauth_account(&mut conn, account.id)
             .await
             .map_err(|e| {
                 tracing::error!("Failed to unlink OAuth account: {}", e);
@@ -1183,7 +1134,7 @@ async fn start_link(
             .get()
             .await
             .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-        diesel_db::find_oauth_account_by_user_and_provider(&mut conn, user.id, &provider)
+        db_find_oauth_account_by_user_and_provider(&mut conn, user.id, &provider)
             .await
             .map_err(|e| {
                 tracing::error!("DB error: {}", e);

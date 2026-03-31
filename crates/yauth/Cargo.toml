@@ -36,7 +36,6 @@ tokio = { workspace = true }
 # Diesel
 diesel = { workspace = true }
 diesel-async-crate = { version = "0.5", features = ["postgres", "deadpool"], package = "diesel-async" }
-pq-sys = { workspace = true }
 futures-util = "0.3"
 
 serde = { workspace = true }

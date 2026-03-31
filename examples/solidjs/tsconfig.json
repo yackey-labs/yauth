@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "jsx": "preserve",
+    "jsxImportSource": "solid-js",
+    "skipLibCheck": true,
+    "paths": {
+      "@yackey-labs/yauth-client": ["../../packages/client/src/index.ts"],
+      "@yackey-labs/yauth-shared": ["../../packages/shared/src/index.ts"],
+      "@yackey-labs/yauth-ui-solidjs": ["../../packages/ui-solidjs/src/index.ts"]
+    }
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "vite-env.d.ts"]
+}

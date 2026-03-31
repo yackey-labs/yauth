@@ -10,8 +10,7 @@ categories = ["authentication", "web-programming"]
 publish = true
 
 [features]
-default = ["diesel-async", "email-password"]
-diesel-async = ["dep:diesel", "dep:diesel-async-crate", "dep:futures-util", "yauth-entity/diesel-async", "yauth-migration/diesel-async"]
+default = ["email-password"]
 email-password = ["yauth-entity/email-password", "yauth-migration/email-password"]
 passkey = ["yauth-entity/passkey", "yauth-migration/passkey", "dep:webauthn-rs", "dep:webauthn-rs-proto"]
 mfa = ["yauth-entity/mfa", "yauth-migration/mfa", "dep:totp-rs"]
@@ -26,8 +25,8 @@ account-lockout = ["yauth-entity/account-lockout", "yauth-migration/account-lock
 webhooks = ["yauth-entity/webhooks", "yauth-migration/webhooks", "dep:hmac"]
 oidc = ["bearer", "oauth2-server", "yauth-entity/oidc", "yauth-migration/oidc"]
 telemetry = ["dep:tracing-opentelemetry", "dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:opentelemetry-semantic-conventions"]
-full = ["diesel-async", "email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link", "admin", "status", "oauth2-server", "account-lockout", "webhooks", "oidc", "telemetry"]
-diesel-full = ["full"]
+openapi = ["dep:utoipa"]
+full = ["email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link", "admin", "status", "oauth2-server", "account-lockout", "webhooks", "oidc", "telemetry", "openapi"]
 
 [dependencies]
 yauth-entity = { workspace = true }
@@ -40,10 +39,10 @@ tower = { workspace = true }
 tower-http = { workspace = true }
 
 # Diesel
-diesel = { workspace = true, optional = true }
-diesel-async-crate = { version = "0.5", features = ["postgres", "deadpool"], optional = true, package = "diesel-async" }
+diesel = { workspace = true }
+diesel-async-crate = { version = "0.5", features = ["postgres", "deadpool"], package = "diesel-async" }
 pq-sys = { workspace = true }
-futures-util = { version = "0.3", optional = true }
+futures-util = "0.3"
 
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -66,7 +65,7 @@ reqwest = { workspace = true }
 
 async-trait = { workspace = true }
 ts-rs = { workspace = true }
-utoipa = { workspace = true }
+utoipa = { workspace = true, optional = true }
 
 # Feature-gated
 webauthn-rs = { workspace = true, optional = true }

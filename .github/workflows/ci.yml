@@ -38,14 +38,17 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --workspace --features full -- -D warnings
 
-      - name: cargo clippy (diesel-async)
-        run: cargo clippy --workspace --no-default-features --features diesel-full -- -D warnings
+      - name: cargo clippy (no default features)
+        run: cargo clippy --workspace --no-default-features --features full -- -D warnings
 
       - name: Biome lint
         run: bun run lint
 
       - name: TypeScript typecheck
         run: bun run typecheck
+
+      - name: Check generated client is up to date
+        run: bun run generate:check
 
   test:
     name: Test
@@ -71,10 +74,10 @@ jobs:
         run: cargo test --workspace --features full
 
   test-diesel:
-    name: Test (diesel-async)
+    name: Test (full features)
     runs-on: ubuntu-latest
-    # Verifies the diesel-only feature set compiles and tests correctly
-    # with no default (seaorm) features enabled.
+    # Verifies the full feature set compiles and tests correctly
+    # with no default features enabled.
     steps:
       - uses: actions/checkout@v4
 
@@ -90,14 +93,14 @@ jobs:
       - name: Install JS dependencies
         run: bun install --frozen-lockfile
 
-      - name: cargo check (diesel-full)
-        run: cargo check --workspace --no-default-features --features diesel-full
+      - name: cargo check (full)
+        run: cargo check --workspace --no-default-features --features full
 
-      - name: cargo clippy (diesel-full)
-        run: cargo clippy --workspace --no-default-features --features diesel-full -- -D warnings
+      - name: cargo clippy (full)
+        run: cargo clippy --workspace --no-default-features --features full -- -D warnings
 
       - name: Run tests (diesel-async)
-        run: cargo test --workspace --no-default-features --features diesel-full
+        run: cargo test --workspace --no-default-features --features full
 
   pentest:
     name: Security Pentest

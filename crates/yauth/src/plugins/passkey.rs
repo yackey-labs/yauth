@@ -348,7 +348,8 @@ async fn register_begin(
     Ok(Json(ccr))
 }
 
-#[derive(Deserialize, TS, utoipa::ToSchema)]
+#[derive(Deserialize, TS)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[ts(export)]
 pub struct RegisterFinishRequest {
     pub name: String,
@@ -451,7 +452,8 @@ async fn register_finish(
 
 // --- Authentication ---
 
-#[derive(Deserialize, TS, utoipa::ToSchema)]
+#[derive(Deserialize, TS)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[ts(export)]
 pub struct PasskeyLoginBeginRequest {
     #[serde(default)]
@@ -623,7 +625,8 @@ async fn login_begin(
     }))
 }
 
-#[derive(Deserialize, TS, utoipa::ToSchema)]
+#[derive(Deserialize, TS)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[ts(export)]
 pub struct PasskeyLoginFinishRequest {
     pub challenge_id: Uuid,
@@ -847,7 +850,8 @@ async fn update_credential_last_used(state: &YAuthState, user_id: Uuid) -> Resul
 
 // --- Passkey Management ---
 
-#[derive(Serialize, TS, utoipa::ToSchema)]
+#[derive(Serialize, TS)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[ts(export)]
 pub struct PasskeyInfo {
     pub id: Uuid,

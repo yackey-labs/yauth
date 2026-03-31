@@ -19,6 +19,11 @@ export function useAuth() {
 	> => {
 		error.value = null;
 		submitting.value = true;
+		if (!client.emailPassword) {
+			error.value = "Email/password authentication is not available.";
+			submitting.value = false;
+			return null;
+		}
 		try {
 			await client.emailPassword.login({ email, password });
 			const u = await refetch();
@@ -54,6 +59,11 @@ export function useAuth() {
 	): Promise<string | null> => {
 		error.value = null;
 		submitting.value = true;
+		if (!client.emailPassword) {
+			error.value = "Email/password authentication is not available.";
+			submitting.value = false;
+			return null;
+		}
 		try {
 			const result = await client.emailPassword.register({
 				email,
@@ -87,6 +97,11 @@ export function useAuth() {
 	const forgotPassword = async (email: string): Promise<string | null> => {
 		error.value = null;
 		submitting.value = true;
+		if (!client.emailPassword) {
+			error.value = "Email/password authentication is not available.";
+			submitting.value = false;
+			return null;
+		}
 		try {
 			const result = await client.emailPassword.forgotPassword({ email });
 			return result.message;
@@ -104,6 +119,11 @@ export function useAuth() {
 	): Promise<string | null> => {
 		error.value = null;
 		submitting.value = true;
+		if (!client.emailPassword) {
+			error.value = "Email/password authentication is not available.";
+			submitting.value = false;
+			return null;
+		}
 		try {
 			const result = await client.emailPassword.resetPassword({
 				token,
@@ -124,6 +144,11 @@ export function useAuth() {
 	): Promise<boolean> => {
 		error.value = null;
 		submitting.value = true;
+		if (!client.emailPassword) {
+			error.value = "Email/password authentication is not available.";
+			submitting.value = false;
+			return false;
+		}
 		try {
 			await client.emailPassword.changePassword({
 				current_password: currentPassword,

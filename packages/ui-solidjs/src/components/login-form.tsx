@@ -13,6 +13,8 @@ export interface LoginFormProps {
 
 export const LoginForm: Component<LoginFormProps> = (props) => {
 	const { client, refetch } = useYAuth();
+	const ep = client?.emailPassword;
+	if (!ep) return null;
 	const [email, setEmail] = createSignal("");
 	const [password, setPassword] = createSignal("");
 	const [error, setError] = createSignal<string | null>(null);
@@ -26,7 +28,7 @@ export const LoginForm: Component<LoginFormProps> = (props) => {
 		try {
 			const form = e.currentTarget as HTMLFormElement;
 			const formData = new FormData(form);
-			await client.emailPassword.login({
+			await ep.login({
 				email: (formData.get("email") as string) || email(),
 				password: (formData.get("password") as string) || password(),
 			});

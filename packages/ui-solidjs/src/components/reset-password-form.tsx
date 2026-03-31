@@ -9,6 +9,8 @@ export interface ResetPasswordFormProps {
 
 export const ResetPasswordForm: Component<ResetPasswordFormProps> = (props) => {
 	const { client } = useYAuth();
+	const ep = client?.emailPassword;
+	if (!ep) return null;
 	const [password, setPassword] = createSignal("");
 	const [error, setError] = createSignal<string | null>(null);
 	const [success, setSuccess] = createSignal<string | null>(null);
@@ -23,7 +25,7 @@ export const ResetPasswordForm: Component<ResetPasswordFormProps> = (props) => {
 		try {
 			const form = e.currentTarget as HTMLFormElement;
 			const formData = new FormData(form);
-			const result = await client.emailPassword.resetPassword({
+			const result = await ep.resetPassword({
 				token: props.token,
 				password: (formData.get("password") as string) || password(),
 			});

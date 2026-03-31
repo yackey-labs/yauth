@@ -37,7 +37,6 @@ export const customFetch = async <T>(
 	const url = typeof input === "string" ? `${baseUrl}${input}` : input;
 
 	const headers: Record<string, string> = {
-		"Content-Type": "application/json",
 		...(init?.headers as Record<string, string>),
 	};
 

@@ -1,3 +1,5 @@
+#![cfg(feature = "openapi")]
+
 use std::path::Path;
 
 fn openapi_output_path() -> &'static str {

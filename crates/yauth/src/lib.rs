@@ -7,10 +7,73 @@ pub mod state;
 pub mod stores;
 
 pub mod plugins;
+#[cfg(feature = "openapi")]
 pub mod routes_meta;
 
 #[cfg(feature = "telemetry")]
 pub mod telemetry;
+
+/// Validate a PostgreSQL schema name to prevent SQL injection.
+/// PostgreSQL unquoted identifiers: `[a-z_][a-z0-9_$]*`, max 63 chars.
+fn validate_schema_name(name: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if name.is_empty() || name.len() > 63 {
+        return Err(format!("Invalid schema name '{}': must be 1-63 characters", name).into());
+    }
+    let first = name.as_bytes()[0];
+    if !(first.is_ascii_lowercase() || first == b'_') {
+        return Err(format!("Invalid schema name '{}': must start with a-z or _", name).into());
+    }
+    if !name
+        .bytes()
+        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+    {
+        return Err(format!(
+            "Invalid schema name '{}': only lowercase letters, digits, and underscores allowed",
+            name
+        )
+        .into());
+    }
+    Ok(())
+}
+
+/// Create a database pool with the configured PostgreSQL schema search path.
+/// When `db_schema` is `"public"` (default), this creates a standard pool.
+/// When `db_schema` is something else (e.g. `"auth"`), each connection sets
+/// `search_path` to that schema so yauth tables resolve correctly.
+pub fn create_pool(
+    database_url: &str,
+    config: &config::YAuthConfig,
+) -> Result<state::DbPool, Box<dyn std::error::Error + Send + Sync>> {
+    use diesel_async_crate::AsyncConnection;
+    use diesel_async_crate::pooled_connection::{AsyncDieselConnectionManager, ManagerConfig};
+    use futures_util::FutureExt;
+
+    if config.db_schema != "public" {
+        validate_schema_name(&config.db_schema)?;
+        let schema = config.db_schema.clone();
+        let mut manager_config = ManagerConfig::<diesel_async_crate::AsyncPgConnection>::default();
+        manager_config.custom_setup = Box::new(move |url| {
+            let schema = schema.clone();
+            async move {
+                let mut conn = diesel_async_crate::AsyncPgConnection::establish(url).await?;
+                use diesel_async_crate::RunQueryDsl;
+                diesel::sql_query(format!("SET search_path TO {schema}, public"))
+                    .execute(&mut conn)
+                    .await
+                    .map_err(diesel::ConnectionError::CouldntSetupConfiguration)?;
+                Ok(conn)
+            }
+            .boxed()
+        });
+        let manager = AsyncDieselConnectionManager::new_with_config(database_url, manager_config);
+        Ok(state::DbPool::builder(manager).build()?)
+    } else {
+        let manager = AsyncDieselConnectionManager::<diesel_async_crate::AsyncPgConnection>::new(
+            database_url,
+        );
+        Ok(state::DbPool::builder(manager).build()?)
+    }
+}
 
 // Re-export entity and migration crates
 pub use yauth_entity as entity;

@@ -15,11 +15,12 @@ const props = defineProps<{
 }>();
 
 const { client } = useYAuth();
+const pk = client.passkey;
 const error = ref<string | null>(null);
 const loading = ref(false);
 
 const handleLogin = async () => {
-	const beginResult = await client.passkey.loginBegin({
+	const beginResult = await pk!.loginBegin({
 		email: props.email || undefined,
 	});
 	const rcr = beginResult as unknown as {
@@ -31,7 +32,7 @@ const handleLogin = async () => {
 			typeof startAuthentication
 		>[0]["optionsJSON"],
 	});
-	await client.passkey.loginFinish({
+	await pk!.loginFinish({
 		challenge_id: rcr.challenge_id,
 		credential: credential as unknown as Record<string, unknown>,
 	});
@@ -40,7 +41,7 @@ const handleLogin = async () => {
 };
 
 const handleRegister = async () => {
-	const ccr = (await client.passkey.registerBegin()) as unknown as {
+	const ccr = (await pk!.registerBegin()) as unknown as {
 		publicKey: unknown;
 	};
 	const credential = await startRegistration({
@@ -48,7 +49,7 @@ const handleRegister = async () => {
 			typeof startRegistration
 		>[0]["optionsJSON"],
 	});
-	await client.passkey.registerFinish({
+	await pk!.registerFinish({
 		credential: credential as unknown as Record<string, unknown>,
 		name: "Passkey",
 	});
@@ -57,6 +58,12 @@ const handleRegister = async () => {
 
 const handleClick = async () => {
 	error.value = null;
+
+	if (!pk) {
+		error.value = "Passkey authentication is not available.";
+		return;
+	}
+
 	loading.value = true;
 
 	try {

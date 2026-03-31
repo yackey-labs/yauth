@@ -67,7 +67,8 @@ pub fn core_public_routes() -> Router<YAuthState> {
 }
 
 /// Server-side auth configuration exposed to frontends via `GET /config`.
-#[derive(Serialize, TS, utoipa::ToSchema)]
+#[derive(Serialize, TS)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[ts(export)]
 pub struct AuthConfigResponse {
     /// Whether new user registration is allowed.
@@ -90,19 +91,18 @@ async fn get_config(State(state): State<YAuthState>) -> Json<AuthConfigResponse>
 
 async fn get_session(Extension(user): Extension<AuthUser>) -> Json<serde_json::Value> {
     Json(serde_json::json!({
-        "user": {
-            "id": user.id,
-            "email": user.email,
-            "display_name": user.display_name,
-            "email_verified": user.email_verified,
-            "role": user.role,
-            "banned": user.banned,
-            "auth_method": format!("{:?}", user.auth_method).to_lowercase(),
-        }
+        "id": user.id,
+        "email": user.email,
+        "display_name": user.display_name,
+        "email_verified": user.email_verified,
+        "role": user.role,
+        "banned": user.banned,
+        "auth_method": format!("{:?}", user.auth_method).to_lowercase(),
     }))
 }
 
-#[derive(Deserialize, TS, utoipa::ToSchema)]
+#[derive(Deserialize, TS)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[ts(export)]
 pub struct UpdateProfileRequest {
     pub display_name: Option<String>,

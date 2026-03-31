@@ -190,19 +190,22 @@ mod diesel_db {
 // Types
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize, TS, utoipa::ToSchema)]
+#[derive(Deserialize, TS)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[ts(export)]
 pub struct MagicLinkSendRequest {
     pub email: String,
 }
 
-#[derive(Deserialize, TS, utoipa::ToSchema)]
+#[derive(Deserialize, TS)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[ts(export)]
 pub struct MagicLinkVerifyRequest {
     pub token: String,
 }
 
-#[derive(Serialize, TS, utoipa::ToSchema)]
+#[derive(Serialize, TS)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[ts(export)]
 pub struct MagicLinkMessageResponse {
     pub message: String,

@@ -25,6 +25,11 @@ const handleSubmit = async (e: Event) => {
 		return;
 	}
 
+	if (!client.emailPassword) {
+		error.value = "Email/password authentication is not available.";
+		return;
+	}
+
 	loading.value = true;
 
 	try {

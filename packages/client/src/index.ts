@@ -1,5 +1,6 @@
-export type { AuthSession, AuthUser } from "@yackey-labs/yauth-shared";
-// Re-export all generated types and functions for direct use
+// Re-export all generated types and functions for direct use.
+// Note: AuthUser and AuthMethod come from generated.ts (matching the actual API wire format).
+// For the simplified shared types, import directly from @yackey-labs/yauth-shared.
 export * from "./generated";
 export {
 	configureClient,
@@ -8,6 +9,8 @@ export {
 } from "./mutator";
 
 import type {
+	AdminListSessionsParams,
+	AdminListUsersParams,
 	BanRequest,
 	CallbackBody,
 	ChangePasswordRequest,
@@ -128,7 +131,6 @@ export function createYAuthClient(options: YAuthClientOptions) {
 			register: (body: RegisterRequest) => emailPasswordRegister(body),
 			login: (body: LoginRequest) => emailPasswordLogin(body),
 			verify: (body: VerifyEmailRequest) => emailPasswordVerifyEmail(body),
-			verifyEmail: (body: VerifyEmailRequest) => emailPasswordVerifyEmail(body),
 			resendVerification: (body: ResendVerificationRequest) =>
 				emailPasswordResendVerification(body),
 			forgotPassword: (body: ForgotPasswordRequest) =>
@@ -195,7 +197,7 @@ export function createYAuthClient(options: YAuthClientOptions) {
 		},
 
 		admin: {
-			listUsers: () => adminListUsers(),
+			listUsers: (params?: AdminListUsersParams) => adminListUsers(params),
 			getUser: (id: string) => adminGetUser(id),
 			updateUser: (id: string, body: UpdateUserRequest) =>
 				adminUpdateUser(id, body),
@@ -203,7 +205,8 @@ export function createYAuthClient(options: YAuthClientOptions) {
 			banUser: (id: string, body: BanRequest) => adminBanUser(id, body),
 			unbanUser: (id: string) => adminUnbanUser(id),
 			impersonate: (id: string) => adminImpersonate(id),
-			listSessions: () => adminListSessions(),
+			listSessions: (params?: AdminListSessionsParams) =>
+				adminListSessions(params),
 			deleteSession: (id: string) => adminDeleteSession(id),
 		},
 

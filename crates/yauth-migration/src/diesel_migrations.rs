@@ -84,17 +84,19 @@ struct CountRow {
 /// (which cannot be sent via PostgreSQL's extended/prepared-statement protocol).
 async fn json_columns_remaining(
     conn: &mut diesel_async_crate::AsyncPgConnection,
+    schema: &str,
 ) -> Result<i64, Box<dyn std::error::Error + Send + Sync>> {
     let rows: Vec<CountRow> = diesel::sql_query(
         "SELECT COUNT(*)::bigint AS count \
          FROM information_schema.columns \
-         WHERE table_schema = 'public' \
+         WHERE table_schema = $1 \
            AND table_name IN (\
              'yauth_oauth2_clients','yauth_authorization_codes','yauth_consents',\
              'yauth_device_codes','yauth_webauthn_credentials','yauth_audit_log'\
            ) \
            AND data_type = 'json'",
     )
+    .bind::<diesel::sql_types::Text, _>(schema)
     .load(conn)
     .await
     .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
@@ -102,7 +104,34 @@ async fn json_columns_remaining(
 }
 
 pub async fn run_migrations(pool: &Pool) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    run_migrations_with_schema(pool, "public").await
+}
+
+pub async fn run_migrations_with_schema(
+    pool: &Pool,
+    schema: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Validate schema name to prevent SQL injection (format! interpolation below).
+    // PostgreSQL unquoted identifiers: [a-z_][a-z0-9_]*, max 63 chars.
+    if schema != "public" {
+        let first_ok = !schema.is_empty()
+            && (schema.as_bytes()[0].is_ascii_lowercase() || schema.as_bytes()[0] == b'_');
+        let all_ok = schema.len() <= 63
+            && schema
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');
+        if !first_ok || !all_ok {
+            return Err(format!("Invalid schema name '{schema}': must be 1-63 chars, start with a-z or _, contain only lowercase letters, digits, and underscores").into());
+        }
+    }
+
     let mut conn = pool.get().await?;
+
+    // Create schema if non-default and set search_path
+    if schema != "public" {
+        exec_sql(&mut conn, &format!("CREATE SCHEMA IF NOT EXISTS {schema}")).await?;
+        exec_sql(&mut conn, &format!("SET search_path TO {schema}, public")).await?;
+    }
 
     // Core tables (always)
     exec_sql(&mut conn, CORE_UP).await?;
@@ -150,7 +179,7 @@ pub async fn run_migrations(pool: &Pool) -> Result<(), Box<dyn std::error::Error
     // Check first so the ALTER TABLE (which is not idempotent) only runs when needed.
     // DO $$ blocks cannot be used here because PostgreSQL rejects them via the
     // extended (prepared-statement) query protocol that diesel uses.
-    if json_columns_remaining(&mut conn).await? > 0 {
+    if json_columns_remaining(&mut conn, schema).await? > 0 {
         exec_sql(&mut conn, FIX_JSON_JSONB_UP).await?;
     }
 
@@ -166,10 +195,18 @@ struct TableName {
 pub async fn list_yauth_tables(
     pool: &Pool,
 ) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
+    list_yauth_tables_in_schema(pool, "public").await
+}
+
+pub async fn list_yauth_tables_in_schema(
+    pool: &Pool,
+    schema: &str,
+) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
     let mut conn = pool.get().await?;
     let results: Vec<TableName> = diesel::sql_query(
-        "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name LIKE 'yauth_%' ORDER BY table_name",
+        "SELECT table_name FROM information_schema.tables WHERE table_schema = $1 AND table_name LIKE 'yauth_%' ORDER BY table_name",
     )
+    .bind::<diesel::sql_types::Text, _>(schema)
     .load(&mut conn)
     .await?;
     Ok(results.into_iter().map(|r| r.table_name).collect())

@@ -15,6 +15,7 @@
 			"!**/*.gen.ts",
 			"!**/bindings",
 			"!**/generated.ts",
+			"!**/generated.msw.ts",
 			"!openapi.json"
 		]
 	},

@@ -16,12 +16,14 @@ export interface PasskeyButtonProps {
 
 export const PasskeyButton: Component<PasskeyButtonProps> = (props) => {
 	const { client } = useYAuth();
+	const pk = client?.passkey;
+	if (!pk) return null;
 	const [error, setError] = createSignal<string | null>(null);
 	const [loading, setLoading] = createSignal(false);
 
 	const handleLogin = async () => {
-		const beginResult = await client.passkey.loginBegin({
-			email: props.email || null,
+		const beginResult = await pk.loginBegin({
+			email: props.email ?? undefined,
 		});
 		const rcr = beginResult as unknown as {
 			options: { publicKey: unknown };
@@ -32,7 +34,7 @@ export const PasskeyButton: Component<PasskeyButtonProps> = (props) => {
 				typeof startAuthentication
 			>[0]["optionsJSON"],
 		});
-		await client.passkey.loginFinish({
+		await pk.loginFinish({
 			challenge_id: rcr.challenge_id,
 			credential: credential as unknown as Record<string, unknown>,
 		});
@@ -41,7 +43,7 @@ export const PasskeyButton: Component<PasskeyButtonProps> = (props) => {
 	};
 
 	const handleRegister = async () => {
-		const ccr = (await client.passkey.registerBegin()) as unknown as {
+		const ccr = (await pk.registerBegin()) as unknown as {
 			publicKey: unknown;
 		};
 		const credential = await startRegistration({
@@ -49,7 +51,7 @@ export const PasskeyButton: Component<PasskeyButtonProps> = (props) => {
 				typeof startRegistration
 			>[0]["optionsJSON"],
 		});
-		await client.passkey.registerFinish({
+		await pk.registerFinish({
 			credential: credential as unknown as Record<string, unknown>,
 			name: "Passkey",
 		});

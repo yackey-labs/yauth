@@ -315,7 +315,8 @@ impl YAuthPlugin for OAuthPlugin {
 // Types
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize, TS, utoipa::ToSchema)]
+#[derive(Deserialize, TS)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[ts(export)]
 pub struct AuthorizeQuery {
     pub redirect_url: Option<String>,
@@ -329,7 +330,8 @@ struct CallbackQuery {
     error_description: Option<String>,
 }
 
-#[derive(Deserialize, TS, utoipa::ToSchema)]
+#[derive(Deserialize, TS)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[ts(export)]
 pub struct CallbackBody {
     pub code: String,
@@ -344,7 +346,8 @@ struct ProviderUserInfo {
     name: Option<String>,
 }
 
-#[derive(Serialize, TS, utoipa::ToSchema)]
+#[derive(Serialize, TS)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[ts(export)]
 pub struct OAuthAccountResponse {
     pub id: String,
@@ -353,7 +356,8 @@ pub struct OAuthAccountResponse {
     pub created_at: String,
 }
 
-#[derive(Serialize, TS, utoipa::ToSchema)]
+#[derive(Serialize, TS)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[ts(export)]
 pub struct OAuthAuthResponse {
     pub user_id: String,
@@ -362,7 +366,8 @@ pub struct OAuthAuthResponse {
     pub email_verified: bool,
 }
 
-#[derive(Serialize, TS, utoipa::ToSchema)]
+#[derive(Serialize, TS)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[ts(export)]
 pub struct AuthorizeResponse {
     pub auth_url: String,

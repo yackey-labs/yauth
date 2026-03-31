@@ -4,9 +4,13 @@ import {
 	createContext,
 	createEffect,
 	createResource,
+	createSignal,
 	type ParentComponent,
+	Show,
 	useContext,
 } from "solid-js";
+
+export type { YAuthClient } from "@yackey-labs/yauth-client";
 
 interface YAuthContextValue {
 	client: YAuthClient;
@@ -17,18 +21,48 @@ interface YAuthContextValue {
 
 const YAuthContext = createContext<YAuthContextValue>();
 
-export const YAuthProvider: ParentComponent<{ client: YAuthClient }> = (
-	props,
-) => {
+interface YAuthProviderProps {
+	client?: YAuthClient;
+	baseUrl?: string;
+}
+
+export const YAuthProvider: ParentComponent<YAuthProviderProps> = (props) => {
+	if (!props.client && !props.baseUrl) {
+		throw new Error(
+			"YAuthProvider requires either a `client` or `baseUrl` prop",
+		);
+	}
+
+	const [resolvedClient, setResolvedClient] = createSignal<YAuthClient | null>(
+		props.client ?? null,
+	);
+
+	if (!props.client && props.baseUrl) {
+		const url = props.baseUrl;
+		import("@yackey-labs/yauth-client").then((mod) => {
+			setResolvedClient(
+				() =>
+					mod.createYAuthClient({
+						baseUrl: url,
+					}) as unknown as YAuthClient,
+			);
+		});
+	}
 	let resolveRefetch: ((user: AuthUser | null) => void) | null = null;
 
 	const [session, { refetch }] = createResource(async () => {
+		const c = resolvedClient();
+		if (!c) return null;
 		try {
-			const result = await props.client.getSession();
-			return result as unknown as AuthUser;
+			return await c.getSession();
 		} catch {
 			return null;
 		}
+	});
+
+	// Re-fetch session once the lazy client resolves
+	createEffect(() => {
+		if (resolvedClient()) refetch();
 	});
 
 	// Resolve pending refetch promises only after the resource signal
@@ -51,16 +85,20 @@ export const YAuthProvider: ParentComponent<{ client: YAuthClient }> = (
 	};
 
 	return (
-		<YAuthContext.Provider
-			value={{
-				client: props.client,
-				user: () => session(),
-				loading: () => session.loading,
-				refetch: refetchAsync,
-			}}
-		>
-			{props.children}
-		</YAuthContext.Provider>
+		<Show when={resolvedClient()} fallback={null}>
+			{(client) => (
+				<YAuthContext.Provider
+					value={{
+						client: client(),
+						user: () => session(),
+						loading: () => session.loading,
+						refetch: refetchAsync,
+					}}
+				>
+					{props.children}
+				</YAuthContext.Provider>
+			)}
+		</Show>
 	);
 };
 

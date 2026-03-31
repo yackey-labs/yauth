@@ -436,7 +436,8 @@ fn truncate_response(body: &str) -> String {
 // Request / Response types
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize, TS, utoipa::ToSchema)]
+#[derive(Deserialize, TS)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[ts(export)]
 pub struct CreateWebhookRequest {
     pub url: String,
@@ -444,7 +445,8 @@ pub struct CreateWebhookRequest {
     pub secret: Option<String>,
 }
 
-#[derive(Deserialize, TS, utoipa::ToSchema)]
+#[derive(Deserialize, TS)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[ts(export)]
 pub struct UpdateWebhookRequest {
     pub url: Option<String>,
@@ -453,7 +455,8 @@ pub struct UpdateWebhookRequest {
     pub active: Option<bool>,
 }
 
-#[derive(Serialize, TS, utoipa::ToSchema)]
+#[derive(Serialize, TS)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[ts(export)]
 pub struct WebhookResponse {
     pub id: String,
@@ -464,14 +467,16 @@ pub struct WebhookResponse {
     pub updated_at: String,
 }
 
-#[derive(Serialize, TS, utoipa::ToSchema)]
+#[derive(Serialize, TS)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[ts(export)]
 pub struct WebhookDetailResponse {
     pub webhook: WebhookResponse,
     pub recent_deliveries: Vec<WebhookDeliveryResponse>,
 }
 
-#[derive(Serialize, TS, utoipa::ToSchema)]
+#[derive(Serialize, TS)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[ts(export)]
 pub struct WebhookDeliveryResponse {
     pub id: String,

@@ -22,63 +22,224 @@ Every feature is behind a **feature flag** — enable only what you need.
 | `webhooks` | HMAC-signed HTTP callbacks on auth events with retry + delivery history | When external systems need real-time auth event notifications |
 | `oidc` | OpenID Connect Provider — id_token issuance, OIDC discovery, JWKS, /userinfo | When downstream apps need OIDC-compliant SSO |
 | `telemetry` | OpenTelemetry tracing bridge | When you need distributed tracing |
-| `diesel-async` | Diesel-async database backend (deadpool) | Yes (default) |
+| `openapi` | utoipa OpenAPI spec generation for client codegen | When you need to generate or update the TypeScript client |
 | `full` | All of the above | Development/testing |
 
-`diesel-async` and `email-password` are enabled by default.
+`email-password` is enabled by default.
 
 ## Quick Start
 
-Add yauth to your `Cargo.toml`:
+### 1. Backend (Rust/Axum)
 
 ```toml
+# Cargo.toml
 [dependencies]
-yauth = { version = "0.2", features = ["email-password", "passkey", "mfa"] }
+yauth = { version = "0.2", features = ["email-password"] }
+tokio = { version = "1", features = ["full"] }
+axum = "0.8"
 ```
-
-Configure and build:
 
 ```rust
-use yauth::{YAuthBuilder, config::*};
+use yauth::{YAuthBuilder, config::*, create_pool};
+use axum::Router;
 
-let yauth = YAuthBuilder::new(db, YAuthConfig {
-    base_url: "https://myapp.example.com".into(),
-    session_ttl: Duration::from_secs(7 * 24 * 3600),
-    secure_cookies: true,
-    // Optional: "remember me" sessions (30 days)
-    remember_me_ttl: Some(DurationSecs(Duration::from_secs(30 * 24 * 3600))),
-    // Optional: bind sessions to IP/UA for hijacking detection
-    session_binding: SessionBindingConfig {
-        bind_ip: true,
-        bind_user_agent: true,
-        ip_mismatch_action: BindingAction::Warn,
-        ua_mismatch_action: BindingAction::Invalidate,
-    },
-    ..Default::default()
-})
-.with_email_password(EmailPasswordConfig {
-    min_password_length: 10,
-    require_email_verification: true,
-    hibp_check: true,
-    password_policy: PasswordPolicyConfig {
-        require_uppercase: true,
-        require_digit: true,
-        disallow_common_passwords: true,
+#[tokio::main]
+async fn main() {
+    let config = YAuthConfig {
+        base_url: "http://localhost:3000".into(),
         ..Default::default()
-    },
-})
-.with_passkey(PasskeyConfig {
-    rp_id: "myapp.example.com".into(),
-    rp_origin: "https://myapp.example.com".into(),
-    rp_name: "My App".into(),
-})
-.with_mfa(MfaConfig::default())
-.build();
+    };
 
-let app = Router::new()
-    .merge(yauth.router())
-    .with_state(yauth.into_state());
+    let pool = create_pool("postgres://user:pass@localhost/mydb", &config)
+        .expect("Failed to create pool");
+
+    // Run yauth migrations (creates yauth_* tables)
+    yauth::migration::diesel_migrations::run_migrations(&pool).await.unwrap();
+
+    let yauth = YAuthBuilder::new(pool, config)
+        .with_email_password(EmailPasswordConfig::default())
+        .build();
+
+    let app = Router::new()
+        .nest("/api/auth", yauth.router())
+        .with_state(yauth.into_state());
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    axum::serve(listener, app).await.unwrap();
+}
 ```
+
+### 2. Frontend (TypeScript)
+
+```bash
+bun add @yackey-labs/yauth-client
+```
+
+```typescript
+import { createYAuthClient } from "@yackey-labs/yauth-client";
+
+const auth = createYAuthClient({ baseUrl: "/api/auth" });
+
+// Register
+await auth.emailPassword.register({ email: "user@example.com", password: "s3cure!Pass" });
+
+// Login
+await auth.emailPassword.login({ email: "user@example.com", password: "s3cure!Pass" });
+
+// Check session
+const user = await auth.getSession();
+console.log(user.email); // "user@example.com"
+
+// Logout
+await auth.logout();
+```
+
+### 3. Pre-built UI (optional)
+
+#### Vue 3
+
+```bash
+bun add @yackey-labs/yauth-ui-vue
+```
+
+**Install the plugin** in your app entry (`main.ts`):
+
+```typescript
+import { createApp } from "vue";
+import { YAuthPlugin } from "@yackey-labs/yauth-ui-vue";
+import App from "./App.vue";
+
+createApp(App)
+  .use(YAuthPlugin, { baseUrl: "/api/auth" })
+  .mount("#app");
+```
+
+**Login page** — the `LoginForm` component handles email/password and emits `@success` when login succeeds:
+
+```vue
+<script setup lang="ts">
+import { LoginForm } from "@yackey-labs/yauth-ui-vue";
+import { useRouter } from "vue-router";
+
+const router = useRouter();
+</script>
+
+<template>
+  <LoginForm @success="router.push('/dashboard')" />
+</template>
+```
+
+**Dashboard page** — use the `useSession()` composable to access the current user:
+
+```vue
+<script setup lang="ts">
+import { useSession, useAuth } from "@yackey-labs/yauth-ui-vue";
+
+const { user, isAuthenticated, loading } = useSession();
+const { logout } = useAuth();
+</script>
+
+<template>
+  <div v-if="loading">Loading...</div>
+  <div v-else-if="isAuthenticated">
+    <p>Logged in as {{ user?.email }}</p>
+    <button @click="logout">Logout</button>
+  </div>
+  <div v-else>Not logged in</div>
+</template>
+```
+
+**Composables reference:**
+
+| Composable | Returns | Use for |
+|------------|---------|---------|
+| `useYAuth()` | `{ client, user, loading, refetch }` | Direct client access |
+| `useAuth()` | `{ user, loading, error, submitting, login, register, logout, forgotPassword, resetPassword, changePassword }` | Auth actions with error/loading state |
+| `useSession()` | `{ user, loading, isAuthenticated, isEmailVerified, logout }` | Reactive session state checks |
+
+**Component props and events:**
+
+| Component | Props | Events |
+|-----------|-------|--------|
+| `LoginForm` | `showPasskey?: boolean` | `@success`, `@mfa-required(pendingSessionId)` |
+| `RegisterForm` | — | `@success(message)` |
+| `ForgotPasswordForm` | — | `@success(message)` |
+| `ResetPasswordForm` | `token: string` | `@success(message)` |
+| `ChangePasswordForm` | — | `@success(message)` |
+| `VerifyEmail` | `token: string` | `@success(message)` |
+| `MfaChallenge` | `pendingSessionId: string` | `@success` |
+| `MfaSetup` | — | `@complete` |
+| `PasskeyButton` | `mode: "login" \| "register"`, `email?: string` | `@success` |
+| `OAuthButtons` | `providers: string[]` | — |
+| `MagicLinkForm` | — | `@success(message)` |
+| `ProfileSettings` | — | — |
+
+**`AuthUser` type** (returned by `getSession()` and available in composables):
+
+```typescript
+interface AuthUser {
+  id: string;
+  email: string;
+  display_name: string | null;
+  email_verified: boolean;
+  role: string;
+  auth_method: "Session" | "Bearer" | "ApiKey";
+}
+```
+
+#### SolidJS
+
+```bash
+bun add @yackey-labs/yauth-ui-solidjs
+```
+
+```tsx
+import { YAuthProvider, LoginForm } from "@yackey-labs/yauth-ui-solidjs";
+
+function App() {
+  return (
+    <YAuthProvider baseUrl="/api/auth">
+      <LoginForm onSuccess={() => navigate("/dashboard")} />
+    </YAuthProvider>
+  );
+}
+```
+
+Access the session in any child component:
+
+```tsx
+import { useYAuth } from "@yackey-labs/yauth-ui-solidjs";
+
+function Dashboard() {
+  const { user, refetch } = useYAuth();
+  return <p>Logged in as {user()?.email}</p>;
+}
+```
+
+### Adding more features
+
+Enable additional plugins with feature flags:
+
+```toml
+yauth = { version = "0.2", features = ["email-password", "passkey", "mfa", "oauth"] }
+```
+
+```rust
+let yauth = YAuthBuilder::new(pool, config)
+    .with_email_password(EmailPasswordConfig::default())
+    .with_passkey(PasskeyConfig {
+        rp_id: "myapp.example.com".into(),
+        rp_origin: "https://myapp.example.com".into(),
+        rp_name: "My App".into(),
+    })
+    .with_mfa(MfaConfig::default())
+    .with_oauth(OAuthConfig {
+        providers: vec![/* Google, GitHub, etc. */],
+    })
+    .build();
+```
+
+All new endpoints are automatically available on the client — no regeneration needed if you use the pre-built `@yackey-labs/yauth-client` package.
 
 ## Architecture
 
@@ -327,19 +488,19 @@ Supported grant types: `authorization_code` (with PKCE S256), `refresh_token`, `
 
 ### @yackey-labs/yauth-client
 
-Zero-dependency HTTP client auto-generated from Rust types and route metadata via `axum-ts-client`.
+HTTP client auto-generated from the OpenAPI spec via `utoipa` + `orval`.
 
 ```typescript
-import { createClient } from "@yackey-labs/yauth-client";
+import { createYAuthClient } from "@yackey-labs/yauth-client";
 
-const auth = createClient({ baseUrl: "https://myapp.example.com/auth" });
+const auth = createYAuthClient({ baseUrl: "https://myapp.example.com/auth" });
 
 // Email/password
 await auth.emailPassword.register({ email, password });
-const { user } = await auth.emailPassword.login({ email, password, remember_me: true });
+await auth.emailPassword.login({ email, password, remember_me: true });
 
 // Session
-const { user } = await auth.getSession();
+const user = await auth.getSession();
 await auth.logout();
 
 // Webhooks, account lockout, OIDC, OAuth2 server, passkey, MFA, etc.
@@ -350,16 +511,27 @@ await auth.logout();
 
 Shared TypeScript types (`AuthUser`, `AuthSession`, etc.) and an AAGUID authenticator map.
 
-### @yackey-labs/yauth-ui-solidjs
+### @yackey-labs/yauth-ui-vue
 
-Pre-built SolidJS components:
+Pre-built Vue 3 components and composables:
 
-- `YAuthProvider` / `useYAuth()` — context provider
+- `YAuthPlugin` / `useYAuth()` — Vue plugin (accepts `client` or `baseUrl`)
+- `useAuth()` — composable for auth actions (login, register, logout, etc.)
+- `useSession()` — composable for reactive session state (`user`, `isAuthenticated`, `loading`)
 - `LoginForm`, `RegisterForm`, `ForgotPasswordForm`, `ResetPasswordForm`
 - `ChangePasswordForm`, `VerifyEmail`, `ProfileSettings`
 - `PasskeyButton`, `OAuthButtons`
 - `MfaSetup`, `MfaChallenge`
 - `MagicLinkForm`
+
+Components check for feature availability — if a feature group isn't present on the client, the component gracefully renders nothing.
+
+### @yackey-labs/yauth-ui-solidjs
+
+Pre-built SolidJS components:
+
+- `YAuthProvider` / `useYAuth()` — context provider (accepts `client` or `baseUrl`)
+- Same component set as Vue: `LoginForm`, `RegisterForm`, `ProfileSettings`, etc.
 - `ConsentScreen` — OAuth2 authorization consent UI
 
 ## Security
@@ -381,13 +553,26 @@ Pre-built SolidJS components:
 
 ## Database Backend
 
-yauth uses **diesel-async** with deadpool as its database backend. This is the default and only supported backend.
+yauth uses **diesel-async** with deadpool as its database backend.
 
 ```toml
 yauth = { version = "0.2", features = ["email-password", "passkey", "mfa"] }
 ```
 
 See [docs/migrating-to-diesel.md](docs/migrating-to-diesel.md) for a migration guide if upgrading from yauth v0.1.x (which supported SeaORM).
+
+### Configurable PostgreSQL Schema
+
+By default, yauth tables live in the `public` schema. Set `db_schema` in `YAuthConfig` to isolate them:
+
+```rust
+let config = YAuthConfig {
+    db_schema: "auth".into(),
+    ..Default::default()
+};
+// Use create_pool() to get a pool with search_path configured
+let pool = yauth::create_pool(&database_url, &config)?;
+```
 
 ## Database Schema
 
@@ -396,7 +581,11 @@ yauth uses PostgreSQL. All tables are prefixed with `yauth_`. Migrations are fea
 Run migrations at startup:
 
 ```rust
+// Standard (public schema)
 yauth::migration::diesel_migrations::run_migrations(&pool).await?;
+
+// Custom schema
+yauth::migration::diesel_migrations::run_migrations_with_schema(&pool, "auth").await?;
 ```
 
 ### Schema by Plugin

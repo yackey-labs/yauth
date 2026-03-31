@@ -192,7 +192,8 @@ impl YAuthPlugin for ApiKeyPlugin {
     }
 }
 
-#[derive(Deserialize, TS, utoipa::ToSchema)]
+#[derive(Deserialize, TS)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[ts(export)]
 pub struct CreateApiKeyRequest {
     pub name: String,
@@ -200,7 +201,8 @@ pub struct CreateApiKeyRequest {
     pub expires_in_days: Option<u32>,
 }
 
-#[derive(Serialize, TS, utoipa::ToSchema)]
+#[derive(Serialize, TS)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[ts(export)]
 pub struct CreateApiKeyResponse {
     pub id: Uuid,
@@ -212,7 +214,8 @@ pub struct CreateApiKeyResponse {
     pub created_at: chrono::DateTime<chrono::FixedOffset>,
 }
 
-#[derive(Serialize, TS, utoipa::ToSchema)]
+#[derive(Serialize, TS)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[ts(export)]
 pub struct ApiKeyResponse {
     pub id: Uuid,

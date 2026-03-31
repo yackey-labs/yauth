@@ -6,9 +6,10 @@ defineProps<{
 }>();
 
 const { client } = useYAuth();
+const oauth = client.oauth;
 
 const handleClick = (provider: string) => {
-	client.oauth.authorize(provider);
+	window.location.href = oauth!.authorize(provider);
 };
 
 const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);

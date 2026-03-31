@@ -96,6 +96,31 @@ fn with_empty_response(builder: OperationBuilder) -> OperationBuilder {
     builder.response("200", ResponseBuilder::new().description("Success").build())
 }
 
+/// Adds query parameters from a schema component (each field becomes a query param).
+fn with_query_params(builder: OperationBuilder, params: &[(&str, bool)]) -> OperationBuilder {
+    let mut b = builder;
+    for &(name, required) in params {
+        b = b.parameter(
+            ParameterBuilder::new()
+                .name(name)
+                .parameter_in(ParameterIn::Query)
+                .required(if required {
+                    utoipa::openapi::Required::True
+                } else {
+                    utoipa::openapi::Required::False
+                })
+                .schema(Some(RefOr::T(
+                    utoipa::openapi::ObjectBuilder::new()
+                        .schema_type(utoipa::openapi::schema::Type::String)
+                        .build()
+                        .into(),
+                )))
+                .build(),
+        );
+    }
+    b
+}
+
 /// Register all schema components from `ToSchema` derives.
 fn register_schemas(builder: ComponentsBuilder) -> ComponentsBuilder {
     use crate::middleware::{AuthMethod, AuthUser};
@@ -190,7 +215,11 @@ fn register_schemas(builder: ComponentsBuilder) -> ComponentsBuilder {
             .schema_from::<ListUsersQuery>()
             .schema_from::<ListSessionsQuery>()
             .schema_from::<UpdateUserRequest>()
-            .schema_from::<BanRequest>();
+            .schema_from::<BanRequest>()
+            .schema_from::<PaginatedUsersResponse>()
+            .schema_from::<AdminUserInfo>()
+            .schema_from::<PaginatedSessionsResponse>()
+            .schema_from::<AdminSessionInfo>();
     }
 
     #[cfg(feature = "webhooks")]
@@ -804,10 +833,13 @@ fn admin_paths(builder: PathsBuilder) -> PathsBuilder {
             PathItemBuilder::new()
                 .operation(
                     HttpMethod::Get,
-                    op("admin_listUsers", "admin")
-                        .pipe(with_empty_response)
-                        .security(auth_req())
-                        .build(),
+                    with_query_params(
+                        op("admin_listUsers", "admin"),
+                        &[("page", false), ("per_page", false), ("search", false)],
+                    )
+                    .pipe(|b| with_response(b, "PaginatedUsersResponse"))
+                    .security(auth_req())
+                    .build(),
                 )
                 .build(),
         )
@@ -817,7 +849,7 @@ fn admin_paths(builder: PathsBuilder) -> PathsBuilder {
                 .operation(
                     HttpMethod::Get,
                     with_path_param(op("admin_getUser", "admin"), "id")
-                        .pipe(|b| with_response(b, "AuthUser"))
+                        .pipe(|b| with_response(b, "AdminUserInfo"))
                         .security(auth_req())
                         .build(),
                 )
@@ -825,7 +857,7 @@ fn admin_paths(builder: PathsBuilder) -> PathsBuilder {
                     HttpMethod::Put,
                     with_path_param(
                         with_body(
-                            with_response(op("admin_updateUser", "admin"), "AuthUser"),
+                            with_response(op("admin_updateUser", "admin"), "AdminUserInfo"),
                             "UpdateUserRequest",
                         ),
                         "id",
@@ -849,7 +881,7 @@ fn admin_paths(builder: PathsBuilder) -> PathsBuilder {
                     HttpMethod::Post,
                     with_path_param(
                         with_body(
-                            with_response(op("admin_banUser", "admin"), "AuthUser"),
+                            with_response(op("admin_banUser", "admin"), "AdminUserInfo"),
                             "BanRequest",
                         ),
                         "id",
@@ -865,7 +897,7 @@ fn admin_paths(builder: PathsBuilder) -> PathsBuilder {
                 .operation(
                     HttpMethod::Post,
                     with_path_param(op("admin_unbanUser", "admin"), "id")
-                        .pipe(|b| with_response(b, "AuthUser"))
+                        .pipe(|b| with_response(b, "AdminUserInfo"))
                         .security(auth_req())
                         .build(),
                 )
@@ -888,10 +920,13 @@ fn admin_paths(builder: PathsBuilder) -> PathsBuilder {
             PathItemBuilder::new()
                 .operation(
                     HttpMethod::Get,
-                    op("admin_listSessions", "admin")
-                        .pipe(with_empty_response)
-                        .security(auth_req())
-                        .build(),
+                    with_query_params(
+                        op("admin_listSessions", "admin"),
+                        &[("page", false), ("per_page", false)],
+                    )
+                    .pipe(|b| with_response(b, "PaginatedSessionsResponse"))
+                    .security(auth_req())
+                    .build(),
                 )
                 .build(),
         )

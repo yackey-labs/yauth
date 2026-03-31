@@ -111,9 +111,34 @@
           "admin"
         ],
         "operationId": "admin_listSessions",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
-            "description": "Success"
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedSessionsResponse"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -157,9 +182,42 @@
           "admin"
         ],
         "operationId": "admin_listUsers",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
-            "description": "Success"
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedUsersResponse"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -191,7 +249,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AuthUser"
+                  "$ref": "#/components/schemas/AdminUserInfo"
                 }
               }
             }
@@ -234,7 +292,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AuthUser"
+                  "$ref": "#/components/schemas/AdminUserInfo"
                 }
               }
             }
@@ -305,7 +363,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AuthUser"
+                  "$ref": "#/components/schemas/AdminUserInfo"
                 }
               }
             }
@@ -368,7 +426,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AuthUser"
+                  "$ref": "#/components/schemas/AdminUserInfo"
                 }
               }
             }
@@ -1757,6 +1815,96 @@
           }
         }
       },
+      "AdminSessionInfo": {
+        "type": "object",
+        "description": "Session info returned by admin list endpoint.",
+        "required": [
+          "id",
+          "user_id",
+          "expires_at",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "ip_address": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "user_agent": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "user_id": {
+            "type": "string"
+          }
+        }
+      },
+      "AdminUserInfo": {
+        "type": "object",
+        "description": "User info returned by admin list endpoint.",
+        "required": [
+          "id",
+          "email",
+          "email_verified",
+          "role",
+          "banned",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "banned": {
+            "type": "boolean"
+          },
+          "banned_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "banned_until": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "email": {
+            "type": "string"
+          },
+          "email_verified": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        }
+      },
       "ApiKeyResponse": {
         "type": "object",
         "required": [
@@ -2286,6 +2434,72 @@
           },
           "user_id": {
             "type": "string"
+          }
+        }
+      },
+      "PaginatedSessionsResponse": {
+        "type": "object",
+        "description": "Response type for `GET /admin/sessions` (schema-only, used for OpenAPI spec).",
+        "required": [
+          "sessions",
+          "total",
+          "page",
+          "per_page"
+        ],
+        "properties": {
+          "page": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "per_page": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "sessions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminSessionInfo"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "PaginatedUsersResponse": {
+        "type": "object",
+        "description": "Response type for `GET /admin/users` (schema-only, used for OpenAPI spec).",
+        "required": [
+          "users",
+          "total",
+          "page",
+          "per_page"
+        ],
+        "properties": {
+          "page": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "per_page": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "users": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminUserInfo"
+            }
           }
         }
       },

@@ -10,6 +10,8 @@ type SetupStep = "begin" | "confirm" | "done";
 
 export const MfaSetup: Component<MfaSetupProps> = (props) => {
 	const { client } = useYAuth();
+	const mfa = client?.mfa;
+	if (!mfa) return null;
 	const [step, setStep] = createSignal<SetupStep>("begin");
 	const [uri, setUri] = createSignal("");
 	const [secret, setSecret] = createSignal("");
@@ -23,7 +25,7 @@ export const MfaSetup: Component<MfaSetupProps> = (props) => {
 		setLoading(true);
 
 		try {
-			const result = await client.mfa.setup();
+			const result = await mfa.setup();
 			setUri(result.otpauth_url);
 			setSecret(result.secret);
 			setBackupCodes(result.backup_codes);
@@ -44,7 +46,7 @@ export const MfaSetup: Component<MfaSetupProps> = (props) => {
 		try {
 			const form = e.currentTarget as HTMLFormElement;
 			const formData = new FormData(form);
-			await client.mfa.confirm({
+			await mfa.confirm({
 				code: (formData.get("code") as string) || code(),
 			});
 			setStep("done");

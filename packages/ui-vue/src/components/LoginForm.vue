@@ -22,6 +22,11 @@ const handleSubmit = async (e: Event) => {
 	error.value = null;
 	loading.value = true;
 
+	if (!client.emailPassword) {
+		error.value = "Email/password authentication is not available.";
+		loading.value = false;
+		return;
+	}
 	try {
 		await client.emailPassword.login({
 			email: email.value,
@@ -115,7 +120,7 @@ const handlePasskeySuccess = (user: AuthUser) => {
 			{{ loading ? "Signing in..." : "Sign in" }}
 		</button>
 
-		<template v-if="showPasskey">
+		<template v-if="showPasskey && client.passkey">
 			<div class="relative">
 				<div
 					class="absolute inset-0 flex items-center"

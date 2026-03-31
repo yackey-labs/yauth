@@ -12,7 +12,8 @@ use uuid::Uuid;
 use crate::error::api_err;
 use crate::state::YAuthState;
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS, utoipa::ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[ts(export)]
 pub struct AuthUser {
     pub id: Uuid,
@@ -27,7 +28,8 @@ pub struct AuthUser {
     pub scopes: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS, utoipa::ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[ts(export)]
 pub enum AuthMethod {
     Session,

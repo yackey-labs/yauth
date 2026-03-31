@@ -18,6 +18,11 @@ const handleSubmit = async (e: Event) => {
 	success.value = null;
 	loading.value = true;
 
+	if (!client.magicLink) {
+		error.value = "Magic link authentication is not available.";
+		loading.value = false;
+		return;
+	}
 	try {
 		const result = await client.magicLink.send({ email: email.value });
 		success.value = result.message;

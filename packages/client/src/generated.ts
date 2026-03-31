@@ -10,6 +10,39 @@ export interface AccountLockoutMessageResponse {
   message: string;
 }
 
+/**
+ * Session info returned by admin list endpoint.
+ */
+export interface AdminSessionInfo {
+  created_at: string;
+  expires_at: string;
+  id: string;
+  /** @nullable */
+  ip_address?: string | null;
+  /** @nullable */
+  user_agent?: string | null;
+  user_id: string;
+}
+
+/**
+ * User info returned by admin list endpoint.
+ */
+export interface AdminUserInfo {
+  banned: boolean;
+  /** @nullable */
+  banned_reason?: string | null;
+  /** @nullable */
+  banned_until?: string | null;
+  created_at: string;
+  /** @nullable */
+  display_name?: string | null;
+  email: string;
+  email_verified: boolean;
+  id: string;
+  role: string;
+  updated_at: string;
+}
+
 export interface ApiKeyResponse {
   created_at: string;
   /** @nullable */
@@ -206,6 +239,32 @@ export interface OAuthAuthResponse {
   user_id: string;
 }
 
+/**
+ * Response type for `GET /admin/sessions` (schema-only, used for OpenAPI spec).
+ */
+export interface PaginatedSessionsResponse {
+  /** @minimum 0 */
+  page: number;
+  /** @minimum 0 */
+  per_page: number;
+  sessions: AdminSessionInfo[];
+  /** @minimum 0 */
+  total: number;
+}
+
+/**
+ * Response type for `GET /admin/users` (schema-only, used for OpenAPI spec).
+ */
+export interface PaginatedUsersResponse {
+  /** @minimum 0 */
+  page: number;
+  /** @minimum 0 */
+  per_page: number;
+  /** @minimum 0 */
+  total: number;
+  users: AdminUserInfo[];
+}
+
 export interface PasskeyInfo {
   created_at: string;
   id: string;
@@ -347,6 +406,17 @@ export interface WebhookDetailResponse {
   webhook: WebhookResponse;
 }
 
+export type AdminListSessionsParams = {
+page?: string;
+per_page?: string;
+};
+
+export type AdminListUsersParams = {
+page?: string;
+per_page?: string;
+search?: string;
+};
+
 export const getOidcJwksUrl = () => {
 
 
@@ -454,17 +524,24 @@ export const accountLockoutUnlock = async (unlockAccountRequest: UnlockAccountRe
 
 
 
-export const getAdminListSessionsUrl = () => {
+export const getAdminListSessionsUrl = (params?: AdminListSessionsParams,) => {
+  const normalizedParams = new URLSearchParams();
 
+  Object.entries(params || {}).forEach(([key, value]) => {
 
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString())
+    }
+  });
 
+  const stringifiedParams = normalizedParams.toString();
 
-  return `/admin/sessions`
+  return stringifiedParams.length > 0 ? `/admin/sessions?${stringifiedParams}` : `/admin/sessions`
 }
 
-export const adminListSessions = async ( options?: RequestInit): Promise<void> => {
+export const adminListSessions = async (params?: AdminListSessionsParams, options?: RequestInit): Promise<PaginatedSessionsResponse> => {
 
-  return customFetch<void>(getAdminListSessionsUrl(),
+  return customFetch<PaginatedSessionsResponse>(getAdminListSessionsUrl(params),
   {
     ...options,
     method: 'GET'
@@ -496,17 +573,24 @@ export const adminDeleteSession = async (id: string, options?: RequestInit): Pro
 
 
 
-export const getAdminListUsersUrl = () => {
+export const getAdminListUsersUrl = (params?: AdminListUsersParams,) => {
+  const normalizedParams = new URLSearchParams();
 
+  Object.entries(params || {}).forEach(([key, value]) => {
 
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString())
+    }
+  });
 
+  const stringifiedParams = normalizedParams.toString();
 
-  return `/admin/users`
+  return stringifiedParams.length > 0 ? `/admin/users?${stringifiedParams}` : `/admin/users`
 }
 
-export const adminListUsers = async ( options?: RequestInit): Promise<void> => {
+export const adminListUsers = async (params?: AdminListUsersParams, options?: RequestInit): Promise<PaginatedUsersResponse> => {
 
-  return customFetch<void>(getAdminListUsersUrl(),
+  return customFetch<PaginatedUsersResponse>(getAdminListUsersUrl(params),
   {
     ...options,
     method: 'GET'
@@ -525,9 +609,9 @@ export const getAdminGetUserUrl = (id: string,) => {
   return `/admin/users/${id}`
 }
 
-export const adminGetUser = async (id: string, options?: RequestInit): Promise<AuthUser> => {
+export const adminGetUser = async (id: string, options?: RequestInit): Promise<AdminUserInfo> => {
 
-  return customFetch<AuthUser>(getAdminGetUserUrl(id),
+  return customFetch<AdminUserInfo>(getAdminGetUserUrl(id),
   {
     ...options,
     method: 'GET'
@@ -547,9 +631,9 @@ export const getAdminUpdateUserUrl = (id: string,) => {
 }
 
 export const adminUpdateUser = async (id: string,
-    updateUserRequest: UpdateUserRequest, options?: RequestInit): Promise<AuthUser> => {
+    updateUserRequest: UpdateUserRequest, options?: RequestInit): Promise<AdminUserInfo> => {
 
-  return customFetch<AuthUser>(getAdminUpdateUserUrl(id),
+  return customFetch<AdminUserInfo>(getAdminUpdateUserUrl(id),
   {
     ...options,
     method: 'PUT',
@@ -591,9 +675,9 @@ export const getAdminBanUserUrl = (id: string,) => {
 }
 
 export const adminBanUser = async (id: string,
-    banRequest: BanRequest, options?: RequestInit): Promise<AuthUser> => {
+    banRequest: BanRequest, options?: RequestInit): Promise<AdminUserInfo> => {
 
-  return customFetch<AuthUser>(getAdminBanUserUrl(id),
+  return customFetch<AdminUserInfo>(getAdminBanUserUrl(id),
   {
     ...options,
     method: 'POST',
@@ -634,9 +718,9 @@ export const getAdminUnbanUserUrl = (id: string,) => {
   return `/admin/users/${id}/unban`
 }
 
-export const adminUnbanUser = async (id: string, options?: RequestInit): Promise<AuthUser> => {
+export const adminUnbanUser = async (id: string, options?: RequestInit): Promise<AdminUserInfo> => {
 
-  return customFetch<AuthUser>(getAdminUnbanUserUrl(id),
+  return customFetch<AdminUserInfo>(getAdminUnbanUserUrl(id),
   {
     ...options,
     method: 'POST'

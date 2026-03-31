@@ -10,8 +10,7 @@ categories = ["authentication", "web-programming"]
 publish = true
 
 [features]
-default = ["diesel-async", "email-password"]
-diesel-async = ["dep:diesel", "dep:diesel-async-crate", "dep:futures-util", "dep:tokio"]
+default = ["email-password"]
 email-password = []
 passkey = []
 mfa = []
@@ -23,12 +22,11 @@ oauth2-server = []
 account-lockout = []
 webhooks = []
 oidc = []
-full = ["diesel-async", "email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link", "oauth2-server", "account-lockout", "webhooks", "oidc"]
-diesel-full = ["full"]
+full = ["email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link", "oauth2-server", "account-lockout", "webhooks", "oidc"]
 
 [dependencies]
-diesel = { workspace = true, optional = true }
-diesel-async-crate = { version = "0.5", features = ["postgres", "deadpool"], optional = true, package = "diesel-async" }
-futures-util = { version = "0.3", default-features = false, features = ["alloc", "async-await-macro"], optional = true }
-tokio = { workspace = true, optional = true }
+diesel = { workspace = true }
+diesel-async-crate = { version = "0.5", features = ["postgres", "deadpool"], package = "diesel-async" }
+futures-util = { version = "0.3", default-features = false, features = ["alloc", "async-await-macro"] }
+tokio = { workspace = true }
 uuid = { workspace = true }

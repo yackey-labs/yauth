@@ -7,7 +7,7 @@ use axum::{
     routing::{delete, get, post, put},
 };
 use chrono::{Duration, Utc};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 use ts_rs::TS;
 use uuid::Uuid;
@@ -62,8 +62,6 @@ mod diesel_db {
         pub id: Uuid,
         #[diesel(sql_type = diesel::sql_types::Uuid)]
         pub user_id: Uuid,
-        #[diesel(sql_type = diesel::sql_types::Text)]
-        pub token_hash: String,
         #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
         pub ip_address: Option<String>,
         #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
@@ -261,7 +259,7 @@ mod diesel_db {
         offset: i64,
     ) -> DbResult<Vec<SessionRow>> {
         diesel::sql_query(
-            "SELECT id, user_id, token_hash, ip_address, user_agent, expires_at, created_at FROM yauth_sessions ORDER BY created_at DESC LIMIT $1 OFFSET $2",
+            "SELECT id, user_id, ip_address, user_agent, expires_at, created_at FROM yauth_sessions ORDER BY created_at DESC LIMIT $1 OFFSET $2",
         )
         .bind::<diesel::sql_types::BigInt, _>(limit)
         .bind::<diesel::sql_types::BigInt, _>(offset)
@@ -280,7 +278,7 @@ mod diesel_db {
 
     pub async fn find_session_by_id(conn: &mut Conn, id: Uuid) -> DbResult<Option<SessionRow>> {
         diesel::sql_query(
-            "SELECT id, user_id, token_hash, ip_address, user_agent, expires_at, created_at FROM yauth_sessions WHERE id = $1",
+            "SELECT id, user_id, ip_address, user_agent, expires_at, created_at FROM yauth_sessions WHERE id = $1",
         )
         .bind::<diesel::sql_types::Uuid, _>(id)
         .get_result(conn)
@@ -331,7 +329,8 @@ impl YAuthPlugin for AdminPlugin {
 // Request / query types
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize, TS, utoipa::ToSchema)]
+#[derive(Deserialize, TS)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[ts(export)]
 pub struct ListUsersQuery {
     pub page: Option<u64>,
@@ -339,14 +338,16 @@ pub struct ListUsersQuery {
     pub search: Option<String>,
 }
 
-#[derive(Deserialize, TS, utoipa::ToSchema)]
+#[derive(Deserialize, TS)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[ts(export)]
 pub struct ListSessionsQuery {
     pub page: Option<u64>,
     pub per_page: Option<u64>,
 }
 
-#[derive(Deserialize, TS, utoipa::ToSchema)]
+#[derive(Deserialize, TS)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[ts(export)]
 pub struct UpdateUserRequest {
     pub display_name: Option<String>,
@@ -354,11 +355,64 @@ pub struct UpdateUserRequest {
     pub email_verified: Option<bool>,
 }
 
-#[derive(Deserialize, TS, utoipa::ToSchema)]
+#[derive(Deserialize, TS)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[ts(export)]
 pub struct BanRequest {
     pub reason: Option<String>,
     pub until: Option<String>,
+}
+
+/// Response type for `GET /admin/users` (schema-only, used for OpenAPI spec).
+#[derive(Serialize, TS)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[ts(export)]
+pub struct PaginatedUsersResponse {
+    pub users: Vec<AdminUserInfo>,
+    pub total: u64,
+    pub page: u64,
+    pub per_page: u64,
+}
+
+/// User info returned by admin list endpoint.
+#[derive(Serialize, TS)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[ts(export)]
+pub struct AdminUserInfo {
+    pub id: String,
+    pub email: String,
+    pub display_name: Option<String>,
+    pub email_verified: bool,
+    pub role: String,
+    pub banned: bool,
+    pub banned_reason: Option<String>,
+    pub banned_until: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// Response type for `GET /admin/sessions` (schema-only, used for OpenAPI spec).
+#[derive(Serialize, TS)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[ts(export)]
+pub struct PaginatedSessionsResponse {
+    pub sessions: Vec<AdminSessionInfo>,
+    pub total: u64,
+    pub page: u64,
+    pub per_page: u64,
+}
+
+/// Session info returned by admin list endpoint.
+#[derive(Serialize, TS)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[ts(export)]
+pub struct AdminSessionInfo {
+    pub id: String,
+    pub user_id: String,
+    pub ip_address: Option<String>,
+    pub user_agent: Option<String>,
+    pub expires_at: String,
+    pub created_at: String,
 }
 
 // ---------------------------------------------------------------------------

@@ -3637,13 +3637,11 @@ dependencies = [
  "futures-util",
  "http",
  "http-body",
- "http-body-util",
  "iri-string",
  "pin-project-lite",
  "tower",
  "tower-layer",
  "tower-service",
- "tracing",
 ]
 
 [[package]]
@@ -4567,11 +4565,8 @@ dependencies = [
  "sha2",
  "testcontainers",
  "testcontainers-modules",
- "thiserror 2.0.18",
  "tokio",
  "totp-rs",
- "tower",
- "tower-http",
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
@@ -4579,7 +4574,6 @@ dependencies = [
  "utoipa",
  "uuid",
  "webauthn-rs",
- "webauthn-rs-proto",
 ]
 
 [[package]]

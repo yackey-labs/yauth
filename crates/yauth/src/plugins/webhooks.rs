@@ -475,6 +475,23 @@ impl From<WebhookDelivery> for WebhookDeliveryResponse {
 }
 
 // ---------------------------------------------------------------------------
+// URL validation helper
+// ---------------------------------------------------------------------------
+
+fn validate_webhook_url(url: &str) -> Result<(), ApiError> {
+    if url.is_empty() {
+        return Err(api_err(StatusCode::BAD_REQUEST, "URL is required"));
+    }
+    if !(url.starts_with("http://") || url.starts_with("https://")) || !url.contains('.') {
+        return Err(api_err(
+            StatusCode::BAD_REQUEST,
+            "Invalid webhook URL: must be an HTTP or HTTPS URL",
+        ));
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // POST /webhooks -- create webhook
 // ---------------------------------------------------------------------------
 
@@ -484,9 +501,7 @@ async fn create_webhook(
     Json(input): Json<CreateWebhookRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     // Validate URL
-    if input.url.is_empty() {
-        return Err(api_err(StatusCode::BAD_REQUEST, "URL is required"));
-    }
+    validate_webhook_url(&input.url)?;
 
     // Validate events
     if input.events.is_empty() {
@@ -642,6 +657,11 @@ async fn update_webhook(
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?
             .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "Webhook not found"))?;
+
+        // Validate URL if being updated
+        if let Some(ref url) = input.url {
+            validate_webhook_url(url)?;
+        }
 
         let events_json = input
             .events

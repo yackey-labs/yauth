@@ -56,6 +56,28 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: yauth
+          POSTGRES_PASSWORD: yauth
+          POSTGRES_DB: yauth_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U yauth -d yauth_test"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 10
+      mailpit:
+        image: axllent/mailpit:latest
+        ports:
+          - 1026:1025
+          - 8026:8025
+        env:
+          MP_SMTP_AUTH_ACCEPT_ANY: 1
+          MP_SMTP_AUTH_ALLOW_INSECURE: 1
     steps:
       - uses: actions/checkout@v4
 
@@ -64,8 +86,18 @@ jobs:
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
-      - name: Run tests
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install JS dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Run unit tests
         run: cargo test --workspace --features full
+
+      - name: Run pentest suite
+        run: cd pentest && bun run test
 
   codeql:
     name: CodeQL (${{ matrix.language }})

@@ -28,6 +28,10 @@ const mfaError = ref<string | null>(null);
 const mfaLoading = ref(false);
 
 const fetchPasskeys = async () => {
+	if (!client.passkey) {
+		passkeysLoading.value = false;
+		return;
+	}
 	passkeysLoading.value = true;
 	try {
 		passkeys.value = await client.passkey.list();
@@ -39,6 +43,10 @@ const fetchPasskeys = async () => {
 };
 
 const fetchOAuthAccounts = async () => {
+	if (!client.oauth) {
+		oauthLoading.value = false;
+		return;
+	}
 	oauthLoading.value = true;
 	try {
 		oauthAccounts.value = await client.oauth.accounts();
@@ -55,6 +63,7 @@ onMounted(() => {
 });
 
 const handleDeletePasskey = async (id: string) => {
+	if (!client.passkey) return;
 	passkeyError.value = null;
 	deletingPasskey.value = id;
 
@@ -70,6 +79,7 @@ const handleDeletePasskey = async (id: string) => {
 };
 
 const handleUnlinkOAuth = async (provider: string) => {
+	if (!client.oauth) return;
 	oauthError.value = null;
 	unlinkingOAuth.value = provider;
 
@@ -85,6 +95,10 @@ const handleUnlinkOAuth = async (provider: string) => {
 };
 
 const handleMfaBegin = async () => {
+	if (!client.mfa) {
+		mfaError.value = "MFA is not available.";
+		return;
+	}
 	mfaError.value = null;
 	mfaLoading.value = true;
 
@@ -104,11 +118,12 @@ const handleMfaBegin = async () => {
 
 const handleMfaConfirm = async (e: Event) => {
 	e.preventDefault();
+	if (!client.mfa) return;
 	mfaError.value = null;
 	mfaLoading.value = true;
 
 	try {
-		await client.mfa.confirm(mfaCode.value);
+		await client.mfa.confirm({ code: mfaCode.value });
 		mfaStep.value = "done";
 	} catch (err) {
 		const e = err instanceof Error ? err : new Error(String(err));
@@ -119,6 +134,7 @@ const handleMfaConfirm = async (e: Event) => {
 };
 
 const handleMfaDisable = async () => {
+	if (!client.mfa) return;
 	mfaError.value = null;
 	mfaLoading.value = true;
 
@@ -174,7 +190,7 @@ const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 			</section>
 
 			<!-- Passkeys -->
-			<section class="space-y-4">
+			<section v-if="client.passkey" class="space-y-4">
 				<h2 class="text-lg font-semibold tracking-tight">Passkeys</h2>
 
 				<div
@@ -238,7 +254,7 @@ const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 			</section>
 
 			<!-- OAuth accounts -->
-			<section class="space-y-4">
+			<section v-if="client.oauth" class="space-y-4">
 				<h2 class="text-lg font-semibold tracking-tight">
 					Connected accounts
 				</h2>
@@ -304,7 +320,7 @@ const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 			</section>
 
 			<!-- MFA setup -->
-			<section class="space-y-4">
+			<section v-if="client.mfa" class="space-y-4">
 				<h2 class="text-lg font-semibold tracking-tight">
 					Two-factor authentication
 				</h2>

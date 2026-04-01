@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/*"]
+members = ["crates/yauth"]
 resolver = "2"
 
 [workspace.package]
@@ -9,10 +9,6 @@ license = "MIT"
 repository = "https://github.com/yackey-labs/yauth"
 
 [workspace.dependencies]
-# Internal crates
-yauth-entity = { version = "0.2.5", path = "crates/yauth-entity", default-features = false }
-yauth-migration = { version = "0.2.5", path = "crates/yauth-migration", default-features = false }
-
 # Web framework
 axum = { version = "0.8", features = ["macros"] }
 axum-extra = { version = "0.12", features = ["cookie"] }
@@ -20,11 +16,9 @@ tokio = { version = "1", features = ["full"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace", "limit"] }
 
-# Database — Diesel
-diesel = { version = "2.2", features = ["postgres", "uuid", "chrono", "serde_json"] }
+# Database — Diesel (postgres_backend = type system only, no libpq; diesel-async uses tokio-postgres)
+diesel = { version = "2.2", features = ["postgres_backend", "uuid", "chrono", "serde_json"] }
 diesel-async = { version = "0.5", features = ["postgres", "deadpool"] }
-diesel_migrations = { version = "2.2", features = ["postgres"] }
-pq-sys = { version = "0.7", features = ["bundled"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -73,8 +67,7 @@ opentelemetry-otlp = { version = "0.31", features = ["grpc-tonic"] }
 opentelemetry-semantic-conventions = { version = "0.31" }
 
 # Code generation
-ts-rs = { version = "11", features = ["serde-compat", "uuid-impl", "chrono-impl"] }
-axfetchum = { version = "0.1" }
+utoipa = { version = "5", features = ["axum_extras", "uuid", "chrono"] }
 
 # Misc
 async-trait = "0.1"

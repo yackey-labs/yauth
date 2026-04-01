@@ -22,8 +22,8 @@
 |---|---|
 | `@yackey-labs/yauth-shared` | Shared types (`AuthUser`, `AuthSession`, AAGUID map) |
 | `@yackey-labs/yauth-client` | HTTP client for all auth endpoints |
-| `@yackey-labs/yauth-ui-solidjs` | SolidJS components (LoginForm, RegisterForm, etc.) |
 | `@yackey-labs/yauth-ui-vue` | Vue 3 components + composables (LoginForm, useAuth, etc.) |
+| `@yackey-labs/yauth-ui-solidjs` | SolidJS components (LoginForm, RegisterForm, etc.) |
 
 ### Pentest Suite (`pentest/`)
 
@@ -59,7 +59,6 @@ bash pentest/pentest-yauth.sh        # Run full pentest suite (255+ cases, 0 FAI
 
 | Feature | What It Enables | Default |
 |---|---|---|
-| `diesel-async` | Diesel-async database backend (deadpool) | Yes |
 | `email-password` | Registration, login, verification, forgot/reset/change password | Yes |
 | `passkey` | WebAuthn registration + login | No |
 | `mfa` | TOTP setup/verify + backup codes | No |
@@ -68,6 +67,7 @@ bash pentest/pentest-yauth.sh        # Run full pentest suite (255+ cases, 0 FAI
 | `api-key` | API key generation + validation | No |
 | `admin` | User management, ban/unban, impersonation | No |
 | `telemetry` | OpenTelemetry tracing bridge | No |
+| `openapi` | utoipa OpenAPI spec generation (for client codegen) | No |
 | `full` | All of the above | No |
 
 Feature flags gate code in all three Rust crates (entity, migration, yauth) simultaneously.
@@ -111,15 +111,25 @@ Authenticated user is injected as `Extension<AuthUser>` on the request.
 
 ## Generated TypeScript Client
 
-This project uses `axfetchum` to auto-generate `@yackey-labs/yauth-client` from Rust types + route metadata.
+This project uses `utoipa` (OpenAPI 3.1 spec generation) + `orval` (TypeScript client generation from OpenAPI) to auto-generate `@yackey-labs/yauth-client`.
+
+**Pipeline:** Rust types derive `ToSchema` → `routes_meta.rs` builds OpenAPI spec programmatically → `openapi.json` → orval generates `packages/client/src/generated.ts` → `packages/client/src/index.ts` wraps generated functions into backward-compatible `createYAuthClient()` factory.
+
+**Key files:**
+- `crates/yauth/src/routes_meta.rs` — OpenAPI spec builder (paths + schemas per feature flag)
+- `openapi.json` — generated OpenAPI 3.1 spec (committed)
+- `orval.config.ts` — orval configuration
+- `packages/client/src/mutator.ts` — custom fetch wrapper (credentials, error handling, bearer tokens)
+- `packages/client/src/generated.ts` — orval-generated functions (committed, do not edit manually)
+- `packages/client/src/index.ts` — `createYAuthClient()` wrapper providing grouped API
 
 **When modifying any API endpoint or request/response type:**
 1. Update the route metadata in `crates/yauth/src/routes_meta.rs`
-2. Ensure request/response types have `#[derive(TS)] #[ts(export)]`
-3. Run `bun generate` to regenerate the TypeScript client
-4. Commit the regenerated `packages/client/src/generated.ts` alongside Rust changes
+2. Ensure request/response types have `#[derive(TS)] #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))] #[ts(export)]`
+3. Run `bun generate` to regenerate `openapi.json` and the TypeScript client
+4. Commit the regenerated `openapi.json` and `packages/client/src/generated.ts` alongside Rust changes
 
-**CI check:** `bun generate:check` (part of `bun validate:ci`) fails if the generated client is out of date.
+**CI check:** `bun generate:check` (part of `bun validate:ci`) fails if the OpenAPI spec is out of date.
 
 ## Versioning
 
@@ -141,6 +151,7 @@ This project uses `axfetchum` to auto-generate `@yackey-labs/yauth-client` from 
 - **Biome** for TypeScript linting/formatting (not ESLint)
 - **`cargo fmt` + `cargo clippy`** for Rust
 - **`yauth_` table prefix** on all database tables
+- **Configurable PG schema** — `db_schema` in `YAuthConfig` (default `"public"`). Set to e.g. `"auth"` to isolate yauth tables in a separate PostgreSQL schema. Use `yauth::create_pool()` to get a pool with the search_path configured.
 - **Timing-safe patterns** — dummy password hash on failed lookups to prevent timing attacks
 - **HIBP k-anonymity** — password breach checking via HaveIBeenPwned API (configurable)
 - **Rate limiting** — per-operation rate limits (login, register, forgot-password, etc.)

@@ -20,16 +20,19 @@ export type EventResponse =
 	| { action: "requireMfa"; userId: string; pendingSessionId: string }
 	| { action: "block"; status: number; message: string };
 
+/** Auth method used for the request (matches Rust enum serialization). */
+export type AuthMethod = "Session" | "Bearer" | "ApiKey";
+
 /** Authenticated user returned from the API (snake_case matches Rust serde) */
 export interface AuthUser {
 	id: string;
 	email: string;
-	display_name: string | null;
+	display_name?: string | null;
 	email_verified: boolean;
-	role: "user" | "admin";
+	role: string;
 	banned: boolean;
-	/** Which method was used for this request: 'session' | 'bearer' | 'apikey' */
-	auth_method: "session" | "bearer" | "apikey";
+	auth_method: AuthMethod;
+	scopes?: string[] | null;
 }
 
 /** Session info for cookie-based auth (snake_case matches Rust serde) */

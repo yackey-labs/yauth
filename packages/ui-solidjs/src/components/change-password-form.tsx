@@ -11,6 +11,8 @@ export const ChangePasswordForm: Component<ChangePasswordFormProps> = (
 	props,
 ) => {
 	const { client } = useYAuth();
+	const ep = client?.emailPassword;
+	if (!ep) return null;
 	const [currentPassword, setCurrentPassword] = createSignal("");
 	const [newPassword, setNewPassword] = createSignal("");
 	const [confirmPassword, setConfirmPassword] = createSignal("");
@@ -39,7 +41,10 @@ export const ChangePasswordForm: Component<ChangePasswordFormProps> = (
 		setLoading(true);
 
 		try {
-			await client.emailPassword.changePassword(currentPw, newPw);
+			await ep.changePassword({
+				current_password: currentPw,
+				new_password: newPw,
+			});
 			setSuccess(true);
 			setCurrentPassword("");
 			setNewPassword("");

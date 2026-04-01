@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import { createYAuthClient, YAuthError } from "./generated";
+import { createYAuthClient, YAuthError } from "./index";
 
 type MockFetch = ReturnType<typeof mock<(...args: unknown[]) => unknown>>;
 

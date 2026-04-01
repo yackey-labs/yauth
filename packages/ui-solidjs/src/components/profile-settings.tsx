@@ -5,10 +5,18 @@ import { useYAuth } from "../provider";
 export const ProfileSettings: Component = () => {
 	const { client, user, loading: userLoading } = useYAuth();
 
+	const passkeyClient = client?.passkey;
+	const oauthClient = client?.oauth;
+	const mfaClient = client?.mfa;
+	const hasPasskey = !!passkeyClient;
+	const hasOAuth = !!oauthClient;
+	const hasMfa = !!mfaClient;
+
 	// Passkeys
 	const [passkeys, { refetch: refetchPasskeys }] = createResource(async () => {
+		if (!passkeyClient) return [];
 		try {
-			return await client.passkey.list();
+			return await passkeyClient.list();
 		} catch {
 			return [];
 		}
@@ -21,8 +29,9 @@ export const ProfileSettings: Component = () => {
 	// OAuth accounts
 	const [oauthAccounts, { refetch: refetchOAuth }] = createResource(
 		async () => {
+			if (!oauthClient) return [];
 			try {
-				return await client.oauth.accounts();
+				return await oauthClient.accounts();
 			} catch {
 				return [];
 			}
@@ -47,7 +56,7 @@ export const ProfileSettings: Component = () => {
 		setDeletingPasskey(id);
 
 		try {
-			await client.passkey.delete(id);
+			await passkeyClient!.delete(id);
 			refetchPasskeys();
 		} catch (err) {
 			const error = err instanceof Error ? err : new Error(String(err));
@@ -62,7 +71,7 @@ export const ProfileSettings: Component = () => {
 		setUnlinkingOAuth(provider);
 
 		try {
-			await client.oauth.unlink(provider);
+			await oauthClient!.unlink(provider);
 			refetchOAuth();
 		} catch (err) {
 			const error = err instanceof Error ? err : new Error(String(err));
@@ -77,7 +86,7 @@ export const ProfileSettings: Component = () => {
 		setMfaLoading(true);
 
 		try {
-			const result = await client.mfa.setup();
+			const result = await mfaClient!.setup();
 			setMfaUri(result.otpauth_url);
 			setMfaSecret(result.secret);
 			setMfaBackupCodes(result.backup_codes);
@@ -98,9 +107,9 @@ export const ProfileSettings: Component = () => {
 		try {
 			const form = e.currentTarget as HTMLFormElement;
 			const formData = new FormData(form);
-			await client.mfa.confirm(
-				(formData.get("mfa_code") as string) || mfaCode(),
-			);
+			await mfaClient!.confirm({
+				code: (formData.get("mfa_code") as string) || mfaCode(),
+			});
 			setMfaStep("done");
 		} catch (err) {
 			const error = err instanceof Error ? err : new Error(String(err));
@@ -115,7 +124,7 @@ export const ProfileSettings: Component = () => {
 		setMfaLoading(true);
 
 		try {
-			await client.mfa.disable();
+			await mfaClient!.disable();
 			setMfaStep("idle");
 			setMfaUri("");
 			setMfaSecret("");
@@ -163,241 +172,247 @@ export const ProfileSettings: Component = () => {
 						</section>
 
 						{/* Passkeys */}
-						<section class="space-y-4">
-							<h2 class="text-lg font-semibold tracking-tight">Passkeys</h2>
+						<Show when={hasPasskey}>
+							<section class="space-y-4">
+								<h2 class="text-lg font-semibold tracking-tight">Passkeys</h2>
 
-							<Show when={passkeyError()}>
-								<div class="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
-									{passkeyError()}
-								</div>
-							</Show>
+								<Show when={passkeyError()}>
+									<div class="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+										{passkeyError()}
+									</div>
+								</Show>
 
-							<Show when={passkeys.loading}>
-								<div class="text-sm text-muted-foreground">
-									Loading passkeys...
-								</div>
-							</Show>
+								<Show when={passkeys.loading}>
+									<div class="text-sm text-muted-foreground">
+										Loading passkeys...
+									</div>
+								</Show>
 
-							<Show when={passkeys()}>
-								{(passkeyList) => (
-									<Show
-										when={passkeyList().length > 0}
-										fallback={
-											<p class="text-sm text-muted-foreground">
-												No passkeys registered.
-											</p>
-										}
-									>
-										<ul class="space-y-2">
-											<For each={passkeyList()}>
-												{(passkey) => (
-													<li class="flex items-center justify-between rounded-md border border-input px-3 py-2">
-														<div class="space-y-0.5">
-															<span class="text-sm font-medium">
-																{passkey.name ?? "Unnamed passkey"}
-															</span>
-															<span class="block text-xs text-muted-foreground">
-																Added{" "}
-																{new Date(
-																	passkey.created_at,
-																).toLocaleDateString()}
-															</span>
-														</div>
-														<button
-															class="inline-flex h-8 cursor-pointer items-center justify-center rounded-md border border-input bg-background px-3 text-xs font-medium shadow-sm transition-colors hover:bg-destructive hover:text-destructive-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
-															type="button"
-															onClick={() => handleDeletePasskey(passkey.id)}
-															disabled={deletingPasskey() === passkey.id}
-														>
-															{deletingPasskey() === passkey.id
-																? "Deleting..."
-																: "Delete"}
-														</button>
-													</li>
-												)}
-											</For>
-										</ul>
-									</Show>
-								)}
-							</Show>
-						</section>
+								<Show when={passkeys()}>
+									{(passkeyList) => (
+										<Show
+											when={passkeyList().length > 0}
+											fallback={
+												<p class="text-sm text-muted-foreground">
+													No passkeys registered.
+												</p>
+											}
+										>
+											<ul class="space-y-2">
+												<For each={passkeyList()}>
+													{(passkey) => (
+														<li class="flex items-center justify-between rounded-md border border-input px-3 py-2">
+															<div class="space-y-0.5">
+																<span class="text-sm font-medium">
+																	{passkey.name ?? "Unnamed passkey"}
+																</span>
+																<span class="block text-xs text-muted-foreground">
+																	Added{" "}
+																	{new Date(
+																		passkey.created_at,
+																	).toLocaleDateString()}
+																</span>
+															</div>
+															<button
+																class="inline-flex h-8 cursor-pointer items-center justify-center rounded-md border border-input bg-background px-3 text-xs font-medium shadow-sm transition-colors hover:bg-destructive hover:text-destructive-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+																type="button"
+																onClick={() => handleDeletePasskey(passkey.id)}
+																disabled={deletingPasskey() === passkey.id}
+															>
+																{deletingPasskey() === passkey.id
+																	? "Deleting..."
+																	: "Delete"}
+															</button>
+														</li>
+													)}
+												</For>
+											</ul>
+										</Show>
+									)}
+								</Show>
+							</section>
+						</Show>
 
 						{/* OAuth accounts */}
-						<section class="space-y-4">
-							<h2 class="text-lg font-semibold tracking-tight">
-								Connected accounts
-							</h2>
+						<Show when={hasOAuth}>
+							<section class="space-y-4">
+								<h2 class="text-lg font-semibold tracking-tight">
+									Connected accounts
+								</h2>
 
-							<Show when={oauthError()}>
-								<div class="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
-									{oauthError()}
-								</div>
-							</Show>
+								<Show when={oauthError()}>
+									<div class="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+										{oauthError()}
+									</div>
+								</Show>
 
-							<Show when={oauthAccounts.loading}>
-								<div class="text-sm text-muted-foreground">
-									Loading accounts...
-								</div>
-							</Show>
+								<Show when={oauthAccounts.loading}>
+									<div class="text-sm text-muted-foreground">
+										Loading accounts...
+									</div>
+								</Show>
 
-							<Show when={oauthAccounts()}>
-								{(accountList) => (
-									<Show
-										when={accountList().length > 0}
-										fallback={
-											<p class="text-sm text-muted-foreground">
-												No connected accounts.
-											</p>
-										}
-									>
-										<ul class="space-y-2">
-											<For each={accountList()}>
-												{(account) => (
-													<li class="flex items-center justify-between rounded-md border border-input px-3 py-2">
-														<div class="space-y-0.5">
-															<span class="text-sm font-medium">
-																{account.provider.charAt(0).toUpperCase() +
-																	account.provider.slice(1)}
-															</span>
-															<span class="block text-xs text-muted-foreground">
-																Connected{" "}
-																{new Date(
-																	account.created_at,
-																).toLocaleDateString()}
-															</span>
-														</div>
-														<button
-															class="inline-flex h-8 cursor-pointer items-center justify-center rounded-md border border-input bg-background px-3 text-xs font-medium shadow-sm transition-colors hover:bg-destructive hover:text-destructive-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
-															type="button"
-															onClick={() =>
-																handleUnlinkOAuth(account.provider)
-															}
-															disabled={unlinkingOAuth() === account.provider}
-														>
-															{unlinkingOAuth() === account.provider
-																? "Unlinking..."
-																: "Unlink"}
-														</button>
+								<Show when={oauthAccounts()}>
+									{(accountList) => (
+										<Show
+											when={accountList().length > 0}
+											fallback={
+												<p class="text-sm text-muted-foreground">
+													No connected accounts.
+												</p>
+											}
+										>
+											<ul class="space-y-2">
+												<For each={accountList()}>
+													{(account) => (
+														<li class="flex items-center justify-between rounded-md border border-input px-3 py-2">
+															<div class="space-y-0.5">
+																<span class="text-sm font-medium">
+																	{account.provider.charAt(0).toUpperCase() +
+																		account.provider.slice(1)}
+																</span>
+																<span class="block text-xs text-muted-foreground">
+																	Connected{" "}
+																	{new Date(
+																		account.created_at,
+																	).toLocaleDateString()}
+																</span>
+															</div>
+															<button
+																class="inline-flex h-8 cursor-pointer items-center justify-center rounded-md border border-input bg-background px-3 text-xs font-medium shadow-sm transition-colors hover:bg-destructive hover:text-destructive-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+																type="button"
+																onClick={() =>
+																	handleUnlinkOAuth(account.provider)
+																}
+																disabled={unlinkingOAuth() === account.provider}
+															>
+																{unlinkingOAuth() === account.provider
+																	? "Unlinking..."
+																	: "Unlink"}
+															</button>
+														</li>
+													)}
+												</For>
+											</ul>
+										</Show>
+									)}
+								</Show>
+							</section>
+						</Show>
+
+						{/* MFA setup */}
+						<Show when={hasMfa}>
+							<section class="space-y-4">
+								<h2 class="text-lg font-semibold tracking-tight">
+									Two-factor authentication
+								</h2>
+
+								<Show when={mfaError()}>
+									<div class="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+										{mfaError()}
+									</div>
+								</Show>
+
+								<Show when={mfaStep() === "idle"}>
+									<div class="flex gap-2">
+										<button
+											class="inline-flex h-9 cursor-pointer items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+											type="button"
+											onClick={handleMfaBegin}
+											disabled={mfaLoading()}
+										>
+											{mfaLoading() ? "Setting up..." : "Set up 2FA"}
+										</button>
+
+										<button
+											class="inline-flex h-9 cursor-pointer items-center justify-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium shadow-sm transition-colors hover:bg-destructive hover:text-destructive-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+											type="button"
+											onClick={handleMfaDisable}
+											disabled={mfaLoading()}
+										>
+											{mfaLoading() ? "Disabling..." : "Disable 2FA"}
+										</button>
+									</div>
+								</Show>
+
+								<Show when={mfaStep() === "confirm"}>
+									<div class="space-y-4">
+										<p class="text-sm text-muted-foreground">
+											Add this account to your authenticator app, then enter the
+											verification code.
+										</p>
+
+										<div class="space-y-1">
+											<span class="text-sm font-medium leading-none">
+												OTP Auth URI
+											</span>
+											<code class="block w-full break-all rounded-md border border-input bg-muted px-3 py-2 text-xs">
+												{mfaUri()}
+											</code>
+										</div>
+
+										<div class="space-y-1">
+											<span class="text-sm font-medium leading-none">
+												Manual entry key
+											</span>
+											<code class="block w-full break-all rounded-md border border-input bg-muted px-3 py-2 text-xs font-mono tracking-wider">
+												{mfaSecret()}
+											</code>
+										</div>
+
+										<form class="space-y-4" onSubmit={handleMfaConfirm}>
+											<div class="space-y-2">
+												<label
+													class="text-sm font-medium leading-none"
+													for="yauth-profile-mfa-code"
+												>
+													Verification code
+												</label>
+												<input
+													class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 md:text-sm"
+													id="yauth-profile-mfa-code"
+													name="mfa_code"
+													type="text"
+													inputmode="numeric"
+													autocomplete="one-time-code"
+													value={mfaCode()}
+													onInput={(e) => setMfaCode(e.currentTarget.value)}
+													required
+													disabled={mfaLoading()}
+												/>
+											</div>
+
+											<button
+												class="inline-flex h-9 w-full cursor-pointer items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+												type="submit"
+												disabled={mfaLoading()}
+											>
+												{mfaLoading() ? "Verifying..." : "Verify and enable"}
+											</button>
+										</form>
+									</div>
+								</Show>
+
+								<Show when={mfaStep() === "done"}>
+									<div class="space-y-4">
+										<div class="rounded-md bg-emerald-500/10 px-3 py-2 text-sm text-emerald-600 dark:text-emerald-400">
+											Two-factor authentication is enabled. Save these backup
+											codes in a safe place.
+										</div>
+
+										<ul class="space-y-1">
+											<For each={mfaBackupCodes()}>
+												{(code) => (
+													<li class="rounded-md border border-input bg-muted px-3 py-1.5 text-center font-mono text-sm tracking-wider">
+														{code}
 													</li>
 												)}
 											</For>
 										</ul>
-									</Show>
-								)}
-							</Show>
-						</section>
-
-						{/* MFA setup */}
-						<section class="space-y-4">
-							<h2 class="text-lg font-semibold tracking-tight">
-								Two-factor authentication
-							</h2>
-
-							<Show when={mfaError()}>
-								<div class="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
-									{mfaError()}
-								</div>
-							</Show>
-
-							<Show when={mfaStep() === "idle"}>
-								<div class="flex gap-2">
-									<button
-										class="inline-flex h-9 cursor-pointer items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
-										type="button"
-										onClick={handleMfaBegin}
-										disabled={mfaLoading()}
-									>
-										{mfaLoading() ? "Setting up..." : "Set up 2FA"}
-									</button>
-
-									<button
-										class="inline-flex h-9 cursor-pointer items-center justify-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium shadow-sm transition-colors hover:bg-destructive hover:text-destructive-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
-										type="button"
-										onClick={handleMfaDisable}
-										disabled={mfaLoading()}
-									>
-										{mfaLoading() ? "Disabling..." : "Disable 2FA"}
-									</button>
-								</div>
-							</Show>
-
-							<Show when={mfaStep() === "confirm"}>
-								<div class="space-y-4">
-									<p class="text-sm text-muted-foreground">
-										Add this account to your authenticator app, then enter the
-										verification code.
-									</p>
-
-									<div class="space-y-1">
-										<span class="text-sm font-medium leading-none">
-											OTP Auth URI
-										</span>
-										<code class="block w-full break-all rounded-md border border-input bg-muted px-3 py-2 text-xs">
-											{mfaUri()}
-										</code>
 									</div>
-
-									<div class="space-y-1">
-										<span class="text-sm font-medium leading-none">
-											Manual entry key
-										</span>
-										<code class="block w-full break-all rounded-md border border-input bg-muted px-3 py-2 text-xs font-mono tracking-wider">
-											{mfaSecret()}
-										</code>
-									</div>
-
-									<form class="space-y-4" onSubmit={handleMfaConfirm}>
-										<div class="space-y-2">
-											<label
-												class="text-sm font-medium leading-none"
-												for="yauth-profile-mfa-code"
-											>
-												Verification code
-											</label>
-											<input
-												class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 md:text-sm"
-												id="yauth-profile-mfa-code"
-												name="mfa_code"
-												type="text"
-												inputmode="numeric"
-												autocomplete="one-time-code"
-												value={mfaCode()}
-												onInput={(e) => setMfaCode(e.currentTarget.value)}
-												required
-												disabled={mfaLoading()}
-											/>
-										</div>
-
-										<button
-											class="inline-flex h-9 w-full cursor-pointer items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
-											type="submit"
-											disabled={mfaLoading()}
-										>
-											{mfaLoading() ? "Verifying..." : "Verify and enable"}
-										</button>
-									</form>
-								</div>
-							</Show>
-
-							<Show when={mfaStep() === "done"}>
-								<div class="space-y-4">
-									<div class="rounded-md bg-emerald-500/10 px-3 py-2 text-sm text-emerald-600 dark:text-emerald-400">
-										Two-factor authentication is enabled. Save these backup
-										codes in a safe place.
-									</div>
-
-									<ul class="space-y-1">
-										<For each={mfaBackupCodes()}>
-											{(code) => (
-												<li class="rounded-md border border-input bg-muted px-3 py-1.5 text-center font-mono text-sm tracking-wider">
-													{code}
-												</li>
-											)}
-										</For>
-									</ul>
-								</div>
-							</Show>
-						</section>
+								</Show>
+							</section>
+						</Show>
 					</>
 				)}
 			</Show>

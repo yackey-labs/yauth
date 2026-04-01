@@ -9,6 +9,8 @@ export interface RegisterFormProps {
 
 export const RegisterForm: Component<RegisterFormProps> = (props) => {
 	const { client } = useYAuth();
+	const ep = client?.emailPassword;
+	if (!ep) return null;
 	const [email, setEmail] = createSignal("");
 	const [password, setPassword] = createSignal("");
 	const [displayName, setDisplayName] = createSignal("");
@@ -25,7 +27,7 @@ export const RegisterForm: Component<RegisterFormProps> = (props) => {
 			const formData = new FormData(form);
 			const formDisplayName =
 				(formData.get("display_name") as string) || displayName();
-			const result = await client.emailPassword.register({
+			const result = await ep.register({
 				email: (formData.get("email") as string) || email(),
 				password: (formData.get("password") as string) || password(),
 				display_name: formDisplayName || undefined,

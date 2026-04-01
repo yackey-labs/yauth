@@ -22,19 +22,35 @@ const handleSubmit = async (e: Event) => {
 	error.value = null;
 	loading.value = true;
 
+	if (!client.emailPassword) {
+		error.value = "Email/password authentication is not available.";
+		loading.value = false;
+		return;
+	}
 	try {
-		const result = await client.emailPassword.login({
+		await client.emailPassword.login({
 			email: email.value,
 			password: password.value,
 		});
 
-		if ("mfa_required" in result && result.mfa_required) {
-			props.onMfaRequired?.(result.pending_session_id);
-		} else {
-			const user = await refetch();
-			props.onSuccess?.(user!);
+		// Login returned void (success) — fetch the session to get the user
+		const user = await refetch();
+		props.onSuccess?.(user!);
+	} catch (err: unknown) {
+		// Check if MFA is required (server returns an error with mfa_required in body)
+		if (
+			err &&
+			typeof err === "object" &&
+			"body" in err &&
+			err.body &&
+			typeof err.body === "object" &&
+			"mfa_required" in err.body &&
+			(err.body as Record<string, unknown>).mfa_required
+		) {
+			const body = err.body as Record<string, unknown>;
+			props.onMfaRequired?.(body.pending_session_id as string);
+			return;
 		}
-	} catch (err) {
 		const e = err instanceof Error ? err : new Error(String(err));
 		error.value = e.message;
 		props.onError?.(e);
@@ -104,7 +120,7 @@ const handlePasskeySuccess = (user: AuthUser) => {
 			{{ loading ? "Signing in..." : "Sign in" }}
 		</button>
 
-		<template v-if="showPasskey">
+		<template v-if="showPasskey && client.passkey">
 			<div class="relative">
 				<div
 					class="absolute inset-0 flex items-center"

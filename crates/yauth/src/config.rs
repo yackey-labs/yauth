@@ -77,10 +77,19 @@ pub struct YAuthConfig {
     /// magic-link, OAuth, etc.). Defaults to true (signups allowed).
     #[serde(default = "default_true")]
     pub allow_signups: bool,
+    /// PostgreSQL schema for yauth tables. Defaults to `"public"`.
+    /// Set to a different schema (e.g. `"auth"`) to isolate yauth tables
+    /// from your application tables. The schema will be created if it doesn't exist.
+    #[serde(default = "default_schema")]
+    pub db_schema: String,
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn default_schema() -> String {
+    "public".into()
 }
 
 impl Default for YAuthConfig {
@@ -97,6 +106,7 @@ impl Default for YAuthConfig {
             remember_me_ttl: None,
             session_binding: SessionBindingConfig::default(),
             allow_signups: true,
+            db_schema: "public".into(),
         }
     }
 }

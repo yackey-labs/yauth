@@ -5,171 +5,114 @@ use axum::{
     response::IntoResponse,
     routing::{delete, get, post},
 };
+use diesel::prelude::*;
+use diesel::result::OptionalExtension;
+use diesel_async_crate::RunQueryDsl;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
-use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::auth::crypto;
+use crate::db::models::{ApiKey, NewApiKey};
+use crate::db::schema::yauth_api_keys;
 use crate::middleware::{AuthMethod, AuthUser};
 use crate::plugin::{PluginContext, YAuthPlugin};
 use crate::state::YAuthState;
 
-// ---------------------------------------------------------------------------
-// Diesel-async helpers
-// ---------------------------------------------------------------------------
+type Conn = diesel_async_crate::AsyncPgConnection;
+type DbResult<T> = Result<T, String>;
 
-mod diesel_db {
-    use diesel::result::OptionalExtension;
-    use diesel_async_crate::RunQueryDsl;
-    use uuid::Uuid;
-
-    type Conn = diesel_async_crate::AsyncPgConnection;
-    type DbResult<T> = Result<T, String>;
-
-    #[derive(diesel::QueryableByName, Clone)]
-    #[allow(dead_code)]
-    pub struct ApiKeyRow {
-        #[diesel(sql_type = diesel::sql_types::Uuid)]
-        pub id: Uuid,
-        #[diesel(sql_type = diesel::sql_types::Uuid)]
-        pub user_id: Uuid,
-        #[diesel(sql_type = diesel::sql_types::Text)]
-        pub key_prefix: String,
-        #[diesel(sql_type = diesel::sql_types::Text)]
-        pub key_hash: String,
-        #[diesel(sql_type = diesel::sql_types::Text)]
-        pub name: String,
-        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Jsonb>)]
-        pub scopes: Option<serde_json::Value>,
-        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Timestamptz>)]
-        pub last_used_at: Option<chrono::NaiveDateTime>,
-        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Timestamptz>)]
-        pub expires_at: Option<chrono::NaiveDateTime>,
-        #[diesel(sql_type = diesel::sql_types::Timestamptz)]
-        pub created_at: chrono::NaiveDateTime,
-    }
-
-    #[derive(diesel::QueryableByName, Clone)]
-    #[allow(dead_code)]
-    pub struct UserRow {
-        #[diesel(sql_type = diesel::sql_types::Uuid)]
-        pub id: Uuid,
-        #[diesel(sql_type = diesel::sql_types::Text)]
-        pub email: String,
-        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
-        pub display_name: Option<String>,
-        #[diesel(sql_type = diesel::sql_types::Bool)]
-        pub email_verified: bool,
-        #[diesel(sql_type = diesel::sql_types::Text)]
-        pub role: String,
-        #[diesel(sql_type = diesel::sql_types::Bool)]
-        pub banned: bool,
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub async fn insert_api_key(
-        conn: &mut Conn,
-        id: Uuid,
-        user_id: Uuid,
-        key_prefix: &str,
-        key_hash: &str,
-        name: &str,
-        scopes: Option<serde_json::Value>,
-        expires_at: Option<chrono::DateTime<chrono::FixedOffset>>,
-        created_at: chrono::DateTime<chrono::FixedOffset>,
-    ) -> DbResult<()> {
-        diesel::sql_query(
-            "INSERT INTO yauth_api_keys (id, user_id, key_prefix, key_hash, name, scopes, last_used_at, expires_at, created_at) VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8)",
-        )
-        .bind::<diesel::sql_types::Uuid, _>(id)
-        .bind::<diesel::sql_types::Uuid, _>(user_id)
-        .bind::<diesel::sql_types::Text, _>(key_prefix)
-        .bind::<diesel::sql_types::Text, _>(key_hash)
-        .bind::<diesel::sql_types::Text, _>(name)
-        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Jsonb>, _>(scopes)
-        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Timestamptz>, _>(expires_at)
-        .bind::<diesel::sql_types::Timestamptz, _>(created_at)
+#[allow(clippy::too_many_arguments)]
+async fn db_insert_api_key(
+    conn: &mut Conn,
+    id: Uuid,
+    user_id: Uuid,
+    key_prefix: &str,
+    key_hash: &str,
+    name: &str,
+    scopes: Option<serde_json::Value>,
+    expires_at: Option<chrono::DateTime<chrono::FixedOffset>>,
+    created_at: chrono::DateTime<chrono::FixedOffset>,
+) -> DbResult<()> {
+    let new_key = NewApiKey {
+        id,
+        user_id,
+        key_prefix: key_prefix.to_string(),
+        key_hash: key_hash.to_string(),
+        name: name.to_string(),
+        scopes,
+        expires_at: expires_at.map(|t| t.naive_utc()),
+        created_at: created_at.naive_utc(),
+    };
+    diesel::insert_into(yauth_api_keys::table)
+        .values(&new_key)
         .execute(conn)
         .await
         .map_err(|e| e.to_string())?;
-        Ok(())
-    }
+    Ok(())
+}
 
-    pub async fn list_api_keys_by_user(conn: &mut Conn, user_id: Uuid) -> DbResult<Vec<ApiKeyRow>> {
-        diesel::sql_query(
-            "SELECT id, user_id, key_prefix, key_hash, name, scopes, last_used_at, expires_at, created_at FROM yauth_api_keys WHERE user_id = $1",
-        )
-        .bind::<diesel::sql_types::Uuid, _>(user_id)
+async fn db_list_api_keys_by_user(conn: &mut Conn, user_id: Uuid) -> DbResult<Vec<ApiKey>> {
+    // No pagination — API key count per user is naturally small
+    yauth_api_keys::table
+        .filter(yauth_api_keys::user_id.eq(user_id))
+        .order(yauth_api_keys::created_at.desc())
+        .select(ApiKey::as_select())
         .load(conn)
         .await
         .map_err(|e| e.to_string())
-    }
-
-    pub async fn find_api_key_by_id_and_user(
-        conn: &mut Conn,
-        id: Uuid,
-        user_id: Uuid,
-    ) -> DbResult<Option<ApiKeyRow>> {
-        diesel::sql_query(
-            "SELECT id, user_id, key_prefix, key_hash, name, scopes, last_used_at, expires_at, created_at FROM yauth_api_keys WHERE id = $1 AND user_id = $2",
-        )
-        .bind::<diesel::sql_types::Uuid, _>(id)
-        .bind::<diesel::sql_types::Uuid, _>(user_id)
-        .get_result(conn)
-        .await
-        .optional()
-        .map_err(|e| e.to_string())
-    }
-
-    pub async fn delete_api_key(conn: &mut Conn, id: Uuid) -> DbResult<()> {
-        diesel::sql_query("DELETE FROM yauth_api_keys WHERE id = $1")
-            .bind::<diesel::sql_types::Uuid, _>(id)
-            .execute(conn)
-            .await
-            .map_err(|e| e.to_string())?;
-        Ok(())
-    }
-
-    pub async fn find_api_key_by_prefix(
-        conn: &mut Conn,
-        prefix: &str,
-    ) -> DbResult<Option<ApiKeyRow>> {
-        diesel::sql_query(
-            "SELECT id, user_id, key_prefix, key_hash, name, scopes, last_used_at, expires_at, created_at FROM yauth_api_keys WHERE key_prefix = $1",
-        )
-        .bind::<diesel::sql_types::Text, _>(prefix)
-        .get_result(conn)
-        .await
-        .optional()
-        .map_err(|e| e.to_string())
-    }
-
-    pub async fn update_api_key_last_used(
-        conn: &mut Conn,
-        id: Uuid,
-        now: chrono::DateTime<chrono::FixedOffset>,
-    ) -> DbResult<()> {
-        diesel::sql_query("UPDATE yauth_api_keys SET last_used_at = $1 WHERE id = $2")
-            .bind::<diesel::sql_types::Timestamptz, _>(now)
-            .bind::<diesel::sql_types::Uuid, _>(id)
-            .execute(conn)
-            .await
-            .map_err(|e| e.to_string())?;
-        Ok(())
-    }
-
-    pub async fn find_user_by_id(conn: &mut Conn, id: Uuid) -> DbResult<Option<UserRow>> {
-        diesel::sql_query(
-            "SELECT id, email, display_name, email_verified, role, banned FROM yauth_users WHERE id = $1",
-        )
-        .bind::<diesel::sql_types::Uuid, _>(id)
-        .get_result(conn)
-        .await
-        .optional()
-        .map_err(|e| e.to_string())
-    }
 }
+
+async fn db_find_api_key_by_id_and_user(
+    conn: &mut Conn,
+    id: Uuid,
+    user_id: Uuid,
+) -> DbResult<Option<ApiKey>> {
+    yauth_api_keys::table
+        .filter(
+            yauth_api_keys::id
+                .eq(id)
+                .and(yauth_api_keys::user_id.eq(user_id)),
+        )
+        .select(ApiKey::as_select())
+        .first(conn)
+        .await
+        .optional()
+        .map_err(|e| e.to_string())
+}
+
+async fn db_delete_api_key(conn: &mut Conn, id: Uuid) -> DbResult<()> {
+    diesel::delete(yauth_api_keys::table.filter(yauth_api_keys::id.eq(id)))
+        .execute(conn)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+async fn db_find_api_key_by_prefix(conn: &mut Conn, prefix: &str) -> DbResult<Option<ApiKey>> {
+    yauth_api_keys::table
+        .filter(yauth_api_keys::key_prefix.eq(prefix))
+        .select(ApiKey::as_select())
+        .first(conn)
+        .await
+        .optional()
+        .map_err(|e| e.to_string())
+}
+
+async fn db_update_api_key_last_used(
+    conn: &mut Conn,
+    id: Uuid,
+    now: chrono::DateTime<chrono::FixedOffset>,
+) -> DbResult<()> {
+    diesel::update(yauth_api_keys::table.filter(yauth_api_keys::id.eq(id)))
+        .set(yauth_api_keys::last_used_at.eq(now.naive_utc()))
+        .execute(conn)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+use crate::db::find_user_by_id;
 
 pub struct ApiKeyPlugin;
 
@@ -192,16 +135,16 @@ impl YAuthPlugin for ApiKeyPlugin {
     }
 }
 
-#[derive(Deserialize, TS)]
-#[ts(export)]
+#[derive(Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct CreateApiKeyRequest {
     pub name: String,
     pub scopes: Option<Vec<String>>,
     pub expires_in_days: Option<u32>,
 }
 
-#[derive(Serialize, TS)]
-#[ts(export)]
+#[derive(Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct CreateApiKeyResponse {
     pub id: Uuid,
     pub key: String,
@@ -212,8 +155,8 @@ pub struct CreateApiKeyResponse {
     pub created_at: chrono::DateTime<chrono::FixedOffset>,
 }
 
-#[derive(Serialize, TS)]
-#[ts(export)]
+#[derive(Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ApiKeyResponse {
     pub id: Uuid,
     pub name: String,
@@ -257,7 +200,7 @@ async fn create_api_key(
             .get()
             .await
             .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-        diesel_db::insert_api_key(
+        db_insert_api_key(
             &mut conn,
             api_key_id,
             user.id,
@@ -318,7 +261,7 @@ async fn list_api_keys(
             .get()
             .await
             .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-        let keys = diesel_db::list_api_keys_by_user(&mut conn, user.id)
+        let keys = db_list_api_keys_by_user(&mut conn, user.id)
             .await
             .map_err(|e| {
                 tracing::error!("Failed to list API keys: {}", e);
@@ -359,7 +302,7 @@ async fn delete_api_key(
             .get()
             .await
             .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-        let key = diesel_db::find_api_key_by_id_and_user(&mut conn, id, user.id)
+        let key = db_find_api_key_by_id_and_user(&mut conn, id, user.id)
             .await
             .map_err(|e| {
                 tracing::error!("Failed to find API key: {}", e);
@@ -368,12 +311,10 @@ async fn delete_api_key(
 
         let key = key.ok_or_else(|| err(StatusCode::NOT_FOUND, "API key not found"))?;
 
-        diesel_db::delete_api_key(&mut conn, key.id)
-            .await
-            .map_err(|e| {
-                tracing::error!("Failed to delete API key: {}", e);
-                err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
+        db_delete_api_key(&mut conn, key.id).await.map_err(|e| {
+            tracing::error!("Failed to delete API key: {}", e);
+            err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
     }
 
     info!(
@@ -410,22 +351,6 @@ pub async fn validate_api_key(key: &str, state: &YAuthState) -> Result<AuthUser,
         return Err("Invalid API key format".to_string());
     }
 
-    struct ApiKeyInfo {
-        id: Uuid,
-        user_id: Uuid,
-        key_hash: String,
-        scopes: Option<serde_json::Value>,
-        expires_at: Option<chrono::DateTime<chrono::FixedOffset>>,
-    }
-    struct UserInfo {
-        id: Uuid,
-        email: String,
-        display_name: Option<String>,
-        email_verified: bool,
-        role: String,
-        banned: bool,
-    }
-
     let mut conn = state
         .db
         .get()
@@ -433,23 +358,14 @@ pub async fn validate_api_key(key: &str, state: &YAuthState) -> Result<AuthUser,
         .map_err(|e| format!("Pool error: {}", e))?;
 
     // Look up by prefix
-    let api_key_info = {
-        let api_key = diesel_db::find_api_key_by_prefix(&mut conn, prefix)
-            .await
-            .map_err(|e| format!("Database error: {}", e))?
-            .ok_or_else(|| "Invalid API key".to_string())?;
-        ApiKeyInfo {
-            id: api_key.id,
-            user_id: api_key.user_id,
-            key_hash: api_key.key_hash,
-            scopes: api_key.scopes,
-            expires_at: api_key.expires_at.map(|t| t.and_utc().fixed_offset()),
-        }
-    };
+    let api_key = db_find_api_key_by_prefix(&mut conn, prefix)
+        .await
+        .map_err(|e| format!("Database error: {}", e))?
+        .ok_or_else(|| "Invalid API key".to_string())?;
 
     // Check expiration
-    if let Some(expires_at) = api_key_info.expires_at {
-        let now = chrono::Utc::now().fixed_offset();
+    if let Some(expires_at) = api_key.expires_at {
+        let now = chrono::Utc::now().naive_utc();
         if expires_at < now {
             warn!(
                 event = "yauth.api_key.expired",
@@ -462,7 +378,7 @@ pub async fn validate_api_key(key: &str, state: &YAuthState) -> Result<AuthUser,
 
     // Timing-safe comparison of the full key hash
     let computed_hash = crypto::hash_token(key);
-    if !crypto::constant_time_eq(computed_hash.as_bytes(), api_key_info.key_hash.as_bytes()) {
+    if !crypto::constant_time_eq(computed_hash.as_bytes(), api_key.key_hash.as_bytes()) {
         warn!(
             event = "yauth.api_key.invalid",
             prefix = %prefix,
@@ -474,31 +390,21 @@ pub async fn validate_api_key(key: &str, state: &YAuthState) -> Result<AuthUser,
     // Update last_used_at (best-effort, don't fail auth if this errors)
     let now = chrono::Utc::now().fixed_offset();
     {
-        if let Err(e) = diesel_db::update_api_key_last_used(&mut conn, api_key_info.id, now).await {
+        if let Err(e) = db_update_api_key_last_used(&mut conn, api_key.id, now).await {
             tracing::error!("Failed to update API key last_used_at: {}", e);
         }
     }
 
     // Look up the user
-    let user_info = {
-        let user = diesel_db::find_user_by_id(&mut conn, api_key_info.user_id)
-            .await
-            .map_err(|e| format!("Database error: {}", e))?
-            .ok_or_else(|| "User not found".to_string())?;
-        UserInfo {
-            id: user.id,
-            email: user.email,
-            display_name: user.display_name,
-            email_verified: user.email_verified,
-            role: user.role,
-            banned: user.banned,
-        }
-    };
+    let user = find_user_by_id(&mut conn, api_key.user_id)
+        .await
+        .map_err(|e| format!("Database error: {}", e))?
+        .ok_or_else(|| "User not found".to_string())?;
 
-    if user_info.banned {
+    if user.banned {
         warn!(
             event = "yauth.api_key.banned",
-            user_id = %user_info.id,
+            user_id = %user.id,
             prefix = %prefix,
             "API key used by banned user"
         );
@@ -506,17 +412,15 @@ pub async fn validate_api_key(key: &str, state: &YAuthState) -> Result<AuthUser,
     }
 
     // Wire API key scopes into AuthUser
-    let scopes: Option<Vec<String>> = api_key_info
-        .scopes
-        .and_then(|v| serde_json::from_value(v).ok());
+    let scopes: Option<Vec<String>> = api_key.scopes.and_then(|v| serde_json::from_value(v).ok());
 
     Ok(AuthUser {
-        id: user_info.id,
-        email: user_info.email,
-        display_name: user_info.display_name,
-        email_verified: user_info.email_verified,
-        role: user_info.role,
-        banned: user_info.banned,
+        id: user.id,
+        email: user.email,
+        display_name: user.display_name,
+        email_verified: user.email_verified,
+        role: user.role,
+        banned: user.banned,
         auth_method: AuthMethod::ApiKey,
         scopes,
     })

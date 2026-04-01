@@ -1,6 +1,8 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::{ChallengeStore, RateLimitResult, RateLimitStore};
+use crate::db::models::Challenge;
+use crate::db::schema::yauth_challenges;
 use crate::state::DbPool;
 
 // ---------------------------------------------------------------------------
@@ -68,16 +70,19 @@ impl PostgresChallengeStore {
     }
 
     async fn cleanup_expired(&self) -> Result<(), String> {
+        use diesel::prelude::*;
         use diesel_async_crate::RunQueryDsl;
         let mut conn = self
             .db
             .get()
             .await
             .map_err(|e| format!("pool error: {e}"))?;
-        diesel::sql_query("DELETE FROM yauth_challenges WHERE expires_at < now()")
-            .execute(&mut conn)
-            .await
-            .map_err(|e| format!("cleanup failed: {e}"))?;
+        diesel::delete(
+            yauth_challenges::table.filter(yauth_challenges::expires_at.lt(diesel::dsl::now)),
+        )
+        .execute(&mut conn)
+        .await
+        .map_err(|e| format!("cleanup failed: {e}"))?;
         Ok(())
     }
 }
@@ -88,6 +93,8 @@ impl ChallengeStore for PostgresChallengeStore {
         self.ensure_init().await?;
         let _ = self.cleanup_expired().await;
 
+        // Use raw SQL for INSERT ON CONFLICT with make_interval() —
+        // diesel doesn't support make_interval natively.
         let sql = r#"
             INSERT INTO yauth_challenges (key, value, expires_at)
             VALUES ($1, $2, now() + make_interval(secs => $3))
@@ -115,11 +122,8 @@ impl ChallengeStore for PostgresChallengeStore {
     async fn get(&self, key: &str) -> Result<Option<serde_json::Value>, String> {
         self.ensure_init().await?;
 
-        let sql = r#"
-            SELECT value FROM yauth_challenges
-            WHERE key = $1 AND expires_at > now()
-        "#;
-
+        use diesel::prelude::*;
+        use diesel::result::OptionalExtension;
         use diesel_async_crate::RunQueryDsl;
         let mut conn = self
             .db
@@ -127,14 +131,10 @@ impl ChallengeStore for PostgresChallengeStore {
             .await
             .map_err(|e| format!("pool error: {e}"))?;
 
-        #[derive(diesel::QueryableByName)]
-        struct ChallengeRow {
-            #[diesel(sql_type = diesel::sql_types::Jsonb)]
-            value: serde_json::Value,
-        }
-
-        let result: Option<ChallengeRow> = diesel::sql_query(sql)
-            .bind::<diesel::sql_types::Text, _>(key)
+        let result: Option<Challenge> = yauth_challenges::table
+            .filter(yauth_challenges::key.eq(key))
+            .filter(yauth_challenges::expires_at.gt(diesel::dsl::now))
+            .select(Challenge::as_select())
             .get_result(&mut conn)
             .await
             .optional()
@@ -145,16 +145,14 @@ impl ChallengeStore for PostgresChallengeStore {
     async fn delete(&self, key: &str) -> Result<(), String> {
         self.ensure_init().await?;
 
-        let sql = "DELETE FROM yauth_challenges WHERE key = $1";
-
+        use diesel::prelude::*;
         use diesel_async_crate::RunQueryDsl;
         let mut conn = self
             .db
             .get()
             .await
             .map_err(|e| format!("pool error: {e}"))?;
-        diesel::sql_query(sql)
-            .bind::<diesel::sql_types::Text, _>(key)
+        diesel::delete(yauth_challenges::table.filter(yauth_challenges::key.eq(key)))
             .execute(&mut conn)
             .await
             .map_err(|e| format!("challenge delete failed: {e}"))?;
@@ -200,6 +198,7 @@ impl RateLimitStore for PostgresRateLimitStore {
             };
         }
 
+        // Keep as raw SQL — CASE+RETURNING is too complex for the query builder
         let sql = r#"
             INSERT INTO yauth_rate_limits (key, count, window_start)
             VALUES ($1, 1, now())
@@ -289,5 +288,3 @@ fn rate_limit_result(
         }
     }
 }
-
-use diesel::result::OptionalExtension;

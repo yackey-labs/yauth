@@ -44,6 +44,12 @@ Replace SeaORM's `Database::connect()` with a deadpool-diesel connection pool:
 +let pool = Pool::builder(config).build()?;
 ```
 
+Or use `yauth::create_pool()` which also handles custom PostgreSQL schema configuration:
+
+```rust
+let pool = yauth::create_pool(&database_url, &yauth_config)?;
+```
+
 ## Step 3: Update AppState
 
 yauth re-exports the pool type as `yauth::DieselPool` and the connection type as `yauth::AsyncPgConnection` for convenience. The internal `DbPool` type alias resolves to the diesel pool.

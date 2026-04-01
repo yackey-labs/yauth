@@ -1,0 +1,16 @@
+{
+	"compilerOptions": {
+		"target": "ESNext",
+		"module": "ESNext",
+		"moduleResolution": "bundler",
+		"strict": true,
+		"jsx": "preserve",
+		"skipLibCheck": true,
+		"paths": {
+			"@yackey-labs/yauth-client": ["../../packages/client/src/index.ts"],
+			"@yackey-labs/yauth-shared": ["../../packages/shared/src/index.ts"],
+			"@yackey-labs/yauth-ui-vue": ["../../packages/ui-vue/src/index.ts"]
+		}
+	},
+	"include": ["src/**/*.ts", "src/**/*.vue", "vite-env.d.ts"]
+}

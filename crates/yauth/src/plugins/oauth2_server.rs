@@ -6,6 +6,9 @@ use axum::{
     routing::{get, post},
 };
 use chrono::Utc;
+use diesel::prelude::*;
+use diesel::result::OptionalExtension;
+use diesel_async_crate::RunQueryDsl;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -14,500 +17,357 @@ use uuid::Uuid;
 
 use crate::auth::crypto;
 use crate::config::OAuth2ServerConfig;
+use crate::db::models::{
+    AuthorizationCode, Consent, DeviceCode, NewAuthorizationCode, NewConsent, NewDeviceCode,
+    NewOauth2Client, NewRefreshToken, Oauth2Client, RefreshToken,
+};
+use crate::db::schema::{
+    yauth_authorization_codes, yauth_consents, yauth_device_codes, yauth_oauth2_clients,
+    yauth_refresh_tokens,
+};
 use crate::error::{ApiError, api_err};
 use crate::middleware::AuthUser;
 use crate::plugin::{PluginContext, YAuthPlugin};
 use crate::state::YAuthState;
 
 // ---------------------------------------------------------------------------
-// Diesel-async helpers
+// Database helpers
 // ---------------------------------------------------------------------------
 
-mod diesel_db {
-    use diesel::result::OptionalExtension;
-    use diesel_async_crate::RunQueryDsl;
-    use uuid::Uuid;
+type Conn = diesel_async_crate::AsyncPgConnection;
+type DbResult<T> = Result<T, String>;
 
-    type Conn = diesel_async_crate::AsyncPgConnection;
-    type DbResult<T> = Result<T, String>;
+// -- Client operations --
 
-    // -- QueryableByName row types --
-
-    #[derive(diesel::QueryableByName, Clone)]
-    #[allow(dead_code)]
-    pub struct ClientRow {
-        #[diesel(sql_type = diesel::sql_types::Uuid)]
-        pub id: Uuid,
-        #[diesel(sql_type = diesel::sql_types::Text)]
-        pub client_id: String,
-        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
-        pub client_secret_hash: Option<String>,
-        #[diesel(sql_type = diesel::sql_types::Jsonb)]
-        pub redirect_uris: serde_json::Value,
-        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
-        pub client_name: Option<String>,
-        #[diesel(sql_type = diesel::sql_types::Jsonb)]
-        pub grant_types: serde_json::Value,
-        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Jsonb>)]
-        pub scopes: Option<serde_json::Value>,
-        #[diesel(sql_type = diesel::sql_types::Bool)]
-        pub is_public: bool,
-        #[diesel(sql_type = diesel::sql_types::Timestamptz)]
-        pub created_at: chrono::NaiveDateTime,
-    }
-
-    #[derive(diesel::QueryableByName, Clone)]
-    #[allow(dead_code)]
-    pub struct AuthCodeRow {
-        #[diesel(sql_type = diesel::sql_types::Uuid)]
-        pub id: Uuid,
-        #[diesel(sql_type = diesel::sql_types::Text)]
-        pub code_hash: String,
-        #[diesel(sql_type = diesel::sql_types::Text)]
-        pub client_id: String,
-        #[diesel(sql_type = diesel::sql_types::Uuid)]
-        pub user_id: Uuid,
-        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Jsonb>)]
-        pub scopes: Option<serde_json::Value>,
-        #[diesel(sql_type = diesel::sql_types::Text)]
-        pub redirect_uri: String,
-        #[diesel(sql_type = diesel::sql_types::Text)]
-        pub code_challenge: String,
-        #[diesel(sql_type = diesel::sql_types::Text)]
-        pub code_challenge_method: String,
-        #[diesel(sql_type = diesel::sql_types::Timestamptz)]
-        pub expires_at: chrono::NaiveDateTime,
-        #[diesel(sql_type = diesel::sql_types::Bool)]
-        pub used: bool,
-        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
-        pub nonce: Option<String>,
-        #[diesel(sql_type = diesel::sql_types::Timestamptz)]
-        pub created_at: chrono::NaiveDateTime,
-    }
-
-    #[derive(diesel::QueryableByName, Clone)]
-    #[allow(dead_code)]
-    pub struct ConsentRow {
-        #[diesel(sql_type = diesel::sql_types::Uuid)]
-        pub id: Uuid,
-        #[diesel(sql_type = diesel::sql_types::Uuid)]
-        pub user_id: Uuid,
-        #[diesel(sql_type = diesel::sql_types::Text)]
-        pub client_id: String,
-        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Jsonb>)]
-        pub scopes: Option<serde_json::Value>,
-        #[diesel(sql_type = diesel::sql_types::Timestamptz)]
-        pub created_at: chrono::NaiveDateTime,
-    }
-
-    #[derive(diesel::QueryableByName, Clone)]
-    #[allow(dead_code)]
-    pub struct DeviceCodeRow {
-        #[diesel(sql_type = diesel::sql_types::Uuid)]
-        pub id: Uuid,
-        #[diesel(sql_type = diesel::sql_types::Text)]
-        pub device_code_hash: String,
-        #[diesel(sql_type = diesel::sql_types::Text)]
-        pub user_code: String,
-        #[diesel(sql_type = diesel::sql_types::Text)]
-        pub client_id: String,
-        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Jsonb>)]
-        pub scopes: Option<serde_json::Value>,
-        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Uuid>)]
-        pub user_id: Option<Uuid>,
-        #[diesel(sql_type = diesel::sql_types::Text)]
-        pub status: String,
-        #[diesel(sql_type = diesel::sql_types::Int4)]
-        pub interval: i32,
-        #[diesel(sql_type = diesel::sql_types::Timestamptz)]
-        pub expires_at: chrono::NaiveDateTime,
-        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Timestamptz>)]
-        pub last_polled_at: Option<chrono::NaiveDateTime>,
-        #[diesel(sql_type = diesel::sql_types::Timestamptz)]
-        pub created_at: chrono::NaiveDateTime,
-    }
-
-    #[derive(diesel::QueryableByName, Clone)]
-    #[allow(dead_code)]
-    pub struct UserRow {
-        #[diesel(sql_type = diesel::sql_types::Uuid)]
-        pub id: Uuid,
-        #[diesel(sql_type = diesel::sql_types::Text)]
-        pub email: String,
-        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
-        pub display_name: Option<String>,
-        #[diesel(sql_type = diesel::sql_types::Bool)]
-        pub email_verified: bool,
-        #[diesel(sql_type = diesel::sql_types::Text)]
-        pub role: String,
-        #[diesel(sql_type = diesel::sql_types::Bool)]
-        pub banned: bool,
-    }
-
-    #[derive(diesel::QueryableByName, Clone)]
-    #[allow(dead_code)]
-    pub struct RefreshTokenRow {
-        #[diesel(sql_type = diesel::sql_types::Uuid)]
-        pub id: Uuid,
-        #[diesel(sql_type = diesel::sql_types::Uuid)]
-        pub user_id: Uuid,
-        #[diesel(sql_type = diesel::sql_types::Text)]
-        pub token_hash: String,
-        #[diesel(sql_type = diesel::sql_types::Uuid)]
-        pub family_id: Uuid,
-        #[diesel(sql_type = diesel::sql_types::Timestamptz)]
-        pub expires_at: chrono::NaiveDateTime,
-        #[diesel(sql_type = diesel::sql_types::Bool)]
-        pub revoked: bool,
-        #[diesel(sql_type = diesel::sql_types::Timestamptz)]
-        pub created_at: chrono::NaiveDateTime,
-    }
-
-    #[derive(diesel::QueryableByName, Clone)]
-    #[allow(dead_code)]
-    pub struct CountRow {
-        #[diesel(sql_type = diesel::sql_types::BigInt)]
-        pub cnt: i64,
-    }
-
-    // -- Client operations --
-
-    pub async fn find_client_by_client_id(
-        conn: &mut Conn,
-        client_id: &str,
-    ) -> DbResult<Option<ClientRow>> {
-        diesel::sql_query(
-            "SELECT id, client_id, client_secret_hash, redirect_uris, client_name, grant_types, scopes, is_public, created_at FROM yauth_oauth2_clients WHERE client_id = $1",
-        )
-        .bind::<diesel::sql_types::Text, _>(client_id)
-        .get_result(conn)
+async fn db_find_client_by_client_id(conn: &mut Conn, cid: &str) -> DbResult<Option<Oauth2Client>> {
+    yauth_oauth2_clients::table
+        .filter(yauth_oauth2_clients::client_id.eq(cid))
+        .select(Oauth2Client::as_select())
+        .first(conn)
         .await
         .optional()
         .map_err(|e| e.to_string())
-    }
+}
 
-    #[allow(clippy::too_many_arguments)]
-    pub async fn insert_client(
-        conn: &mut Conn,
-        id: Uuid,
-        client_id: &str,
-        client_secret_hash: Option<&str>,
-        redirect_uris: &serde_json::Value,
-        client_name: Option<&str>,
-        grant_types: &serde_json::Value,
-        scopes: Option<&serde_json::Value>,
-        is_public: bool,
-        created_at: chrono::DateTime<chrono::FixedOffset>,
-    ) -> DbResult<()> {
-        diesel::sql_query(
-            "INSERT INTO yauth_oauth2_clients (id, client_id, client_secret_hash, redirect_uris, client_name, grant_types, scopes, is_public, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
-        )
-        .bind::<diesel::sql_types::Uuid, _>(id)
-        .bind::<diesel::sql_types::Text, _>(client_id)
-        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(client_secret_hash)
-        .bind::<diesel::sql_types::Jsonb, _>(redirect_uris)
-        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(client_name)
-        .bind::<diesel::sql_types::Jsonb, _>(grant_types)
-        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Jsonb>, _>(scopes)
-        .bind::<diesel::sql_types::Bool, _>(is_public)
-        .bind::<diesel::sql_types::Timestamptz, _>(created_at)
+#[allow(clippy::too_many_arguments)]
+async fn db_insert_client(
+    conn: &mut Conn,
+    id: Uuid,
+    client_id: &str,
+    client_secret_hash: Option<&str>,
+    redirect_uris: &serde_json::Value,
+    client_name: Option<&str>,
+    grant_types: &serde_json::Value,
+    scopes: Option<&serde_json::Value>,
+    is_public: bool,
+    created_at: chrono::DateTime<chrono::FixedOffset>,
+) -> DbResult<()> {
+    let new_client = NewOauth2Client {
+        id,
+        client_id: client_id.to_string(),
+        client_secret_hash: client_secret_hash.map(String::from),
+        redirect_uris: redirect_uris.clone(),
+        client_name: client_name.map(String::from),
+        grant_types: grant_types.clone(),
+        scopes: scopes.cloned(),
+        is_public,
+        created_at: created_at.naive_utc(),
+    };
+    diesel::insert_into(yauth_oauth2_clients::table)
+        .values(&new_client)
         .execute(conn)
         .await
         .map_err(|e| e.to_string())?;
-        Ok(())
-    }
+    Ok(())
+}
 
-    // -- Authorization code operations --
+// -- Authorization code operations --
 
-    pub async fn find_auth_code_by_hash(
-        conn: &mut Conn,
-        code_hash: &str,
-    ) -> DbResult<Option<AuthCodeRow>> {
-        diesel::sql_query(
-            "SELECT id, code_hash, client_id, user_id, scopes, redirect_uri, code_challenge, code_challenge_method, expires_at, used, nonce, created_at FROM yauth_authorization_codes WHERE code_hash = $1",
-        )
-        .bind::<diesel::sql_types::Text, _>(code_hash)
-        .get_result(conn)
+async fn db_find_auth_code_by_hash(
+    conn: &mut Conn,
+    hash: &str,
+) -> DbResult<Option<AuthorizationCode>> {
+    yauth_authorization_codes::table
+        .filter(yauth_authorization_codes::code_hash.eq(hash))
+        .select(AuthorizationCode::as_select())
+        .first(conn)
         .await
         .optional()
         .map_err(|e| e.to_string())
-    }
+}
 
-    pub async fn mark_auth_code_used(conn: &mut Conn, id: Uuid) -> DbResult<()> {
-        diesel::sql_query("UPDATE yauth_authorization_codes SET used = true WHERE id = $1")
-            .bind::<diesel::sql_types::Uuid, _>(id)
-            .execute(conn)
-            .await
-            .map_err(|e| e.to_string())?;
-        Ok(())
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub async fn insert_auth_code(
-        conn: &mut Conn,
-        id: Uuid,
-        code_hash: &str,
-        client_id: &str,
-        user_id: Uuid,
-        scopes: Option<&serde_json::Value>,
-        redirect_uri: &str,
-        code_challenge: &str,
-        code_challenge_method: &str,
-        expires_at: chrono::DateTime<chrono::FixedOffset>,
-        created_at: chrono::DateTime<chrono::FixedOffset>,
-    ) -> DbResult<()> {
-        diesel::sql_query(
-            "INSERT INTO yauth_authorization_codes (id, code_hash, client_id, user_id, scopes, redirect_uri, code_challenge, code_challenge_method, nonce, expires_at, used, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, $9, false, $10)",
-        )
-        .bind::<diesel::sql_types::Uuid, _>(id)
-        .bind::<diesel::sql_types::Text, _>(code_hash)
-        .bind::<diesel::sql_types::Text, _>(client_id)
-        .bind::<diesel::sql_types::Uuid, _>(user_id)
-        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Jsonb>, _>(scopes)
-        .bind::<diesel::sql_types::Text, _>(redirect_uri)
-        .bind::<diesel::sql_types::Text, _>(code_challenge)
-        .bind::<diesel::sql_types::Text, _>(code_challenge_method)
-        .bind::<diesel::sql_types::Timestamptz, _>(expires_at)
-        .bind::<diesel::sql_types::Timestamptz, _>(created_at)
+async fn db_mark_auth_code_used(conn: &mut Conn, id: Uuid) -> DbResult<()> {
+    diesel::update(yauth_authorization_codes::table.filter(yauth_authorization_codes::id.eq(id)))
+        .set(yauth_authorization_codes::used.eq(true))
         .execute(conn)
         .await
         .map_err(|e| e.to_string())?;
-        Ok(())
-    }
+    Ok(())
+}
 
-    // -- Consent operations --
-
-    pub async fn find_consent(
-        conn: &mut Conn,
-        user_id: Uuid,
-        client_id: &str,
-    ) -> DbResult<Option<ConsentRow>> {
-        diesel::sql_query(
-            "SELECT id, user_id, client_id, scopes, created_at FROM yauth_consents WHERE user_id = $1 AND client_id = $2",
-        )
-        .bind::<diesel::sql_types::Uuid, _>(user_id)
-        .bind::<diesel::sql_types::Text, _>(client_id)
-        .get_result(conn)
-        .await
-        .optional()
-        .map_err(|e| e.to_string())
-    }
-
-    pub async fn update_consent(
-        conn: &mut Conn,
-        id: Uuid,
-        scopes: Option<&serde_json::Value>,
-        created_at: chrono::DateTime<chrono::FixedOffset>,
-    ) -> DbResult<()> {
-        diesel::sql_query("UPDATE yauth_consents SET scopes = $1, created_at = $2 WHERE id = $3")
-            .bind::<diesel::sql_types::Nullable<diesel::sql_types::Jsonb>, _>(scopes)
-            .bind::<diesel::sql_types::Timestamptz, _>(created_at)
-            .bind::<diesel::sql_types::Uuid, _>(id)
-            .execute(conn)
-            .await
-            .map_err(|e| e.to_string())?;
-        Ok(())
-    }
-
-    pub async fn insert_consent(
-        conn: &mut Conn,
-        id: Uuid,
-        user_id: Uuid,
-        client_id: &str,
-        scopes: Option<&serde_json::Value>,
-        created_at: chrono::DateTime<chrono::FixedOffset>,
-    ) -> DbResult<()> {
-        diesel::sql_query(
-            "INSERT INTO yauth_consents (id, user_id, client_id, scopes, created_at) VALUES ($1, $2, $3, $4, $5)",
-        )
-        .bind::<diesel::sql_types::Uuid, _>(id)
-        .bind::<diesel::sql_types::Uuid, _>(user_id)
-        .bind::<diesel::sql_types::Text, _>(client_id)
-        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Jsonb>, _>(scopes)
-        .bind::<diesel::sql_types::Timestamptz, _>(created_at)
+#[allow(clippy::too_many_arguments)]
+async fn db_insert_auth_code(
+    conn: &mut Conn,
+    id: Uuid,
+    code_hash: &str,
+    client_id: &str,
+    user_id: Uuid,
+    scopes: Option<&serde_json::Value>,
+    redirect_uri: &str,
+    code_challenge: &str,
+    code_challenge_method: &str,
+    expires_at: chrono::DateTime<chrono::FixedOffset>,
+    created_at: chrono::DateTime<chrono::FixedOffset>,
+) -> DbResult<()> {
+    let new_code = NewAuthorizationCode {
+        id,
+        code_hash: code_hash.to_string(),
+        client_id: client_id.to_string(),
+        user_id,
+        scopes: scopes.cloned(),
+        redirect_uri: redirect_uri.to_string(),
+        code_challenge: code_challenge.to_string(),
+        code_challenge_method: code_challenge_method.to_string(),
+        expires_at: expires_at.naive_utc(),
+        used: false,
+        nonce: None,
+        created_at: created_at.naive_utc(),
+    };
+    diesel::insert_into(yauth_authorization_codes::table)
+        .values(&new_code)
         .execute(conn)
         .await
         .map_err(|e| e.to_string())?;
-        Ok(())
-    }
+    Ok(())
+}
 
-    // -- Device code operations --
+// -- Consent operations --
 
-    pub async fn find_device_code_by_user_code_pending(
-        conn: &mut Conn,
-        user_code: &str,
-    ) -> DbResult<Option<DeviceCodeRow>> {
-        diesel::sql_query(
-            "SELECT id, device_code_hash, user_code, client_id, scopes, user_id, status, interval, expires_at, last_polled_at, created_at FROM yauth_device_codes WHERE user_code = $1 AND status = 'pending'",
+async fn db_find_consent(conn: &mut Conn, uid: Uuid, cid: &str) -> DbResult<Option<Consent>> {
+    yauth_consents::table
+        .filter(
+            yauth_consents::user_id
+                .eq(uid)
+                .and(yauth_consents::client_id.eq(cid)),
         )
-        .bind::<diesel::sql_types::Text, _>(user_code)
-        .get_result(conn)
+        .select(Consent::as_select())
+        .first(conn)
         .await
         .optional()
         .map_err(|e| e.to_string())
-    }
+}
 
-    pub async fn find_device_code_by_hash(
-        conn: &mut Conn,
-        device_code_hash: &str,
-    ) -> DbResult<Option<DeviceCodeRow>> {
-        diesel::sql_query(
-            "SELECT id, device_code_hash, user_code, client_id, scopes, user_id, status, interval, expires_at, last_polled_at, created_at FROM yauth_device_codes WHERE device_code_hash = $1",
-        )
-        .bind::<diesel::sql_types::Text, _>(device_code_hash)
-        .get_result(conn)
-        .await
-        .optional()
-        .map_err(|e| e.to_string())
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub async fn insert_device_code(
-        conn: &mut Conn,
-        id: Uuid,
-        device_code_hash: &str,
-        user_code: &str,
-        client_id: &str,
-        scopes: Option<&serde_json::Value>,
-        interval: i32,
-        expires_at: chrono::DateTime<chrono::FixedOffset>,
-        created_at: chrono::DateTime<chrono::FixedOffset>,
-    ) -> DbResult<()> {
-        diesel::sql_query(
-            "INSERT INTO yauth_device_codes (id, device_code_hash, user_code, client_id, scopes, user_id, status, interval, expires_at, last_polled_at, created_at) VALUES ($1, $2, $3, $4, $5, NULL, 'pending', $6, $7, NULL, $8)",
-        )
-        .bind::<diesel::sql_types::Uuid, _>(id)
-        .bind::<diesel::sql_types::Text, _>(device_code_hash)
-        .bind::<diesel::sql_types::Text, _>(user_code)
-        .bind::<diesel::sql_types::Text, _>(client_id)
-        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Jsonb>, _>(scopes)
-        .bind::<diesel::sql_types::Int4, _>(interval)
-        .bind::<diesel::sql_types::Timestamptz, _>(expires_at)
-        .bind::<diesel::sql_types::Timestamptz, _>(created_at)
+async fn db_update_consent(
+    conn: &mut Conn,
+    id: Uuid,
+    scopes: Option<&serde_json::Value>,
+    created_at: chrono::DateTime<chrono::FixedOffset>,
+) -> DbResult<()> {
+    diesel::update(yauth_consents::table.filter(yauth_consents::id.eq(id)))
+        .set((
+            yauth_consents::scopes.eq(scopes),
+            yauth_consents::created_at.eq(created_at.naive_utc()),
+        ))
         .execute(conn)
         .await
         .map_err(|e| e.to_string())?;
-        Ok(())
-    }
+    Ok(())
+}
 
-    pub async fn update_device_code_status(
-        conn: &mut Conn,
-        id: Uuid,
-        status: &str,
-        user_id: Option<Uuid>,
-    ) -> DbResult<()> {
-        diesel::sql_query("UPDATE yauth_device_codes SET status = $1, user_id = $2 WHERE id = $3")
-            .bind::<diesel::sql_types::Text, _>(status)
-            .bind::<diesel::sql_types::Nullable<diesel::sql_types::Uuid>, _>(user_id)
-            .bind::<diesel::sql_types::Uuid, _>(id)
-            .execute(conn)
-            .await
-            .map_err(|e| e.to_string())?;
-        Ok(())
-    }
-
-    pub async fn update_device_code_polled(
-        conn: &mut Conn,
-        id: Uuid,
-        last_polled_at: chrono::DateTime<chrono::FixedOffset>,
-    ) -> DbResult<()> {
-        diesel::sql_query("UPDATE yauth_device_codes SET last_polled_at = $1 WHERE id = $2")
-            .bind::<diesel::sql_types::Timestamptz, _>(last_polled_at)
-            .bind::<diesel::sql_types::Uuid, _>(id)
-            .execute(conn)
-            .await
-            .map_err(|e| e.to_string())?;
-        Ok(())
-    }
-
-    pub async fn update_device_code_slow_down(
-        conn: &mut Conn,
-        id: Uuid,
-        new_interval: i32,
-        last_polled_at: chrono::DateTime<chrono::FixedOffset>,
-    ) -> DbResult<()> {
-        diesel::sql_query(
-            "UPDATE yauth_device_codes SET interval = $1, last_polled_at = $2 WHERE id = $3",
-        )
-        .bind::<diesel::sql_types::Int4, _>(new_interval)
-        .bind::<diesel::sql_types::Timestamptz, _>(last_polled_at)
-        .bind::<diesel::sql_types::Uuid, _>(id)
+async fn db_insert_consent(
+    conn: &mut Conn,
+    id: Uuid,
+    user_id: Uuid,
+    client_id: &str,
+    scopes: Option<&serde_json::Value>,
+    created_at: chrono::DateTime<chrono::FixedOffset>,
+) -> DbResult<()> {
+    let new_consent = NewConsent {
+        id,
+        user_id,
+        client_id: client_id.to_string(),
+        scopes: scopes.cloned(),
+        created_at: created_at.naive_utc(),
+    };
+    diesel::insert_into(yauth_consents::table)
+        .values(&new_consent)
         .execute(conn)
         .await
         .map_err(|e| e.to_string())?;
-        Ok(())
-    }
+    Ok(())
+}
 
-    // -- User operations --
+// -- Device code operations --
 
-    pub async fn find_user_by_id(conn: &mut Conn, id: Uuid) -> DbResult<Option<UserRow>> {
-        diesel::sql_query(
-            "SELECT id, email, display_name, email_verified, role, banned FROM yauth_users WHERE id = $1",
+async fn db_find_device_code_by_user_code_pending(
+    conn: &mut Conn,
+    user_code: &str,
+) -> DbResult<Option<DeviceCode>> {
+    yauth_device_codes::table
+        .filter(
+            yauth_device_codes::user_code
+                .eq(user_code)
+                .and(yauth_device_codes::status.eq("pending")),
         )
-        .bind::<diesel::sql_types::Uuid, _>(id)
-        .get_result(conn)
+        .select(DeviceCode::as_select())
+        .first(conn)
         .await
         .optional()
         .map_err(|e| e.to_string())
-    }
+}
 
-    // -- Refresh token operations --
-
-    pub async fn find_refresh_token_by_hash(
-        conn: &mut Conn,
-        token_hash: &str,
-    ) -> DbResult<Option<RefreshTokenRow>> {
-        diesel::sql_query(
-            "SELECT id, user_id, token_hash, family_id, expires_at, revoked, created_at FROM yauth_refresh_tokens WHERE token_hash = $1",
-        )
-        .bind::<diesel::sql_types::Text, _>(token_hash)
-        .get_result(conn)
+async fn db_find_device_code_by_hash(conn: &mut Conn, hash: &str) -> DbResult<Option<DeviceCode>> {
+    yauth_device_codes::table
+        .filter(yauth_device_codes::device_code_hash.eq(hash))
+        .select(DeviceCode::as_select())
+        .first(conn)
         .await
         .optional()
         .map_err(|e| e.to_string())
-    }
+}
 
-    pub async fn insert_refresh_token(
-        conn: &mut Conn,
-        id: Uuid,
-        user_id: Uuid,
-        token_hash: &str,
-        family_id: Uuid,
-        expires_at: chrono::DateTime<chrono::FixedOffset>,
-        created_at: chrono::DateTime<chrono::FixedOffset>,
-    ) -> DbResult<()> {
-        diesel::sql_query(
-            "INSERT INTO yauth_refresh_tokens (id, user_id, token_hash, family_id, expires_at, revoked, created_at) VALUES ($1, $2, $3, $4, $5, false, $6)",
-        )
-        .bind::<diesel::sql_types::Uuid, _>(id)
-        .bind::<diesel::sql_types::Uuid, _>(user_id)
-        .bind::<diesel::sql_types::Text, _>(token_hash)
-        .bind::<diesel::sql_types::Uuid, _>(family_id)
-        .bind::<diesel::sql_types::Timestamptz, _>(expires_at)
-        .bind::<diesel::sql_types::Timestamptz, _>(created_at)
+#[allow(clippy::too_many_arguments)]
+async fn db_insert_device_code(
+    conn: &mut Conn,
+    id: Uuid,
+    device_code_hash: &str,
+    user_code: &str,
+    client_id: &str,
+    scopes: Option<&serde_json::Value>,
+    interval: i32,
+    expires_at: chrono::DateTime<chrono::FixedOffset>,
+    created_at: chrono::DateTime<chrono::FixedOffset>,
+) -> DbResult<()> {
+    let new_dc = NewDeviceCode {
+        id,
+        device_code_hash: device_code_hash.to_string(),
+        user_code: user_code.to_string(),
+        client_id: client_id.to_string(),
+        scopes: scopes.cloned(),
+        user_id: None,
+        status: "pending".to_string(),
+        interval,
+        expires_at: expires_at.naive_utc(),
+        created_at: created_at.naive_utc(),
+    };
+    diesel::insert_into(yauth_device_codes::table)
+        .values(&new_dc)
         .execute(conn)
         .await
         .map_err(|e| e.to_string())?;
-        Ok(())
-    }
+    Ok(())
+}
 
-    pub async fn revoke_refresh_token(conn: &mut Conn, id: Uuid) -> DbResult<()> {
-        diesel::sql_query("UPDATE yauth_refresh_tokens SET revoked = true WHERE id = $1")
-            .bind::<diesel::sql_types::Uuid, _>(id)
-            .execute(conn)
-            .await
-            .map_err(|e| e.to_string())?;
-        Ok(())
-    }
+async fn db_update_device_code_status(
+    conn: &mut Conn,
+    id: Uuid,
+    status: &str,
+    user_id: Option<Uuid>,
+) -> DbResult<()> {
+    diesel::update(yauth_device_codes::table.filter(yauth_device_codes::id.eq(id)))
+        .set((
+            yauth_device_codes::status.eq(status),
+            yauth_device_codes::user_id.eq(user_id),
+        ))
+        .execute(conn)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
 
-    pub async fn revoke_family(conn: &mut Conn, family_id: Uuid) -> DbResult<()> {
-        diesel::sql_query("UPDATE yauth_refresh_tokens SET revoked = true WHERE family_id = $1")
-            .bind::<diesel::sql_types::Uuid, _>(family_id)
-            .execute(conn)
-            .await
-            .map_err(|e| e.to_string())?;
-        Ok(())
-    }
+async fn db_update_device_code_polled(
+    conn: &mut Conn,
+    id: Uuid,
+    last_polled_at: chrono::DateTime<chrono::FixedOffset>,
+) -> DbResult<()> {
+    diesel::update(yauth_device_codes::table.filter(yauth_device_codes::id.eq(id)))
+        .set(yauth_device_codes::last_polled_at.eq(Some(last_polled_at.naive_utc())))
+        .execute(conn)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+async fn db_update_device_code_slow_down(
+    conn: &mut Conn,
+    id: Uuid,
+    new_interval: i32,
+    last_polled_at: chrono::DateTime<chrono::FixedOffset>,
+) -> DbResult<()> {
+    diesel::update(yauth_device_codes::table.filter(yauth_device_codes::id.eq(id)))
+        .set((
+            yauth_device_codes::interval.eq(new_interval),
+            yauth_device_codes::last_polled_at.eq(Some(last_polled_at.naive_utc())),
+        ))
+        .execute(conn)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// -- User operations --
+
+use crate::db::find_user_by_id;
+
+// -- Refresh token operations --
+
+async fn db_find_refresh_token_by_hash(
+    conn: &mut Conn,
+    hash: &str,
+) -> DbResult<Option<RefreshToken>> {
+    yauth_refresh_tokens::table
+        .filter(yauth_refresh_tokens::token_hash.eq(hash))
+        .select(RefreshToken::as_select())
+        .first(conn)
+        .await
+        .optional()
+        .map_err(|e| e.to_string())
+}
+
+async fn db_insert_refresh_token(
+    conn: &mut Conn,
+    id: Uuid,
+    user_id: Uuid,
+    token_hash: &str,
+    family_id: Uuid,
+    expires_at: chrono::DateTime<chrono::FixedOffset>,
+    created_at: chrono::DateTime<chrono::FixedOffset>,
+) -> DbResult<()> {
+    let new_token = NewRefreshToken {
+        id,
+        user_id,
+        token_hash: token_hash.to_string(),
+        family_id,
+        expires_at: expires_at.naive_utc(),
+        revoked: false,
+        created_at: created_at.naive_utc(),
+    };
+    diesel::insert_into(yauth_refresh_tokens::table)
+        .values(&new_token)
+        .execute(conn)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+async fn db_revoke_refresh_token(conn: &mut Conn, id: Uuid) -> DbResult<()> {
+    diesel::update(yauth_refresh_tokens::table.filter(yauth_refresh_tokens::id.eq(id)))
+        .set(yauth_refresh_tokens::revoked.eq(true))
+        .execute(conn)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+async fn db_revoke_family(conn: &mut Conn, family_id: Uuid) -> DbResult<()> {
+    diesel::update(
+        yauth_refresh_tokens::table.filter(yauth_refresh_tokens::family_id.eq(family_id)),
+    )
+    .set(yauth_refresh_tokens::revoked.eq(true))
+    .execute(conn)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -815,7 +675,7 @@ async fn authorize_post(
                     .into_response();
             }
         };
-        if let Err(e) = diesel_db::insert_auth_code(
+        if let Err(e) = db_insert_auth_code(
             &mut conn,
             Uuid::new_v4(),
             &code_hash,
@@ -1105,22 +965,6 @@ async fn handle_authorization_code_grant(
     // Find authorization code
     let code_hash = crypto::hash_token(code);
 
-    // Stored code info
-    #[allow(dead_code)]
-    struct StoredCode {
-        id: Uuid,
-        code_hash: String,
-        client_id: String,
-        user_id: Uuid,
-        scopes: Option<serde_json::Value>,
-        redirect_uri: String,
-        code_challenge: String,
-        code_challenge_method: String,
-        expires_at: chrono::NaiveDateTime,
-        used: bool,
-        nonce: Option<String>,
-    }
-
     let stored_code = {
         let mut conn = state.db.get().await.map_err(|_| {
             oauth2_error(
@@ -1129,7 +973,7 @@ async fn handle_authorization_code_grant(
                 "Internal error",
             )
         })?;
-        let row = diesel_db::find_auth_code_by_hash(&mut conn, &code_hash)
+        db_find_auth_code_by_hash(&mut conn, &code_hash)
             .await
             .map_err(|e| {
                 tracing::error!("DB error: {}", e);
@@ -1149,20 +993,7 @@ async fn handle_authorization_code_grant(
                     "invalid_grant",
                     "Invalid authorization code",
                 )
-            })?;
-        StoredCode {
-            id: row.id,
-            code_hash: row.code_hash,
-            client_id: row.client_id,
-            user_id: row.user_id,
-            scopes: row.scopes,
-            redirect_uri: row.redirect_uri,
-            code_challenge: row.code_challenge,
-            code_challenge_method: row.code_challenge_method,
-            expires_at: row.expires_at,
-            used: row.used,
-            nonce: row.nonce,
-        }
+            })?
     };
 
     // Check if code was already used
@@ -1243,7 +1074,7 @@ async fn handle_authorization_code_grant(
                 "Internal error",
             )
         })?;
-        diesel_db::mark_auth_code_used(&mut conn, stored_code.id)
+        db_mark_auth_code_used(&mut conn, stored_code.id)
             .await
             .map_err(|e| {
                 tracing::error!("Failed to mark auth code as used: {}", e);
@@ -1256,16 +1087,6 @@ async fn handle_authorization_code_grant(
     }
 
     // Look up user
-    #[allow(dead_code)]
-    struct AuthCodeUser {
-        id: Uuid,
-        email: String,
-        display_name: Option<String>,
-        email_verified: bool,
-        role: String,
-        banned: bool,
-    }
-
     let user = {
         let mut conn = state.db.get().await.map_err(|_| {
             oauth2_error(
@@ -1274,7 +1095,7 @@ async fn handle_authorization_code_grant(
                 "Internal error",
             )
         })?;
-        let u = diesel_db::find_user_by_id(&mut conn, stored_code.user_id)
+        find_user_by_id(&mut conn, stored_code.user_id)
             .await
             .map_err(|e| {
                 tracing::error!("DB error: {}", e);
@@ -1286,15 +1107,7 @@ async fn handle_authorization_code_grant(
             })?
             .ok_or_else(|| {
                 oauth2_error(StatusCode::BAD_REQUEST, "invalid_grant", "User not found")
-            })?;
-        AuthCodeUser {
-            id: u.id,
-            email: u.email,
-            display_name: u.display_name,
-            email_verified: u.email_verified,
-            role: u.role,
-            banned: u.banned,
-        }
+            })?
     };
 
     if user.banned {
@@ -1476,7 +1289,7 @@ async fn handle_oauth2_refresh_token(
                     "Internal error",
                 )
             })?;
-            let row = diesel_db::find_refresh_token_by_hash(&mut conn, &token_hash)
+            let row = db_find_refresh_token_by_hash(&mut conn, &token_hash)
                 .await
                 .map_err(|e| {
                     tracing::error!("DB error: {}", e);
@@ -1511,7 +1324,7 @@ async fn handle_oauth2_refresh_token(
             {
                 let mut conn = state.db.get().await.ok();
                 if let Some(ref mut conn) = conn {
-                    let _ = diesel_db::revoke_family(conn, stored.family_id).await;
+                    let _ = db_revoke_family(conn, stored.family_id).await;
                 }
             }
             return Err(oauth2_error(
@@ -1541,7 +1354,7 @@ async fn handle_oauth2_refresh_token(
                     "Internal error",
                 )
             })?;
-            diesel_db::revoke_refresh_token(&mut conn, stored.id)
+            db_revoke_refresh_token(&mut conn, stored.id)
                 .await
                 .map_err(|e| {
                     tracing::error!("Failed to revoke old refresh token: {}", e);
@@ -1554,16 +1367,6 @@ async fn handle_oauth2_refresh_token(
         }
 
         // Look up user
-        #[allow(dead_code)]
-        struct RefreshUser {
-            id: Uuid,
-            email: String,
-            display_name: Option<String>,
-            email_verified: bool,
-            role: String,
-            banned: bool,
-        }
-
         let user = {
             let mut conn = state.db.get().await.map_err(|_| {
                 oauth2_error(
@@ -1572,7 +1375,7 @@ async fn handle_oauth2_refresh_token(
                     "Internal error",
                 )
             })?;
-            let u = diesel_db::find_user_by_id(&mut conn, user_id)
+            find_user_by_id(&mut conn, user_id)
                 .await
                 .map_err(|e| {
                     tracing::error!("DB error: {}", e);
@@ -1584,15 +1387,7 @@ async fn handle_oauth2_refresh_token(
                 })?
                 .ok_or_else(|| {
                     oauth2_error(StatusCode::BAD_REQUEST, "invalid_grant", "User not found")
-                })?;
-            RefreshUser {
-                id: u.id,
-                email: u.email,
-                display_name: u.display_name,
-                email_verified: u.email_verified,
-                role: u.role,
-                banned: u.banned,
-            }
+                })?
         };
 
         if user.banned {
@@ -1764,7 +1559,7 @@ async fn dynamic_client_registration(
             .get()
             .await
             .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-        diesel_db::insert_client(
+        db_insert_client(
             &mut conn,
             Uuid::new_v4(),
             &client_id,
@@ -1828,7 +1623,7 @@ async fn generate_unique_user_code_diesel(
 ) -> Result<String, ApiError> {
     for _ in 0..10 {
         let code = generate_user_code();
-        let existing = diesel_db::find_device_code_by_user_code_pending(conn, &code)
+        let existing = db_find_device_code_by_user_code_pending(conn, &code)
             .await
             .map_err(|e| {
                 tracing::error!("DB error checking user code uniqueness: {}", e);
@@ -1903,7 +1698,7 @@ async fn device_authorization(
         .map(|s| serde_json::json!(s.split_whitespace().collect::<Vec<_>>()));
 
     {
-        if let Err(e) = diesel_db::insert_device_code(
+        if let Err(e) = db_insert_device_code(
             &mut conn,
             Uuid::new_v4(),
             &device_code_hash,
@@ -1985,7 +1780,7 @@ async fn device_verify_get(
                         .into_response();
                 }
             };
-            diesel_db::find_device_code_by_user_code_pending(&mut conn, code)
+            db_find_device_code_by_user_code_pending(&mut conn, code)
                 .await
                 .map(|opt| {
                     opt.map(|dc| DcInfo {
@@ -2018,7 +1813,7 @@ async fn device_verify_get(
                                 .into_response();
                         }
                     };
-                    diesel_db::find_client_by_client_id(&mut conn, &dc.client_id)
+                    db_find_client_by_client_id(&mut conn, &dc.client_id)
                         .await
                         .ok()
                         .flatten()
@@ -2111,7 +1906,7 @@ async fn device_verify_post(
                     .into_response();
             }
         };
-        match diesel_db::find_device_code_by_user_code_pending(&mut conn, &input.user_code).await {
+        match db_find_device_code_by_user_code_pending(&mut conn, &input.user_code).await {
             Ok(Some(dc)) => DcInfo {
                 id: dc.id,
                 expires_at: dc.expires_at,
@@ -2156,9 +1951,7 @@ async fn device_verify_post(
         } else {
             None
         };
-        if let Err(e) =
-            diesel_db::update_device_code_status(&mut conn, dc.id, new_status, user_id).await
-        {
+        if let Err(e) = db_update_device_code_status(&mut conn, dc.id, new_status, user_id).await {
             tracing::error!("Failed to update device code status: {}", e);
             return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
         }
@@ -2242,7 +2035,7 @@ async fn handle_device_code_grant(
                 "Internal error",
             )
         })?;
-        let row = diesel_db::find_device_code_by_hash(&mut conn, &device_code_hash)
+        let row = db_find_device_code_by_hash(&mut conn, &device_code_hash)
             .await
             .map_err(|e| {
                 tracing::error!("DB error: {}", e);
@@ -2299,13 +2092,9 @@ async fn handle_device_code_grant(
             {
                 let mut conn = state.db.get().await.ok();
                 if let Some(ref mut conn) = conn {
-                    let _ = diesel_db::update_device_code_slow_down(
-                        conn,
-                        stored.id,
-                        stored.interval + 5,
-                        now,
-                    )
-                    .await;
+                    let _ =
+                        db_update_device_code_slow_down(conn, stored.id, stored.interval + 5, now)
+                            .await;
                 }
             }
             return Err(oauth2_error(
@@ -2321,7 +2110,7 @@ async fn handle_device_code_grant(
     {
         let mut conn = state.db.get().await.ok();
         if let Some(ref mut conn) = conn {
-            let _ = diesel_db::update_device_code_polled(conn, stored.id, now).await;
+            let _ = db_update_device_code_polled(conn, stored.id, now).await;
         }
     }
 
@@ -2377,7 +2166,7 @@ async fn handle_device_code_grant(
                 "Internal error",
             )
         })?;
-        diesel_db::update_device_code_status(&mut conn, stored.id, "used", stored.user_id)
+        db_update_device_code_status(&mut conn, stored.id, "used", stored.user_id)
             .await
             .map_err(|e| {
                 tracing::error!("Failed to mark device code as used: {}", e);
@@ -2390,16 +2179,6 @@ async fn handle_device_code_grant(
     }
 
     // Look up user
-    #[allow(dead_code)]
-    struct DeviceCodeUser {
-        id: Uuid,
-        email: String,
-        display_name: Option<String>,
-        email_verified: bool,
-        role: String,
-        banned: bool,
-    }
-
     let user = {
         let mut conn = state.db.get().await.map_err(|_| {
             oauth2_error(
@@ -2408,7 +2187,7 @@ async fn handle_device_code_grant(
                 "Internal error",
             )
         })?;
-        let u = diesel_db::find_user_by_id(&mut conn, user_id)
+        find_user_by_id(&mut conn, user_id)
             .await
             .map_err(|e| {
                 tracing::error!("DB error: {}", e);
@@ -2420,15 +2199,7 @@ async fn handle_device_code_grant(
             })?
             .ok_or_else(|| {
                 oauth2_error(StatusCode::BAD_REQUEST, "invalid_grant", "User not found")
-            })?;
-        DeviceCodeUser {
-            id: u.id,
-            email: u.email,
-            display_name: u.display_name,
-            email_verified: u.email_verified,
-            role: u.role,
-            banned: u.banned,
-        }
+            })?
     };
 
     if user.banned {
@@ -2631,7 +2402,7 @@ async fn introspect_endpoint(
                             continue;
                         }
                     };
-                    diesel_db::find_refresh_token_by_hash(&mut conn, &token_hash)
+                    db_find_refresh_token_by_hash(&mut conn, &token_hash)
                         .await
                         .ok()
                         .flatten()
@@ -2709,29 +2480,17 @@ async fn revoke_endpoint(
             "refresh_token" => {
                 let token_hash = crypto::hash_token(token);
 
-                #[allow(dead_code)]
-                struct RevokeInfo {
-                    id: Uuid,
-                    family_id: Uuid,
-                    revoked: bool,
-                }
-
-                let rt_opt: Option<RevokeInfo> = {
+                let rt_opt = {
                     let mut conn = match state.db.get().await {
                         Ok(c) => c,
                         Err(_) => {
                             continue;
                         }
                     };
-                    diesel_db::find_refresh_token_by_hash(&mut conn, &token_hash)
+                    db_find_refresh_token_by_hash(&mut conn, &token_hash)
                         .await
                         .ok()
                         .flatten()
-                        .map(|s| RevokeInfo {
-                            id: s.id,
-                            family_id: s.family_id,
-                            revoked: s.revoked,
-                        })
                 };
 
                 if let Some(stored) = rt_opt {
@@ -2740,7 +2499,7 @@ async fn revoke_endpoint(
                     {
                         let mut conn = state.db.get().await.ok();
                         if let Some(ref mut conn) = conn {
-                            let _ = diesel_db::revoke_family(conn, stored.family_id).await;
+                            let _ = db_revoke_family(conn, stored.family_id).await;
                         }
                     }
 
@@ -2750,7 +2509,7 @@ async fn revoke_endpoint(
                             {
                                 let mut conn = state.db.get().await.ok();
                                 if let Some(ref mut conn) = conn {
-                                    let _ = diesel_db::revoke_refresh_token(conn, stored.id).await;
+                                    let _ = db_revoke_refresh_token(conn, stored.id).await;
                                 }
                             }
                         }
@@ -3054,48 +2813,25 @@ fn validate_authorize_params_from_consent(input: &AuthorizeConsentRequest) -> Re
     Ok(())
 }
 
-/// Common client info struct.
-struct ClientInfo {
-    client_id: String,
-    client_secret_hash: Option<String>,
-    redirect_uris: serde_json::Value,
-    client_name: Option<String>,
-    grant_types: serde_json::Value,
-    scopes: Option<serde_json::Value>,
-    #[allow(dead_code)]
-    is_public: bool,
-}
-
-async fn lookup_client(state: &YAuthState, client_id: &str) -> Result<ClientInfo, ApiError> {
-    {
-        let mut conn = state
-            .db
-            .get()
-            .await
-            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-        let m = diesel_db::find_client_by_client_id(&mut conn, client_id)
-            .await
-            .map_err(|e| {
-                tracing::error!("DB error looking up client: {}", e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?
-            .ok_or_else(|| api_err(StatusCode::BAD_REQUEST, "Unknown client_id"))?;
-        Ok(ClientInfo {
-            client_id: m.client_id,
-            client_secret_hash: m.client_secret_hash,
-            redirect_uris: m.redirect_uris,
-            client_name: m.client_name,
-            grant_types: m.grant_types,
-            scopes: m.scopes,
-            is_public: m.is_public,
-        })
-    }
+async fn lookup_client(state: &YAuthState, client_id: &str) -> Result<Oauth2Client, ApiError> {
+    let mut conn = state
+        .db
+        .get()
+        .await
+        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
+    db_find_client_by_client_id(&mut conn, client_id)
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error looking up client: {}", e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?
+        .ok_or_else(|| api_err(StatusCode::BAD_REQUEST, "Unknown client_id"))
 }
 
 /// Resolve redirect_uri: if provided, validate against registered URIs.
 /// If omitted, default to the client's single registered URI (RFC 6749 §3.1.2.3).
 fn resolve_redirect_uri(
-    client: &ClientInfo,
+    client: &Oauth2Client,
     redirect_uri: Option<&str>,
 ) -> Result<String, ApiError> {
     let empty = vec![];
@@ -3130,7 +2866,7 @@ fn resolve_redirect_uri(
     }
 }
 
-fn validate_redirect_uri(client: &ClientInfo, redirect_uri: &str) -> Result<(), ApiError> {
+fn validate_redirect_uri(client: &Oauth2Client, redirect_uri: &str) -> Result<(), ApiError> {
     resolve_redirect_uri(client, Some(redirect_uri)).map(|_| ())
 }
 
@@ -3152,9 +2888,7 @@ async fn authenticate_user(
                     Ok(c) => c,
                     Err(_) => return Err(()),
                 };
-                if let Ok(Some(user)) =
-                    diesel_db::find_user_by_id(&mut conn, session_user.user_id).await
-                {
+                if let Ok(Some(user)) = find_user_by_id(&mut conn, session_user.user_id).await {
                     if !user.banned {
                         return Ok(AuthUser {
                             id: user.id,
@@ -3203,18 +2937,18 @@ async fn save_consent(
                 return;
             }
         };
-        let existing = diesel_db::find_consent(&mut conn, user_id, client_id).await;
+        let existing = db_find_consent(&mut conn, user_id, client_id).await;
         let now = Utc::now().fixed_offset();
         match existing {
             Ok(Some(existing)) => {
                 if let Err(e) =
-                    diesel_db::update_consent(&mut conn, existing.id, scopes.as_ref(), now).await
+                    db_update_consent(&mut conn, existing.id, scopes.as_ref(), now).await
                 {
                     tracing::error!("Failed to update consent: {}", e);
                 }
             }
             _ => {
-                if let Err(e) = diesel_db::insert_consent(
+                if let Err(e) = db_insert_consent(
                     &mut conn,
                     Uuid::new_v4(),
                     user_id,
@@ -3246,7 +2980,7 @@ async fn create_refresh_token_for_oauth2_diesel(
         + chrono::Duration::from_std(ttl).unwrap_or(chrono::Duration::days(7)))
     .fixed_offset();
 
-    diesel_db::insert_refresh_token(
+    db_insert_refresh_token(
         conn,
         Uuid::new_v4(),
         user_id,

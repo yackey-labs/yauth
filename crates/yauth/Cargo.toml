@@ -10,40 +10,33 @@ categories = ["authentication", "web-programming"]
 publish = true
 
 [features]
-default = ["diesel-async", "email-password"]
-diesel-async = ["dep:diesel", "dep:diesel-async-crate", "dep:futures-util", "yauth-entity/diesel-async", "yauth-migration/diesel-async"]
-email-password = ["yauth-entity/email-password", "yauth-migration/email-password"]
-passkey = ["yauth-entity/passkey", "yauth-migration/passkey", "dep:webauthn-rs", "dep:webauthn-rs-proto"]
-mfa = ["yauth-entity/mfa", "yauth-migration/mfa", "dep:totp-rs"]
-oauth = ["yauth-entity/oauth", "yauth-migration/oauth", "dep:oauth2"]
-bearer = ["yauth-entity/bearer", "yauth-migration/bearer", "dep:jsonwebtoken"]
-api-key = ["yauth-entity/api-key", "yauth-migration/api-key"]
-magic-link = ["yauth-entity/magic-link", "yauth-migration/magic-link"]
+default = ["email-password"]
+email-password = []
+passkey = ["dep:webauthn-rs"]
+mfa = ["dep:totp-rs"]
+oauth = ["dep:oauth2"]
+bearer = ["dep:jsonwebtoken"]
+api-key = []
+magic-link = []
 admin = []
 status = []
-oauth2-server = ["yauth-entity/oauth2-server", "yauth-migration/oauth2-server", "dep:url", "dep:base64", "dep:serde_urlencoded"]
-account-lockout = ["yauth-entity/account-lockout", "yauth-migration/account-lockout"]
-webhooks = ["yauth-entity/webhooks", "yauth-migration/webhooks", "dep:hmac"]
-oidc = ["bearer", "oauth2-server", "yauth-entity/oidc", "yauth-migration/oidc"]
+oauth2-server = ["dep:url", "dep:base64", "dep:serde_urlencoded"]
+account-lockout = []
+webhooks = ["dep:hmac"]
+oidc = ["bearer", "oauth2-server"]
 telemetry = ["dep:tracing-opentelemetry", "dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:opentelemetry-semantic-conventions"]
-full = ["diesel-async", "email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link", "admin", "status", "oauth2-server", "account-lockout", "webhooks", "oidc", "telemetry"]
-diesel-full = ["full"]
+openapi = ["dep:utoipa"]
+full = ["email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link", "admin", "status", "oauth2-server", "account-lockout", "webhooks", "oidc", "telemetry", "openapi"]
 
 [dependencies]
-yauth-entity = { workspace = true }
-yauth-migration = { workspace = true }
-
 axum = { workspace = true }
 axum-extra = { workspace = true }
 tokio = { workspace = true }
-tower = { workspace = true }
-tower-http = { workspace = true }
 
 # Diesel
-diesel = { workspace = true, optional = true }
-diesel-async-crate = { version = "0.5", features = ["postgres", "deadpool"], optional = true, package = "diesel-async" }
-pq-sys = { workspace = true }
-futures-util = { version = "0.3", optional = true }
+diesel = { workspace = true }
+diesel-async-crate = { version = "0.5", features = ["postgres", "deadpool"], package = "diesel-async" }
+futures-util = "0.3"
 
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -57,7 +50,6 @@ sha2 = "0.10"
 uuid = { workspace = true }
 chrono = { workspace = true }
 
-thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
@@ -65,12 +57,11 @@ lettre = { workspace = true }
 reqwest = { workspace = true }
 
 async-trait = { workspace = true }
-ts-rs = { workspace = true }
-axfetchum = { workspace = true }
+utoipa = { workspace = true, optional = true }
 
 # Feature-gated
 webauthn-rs = { workspace = true, optional = true }
-webauthn-rs-proto = { workspace = true, optional = true }
+
 totp-rs = { workspace = true, optional = true }
 oauth2 = { workspace = true, optional = true }
 jsonwebtoken = { workspace = true, optional = true }
@@ -94,8 +85,8 @@ totp-rs = { workspace = true }
 uuid = { workspace = true }
 base64 = "0.22"
 url = "2"
-testcontainers = "0.26"
-testcontainers-modules = { version = "0.14", features = ["postgres"] }
+testcontainers = "0.27"
+testcontainers-modules = { version = "0.15", features = ["postgres"] }
 
 
 [[example]]

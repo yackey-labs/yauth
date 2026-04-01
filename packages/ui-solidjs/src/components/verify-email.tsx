@@ -12,13 +12,15 @@ type VerifyState = "loading" | "success" | "error";
 
 export const VerifyEmail: Component<VerifyEmailProps> = (props) => {
 	const { client } = useYAuth();
+	const ep = client?.emailPassword;
+	if (!ep) return null;
 	const [state, setState] = createSignal<VerifyState>("loading");
 	const [message, setMessage] = createSignal("");
 	const [errorMessage, setErrorMessage] = createSignal("");
 
 	createEffect(async () => {
 		try {
-			const result = await client.emailPassword.verify(props.token);
+			const result = await ep.verify({ token: props.token });
 			setMessage(result.message);
 			setState("success");
 			props.onSuccess?.();

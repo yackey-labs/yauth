@@ -7,9 +7,11 @@ export interface OAuthButtonsProps {
 
 export const OAuthButtons: Component<OAuthButtonsProps> = (props) => {
 	const { client } = useYAuth();
+	const oauth = client?.oauth;
+	if (!oauth) return null;
 
 	const handleClick = (provider: string) => {
-		client.oauth.authorize(provider);
+		window.location.href = oauth.authorize(provider);
 	};
 
 	return (

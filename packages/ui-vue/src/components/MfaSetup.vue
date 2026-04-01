@@ -21,6 +21,11 @@ const handleBegin = async () => {
 	error.value = null;
 	loading.value = true;
 
+	if (!client.mfa) {
+		error.value = "MFA is not available.";
+		loading.value = false;
+		return;
+	}
 	try {
 		const result = await client.mfa.setup();
 		uri.value = result.otpauth_url;
@@ -40,8 +45,13 @@ const handleConfirm = async (e: Event) => {
 	error.value = null;
 	loading.value = true;
 
+	if (!client.mfa) {
+		error.value = "MFA is not available.";
+		loading.value = false;
+		return;
+	}
 	try {
-		await client.mfa.confirm(code.value);
+		await client.mfa.confirm({ code: code.value });
 		step.value = "done";
 		props.onComplete?.(backupCodes.value);
 	} catch (err) {

@@ -10,6 +10,8 @@ export const ForgotPasswordForm: Component<ForgotPasswordFormProps> = (
 	props,
 ) => {
 	const { client } = useYAuth();
+	const ep = client?.emailPassword;
+	if (!ep) return null;
 	const [email, setEmail] = createSignal("");
 	const [error, setError] = createSignal<string | null>(null);
 	const [success, setSuccess] = createSignal<string | null>(null);
@@ -24,9 +26,9 @@ export const ForgotPasswordForm: Component<ForgotPasswordFormProps> = (
 		try {
 			const form = e.currentTarget as HTMLFormElement;
 			const formData = new FormData(form);
-			const result = await client.emailPassword.forgotPassword(
-				(formData.get("email") as string) || email(),
-			);
+			const result = await ep.forgotPassword({
+				email: (formData.get("email") as string) || email(),
+			});
 			setSuccess(result.message);
 			props.onSuccess?.(result.message);
 		} catch (err) {

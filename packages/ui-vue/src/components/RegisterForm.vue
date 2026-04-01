@@ -8,6 +8,7 @@ const props = defineProps<{
 }>();
 
 const { client } = useYAuth();
+const ep = client.emailPassword;
 const email = ref("");
 const password = ref("");
 const displayName = ref("");
@@ -20,7 +21,7 @@ const handleSubmit = async (e: Event) => {
 	loading.value = true;
 
 	try {
-		const result = await client.emailPassword.register({
+		const result = await ep!.register({
 			email: email.value,
 			password: password.value,
 			display_name: displayName.value || undefined,

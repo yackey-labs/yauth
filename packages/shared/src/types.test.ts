@@ -10,11 +10,11 @@ describe("AuthUser type", () => {
 			email_verified: true,
 			role: "user",
 			banned: false,
-			auth_method: "session",
+			auth_method: "Session",
 		};
 		expect(user.id).toBe("550e8400-e29b-41d4-a716-446655440000");
 		expect(user.role).toBe("user");
-		expect(user.auth_method).toBe("session");
+		expect(user.auth_method).toBe("Session");
 	});
 
 	test("accepts null display_name", () => {
@@ -25,7 +25,7 @@ describe("AuthUser type", () => {
 			email_verified: false,
 			role: "admin",
 			banned: false,
-			auth_method: "bearer",
+			auth_method: "Bearer",
 		};
 		expect(user.display_name).toBeNull();
 	});
@@ -38,9 +38,9 @@ describe("AuthUser type", () => {
 			email_verified: false,
 			role: "user",
 			banned: false,
-			auth_method: "apikey",
+			auth_method: "ApiKey",
 		};
-		expect(user.auth_method).toBe("apikey");
+		expect(user.auth_method).toBe("ApiKey");
 	});
 });
 

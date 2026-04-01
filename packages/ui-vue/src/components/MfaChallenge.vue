@@ -19,10 +19,18 @@ const handleSubmit = async (e: Event) => {
 	error.value = null;
 	loading.value = true;
 
+	if (!client.mfa) {
+		error.value = "MFA is not available.";
+		loading.value = false;
+		return;
+	}
 	try {
-		await client.mfa.verify(props.pendingSessionId, code.value);
+		await client.mfa.verify({
+			pending_session_id: props.pendingSessionId,
+			code: code.value,
+		});
 		const session = await client.getSession();
-		props.onSuccess?.(session.user);
+		props.onSuccess?.(session as unknown as AuthUser);
 	} catch (err) {
 		const e = err instanceof Error ? err : new Error(String(err));
 		error.value = e.message;

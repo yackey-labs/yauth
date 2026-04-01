@@ -11,6 +11,8 @@ export interface MfaChallengeProps {
 
 export const MfaChallenge: Component<MfaChallengeProps> = (props) => {
 	const { client } = useYAuth();
+	const mfa = client?.mfa;
+	if (!mfa) return null;
 	const [code, setCode] = createSignal("");
 	const [error, setError] = createSignal<string | null>(null);
 	const [loading, setLoading] = createSignal(false);
@@ -23,12 +25,12 @@ export const MfaChallenge: Component<MfaChallengeProps> = (props) => {
 		try {
 			const form = e.currentTarget as HTMLFormElement;
 			const formData = new FormData(form);
-			await client.mfa.verify(
-				props.pendingSessionId,
-				(formData.get("code") as string) || code(),
-			);
+			await mfa.verify({
+				pending_session_id: props.pendingSessionId,
+				code: (formData.get("code") as string) || code(),
+			});
 			const session = await client.getSession();
-			props.onSuccess?.(session.user);
+			props.onSuccess?.(session as unknown as AuthUser);
 		} catch (err) {
 			const error = err instanceof Error ? err : new Error(String(err));
 			setError(error.message);

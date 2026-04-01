@@ -8,6 +8,8 @@ export interface MagicLinkFormProps {
 
 export const MagicLinkForm: Component<MagicLinkFormProps> = (props) => {
 	const { client } = useYAuth();
+	const ml = client?.magicLink;
+	if (!ml) return null;
 	const [email, setEmail] = createSignal("");
 	const [error, setError] = createSignal<string | null>(null);
 	const [success, setSuccess] = createSignal<string | null>(null);
@@ -22,9 +24,9 @@ export const MagicLinkForm: Component<MagicLinkFormProps> = (props) => {
 		try {
 			const form = e.currentTarget as HTMLFormElement;
 			const formData = new FormData(form);
-			const result = await client.magicLink.send(
-				(formData.get("email") as string) || email(),
-			);
+			const result = await ml.send({
+				email: (formData.get("email") as string) || email(),
+			});
 			setSuccess(result.message);
 			props.onSuccess?.(result.message);
 		} catch (err) {

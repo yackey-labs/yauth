@@ -16,8 +16,13 @@ const message = ref("");
 const errorMessage = ref("");
 
 onMounted(async () => {
+	if (!client.emailPassword) {
+		errorMessage.value = "Email/password authentication is not available.";
+		state.value = "error";
+		return;
+	}
 	try {
-		const result = await client.emailPassword.verify(props.token);
+		const result = await client.emailPassword.verify({ token: props.token });
 		message.value = result.message;
 		state.value = "success";
 		props.onSuccess?.();

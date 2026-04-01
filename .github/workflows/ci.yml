@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: false
@@ -38,102 +41,84 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --workspace --features full -- -D warnings
 
-      - name: cargo clippy (diesel-async)
-        run: cargo clippy --workspace --no-default-features --features diesel-full -- -D warnings
-
       - name: Biome lint
         run: bun run lint
 
       - name: TypeScript typecheck
         run: bun run typecheck
 
-  test:
-    name: Test
-    runs-on: ubuntu-latest
-    # No postgres service — unit tests need no DB; diesel integration tests
-    # use testcontainers (one fresh container per test).
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Install JS dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Run tests
-        run: cargo test --workspace --features full
-
-  test-diesel:
-    name: Test (diesel-async)
-    runs-on: ubuntu-latest
-    # Verifies the diesel-only feature set compiles and tests correctly
-    # with no default (seaorm) features enabled.
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --component clippy
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Install JS dependencies
-        run: bun install --frozen-lockfile
-
-      - name: cargo check (diesel-full)
-        run: cargo check --workspace --no-default-features --features diesel-full
-
-      - name: cargo clippy (diesel-full)
-        run: cargo clippy --workspace --no-default-features --features diesel-full -- -D warnings
-
-      - name: Run tests (diesel-async)
-        run: cargo test --workspace --no-default-features --features diesel-full
-
-  pentest:
-    name: Security Pentest
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-
-      - name: Run pentest suite
-        run: cargo test --package yauth --features full -- pentest --nocapture
-
-  build:
-    name: Build
-    runs-on: ubuntu-latest
-    needs: [lint, test, test-diesel, pentest]
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Install JS dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Build Rust crates
-        run: cargo build --workspace --features full --release
+      - name: Check generated client is up to date
+        run: bun run generate:check
 
       - name: Build TS packages
         run: bun run build
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: yauth
+          POSTGRES_PASSWORD: yauth
+          POSTGRES_DB: yauth_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U yauth -d yauth_test"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 10
+      mailpit:
+        image: axllent/mailpit:latest
+        ports:
+          - 1026:1025
+          - 8026:8025
+        env:
+          MP_SMTP_AUTH_ACCEPT_ANY: 1
+          MP_SMTP_AUTH_ALLOW_INSECURE: 1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install JS dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Run unit tests
+        run: cargo test --workspace --features full
+
+      - name: Run pentest suite
+        run: cd pentest && bun run test
+
+  codeql:
+    name: CodeQL (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [actions, javascript-typescript, rust]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+

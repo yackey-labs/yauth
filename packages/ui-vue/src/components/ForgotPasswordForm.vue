@@ -18,8 +18,15 @@ const handleSubmit = async (e: Event) => {
 	success.value = null;
 	loading.value = true;
 
+	if (!client.emailPassword) {
+		error.value = "Email/password authentication is not available.";
+		loading.value = false;
+		return;
+	}
 	try {
-		const result = await client.emailPassword.forgotPassword(email.value);
+		const result = await client.emailPassword.forgotPassword({
+			email: email.value,
+		});
 		success.value = result.message;
 		props.onSuccess?.(result.message);
 	} catch (err) {

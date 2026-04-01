@@ -3,14 +3,18 @@ use axum::{
     routing::post,
 };
 use chrono::Utc;
+use diesel::prelude::*;
+use diesel::result::OptionalExtension;
+use diesel_async_crate::RunQueryDsl;
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
-use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::auth::{crypto, password};
 use crate::config::BearerConfig;
+use crate::db::models::{NewRefreshToken, RefreshToken};
+use crate::db::schema::yauth_refresh_tokens;
 use crate::error::{ApiError, api_err};
 use crate::middleware::{AuthMethod, AuthUser};
 use crate::plugin::{PluginContext, YAuthPlugin};
@@ -47,143 +51,88 @@ impl YAuthPlugin for BearerPlugin {
 }
 
 // ---------------------------------------------------------------------------
-// Diesel-async helpers
+// Database helpers
 // ---------------------------------------------------------------------------
 
-mod diesel_db {
-    use diesel::result::OptionalExtension;
-    use diesel_async_crate::RunQueryDsl;
-    use uuid::Uuid;
+type Conn = diesel_async_crate::AsyncPgConnection;
+type DbResult<T> = Result<T, String>;
 
-    type Conn = diesel_async_crate::AsyncPgConnection;
-    type DbResult<T> = Result<T, String>;
+use crate::db::{find_user_by_email, find_user_by_id};
 
-    #[derive(diesel::QueryableByName, Clone)]
-    #[allow(dead_code)]
-    pub struct UserRow {
-        #[diesel(sql_type = diesel::sql_types::Uuid)]
-        pub id: Uuid,
+// Password table is gated behind email-password feature in schema.rs,
+// but bearer can be enabled independently. Keep as raw SQL to avoid
+// cross-feature dependency.
+async fn db_find_password_hash(conn: &mut Conn, user_id: Uuid) -> DbResult<Option<String>> {
+    #[derive(diesel::QueryableByName)]
+    struct PasswordRow {
         #[diesel(sql_type = diesel::sql_types::Text)]
-        pub email: String,
-        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
-        pub display_name: Option<String>,
-        #[diesel(sql_type = diesel::sql_types::Bool)]
-        pub email_verified: bool,
-        #[diesel(sql_type = diesel::sql_types::Text)]
-        pub role: String,
-        #[diesel(sql_type = diesel::sql_types::Bool)]
-        pub banned: bool,
+        password_hash: String,
     }
-
-    #[derive(diesel::QueryableByName, Clone)]
-    #[allow(dead_code)]
-    pub struct PasswordRow {
-        #[diesel(sql_type = diesel::sql_types::Text)]
-        pub password_hash: String,
-    }
-
-    #[derive(diesel::QueryableByName, Clone)]
-    #[allow(dead_code)]
-    pub struct RefreshTokenRow {
-        #[diesel(sql_type = diesel::sql_types::Uuid)]
-        pub id: Uuid,
-        #[diesel(sql_type = diesel::sql_types::Uuid)]
-        pub user_id: Uuid,
-        #[diesel(sql_type = diesel::sql_types::Text)]
-        pub token_hash: String,
-        #[diesel(sql_type = diesel::sql_types::Uuid)]
-        pub family_id: Uuid,
-        #[diesel(sql_type = diesel::sql_types::Timestamptz)]
-        pub expires_at: chrono::NaiveDateTime,
-        #[diesel(sql_type = diesel::sql_types::Bool)]
-        pub revoked: bool,
-    }
-
-    pub async fn find_user_by_email(conn: &mut Conn, email: &str) -> DbResult<Option<UserRow>> {
-        diesel::sql_query(
-            "SELECT id, email, display_name, email_verified, role, banned FROM yauth_users WHERE email = $1",
-        )
-        .bind::<diesel::sql_types::Text, _>(email)
-        .get_result(conn)
-        .await
-        .optional()
-        .map_err(|e| e.to_string())
-    }
-
-    pub async fn find_user_by_id(conn: &mut Conn, id: Uuid) -> DbResult<Option<UserRow>> {
-        diesel::sql_query(
-            "SELECT id, email, display_name, email_verified, role, banned FROM yauth_users WHERE id = $1",
-        )
-        .bind::<diesel::sql_types::Uuid, _>(id)
-        .get_result(conn)
-        .await
-        .optional()
-        .map_err(|e| e.to_string())
-    }
-
-    pub async fn find_password(conn: &mut Conn, user_id: Uuid) -> DbResult<Option<PasswordRow>> {
-        diesel::sql_query("SELECT password_hash FROM yauth_passwords WHERE user_id = $1")
-            .bind::<diesel::sql_types::Uuid, _>(user_id)
-            .get_result(conn)
-            .await
-            .optional()
-            .map_err(|e| e.to_string())
-    }
-
-    pub async fn insert_refresh_token(
-        conn: &mut Conn,
-        id: Uuid,
-        user_id: Uuid,
-        token_hash: &str,
-        family_id: Uuid,
-        expires_at: chrono::DateTime<chrono::FixedOffset>,
-    ) -> DbResult<()> {
-        diesel::sql_query(
-            "INSERT INTO yauth_refresh_tokens (id, user_id, token_hash, family_id, expires_at, revoked, created_at) VALUES ($1, $2, $3, $4, $5, false, $6)",
-        )
-        .bind::<diesel::sql_types::Uuid, _>(id)
+    diesel::sql_query("SELECT password_hash FROM yauth_passwords WHERE user_id = $1")
         .bind::<diesel::sql_types::Uuid, _>(user_id)
-        .bind::<diesel::sql_types::Text, _>(token_hash)
-        .bind::<diesel::sql_types::Uuid, _>(family_id)
-        .bind::<diesel::sql_types::Timestamptz, _>(expires_at)
-        .bind::<diesel::sql_types::Timestamptz, _>(chrono::Utc::now())
+        .get_result::<PasswordRow>(conn)
+        .await
+        .optional()
+        .map_err(|e| e.to_string())
+        .map(|opt| opt.map(|p| p.password_hash))
+}
+
+async fn db_insert_refresh_token(
+    conn: &mut Conn,
+    id: Uuid,
+    user_id: Uuid,
+    token_hash: &str,
+    family_id: Uuid,
+    expires_at: chrono::DateTime<chrono::FixedOffset>,
+) -> DbResult<()> {
+    let new_token = NewRefreshToken {
+        id,
+        user_id,
+        token_hash: token_hash.to_string(),
+        family_id,
+        expires_at: expires_at.naive_utc(),
+        revoked: false,
+        created_at: chrono::Utc::now().naive_utc(),
+    };
+    diesel::insert_into(yauth_refresh_tokens::table)
+        .values(&new_token)
         .execute(conn)
         .await
         .map_err(|e| e.to_string())?;
-        Ok(())
-    }
+    Ok(())
+}
 
-    pub async fn find_refresh_token_by_hash(
-        conn: &mut Conn,
-        token_hash: &str,
-    ) -> DbResult<Option<RefreshTokenRow>> {
-        diesel::sql_query(
-            "SELECT id, user_id, token_hash, family_id, expires_at, revoked FROM yauth_refresh_tokens WHERE token_hash = $1",
-        )
-        .bind::<diesel::sql_types::Text, _>(token_hash)
-        .get_result(conn)
+async fn db_find_refresh_token_by_hash(
+    conn: &mut Conn,
+    token_hash: &str,
+) -> DbResult<Option<RefreshToken>> {
+    yauth_refresh_tokens::table
+        .filter(yauth_refresh_tokens::token_hash.eq(token_hash))
+        .select(RefreshToken::as_select())
+        .first(conn)
         .await
         .optional()
         .map_err(|e| e.to_string())
-    }
+}
 
-    pub async fn revoke_refresh_token(conn: &mut Conn, id: Uuid) -> DbResult<()> {
-        diesel::sql_query("UPDATE yauth_refresh_tokens SET revoked = true WHERE id = $1")
-            .bind::<diesel::sql_types::Uuid, _>(id)
-            .execute(conn)
-            .await
-            .map_err(|e| e.to_string())?;
-        Ok(())
-    }
+async fn db_revoke_refresh_token(conn: &mut Conn, id: Uuid) -> DbResult<()> {
+    diesel::update(yauth_refresh_tokens::table.filter(yauth_refresh_tokens::id.eq(id)))
+        .set(yauth_refresh_tokens::revoked.eq(true))
+        .execute(conn)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
 
-    pub async fn revoke_family(conn: &mut Conn, family_id: Uuid) -> DbResult<()> {
-        diesel::sql_query("UPDATE yauth_refresh_tokens SET revoked = true WHERE family_id = $1")
-            .bind::<diesel::sql_types::Uuid, _>(family_id)
-            .execute(conn)
-            .await
-            .map_err(|e| e.to_string())?;
-        Ok(())
-    }
+async fn db_revoke_family(conn: &mut Conn, family_id: Uuid) -> DbResult<()> {
+    diesel::update(
+        yauth_refresh_tokens::table.filter(yauth_refresh_tokens::family_id.eq(family_id)),
+    )
+    .set(yauth_refresh_tokens::revoked.eq(true))
+    .execute(conn)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -208,8 +157,8 @@ struct Claims {
 // Request / Response types
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize, TS)]
-#[ts(export)]
+#[derive(Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct TokenRequest {
     pub email: String,
     pub password: String,
@@ -218,20 +167,20 @@ pub struct TokenRequest {
     pub scope: Option<String>,
 }
 
-#[derive(Deserialize, TS)]
-#[ts(export)]
+#[derive(Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct RefreshRequest {
     pub refresh_token: String,
 }
 
-#[derive(Deserialize, TS)]
-#[ts(export)]
+#[derive(Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct RevokeRequest {
     pub refresh_token: String,
 }
 
-#[derive(Serialize, TS)]
-#[ts(export)]
+#[derive(Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct TokenResponse {
     pub access_token: String,
     pub refresh_token: String,
@@ -305,7 +254,7 @@ async fn create_refresh_token_diesel(
         + chrono::Duration::from_std(ttl).unwrap_or(chrono::Duration::days(7)))
     .fixed_offset();
 
-    diesel_db::insert_refresh_token(
+    db_insert_refresh_token(
         conn,
         Uuid::new_v4(),
         user_id,
@@ -347,49 +296,28 @@ async fn create_token(
         .await
         .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
-    struct TokenUser {
-        id: Uuid,
-        email: String,
-        role: String,
-        banned: bool,
-        email_verified: bool,
-    }
-
     let (user_opt, hash) = {
-        let user = diesel_db::find_user_by_email(&mut conn, &email)
-            .await
-            .map_err(|e| {
-                tracing::error!("DB error: {}", e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
+        let user = find_user_by_email(&mut conn, &email).await.map_err(|e| {
+            tracing::error!("DB error: {}", e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
 
         match &user {
             Some(u) => {
-                let pwd = diesel_db::find_password(&mut conn, u.id)
-                    .await
-                    .map_err(|e| {
-                        tracing::error!("DB error: {}", e);
-                        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-                    })?;
-                let h = pwd
-                    .map(|p| p.password_hash)
-                    .unwrap_or_else(|| state.dummy_hash.clone());
-                (
-                    Some(TokenUser {
-                        id: u.id,
-                        email: u.email.clone(),
-                        role: u.role.clone(),
-                        banned: u.banned,
-                        email_verified: u.email_verified,
-                    }),
-                    h,
-                )
+                let pwd_hash = db_find_password_hash(&mut conn, u.id).await.map_err(|e| {
+                    tracing::error!("DB error: {}", e);
+                    api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+                })?;
+                let h = pwd_hash.unwrap_or_else(|| state.dummy_hash.clone());
+                (Some(u.clone()), h)
             }
             None => (None, state.dummy_hash.clone()),
         }
     };
 
-    let valid = password::verify_password(&input.password, &hash).unwrap_or(false);
+    let valid = password::verify_password(&input.password, &hash)
+        .await
+        .unwrap_or(false);
 
     match (user_opt, valid) {
         (Some(u), true) => {
@@ -484,29 +412,15 @@ async fn refresh_token(
         .await
         .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
-    struct StoredToken {
-        id: Uuid,
-        user_id: Uuid,
-        family_id: Uuid,
-        expires_at: chrono::NaiveDateTime,
-        revoked: bool,
-    }
-
     let stored = {
-        let found = diesel_db::find_refresh_token_by_hash(&mut conn, &token_hash)
+        let found = db_find_refresh_token_by_hash(&mut conn, &token_hash)
             .await
             .map_err(|e| {
                 tracing::error!("DB error: {}", e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
         match found {
-            Some(t) => StoredToken {
-                id: t.id,
-                user_id: t.user_id,
-                family_id: t.family_id,
-                expires_at: t.expires_at,
-                revoked: t.revoked,
-            },
+            Some(t) => t,
             None => {
                 warn!(
                     event = "yauth.bearer.refresh.invalid",
@@ -523,7 +437,7 @@ async fn refresh_token(
             user_id = %stored.user_id, "Refresh token reuse detected — revoking entire family"
         );
         {
-            let _ = diesel_db::revoke_family(&mut conn, stored.family_id).await;
+            let _ = db_revoke_family(&mut conn, stored.family_id).await;
         }
         return Err(api_err(
             StatusCode::UNAUTHORIZED,
@@ -545,7 +459,7 @@ async fn refresh_token(
 
     // Revoke old token
     {
-        diesel_db::revoke_refresh_token(&mut conn, stored.id)
+        db_revoke_refresh_token(&mut conn, stored.id)
             .await
             .map_err(|e| {
                 tracing::error!("Failed to revoke old refresh token: {}", e);
@@ -554,27 +468,14 @@ async fn refresh_token(
     }
 
     // Look up user
-    struct RefreshUser {
-        id: Uuid,
-        email: String,
-        role: String,
-        banned: bool,
-    }
-
     let user = {
-        let u = diesel_db::find_user_by_id(&mut conn, user_id)
+        find_user_by_id(&mut conn, user_id)
             .await
             .map_err(|e| {
                 tracing::error!("DB error: {}", e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?
-            .ok_or_else(|| api_err(StatusCode::UNAUTHORIZED, "User not found"))?;
-        RefreshUser {
-            id: u.id,
-            email: u.email,
-            role: u.role,
-            banned: u.banned,
-        }
+            .ok_or_else(|| api_err(StatusCode::UNAUTHORIZED, "User not found"))?
     };
 
     if user.banned {
@@ -634,24 +535,13 @@ async fn revoke_token(
         .await
         .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
-    struct StoredInfo {
-        user_id: Uuid,
-        revoked: bool,
-        id: Uuid,
-    }
-
     let stored_opt = {
-        let found = diesel_db::find_refresh_token_by_hash(&mut conn, &token_hash)
+        db_find_refresh_token_by_hash(&mut conn, &token_hash)
             .await
             .map_err(|e| {
                 tracing::error!("DB error: {}", e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
-        found.map(|t| StoredInfo {
-            user_id: t.user_id,
-            revoked: t.revoked,
-            id: t.id,
-        })
+            })?
     };
 
     let stored = match stored_opt {
@@ -668,7 +558,7 @@ async fn revoke_token(
 
     if !stored.revoked {
         {
-            diesel_db::revoke_refresh_token(&mut conn, stored.id)
+            db_revoke_refresh_token(&mut conn, stored.id)
                 .await
                 .map_err(|e| {
                     tracing::error!("Failed to revoke refresh token: {}", e);
@@ -725,7 +615,7 @@ pub async fn validate_jwt(token: &str, state: &YAuthState) -> Result<AuthUser, S
             .get()
             .await
             .map_err(|e| format!("Pool error: {}", e))?;
-        diesel_db::find_user_by_id(&mut conn, user_id)
+        find_user_by_id(&mut conn, user_id)
             .await
             .map_err(|e| format!("DB error during JWT validation: {}", e))?
             .ok_or_else(|| "User not found".to_string())?

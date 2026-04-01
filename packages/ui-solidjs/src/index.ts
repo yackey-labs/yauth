@@ -11,4 +11,5 @@ export { ProfileSettings } from "./components/profile-settings";
 export { RegisterForm } from "./components/register-form";
 export { ResetPasswordForm } from "./components/reset-password-form";
 export { VerifyEmail } from "./components/verify-email";
+export type { YAuthClient } from "./provider";
 export { useYAuth, YAuthProvider } from "./provider";

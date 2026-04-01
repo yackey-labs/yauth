@@ -171,7 +171,13 @@ async fn main() {
     .with_api_key()
     // Admin user management endpoints
     .with_admin()
-    // OAuth2 Authorization Server (for MCP auth)
+    // Magic link (passwordless email login)
+    .with_magic_link(yauth::config::MagicLinkConfig::default())
+    // Account lockout (brute-force protection)
+    .with_account_lockout(yauth::config::AccountLockoutConfig::default())
+    // Webhooks (HTTP callbacks on auth events)
+    .with_webhooks(yauth::config::WebhookConfig::default())
+    // OAuth2 Authorization Server
     .with_oauth2_server(yauth::config::OAuth2ServerConfig {
         issuer: base_url.clone(),
         authorization_code_ttl: Duration::from_secs(60),
@@ -184,6 +190,13 @@ async fn main() {
         allow_dynamic_registration: true,
         ..Default::default()
     })
+    // OIDC (OpenID Connect Provider)
+    .with_oidc(yauth::config::OidcConfig {
+        issuer: base_url.clone(),
+        ..Default::default()
+    })
+    // Status endpoint
+    .with_status()
     .build();
 
     // -----------------------------------------------------------------------

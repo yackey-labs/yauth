@@ -429,15 +429,18 @@ impl YAuthBuilder {
             #[cfg(feature = "email-password")]
             email_password_config: self.email_password_config.clone().unwrap_or_default(),
             #[cfg(feature = "bearer")]
-            bearer_config: self
-                .bearer_config
-                .clone()
-                .unwrap_or_else(|| config::BearerConfig {
-                    jwt_secret: String::new(),
-                    access_token_ttl: std::time::Duration::from_secs(900),
-                    refresh_token_ttl: std::time::Duration::from_secs(30 * 24 * 3600),
-                    audience: None,
-                }),
+            bearer_config: {
+                let cfg = self
+                    .bearer_config
+                    .clone()
+                    .expect("Bearer feature requires .with_bearer(config)");
+                if cfg.jwt_secret.is_empty() {
+                    panic!(
+                        "BearerConfig.jwt_secret must not be empty — tokens would be trivially forgeable"
+                    );
+                }
+                cfg
+            },
             #[cfg(feature = "mfa")]
             mfa_config: self.mfa_config.clone().unwrap_or_default(),
             #[cfg(feature = "oauth")]

@@ -909,6 +909,19 @@ async fn authorize(
     Query(query): Query<AuthorizeQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
     let provider_config = find_provider_config(&state, &provider)?;
+
+    // Validate redirect_url against trusted origins to prevent open redirects
+    if let Some(ref url) = query.redirect_url {
+        let trusted = state
+            .config
+            .trusted_origins
+            .iter()
+            .any(|origin| url.starts_with(origin));
+        if !trusted {
+            return Err(api_err(StatusCode::BAD_REQUEST, "Invalid redirect URL"));
+        }
+    }
+
     let state_token = crypto::generate_token();
     store_state(
         &state,

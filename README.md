@@ -593,6 +593,8 @@ let yauth = YAuthBuilder::new(pool, config)
 
 `.with_redis()` switches all ephemeral stores (sessions, rate limits, challenges, revocation) to Redis. Durable data (users, passwords, API keys) stays in Postgres.
 
+**Note:** The `yauth_sessions` table is always created in Postgres by migrations, even when Redis is the session store. This is intentional — it allows switching backends without re-running migrations, and the `CREATE TABLE IF NOT EXISTS` is a no-op.
+
 **When to use Redis:** multi-replica deployments (shared sessions), high-traffic apps (sub-millisecond session lookups), or when you need instant JWT revocation across all nodes.
 
 #### Advanced: Per-Store Overrides

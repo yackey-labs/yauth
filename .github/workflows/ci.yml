@@ -70,14 +70,6 @@ jobs:
           --health-interval 2s
           --health-timeout 5s
           --health-retries 10
-      mailpit:
-        image: axllent/mailpit:latest
-        ports:
-          - 1026:1025
-          - 8026:8025
-        env:
-          MP_SMTP_AUTH_ACCEPT_ANY: 1
-          MP_SMTP_AUTH_ALLOW_INSECURE: 1
     steps:
       - uses: actions/checkout@v4
 
@@ -86,18 +78,13 @@ jobs:
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Install JS dependencies
-        run: bun install --frozen-lockfile
-
       - name: Run unit tests
-        run: cargo test --workspace --features full
+        run: cargo test --workspace --features full --lib
 
-      - name: Run pentest suite
-        run: cd pentest && bun run test
+      - name: Run integration tests (serialized — shared DB)
+        env:
+          DATABASE_URL: postgres://yauth:yauth@127.0.0.1:5433/yauth_test
+        run: cargo test --workspace --features full --test diesel_integration --test pentest -- --test-threads=1
 
   codeql:
     name: CodeQL (${{ matrix.language }})
@@ -115,6 +102,7 @@ jobs:
         uses: github/codeql-action/init@v3
         with:
           languages: ${{ matrix.language }}
+          config-file: .github/codeql-config.yml
 
       - name: Autobuild
         uses: github/codeql-action/autobuild@v3

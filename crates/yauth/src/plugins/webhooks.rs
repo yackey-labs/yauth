@@ -276,6 +276,16 @@ async fn dispatch_webhooks_diesel(
             continue;
         }
 
+        // Defense in depth: skip delivery if URL fails SSRF check (may pre-date validation)
+        if !is_ssrf_safe(&webhook.url) {
+            warn!(
+                webhook_id = %webhook.id,
+                url = %webhook.url,
+                "Skipping webhook delivery: URL points to internal or private network"
+            );
+            continue;
+        }
+
         let body = serde_json::json!({
             "event": event_type,
             "payload": payload,
@@ -478,6 +488,54 @@ impl From<WebhookDelivery> for WebhookDeliveryResponse {
 // URL validation helper
 // ---------------------------------------------------------------------------
 
+fn is_ssrf_safe(url_str: &str) -> bool {
+    let parsed = match url::Url::parse(url_str) {
+        Ok(u) => u,
+        Err(_) => return false,
+    };
+
+    let host = match parsed.host_str() {
+        Some(h) => h,
+        None => return false,
+    };
+
+    // Block obvious internal hostnames
+    let blocked_hosts = [
+        "localhost",
+        "127.0.0.1",
+        "0.0.0.0",
+        "[::1]",
+        "metadata.google.internal",
+    ];
+    if blocked_hosts.contains(&host) {
+        return false;
+    }
+
+    // Block private IP ranges
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        match ip {
+            std::net::IpAddr::V4(v4) => {
+                if v4.is_private()
+                    || v4.is_loopback()
+                    || v4.is_link_local()
+                    || (v4.octets()[0] == 169 && v4.octets()[1] == 254) // link-local
+                    || (v4.octets()[0] == 100 && (v4.octets()[1] & 0xC0) == 64)
+                // CGN
+                {
+                    return false;
+                }
+            }
+            std::net::IpAddr::V6(v6) => {
+                if v6.is_loopback() {
+                    return false;
+                }
+            }
+        }
+    }
+
+    true
+}
+
 fn validate_webhook_url(url: &str) -> Result<(), ApiError> {
     if url.is_empty() {
         return Err(api_err(StatusCode::BAD_REQUEST, "URL is required"));
@@ -486,6 +544,12 @@ fn validate_webhook_url(url: &str) -> Result<(), ApiError> {
         return Err(api_err(
             StatusCode::BAD_REQUEST,
             "Invalid webhook URL: must be an HTTP or HTTPS URL",
+        ));
+    }
+    if !is_ssrf_safe(url) {
+        return Err(api_err(
+            StatusCode::BAD_REQUEST,
+            "Webhook URL must not point to internal or private networks",
         ));
     }
     Ok(())
@@ -773,6 +837,14 @@ async fn test_webhook(
         (webhook.id, webhook.url, webhook.secret)
     };
 
+    // SSRF check before sending test delivery
+    if !is_ssrf_safe(&webhook_url) {
+        return Err(api_err(
+            StatusCode::BAD_REQUEST,
+            "Webhook URL must not point to internal or private networks",
+        ));
+    }
+
     let body = serde_json::json!({
         "event": "test",
         "payload": {
@@ -1002,6 +1074,47 @@ mod tests {
             }),
             "account.unlocked"
         );
+    }
+
+    #[test]
+    fn is_ssrf_safe_allows_public_urls() {
+        assert!(is_ssrf_safe("https://example.com/webhook"));
+        assert!(is_ssrf_safe("https://hooks.slack.com/services/T00/B00/xxx"));
+        assert!(is_ssrf_safe("http://203.0.113.50:8080/hook"));
+    }
+
+    #[test]
+    fn is_ssrf_safe_blocks_localhost() {
+        assert!(!is_ssrf_safe("http://localhost/hook"));
+        assert!(!is_ssrf_safe("http://127.0.0.1/hook"));
+        assert!(!is_ssrf_safe("http://0.0.0.0/hook"));
+        assert!(!is_ssrf_safe("http://[::1]/hook"));
+    }
+
+    #[test]
+    fn is_ssrf_safe_blocks_private_ips() {
+        assert!(!is_ssrf_safe("http://10.0.0.1/hook"));
+        assert!(!is_ssrf_safe("http://172.16.0.1/hook"));
+        assert!(!is_ssrf_safe("http://192.168.1.1/hook"));
+    }
+
+    #[test]
+    fn is_ssrf_safe_blocks_link_local_and_cgn() {
+        assert!(!is_ssrf_safe("http://169.254.169.254/latest/meta-data/"));
+        assert!(!is_ssrf_safe("http://100.64.0.1/hook"));
+    }
+
+    #[test]
+    fn is_ssrf_safe_blocks_metadata_endpoint() {
+        assert!(!is_ssrf_safe(
+            "http://metadata.google.internal/computeMetadata/v1/"
+        ));
+    }
+
+    #[test]
+    fn is_ssrf_safe_rejects_invalid_urls() {
+        assert!(!is_ssrf_safe("not-a-url"));
+        assert!(!is_ssrf_safe(""));
     }
 
     #[test]

@@ -22,7 +22,7 @@ admin = []
 status = []
 oauth2-server = ["dep:url", "dep:base64", "dep:serde_urlencoded"]
 account-lockout = []
-webhooks = ["dep:hmac"]
+webhooks = ["dep:hmac", "dep:url"]
 oidc = ["bearer", "oauth2-server"]
 telemetry = ["dep:tracing-opentelemetry", "dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:opentelemetry-semantic-conventions"]
 openapi = ["dep:utoipa"]
@@ -91,6 +91,8 @@ base64 = "0.22"
 url = "2"
 testcontainers = "0.27"
 testcontainers-modules = { version = "0.15", features = ["postgres"] }
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
 
 
 [[example]]

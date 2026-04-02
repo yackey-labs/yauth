@@ -25,7 +25,7 @@ use crate::state::YAuthState;
 
 use crate::config::EmailPasswordConfig;
 use diesel::prelude::*;
-use diesel::result::OptionalExtension;
+use diesel::result::{DatabaseErrorKind, Error as DieselError, OptionalExtension};
 use diesel_async_crate::RunQueryDsl;
 
 const VERIFICATION_TOKEN_EXPIRY_HOURS: i64 = 24;
@@ -241,14 +241,23 @@ async fn register(
         .await
         .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
-    diesel::insert_into(yauth_users::table)
+    match diesel::insert_into(yauth_users::table)
         .values(&new_user)
         .execute(&mut conn)
         .await
-        .map_err(|e| {
+    {
+        Ok(_) => {}
+        Err(DieselError::DatabaseError(DatabaseErrorKind::UniqueViolation, _)) => {
+            return Err(api_err(
+                StatusCode::CONFLICT,
+                "An account with this email already exists",
+            ));
+        }
+        Err(e) => {
             tracing::error!("Failed to create user: {}", e);
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
+            return Err(api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"));
+        }
+    }
 
     let new_password = NewPassword {
         user_id,

@@ -408,18 +408,13 @@ async fn verify_magic_link(
         }
     }
 
-    let (session_token, _session_id) = session::create_session(
-        &state.db,
-        user_model.id,
-        None,
-        None,
-        state.config.session_ttl,
-    )
-    .await
-    .map_err(|e| {
-        tracing::error!("Failed to create session: {}", e);
-        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-    })?;
+    let (session_token, _session_id) =
+        session::create_session(&state, user_model.id, None, None, state.config.session_ttl)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to create session: {}", e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?;
 
     state.emit_event(&AuthEvent::MagicLinkVerified {
         user_id: user_model.id,

@@ -606,7 +606,7 @@ async fn login_finish(
     let _ = update_credential_last_used(&state, user_id).await;
 
     let (token, _session_id) =
-        session::create_session(&state.db, user_id, None, None, state.config.session_ttl)
+        session::create_session(&state, user_id, None, None, state.config.session_ttl)
             .await
             .map_err(|e| {
                 tracing::error!("Failed to create session: {}", e);

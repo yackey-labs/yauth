@@ -291,6 +291,27 @@ impl YAuthBuilder {
         self
     }
 
+    /// Use Redis for all ephemeral stores (sessions, rate limits, challenges, revocation).
+    /// Keys are prefixed with `yauth:`. Postgres remains the source of truth for
+    /// durable data (users, passwords, etc.).
+    #[cfg(feature = "redis")]
+    pub fn with_redis(mut self, conn: ::redis::aio::ConnectionManager) -> Self {
+        self.store_backend = StoreBackend::Redis(Box::new(conn), "yauth".into());
+        self
+    }
+
+    /// Use Redis with a custom key prefix. Useful when multiple apps share a Redis instance.
+    /// Example: `.with_redis_prefixed(conn, "freshstrings")` → keys like `freshstrings:session:{hash}`
+    #[cfg(feature = "redis")]
+    pub fn with_redis_prefixed(
+        mut self,
+        conn: ::redis::aio::ConnectionManager,
+        prefix: impl Into<String>,
+    ) -> Self {
+        self.store_backend = StoreBackend::Redis(Box::new(conn), prefix.into());
+        self
+    }
+
     pub fn with_plugin(mut self, plugin: Box<dyn YAuthPlugin>) -> Self {
         self.plugins.push(plugin);
         self
@@ -306,23 +327,60 @@ impl YAuthBuilder {
         let rate_limiter = auth::rate_limit::RateLimiter::new(10, 60);
 
         // Build challenge store
-        let challenge_store: std::sync::Arc<dyn stores::ChallengeStore> = match self.store_backend {
+        let challenge_store: std::sync::Arc<dyn stores::ChallengeStore> = match &self.store_backend
+        {
             StoreBackend::Memory => {
                 std::sync::Arc::new(stores::memory::MemoryChallengeStore::new())
             }
             StoreBackend::Postgres => std::sync::Arc::new(
                 stores::postgres::PostgresChallengeStore::new(self.db.clone()),
             ),
+            #[cfg(feature = "redis")]
+            StoreBackend::Redis(conn, prefix) => std::sync::Arc::new(
+                stores::redis::RedisChallengeStore::new(*conn.clone()).with_prefix(prefix.clone()),
+            ),
         };
 
         // Build rate limit store
-        let rate_limit_store: std::sync::Arc<dyn stores::RateLimitStore> = match self.store_backend
+        let rate_limit_store: std::sync::Arc<dyn stores::RateLimitStore> = match &self.store_backend
         {
             StoreBackend::Memory => {
                 std::sync::Arc::new(stores::memory::MemoryRateLimitStore::new(10, 60))
             }
             StoreBackend::Postgres => std::sync::Arc::new(
                 stores::postgres::PostgresRateLimitStore::new(self.db.clone()),
+            ),
+            #[cfg(feature = "redis")]
+            StoreBackend::Redis(conn, prefix) => std::sync::Arc::new(
+                stores::redis::RedisRateLimitStore::new(*conn.clone()).with_prefix(prefix.clone()),
+            ),
+        };
+
+        // Build session store
+        let session_store: std::sync::Arc<dyn stores::SessionStore> = match &self.store_backend {
+            StoreBackend::Memory => std::sync::Arc::new(stores::memory::MemorySessionStore::new()),
+            StoreBackend::Postgres => {
+                std::sync::Arc::new(stores::postgres::PostgresSessionStore::new(self.db.clone()))
+            }
+            #[cfg(feature = "redis")]
+            StoreBackend::Redis(conn, prefix) => std::sync::Arc::new(
+                stores::redis::RedisSessionStore::new(*conn.clone()).with_prefix(prefix.clone()),
+            ),
+        };
+
+        // Build revocation store
+        let revocation_store: std::sync::Arc<dyn stores::RevocationStore> = match &self
+            .store_backend
+        {
+            StoreBackend::Memory => {
+                std::sync::Arc::new(stores::memory::MemoryRevocationStore::new())
+            }
+            StoreBackend::Postgres => std::sync::Arc::new(
+                stores::postgres::PostgresRevocationStore::new(self.db.clone()),
+            ),
+            #[cfg(feature = "redis")]
+            StoreBackend::Redis(conn, prefix) => std::sync::Arc::new(
+                stores::redis::RedisRevocationStore::new(*conn.clone()).with_prefix(prefix.clone()),
             ),
         };
 
@@ -364,6 +422,8 @@ impl YAuthBuilder {
             rate_limiter,
             challenge_store,
             rate_limit_store,
+            session_store,
+            revocation_store,
             email_service,
             plugins: std::sync::Arc::new(Vec::new()), // placeholder, replaced below
             #[cfg(feature = "email-password")]

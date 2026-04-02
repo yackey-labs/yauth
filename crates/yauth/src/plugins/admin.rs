@@ -510,7 +510,7 @@ async fn ban_user(
     };
 
     // Delete all active sessions for the banned user
-    let deleted_sessions = session::delete_all_user_sessions(&state.db, id)
+    let deleted_sessions = session::delete_all_user_sessions(&state, id)
         .await
         .unwrap_or(0);
 

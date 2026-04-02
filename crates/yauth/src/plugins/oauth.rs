@@ -711,7 +711,7 @@ async fn handle_callback(
         };
 
         let (token, _session_id) =
-            session::create_session(&state.db, user.id, None, None, state.config.session_ttl)
+            session::create_session(state, user.id, None, None, state.config.session_ttl)
                 .await
                 .map_err(|e| {
                     tracing::error!("Failed to create session: {}", e);
@@ -877,18 +877,13 @@ async fn handle_callback(
     };
 
     // 8. Create session
-    let (token, _session_id) = session::create_session(
-        &state.db,
-        user_info.id,
-        None,
-        None,
-        state.config.session_ttl,
-    )
-    .await
-    .map_err(|e| {
-        tracing::error!("Failed to create session: {}", e);
-        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-    })?;
+    let (token, _session_id) =
+        session::create_session(state, user_info.id, None, None, state.config.session_ttl)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to create session: {}", e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?;
 
     Ok((
         user_info.id.to_string(),

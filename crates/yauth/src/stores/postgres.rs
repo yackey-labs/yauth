@@ -1,8 +1,13 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use super::{ChallengeStore, RateLimitResult, RateLimitStore};
-use crate::db::models::Challenge;
-use crate::db::schema::yauth_challenges;
+use chrono::Utc;
+use uuid::Uuid;
+
+use super::{
+    ChallengeStore, RateLimitResult, RateLimitStore, RevocationStore, SessionStore, StoredSession,
+};
+use crate::db::models::{Challenge, NewSession, Session};
+use crate::db::schema::{yauth_challenges, yauth_sessions};
 use crate::state::DbPool;
 
 // ---------------------------------------------------------------------------
@@ -21,6 +26,13 @@ const CREATE_CHALLENGES_TABLE: &str = r#"
 CREATE UNLOGGED TABLE IF NOT EXISTS yauth_challenges (
     key         TEXT PRIMARY KEY,
     value       JSONB NOT NULL,
+    expires_at  TIMESTAMPTZ NOT NULL
+)
+"#;
+
+const CREATE_REVOCATIONS_TABLE: &str = r#"
+CREATE UNLOGGED TABLE IF NOT EXISTS yauth_revocations (
+    key         TEXT PRIMARY KEY,
     expires_at  TIMESTAMPTZ NOT NULL
 )
 "#;
@@ -286,5 +298,256 @@ fn rate_limit_result(
             remaining: limit - count,
             retry_after: 0,
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PostgresSessionStore
+// ---------------------------------------------------------------------------
+
+pub struct PostgresSessionStore {
+    db: DbPool,
+}
+
+impl PostgresSessionStore {
+    pub fn new(db: DbPool) -> Self {
+        Self { db }
+    }
+}
+
+#[async_trait::async_trait]
+impl SessionStore for PostgresSessionStore {
+    async fn create(
+        &self,
+        user_id: Uuid,
+        token_hash: String,
+        ip_address: Option<String>,
+        user_agent: Option<String>,
+        ttl: std::time::Duration,
+    ) -> Result<Uuid, String> {
+        use diesel_async_crate::RunQueryDsl;
+
+        let session_id = Uuid::new_v4();
+        let now = Utc::now();
+        let expires_at = now + chrono::Duration::from_std(ttl).unwrap_or(chrono::Duration::days(7));
+
+        let new_session = NewSession {
+            id: session_id,
+            user_id,
+            token_hash,
+            ip_address,
+            user_agent,
+            expires_at: expires_at.naive_utc(),
+            created_at: now.naive_utc(),
+        };
+
+        let mut conn = self
+            .db
+            .get()
+            .await
+            .map_err(|e| format!("pool error: {e}"))?;
+
+        diesel::insert_into(yauth_sessions::table)
+            .values(&new_session)
+            .execute(&mut conn)
+            .await
+            .map_err(|e| format!("session create failed: {e}"))?;
+
+        Ok(session_id)
+    }
+
+    async fn validate(&self, token_hash: &str) -> Result<Option<StoredSession>, String> {
+        use diesel::prelude::*;
+        use diesel::result::OptionalExtension;
+        use diesel_async_crate::RunQueryDsl;
+
+        let mut conn = self
+            .db
+            .get()
+            .await
+            .map_err(|e| format!("pool error: {e}"))?;
+
+        let session: Option<Session> = yauth_sessions::table
+            .filter(yauth_sessions::token_hash.eq(token_hash))
+            .select(Session::as_select())
+            .get_result(&mut conn)
+            .await
+            .optional()
+            .map_err(|e| format!("session validate failed: {e}"))?;
+
+        match session {
+            Some(s) => {
+                let now = Utc::now().naive_utc();
+                if s.expires_at < now {
+                    // Expired — clean up the row
+                    diesel::delete(yauth_sessions::table.filter(yauth_sessions::id.eq(s.id)))
+                        .execute(&mut conn)
+                        .await
+                        .map_err(|e| format!("session cleanup failed: {e}"))?;
+                    return Ok(None);
+                }
+
+                Ok(Some(StoredSession {
+                    id: s.id,
+                    user_id: s.user_id,
+                    ip_address: s.ip_address,
+                    user_agent: s.user_agent,
+                    expires_at: s.expires_at,
+                    created_at: s.created_at,
+                }))
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn delete(&self, token_hash: &str) -> Result<bool, String> {
+        use diesel::prelude::*;
+        use diesel_async_crate::RunQueryDsl;
+
+        let mut conn = self
+            .db
+            .get()
+            .await
+            .map_err(|e| format!("pool error: {e}"))?;
+
+        let rows =
+            diesel::delete(yauth_sessions::table.filter(yauth_sessions::token_hash.eq(token_hash)))
+                .execute(&mut conn)
+                .await
+                .map_err(|e| format!("session delete failed: {e}"))?;
+
+        Ok(rows > 0)
+    }
+
+    async fn delete_all_for_user(&self, user_id: Uuid) -> Result<u64, String> {
+        use diesel::prelude::*;
+        use diesel_async_crate::RunQueryDsl;
+
+        let mut conn = self
+            .db
+            .get()
+            .await
+            .map_err(|e| format!("pool error: {e}"))?;
+
+        let rows =
+            diesel::delete(yauth_sessions::table.filter(yauth_sessions::user_id.eq(user_id)))
+                .execute(&mut conn)
+                .await
+                .map_err(|e| format!("session delete_all_for_user failed: {e}"))?;
+
+        Ok(rows as u64)
+    }
+
+    async fn delete_others_for_user(&self, user_id: Uuid, keep_hash: &str) -> Result<u64, String> {
+        use diesel::prelude::*;
+        use diesel_async_crate::RunQueryDsl;
+
+        let mut conn = self
+            .db
+            .get()
+            .await
+            .map_err(|e| format!("pool error: {e}"))?;
+
+        let rows = diesel::delete(
+            yauth_sessions::table
+                .filter(yauth_sessions::user_id.eq(user_id))
+                .filter(yauth_sessions::token_hash.ne(keep_hash)),
+        )
+        .execute(&mut conn)
+        .await
+        .map_err(|e| format!("session delete_others_for_user failed: {e}"))?;
+
+        Ok(rows as u64)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PostgresRevocationStore
+// ---------------------------------------------------------------------------
+
+pub struct PostgresRevocationStore {
+    db: DbPool,
+    initialized: AtomicBool,
+}
+
+impl PostgresRevocationStore {
+    pub fn new(db: DbPool) -> Self {
+        Self {
+            db,
+            initialized: AtomicBool::new(false),
+        }
+    }
+
+    async fn ensure_init(&self) -> Result<(), String> {
+        if !self.initialized.load(Ordering::Relaxed) {
+            ensure_table_diesel(&self.db, CREATE_REVOCATIONS_TABLE).await?;
+            self.initialized.store(true, Ordering::Relaxed);
+        }
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl RevocationStore for PostgresRevocationStore {
+    async fn revoke(&self, jti: &str, ttl: std::time::Duration) -> Result<(), String> {
+        self.ensure_init().await?;
+
+        let sql = r#"
+            INSERT INTO yauth_revocations (key, expires_at)
+            VALUES ($1, now() + make_interval(secs => $2))
+            ON CONFLICT (key) DO UPDATE
+                SET expires_at = EXCLUDED.expires_at
+        "#;
+
+        use diesel_async_crate::RunQueryDsl;
+        let mut conn = self
+            .db
+            .get()
+            .await
+            .map_err(|e| format!("pool error: {e}"))?;
+
+        diesel::sql_query(sql)
+            .bind::<diesel::sql_types::Text, _>(jti)
+            .bind::<diesel::sql_types::Float8, _>(ttl.as_secs_f64())
+            .execute(&mut conn)
+            .await
+            .map_err(|e| format!("revocation insert failed: {e}"))?;
+
+        Ok(())
+    }
+
+    async fn is_revoked(&self, jti: &str) -> Result<bool, String> {
+        self.ensure_init().await?;
+
+        let sql = r#"
+            SELECT 1 AS found
+            FROM yauth_revocations
+            WHERE key = $1 AND expires_at > now()
+        "#;
+
+        use diesel::result::OptionalExtension;
+        use diesel_async_crate::RunQueryDsl;
+
+        #[derive(diesel::QueryableByName)]
+        struct Found {
+            #[diesel(sql_type = diesel::sql_types::Int4)]
+            #[allow(dead_code)]
+            found: i32,
+        }
+
+        let mut conn = self
+            .db
+            .get()
+            .await
+            .map_err(|e| format!("pool error: {e}"))?;
+
+        let result: Option<Found> = diesel::sql_query(sql)
+            .bind::<diesel::sql_types::Text, _>(jti)
+            .get_result(&mut conn)
+            .await
+            .optional()
+            .map_err(|e| format!("revocation check failed: {e}"))?;
+
+        Ok(result.is_some())
     }
 }

@@ -3,7 +3,7 @@ use crate::config::YAuthConfig;
 use crate::db::models::NewAuditLog;
 use crate::db::schema::{yauth_audit_log, yauth_users};
 use crate::plugin::{AuthEvent, EventResponse, PluginContext, YAuthPlugin};
-use crate::stores::{ChallengeStore, RateLimitStore};
+use crate::stores::{ChallengeStore, RateLimitStore, RevocationStore, SessionStore};
 use diesel::QueryDsl;
 use diesel::result::OptionalExtension;
 use std::sync::Arc;
@@ -20,6 +20,8 @@ pub struct YAuthState {
     pub rate_limiter: RateLimiter,
     pub challenge_store: Arc<dyn ChallengeStore>,
     pub rate_limit_store: Arc<dyn RateLimitStore>,
+    pub session_store: Arc<dyn SessionStore>,
+    pub revocation_store: Arc<dyn RevocationStore>,
     pub email_service: Option<EmailService>,
     pub plugins: Arc<Vec<Box<dyn YAuthPlugin>>>,
     #[cfg(feature = "email-password")]

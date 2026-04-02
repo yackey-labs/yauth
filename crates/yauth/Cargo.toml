@@ -26,6 +26,7 @@ webhooks = ["dep:hmac"]
 oidc = ["bearer", "oauth2-server"]
 telemetry = ["dep:tracing-opentelemetry", "dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:opentelemetry-semantic-conventions"]
 openapi = ["dep:utoipa"]
+redis = ["dep:redis"]
 full = ["email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link", "admin", "status", "oauth2-server", "account-lockout", "webhooks", "oidc", "telemetry", "openapi"]
 
 [dependencies]
@@ -55,6 +56,9 @@ tracing-subscriber = { workspace = true }
 
 lettre = { workspace = true }
 reqwest = { workspace = true }
+
+# Feature-gated: Redis store backend
+redis = { version = "0.27", features = ["aio", "tokio-comp", "connection-manager"], optional = true }
 
 async-trait = { workspace = true }
 utoipa = { workspace = true, optional = true }

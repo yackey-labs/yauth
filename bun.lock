@@ -17,9 +17,9 @@
       "name": "yauth-solidjs-example",
       "dependencies": {
         "@solidjs/router": "^0.15.0",
-        "@yackey-labs/yauth-client": "0.2.5",
-        "@yackey-labs/yauth-shared": "0.2.5",
-        "@yackey-labs/yauth-ui-solidjs": "0.2.5",
+        "@yackey-labs/yauth-client": "0.3.0",
+        "@yackey-labs/yauth-shared": "0.3.0",
+        "@yackey-labs/yauth-ui-solidjs": "0.3.0",
         "solid-js": "^1.9.0",
       },
       "devDependencies": {
@@ -31,9 +31,9 @@
     "examples/vue": {
       "name": "yauth-vue-example",
       "dependencies": {
-        "@yackey-labs/yauth-client": "0.2.5",
-        "@yackey-labs/yauth-shared": "0.2.5",
-        "@yackey-labs/yauth-ui-vue": "0.2.5",
+        "@yackey-labs/yauth-client": "0.3.0",
+        "@yackey-labs/yauth-shared": "0.3.0",
+        "@yackey-labs/yauth-ui-vue": "0.3.0",
         "vue": "^3.5.0",
         "vue-router": "^4.5.0",
       },
@@ -46,9 +46,9 @@
     "examples/vue-redis": {
       "name": "yauth-vue-redis-example",
       "dependencies": {
-        "@yackey-labs/yauth-client": "0.2.5",
-        "@yackey-labs/yauth-shared": "0.2.5",
-        "@yackey-labs/yauth-ui-vue": "0.2.5",
+        "@yackey-labs/yauth-client": "0.3.0",
+        "@yackey-labs/yauth-shared": "0.3.0",
+        "@yackey-labs/yauth-ui-vue": "0.3.0",
         "vue": "^3.5.0",
         "vue-router": "^4.5.0",
       },
@@ -60,7 +60,7 @@
     },
     "packages/client": {
       "name": "@yackey-labs/yauth-client",
-      "version": "0.2.5",
+      "version": "0.3.1",
       "dependencies": {
         "@yackey-labs/yauth-shared": "0.2.5",
       },
@@ -70,14 +70,14 @@
     },
     "packages/shared": {
       "name": "@yackey-labs/yauth-shared",
-      "version": "0.2.5",
+      "version": "0.3.1",
       "devDependencies": {
         "typescript": "^5.7.2",
       },
     },
     "packages/ui-solidjs": {
       "name": "@yackey-labs/yauth-ui-solidjs",
-      "version": "0.2.5",
+      "version": "0.3.1",
       "dependencies": {
         "@simplewebauthn/browser": "^13.0.0",
         "@yackey-labs/yauth-client": "0.2.5",
@@ -92,7 +92,7 @@
     },
     "packages/ui-vue": {
       "name": "@yackey-labs/yauth-ui-vue",
-      "version": "0.2.5",
+      "version": "0.3.1",
       "dependencies": {
         "@simplewebauthn/browser": "^13.0.0",
         "@yackey-labs/yauth-client": "0.2.5",
@@ -115,7 +115,7 @@
     "pentest": {
       "name": "yauth-pentest",
       "dependencies": {
-        "@yackey-labs/yauth-client": "0.2.5",
+        "@yackey-labs/yauth-client": "0.3.0",
       },
       "devDependencies": {
         "@types/bun": "^1.3.10",
@@ -949,9 +949,29 @@
 
     "strip-literal/js-tokens": ["js-tokens@9.0.1", "", {}, "sha512-mxa9E9ITFOt0ban3j6L5MpjwegGz6lBQmM1IJkWeBZGcMxto50+eWdjC/52xDbS2vy0k7vIMK0Fe2wfL9OQSpQ=="],
 
+    "yauth-pentest/@yackey-labs/yauth-client": ["@yackey-labs/yauth-client@0.3.0", "", { "dependencies": { "@yackey-labs/yauth-shared": "0.3.0" } }, "sha512-PPkfeE+e/SkJRpr3JWlTIc4qi0+uwyA3J6q61L26wpf0N7356HyXtv+Iql9RgXccWEVE27psbQYbsmg7jZQNHw=="],
+
+    "yauth-solidjs-example/@yackey-labs/yauth-client": ["@yackey-labs/yauth-client@0.3.0", "", { "dependencies": { "@yackey-labs/yauth-shared": "0.3.0" } }, "sha512-PPkfeE+e/SkJRpr3JWlTIc4qi0+uwyA3J6q61L26wpf0N7356HyXtv+Iql9RgXccWEVE27psbQYbsmg7jZQNHw=="],
+
+    "yauth-solidjs-example/@yackey-labs/yauth-shared": ["@yackey-labs/yauth-shared@0.3.0", "", {}, "sha512-brbMuXq3EedFzPdUKd3eSdHx7tT8BGGgDZQildcGnYstURO79mvHLaXHJvsSRMo75BUnfiq3CfQGpq4Q2nNh3Q=="],
+
+    "yauth-solidjs-example/@yackey-labs/yauth-ui-solidjs": ["@yackey-labs/yauth-ui-solidjs@0.3.0", "", { "dependencies": { "@simplewebauthn/browser": "^13.0.0", "@yackey-labs/yauth-client": "0.3.0", "@yackey-labs/yauth-shared": "0.3.0", "solid-js": "^1.9.5" } }, "sha512-9GYXNIMsBFSNqzJyaroPfMfOM8deNXD+ZD4KYKIUXTbrjgURJHk9PulF/+msFDGWPJpx9gwKIuw69g+akhWzgQ=="],
+
     "yauth-solidjs-example/vite": ["vite@6.4.1", "", { "dependencies": { "esbuild": "^0.25.0", "fdir": "^6.4.4", "picomatch": "^4.0.2", "postcss": "^8.5.3", "rollup": "^4.34.9", "tinyglobby": "^0.2.13" }, "optionalDependencies": { "fsevents": "~2.3.3" }, "peerDependencies": { "@types/node": "^18.0.0 || ^20.0.0 || >=22.0.0", "jiti": ">=1.21.0", "less": "*", "lightningcss": "^1.21.0", "sass": "*", "sass-embedded": "*", "stylus": "*", "sugarss": "*", "terser": "^5.16.0", "tsx": "^4.8.1", "yaml": "^2.4.2" }, "optionalPeers": ["@types/node", "jiti", "less", "lightningcss", "sass", "sass-embedded", "stylus", "sugarss", "terser", "tsx", "yaml"], "bin": { "vite": "bin/vite.js" } }, "sha512-+Oxm7q9hDoLMyJOYfUYBuHQo+dkAloi33apOPP56pzj+vsdJDzr+j1NISE5pyaAuKL4A3UD34qd0lx5+kfKp2g=="],
 
+    "yauth-vue-example/@yackey-labs/yauth-client": ["@yackey-labs/yauth-client@0.3.0", "", { "dependencies": { "@yackey-labs/yauth-shared": "0.3.0" } }, "sha512-PPkfeE+e/SkJRpr3JWlTIc4qi0+uwyA3J6q61L26wpf0N7356HyXtv+Iql9RgXccWEVE27psbQYbsmg7jZQNHw=="],
+
+    "yauth-vue-example/@yackey-labs/yauth-shared": ["@yackey-labs/yauth-shared@0.3.0", "", {}, "sha512-brbMuXq3EedFzPdUKd3eSdHx7tT8BGGgDZQildcGnYstURO79mvHLaXHJvsSRMo75BUnfiq3CfQGpq4Q2nNh3Q=="],
+
+    "yauth-vue-example/@yackey-labs/yauth-ui-vue": ["@yackey-labs/yauth-ui-vue@0.3.0", "", { "dependencies": { "@simplewebauthn/browser": "^13.0.0", "@yackey-labs/yauth-client": "0.3.0", "@yackey-labs/yauth-shared": "0.3.0", "vue": "^3.5.0" } }, "sha512-IK0x4RJrvelNllJNm8NcgOXekxYF3BmtwLmzdrv7NL00X35dBtdYLf70N+DLUtn7TssqwVjDOaA5y3VxM5qtAw=="],
+
     "yauth-vue-example/vite": ["vite@6.4.1", "", { "dependencies": { "esbuild": "^0.25.0", "fdir": "^6.4.4", "picomatch": "^4.0.2", "postcss": "^8.5.3", "rollup": "^4.34.9", "tinyglobby": "^0.2.13" }, "optionalDependencies": { "fsevents": "~2.3.3" }, "peerDependencies": { "@types/node": "^18.0.0 || ^20.0.0 || >=22.0.0", "jiti": ">=1.21.0", "less": "*", "lightningcss": "^1.21.0", "sass": "*", "sass-embedded": "*", "stylus": "*", "sugarss": "*", "terser": "^5.16.0", "tsx": "^4.8.1", "yaml": "^2.4.2" }, "optionalPeers": ["@types/node", "jiti", "less", "lightningcss", "sass", "sass-embedded", "stylus", "sugarss", "terser", "tsx", "yaml"], "bin": { "vite": "bin/vite.js" } }, "sha512-+Oxm7q9hDoLMyJOYfUYBuHQo+dkAloi33apOPP56pzj+vsdJDzr+j1NISE5pyaAuKL4A3UD34qd0lx5+kfKp2g=="],
+
+    "yauth-vue-redis-example/@yackey-labs/yauth-client": ["@yackey-labs/yauth-client@0.3.0", "", { "dependencies": { "@yackey-labs/yauth-shared": "0.3.0" } }, "sha512-PPkfeE+e/SkJRpr3JWlTIc4qi0+uwyA3J6q61L26wpf0N7356HyXtv+Iql9RgXccWEVE27psbQYbsmg7jZQNHw=="],
+
+    "yauth-vue-redis-example/@yackey-labs/yauth-shared": ["@yackey-labs/yauth-shared@0.3.0", "", {}, "sha512-brbMuXq3EedFzPdUKd3eSdHx7tT8BGGgDZQildcGnYstURO79mvHLaXHJvsSRMo75BUnfiq3CfQGpq4Q2nNh3Q=="],
+
+    "yauth-vue-redis-example/@yackey-labs/yauth-ui-vue": ["@yackey-labs/yauth-ui-vue@0.3.0", "", { "dependencies": { "@simplewebauthn/browser": "^13.0.0", "@yackey-labs/yauth-client": "0.3.0", "@yackey-labs/yauth-shared": "0.3.0", "vue": "^3.5.0" } }, "sha512-IK0x4RJrvelNllJNm8NcgOXekxYF3BmtwLmzdrv7NL00X35dBtdYLf70N+DLUtn7TssqwVjDOaA5y3VxM5qtAw=="],
 
     "yauth-vue-redis-example/vite": ["vite@6.4.1", "", { "dependencies": { "esbuild": "^0.25.0", "fdir": "^6.4.4", "picomatch": "^4.0.2", "postcss": "^8.5.3", "rollup": "^4.34.9", "tinyglobby": "^0.2.13" }, "optionalDependencies": { "fsevents": "~2.3.3" }, "peerDependencies": { "@types/node": "^18.0.0 || ^20.0.0 || >=22.0.0", "jiti": ">=1.21.0", "less": "*", "lightningcss": "^1.21.0", "sass": "*", "sass-embedded": "*", "stylus": "*", "sugarss": "*", "terser": "^5.16.0", "tsx": "^4.8.1", "yaml": "^2.4.2" }, "optionalPeers": ["@types/node", "jiti", "less", "lightningcss", "sass", "sass-embedded", "stylus", "sugarss", "terser", "tsx", "yaml"], "bin": { "vite": "bin/vite.js" } }, "sha512-+Oxm7q9hDoLMyJOYfUYBuHQo+dkAloi33apOPP56pzj+vsdJDzr+j1NISE5pyaAuKL4A3UD34qd0lx5+kfKp2g=="],
 
@@ -966,6 +986,8 @@
     "editorconfig/minimatch/brace-expansion": ["brace-expansion@2.0.2", "", { "dependencies": { "balanced-match": "^1.0.0" } }, "sha512-Jt0vHyM+jmUBqojB7E1NIYadt0vI0Qxjxd2TErW94wDz+E2LAm5vKMXXwg6ZZBTHPuUlDgQHKXvjGBdfcF1ZDQ=="],
 
     "glob/minimatch/brace-expansion": ["brace-expansion@2.0.2", "", { "dependencies": { "balanced-match": "^1.0.0" } }, "sha512-Jt0vHyM+jmUBqojB7E1NIYadt0vI0Qxjxd2TErW94wDz+E2LAm5vKMXXwg6ZZBTHPuUlDgQHKXvjGBdfcF1ZDQ=="],
+
+    "yauth-pentest/@yackey-labs/yauth-client/@yackey-labs/yauth-shared": ["@yackey-labs/yauth-shared@0.3.0", "", {}, "sha512-brbMuXq3EedFzPdUKd3eSdHx7tT8BGGgDZQildcGnYstURO79mvHLaXHJvsSRMo75BUnfiq3CfQGpq4Q2nNh3Q=="],
 
     "yauth-solidjs-example/vite/esbuild": ["esbuild@0.25.12", "", { "optionalDependencies": { "@esbuild/aix-ppc64": "0.25.12", "@esbuild/android-arm": "0.25.12", "@esbuild/android-arm64": "0.25.12", "@esbuild/android-x64": "0.25.12", "@esbuild/darwin-arm64": "0.25.12", "@esbuild/darwin-x64": "0.25.12", "@esbuild/freebsd-arm64": "0.25.12", "@esbuild/freebsd-x64": "0.25.12", "@esbuild/linux-arm": "0.25.12", "@esbuild/linux-arm64": "0.25.12", "@esbuild/linux-ia32": "0.25.12", "@esbuild/linux-loong64": "0.25.12", "@esbuild/linux-mips64el": "0.25.12", "@esbuild/linux-ppc64": "0.25.12", "@esbuild/linux-riscv64": "0.25.12", "@esbuild/linux-s390x": "0.25.12", "@esbuild/linux-x64": "0.25.12", "@esbuild/netbsd-arm64": "0.25.12", "@esbuild/netbsd-x64": "0.25.12", "@esbuild/openbsd-arm64": "0.25.12", "@esbuild/openbsd-x64": "0.25.12", "@esbuild/openharmony-arm64": "0.25.12", "@esbuild/sunos-x64": "0.25.12", "@esbuild/win32-arm64": "0.25.12", "@esbuild/win32-ia32": "0.25.12", "@esbuild/win32-x64": "0.25.12" }, "bin": { "esbuild": "bin/esbuild" } }, "sha512-bbPBYYrtZbkt6Os6FiTLCTFxvq4tt3JKall1vRwshA3fdVztsLAatFaZobhkBC8/BrPetoa0oksYoKXoG4ryJg=="],
 

@@ -78,10 +78,13 @@ jobs:
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
-      - name: Run unit + integration + pentest tests
+      - name: Run unit tests
+        run: cargo test --workspace --features full --lib
+
+      - name: Run integration tests (serialized — shared DB)
         env:
           DATABASE_URL: postgres://yauth:yauth@127.0.0.1:5433/yauth_test
-        run: cargo test --workspace --features full
+        run: cargo test --workspace --features full --test diesel_integration --test pentest -- --test-threads=1
 
   codeql:
     name: CodeQL (${{ matrix.language }})

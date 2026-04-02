@@ -127,7 +127,8 @@ async fn main() {
     // -----------------------------------------------------------------------
     // 4. Build the YAuth instance with all plugins enabled
     // -----------------------------------------------------------------------
-    let auth = YAuthBuilder::new(
+    #[allow(unused_mut)]
+    let mut builder = YAuthBuilder::new(
         pool,
         yauth::config::YAuthConfig {
             base_url: base_url.clone(),
@@ -196,8 +197,23 @@ async fn main() {
         ..Default::default()
     })
     // Status endpoint
-    .with_status()
-    .build();
+    .with_status();
+
+    // Optional Redis store backend
+    #[cfg(feature = "redis")]
+    let builder = if let Ok(redis_url) = env::var("REDIS_URL") {
+        tracing::info!("Using Redis store backend: {}", redis_url);
+        let client = redis::Client::open(redis_url).expect("Invalid REDIS_URL");
+        let conn = client
+            .get_connection_manager()
+            .await
+            .expect("Failed to connect to Redis");
+        builder.with_redis(conn)
+    } else {
+        builder
+    };
+
+    let auth = builder.build();
 
     // -----------------------------------------------------------------------
     // 5. Build the Axum application

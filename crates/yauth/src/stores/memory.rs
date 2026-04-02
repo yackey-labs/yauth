@@ -1,9 +1,14 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::Mutex;
 
-use super::{ChallengeStore, RateLimitResult, RateLimitStore};
+use chrono::Utc;
+use tokio::sync::Mutex;
+use uuid::Uuid;
+
+use super::{
+    ChallengeStore, RateLimitResult, RateLimitStore, RevocationStore, SessionStore, StoredSession,
+};
 
 // --- MemoryChallengeStore ---
 
@@ -131,6 +136,142 @@ impl RateLimitStore for MemoryRateLimitStore {
                 remaining: max - entry.timestamps.len() as u32,
                 retry_after: 0,
             }
+        }
+    }
+}
+
+// --- MemorySessionStore ---
+
+pub struct MemorySessionStore {
+    entries: Arc<Mutex<HashMap<String, StoredSession>>>,
+}
+
+impl Default for MemorySessionStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MemorySessionStore {
+    pub fn new() -> Self {
+        Self {
+            entries: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl SessionStore for MemorySessionStore {
+    async fn create(
+        &self,
+        user_id: Uuid,
+        token_hash: String,
+        ip_address: Option<String>,
+        user_agent: Option<String>,
+        ttl: Duration,
+    ) -> Result<Uuid, String> {
+        let mut map = self.entries.lock().await;
+        // Cleanup expired entries if map is large
+        if map.len() > 1000 {
+            let now = Utc::now().naive_utc();
+            map.retain(|_, s| s.expires_at > now);
+        }
+        let id = Uuid::new_v4();
+        let now = Utc::now().naive_utc();
+        let expires_at = now + chrono::Duration::from_std(ttl).map_err(|e| e.to_string())?;
+        let session = StoredSession {
+            id,
+            user_id,
+            ip_address,
+            user_agent,
+            expires_at,
+            created_at: now,
+        };
+        map.insert(token_hash, session);
+        Ok(id)
+    }
+
+    async fn validate(&self, token_hash: &str) -> Result<Option<StoredSession>, String> {
+        let mut map = self.entries.lock().await;
+        let now = Utc::now().naive_utc();
+        match map.get(token_hash) {
+            Some(session) if session.expires_at > now => Ok(Some(session.clone())),
+            Some(_) => {
+                // Expired — remove it
+                map.remove(token_hash);
+                Ok(None)
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn delete(&self, token_hash: &str) -> Result<bool, String> {
+        let mut map = self.entries.lock().await;
+        Ok(map.remove(token_hash).is_some())
+    }
+
+    async fn delete_all_for_user(&self, user_id: Uuid) -> Result<u64, String> {
+        let mut map = self.entries.lock().await;
+        let before = map.len();
+        map.retain(|_, s| s.user_id != user_id);
+        Ok((before - map.len()) as u64)
+    }
+
+    async fn delete_others_for_user(&self, user_id: Uuid, keep_hash: &str) -> Result<u64, String> {
+        let mut map = self.entries.lock().await;
+        let before = map.len();
+        map.retain(|key, s| !(s.user_id == user_id && key != keep_hash));
+        Ok((before - map.len()) as u64)
+    }
+}
+
+// --- MemoryRevocationStore ---
+
+struct RevocationEntry {
+    expires_at: Instant,
+}
+
+pub struct MemoryRevocationStore {
+    entries: Arc<Mutex<HashMap<String, RevocationEntry>>>,
+}
+
+impl Default for MemoryRevocationStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MemoryRevocationStore {
+    pub fn new() -> Self {
+        Self {
+            entries: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl RevocationStore for MemoryRevocationStore {
+    async fn revoke(&self, jti: &str, ttl: Duration) -> Result<(), String> {
+        let mut map = self.entries.lock().await;
+        // Cleanup expired entries if map is large
+        if map.len() > 1000 {
+            let now = Instant::now();
+            map.retain(|_, e| e.expires_at > now);
+        }
+        map.insert(
+            jti.to_string(),
+            RevocationEntry {
+                expires_at: Instant::now() + ttl,
+            },
+        );
+        Ok(())
+    }
+
+    async fn is_revoked(&self, jti: &str) -> Result<bool, String> {
+        let map = self.entries.lock().await;
+        match map.get(jti) {
+            Some(entry) if entry.expires_at > Instant::now() => Ok(true),
+            _ => Ok(false),
         }
     }
 }

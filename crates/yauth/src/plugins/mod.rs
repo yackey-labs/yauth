@@ -170,7 +170,7 @@ async fn logout(
     jar: axum_extra::extract::cookie::CookieJar,
 ) -> impl axum::response::IntoResponse {
     if let Some(cookie) = jar.get(&state.config.session_cookie_name) {
-        let _ = crate::auth::session::delete_session(&state.db, cookie.value()).await;
+        let _ = crate::auth::session::delete_session(&state, cookie.value()).await;
     }
 
     state

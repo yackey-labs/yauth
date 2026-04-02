@@ -23,6 +23,7 @@ Every feature is behind a **feature flag** — enable only what you need.
 | `oidc` | OpenID Connect Provider — id_token issuance, OIDC discovery, JWKS, /userinfo | When downstream apps need OIDC-compliant SSO |
 | `telemetry` | OpenTelemetry tracing bridge | When you need distributed tracing |
 | `openapi` | utoipa OpenAPI spec generation for client codegen | When you need to generate or update the TypeScript client |
+| `redis` | Redis store backend for sessions, rate limits, challenges, revocation | Multi-replica deployments, high-traffic apps |
 | `full` | All of the above | Development/testing |
 
 `email-password` is enabled by default.
@@ -570,6 +571,45 @@ let config = YAuthConfig {
 };
 // Use create_pool() to get a pool with search_path configured
 let pool = yauth::create_pool(&database_url, &config)?;
+```
+
+### Redis Store Backend
+
+Enable the `redis` feature for Redis-backed sessions, rate limiting, challenges, and JTI revocation:
+
+```bash
+cargo add yauth --features email-password,redis
+```
+
+```rust
+let redis_client = redis::Client::open("redis://127.0.0.1:6379")?;
+let redis_conn = redis_client.get_connection_manager().await?;
+
+let yauth = YAuthBuilder::new(pool, config)
+    .with_redis(redis_conn)        // all ephemeral stores use Redis
+    .with_email_password(EmailPasswordConfig::default())
+    .build();
+```
+
+`.with_redis()` switches all ephemeral stores (sessions, rate limits, challenges, revocation) to Redis. Durable data (users, passwords, API keys) stays in Postgres.
+
+**When to use Redis:** multi-replica deployments (shared sessions), high-traffic apps (sub-millisecond session lookups), or when you need instant JWT revocation across all nodes.
+
+#### Advanced: Per-Store Overrides
+
+The store traits (`SessionStore`, `RateLimitStore`, `ChallengeStore`, `RevocationStore`) are public. You can mix backends or provide custom implementations:
+
+```rust
+use yauth::stores::{StoreBackend, memory::MemoryRateLimitStore};
+
+let yauth = YAuthBuilder::new(pool, config)
+    .with_redis(redis_conn)                    // default: Redis for everything
+    .with_store_backend(StoreBackend::Memory)   // override: use memory instead
+    .build();
+
+// Or implement a custom store:
+// struct MyCustomSessionStore { ... }
+// impl SessionStore for MyCustomSessionStore { ... }
 ```
 
 ## Database Schema

@@ -784,7 +784,7 @@ async fn verify_mfa(
     state.challenge_store.delete(&key).await.ok();
 
     let (token, _session_id) =
-        session::create_session(&state.db, user_id, None, None, state.config.session_ttl)
+        session::create_session(&state, user_id, None, None, state.config.session_ttl)
             .await
             .map_err(|e| {
                 tracing::error!("Failed to create session: {}", e);

@@ -207,9 +207,15 @@ async fn diesel_session_create_validate_delete() {
         .expect("insert dummy user");
     }
 
+    // Build state for session operations
+    let config = YAuthConfig::default();
+    let state = YAuthBuilder::new(db.pool.clone(), config)
+        .build()
+        .into_state();
+
     // --- Create session ---
     let (token, session_id) = yauth::auth::session::create_session(
-        &db.pool,
+        &state,
         user_id,
         Some("127.0.0.1".into()),
         Some("test-agent".into()),
@@ -220,12 +226,6 @@ async fn diesel_session_create_validate_delete() {
 
     assert!(!token.is_empty(), "token should be non-empty");
     assert_ne!(session_id, Uuid::nil(), "session_id should be non-nil");
-
-    // --- Validate session ---
-    let config = YAuthConfig::default();
-    let state = YAuthBuilder::new(db.pool.clone(), config)
-        .build()
-        .into_state();
 
     let user = yauth::auth::session::validate_session(
         &state,
@@ -242,7 +242,7 @@ async fn diesel_session_create_validate_delete() {
     assert_eq!(user.session_id, session_id);
 
     // --- Delete session ---
-    let deleted = yauth::auth::session::delete_session(&db.pool, &token)
+    let deleted = yauth::auth::session::delete_session(&state, &token)
         .await
         .expect("delete_session should succeed");
     assert!(deleted, "delete should report success");

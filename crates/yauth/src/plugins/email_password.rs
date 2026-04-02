@@ -438,7 +438,7 @@ async fn login(
                         state.config.session_ttl
                     };
                     let (token, _session_id) =
-                        session::create_session(&state.db, u.id, None, None, session_ttl)
+                        session::create_session(&state, u.id, None, None, session_ttl)
                             .await
                             .map_err(|e| {
                                 tracing::error!("Failed to create session: {}", e);
@@ -894,7 +894,7 @@ async fn reset_password(
         .await
         .ok();
 
-    session::delete_all_user_sessions(&state.db, reset_info.user_id)
+    session::delete_all_user_sessions(&state, reset_info.user_id)
         .await
         .ok();
 
@@ -1013,12 +1013,11 @@ async fn change_password(
         })?;
 
     if let Some(cookie) = jar.get(&state.config.session_cookie_name) {
-        let current_token_hash = crypto::hash_token(cookie.value());
-        session::delete_other_user_sessions(&state.db, user.id, &current_token_hash)
+        session::delete_other_user_sessions(&state, user.id, cookie.value())
             .await
             .ok();
     } else {
-        session::delete_all_user_sessions(&state.db, user.id)
+        session::delete_all_user_sessions(&state, user.id)
             .await
             .ok();
     }

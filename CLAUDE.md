@@ -68,6 +68,7 @@ bash pentest/pentest-yauth.sh        # Run full pentest suite (255+ cases, 0 FAI
 | `admin` | User management, ban/unban, impersonation | No |
 | `telemetry` | OpenTelemetry tracing bridge | No |
 | `openapi` | utoipa OpenAPI spec generation (for client codegen) | No |
+| `redis` | Redis store backend (sessions, rate limits, challenges, revocation) | No |
 | `full` | All of the above | No |
 
 Feature flags gate code in all three Rust crates (entity, migration, yauth) simultaneously.

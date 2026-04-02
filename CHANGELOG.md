@@ -1,3 +1,18 @@
+## 0.3.0 (2026-04-02)
+
+### Breaking Changes
+
+- replace axfetchum with utoipa + orval for client generation (#17)
+
+### Features
+
+- trait-based sessions + Redis store backend (#19)
+- OWASP A09/A10 coverage + security vulnerability fixes (#18)
+
+### Fixes
+
+- exclude test files from yauth-shared and yauth-client packages (#15)
+
 ## 0.2.5 (2026-03-24)
 
 ### Fixes

@@ -11,6 +11,16 @@ versioned_files = [
     { path = "packages/ui-solidjs/package.json", dependency = "@yackey-labs/yauth-shared" },
     { path = "packages/ui-vue/package.json", dependency = "@yackey-labs/yauth-client" },
     { path = "packages/ui-vue/package.json", dependency = "@yackey-labs/yauth-shared" },
+    { path = "examples/vue/package.json", dependency = "@yackey-labs/yauth-client" },
+    { path = "examples/vue/package.json", dependency = "@yackey-labs/yauth-shared" },
+    { path = "examples/vue/package.json", dependency = "@yackey-labs/yauth-ui-vue" },
+    { path = "examples/solidjs/package.json", dependency = "@yackey-labs/yauth-client" },
+    { path = "examples/solidjs/package.json", dependency = "@yackey-labs/yauth-shared" },
+    { path = "examples/solidjs/package.json", dependency = "@yackey-labs/yauth-ui-solidjs" },
+    { path = "examples/vue-redis/package.json", dependency = "@yackey-labs/yauth-client" },
+    { path = "examples/vue-redis/package.json", dependency = "@yackey-labs/yauth-shared" },
+    { path = "examples/vue-redis/package.json", dependency = "@yackey-labs/yauth-ui-vue" },
+    { path = "pentest/package.json", dependency = "@yackey-labs/yauth-client" },
 ]
 changelog = "CHANGELOG.md"
 

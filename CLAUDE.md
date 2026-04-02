@@ -134,15 +134,29 @@ This project uses `utoipa` (OpenAPI 3.1 spec generation) + `orval` (TypeScript c
 
 ## Versioning
 
-- **Semantic versioning** is automated via [knope](https://knope.tech) + GitHub CI
-- **NEVER manually edit version numbers** in `Cargo.toml`, `Cargo.lock`, or `package.json` — knope manages all of them from conventional commits
-- **NEVER run `knope release` locally** — releases are triggered exclusively by pushing to `main` via CI (`.github/workflows/release.yml`)
-- All Rust crates and npm packages share a **single unified version** managed by `knope.toml`
+Releases are fully automated via [knope](https://knope.tech) + GitHub CI. The only manual step is writing conventional commits — everything else happens automatically.
+
+### Happy path
+1. Write conventional commits (`feat:`, `fix:`, `feat!:`, etc.)
+2. PR is merged to `main`
+3. CI runs `.github/workflows/release.yml` which calls `knope release`
+4. knope bumps versions in `Cargo.toml`, `Cargo.lock`, all `package.json` files, and writes `CHANGELOG.md`
+5. knope commits `chore: prepare release N`, publishes to crates.io + npm, pushes the commit + tag, creates a GitHub release
+6. The `chore: prepare release` commit triggers CI again but is skipped by the `if: !startsWith(...)` guard
+
+### Rules
+- **NEVER manually edit version numbers** — knope manages `Cargo.toml`, `Cargo.lock`, and all `package.json` files
+- **NEVER run `knope release` locally** — use `knope release --dry-run` to preview
+- All Rust crates and npm packages share a **single unified version** via `knope.toml`
 - `feat:` → minor bump, `fix:` → patch bump, `feat!:` / `fix!:` / `BREAKING CHANGE:` → major bump
-- Pushing to `main` triggers: `knope release` → version bump + changelog + GitHub release + publish (Cargo + npm)
-- The `chore: prepare release` commit pushed by the release job is skipped by the `if: !startsWith(...)` guard
-- To preview what knope will do: `knope release --dry-run` (dry-run only, never run the real thing locally)
-- **Partial release recovery** — if CI publishes Rust crates but fails at npm (e.g., ENEEDAUTH), crates.io has version N but the `chore: prepare release N` commit was never pushed and no git tag exists. To recover: manually bump all version files to N, commit as `chore: prepare release N`, open a PR, merge it, then push `git tag vN <squash-sha> && git push origin vN`. Then open a `fix:` PR to trigger the next version.
+
+### Partial release recovery
+If CI publishes to crates.io/npm but fails before pushing the version commit and tag (e.g., "crate already exists" on a re-run):
+1. Manually bump all version files to N
+2. Commit as `chore: prepare release N`
+3. Open a PR, merge it
+4. Push the tag: `git tag vN <squash-sha> && git push origin vN`
+5. Open a `fix:` PR to trigger the next version
 
 ## Conventions
 

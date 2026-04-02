@@ -1,5 +1,8 @@
 use axum::{
-    Extension, Json, Router, extract::State, http::StatusCode, response::IntoResponse,
+    Extension, Json, Router,
+    extract::State,
+    http::{HeaderMap, StatusCode},
+    response::IntoResponse,
     routing::post,
 };
 use chrono::Utc;
@@ -516,6 +519,7 @@ async fn refresh_token(
 
 async fn revoke_token(
     State(state): State<YAuthState>,
+    headers: HeaderMap,
     Extension(auth_user): Extension<AuthUser>,
     Json(input): Json<RevokeRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
@@ -567,12 +571,53 @@ async fn revoke_token(
         }
     }
 
+    // Revoke the caller's access token JTI so it cannot be used for the
+    // remainder of its TTL.  We extract the JTI from the Authorization
+    // header that was used to authenticate this request.
+    if let Some(jti) = extract_jti_from_auth_header(&headers, &state) {
+        let ttl = state.bearer_config.access_token_ttl;
+        if let Err(e) = state.revocation_store.revoke(&jti, ttl).await {
+            tracing::warn!("Failed to revoke access token JTI: {}", e);
+        }
+    }
+
     info!(event = "yauth.bearer.revoked", user_id = %auth_user.id, "Refresh token revoked");
     state
         .write_audit_log(Some(auth_user.id), "bearer_token_revoked", None, None)
         .await;
 
     Ok(Json(serde_json::json!({ "success": true })))
+}
+
+// ---------------------------------------------------------------------------
+// JTI extraction helper
+// ---------------------------------------------------------------------------
+
+/// Extract the `jti` claim from the Bearer token in the Authorization header.
+/// Returns `None` if the header is absent, malformed, or the JWT cannot be decoded.
+fn extract_jti_from_auth_header(headers: &HeaderMap, state: &YAuthState) -> Option<String> {
+    let auth_header = headers.get("authorization")?;
+    let header_str = auth_header.to_str().ok()?;
+    let token = header_str.strip_prefix("Bearer ")?;
+
+    let config = &state.bearer_config;
+    let mut validation = Validation::new(Algorithm::HS256);
+    validation.validate_exp = true;
+
+    if let Some(ref expected_aud) = config.audience {
+        validation.set_audience(&[expected_aud]);
+    } else {
+        validation.validate_aud = false;
+    }
+
+    let token_data = decode::<Claims>(
+        token,
+        &DecodingKey::from_secret(config.jwt_secret.as_bytes()),
+        &validation,
+    )
+    .ok()?;
+
+    Some(token_data.claims.jti)
 }
 
 // ---------------------------------------------------------------------------
@@ -599,6 +644,17 @@ pub async fn validate_jwt(token: &str, state: &YAuthState) -> Result<AuthUser, S
     .map_err(|e| format!("JWT validation failed: {}", e))?;
 
     let claims = token_data.claims;
+
+    // Check JTI revocation before accepting the token
+    if state
+        .revocation_store
+        .is_revoked(&claims.jti)
+        .await
+        .unwrap_or(false)
+    {
+        return Err("Token has been revoked".to_string());
+    }
+
     let user_id: Uuid = claims
         .sub
         .parse()

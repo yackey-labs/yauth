@@ -30,7 +30,7 @@ impl TestDb {
             .as_ref()
     }
 
-    async fn try_new() -> Option<Self> {
+    pub async fn try_new() -> Option<Self> {
         if let Ok(url) = std::env::var("DATABASE_URL") {
             let manager = AsyncDieselConnectionManager::<AsyncPgConnection>::new(&url);
             let pool = DieselPool::builder(manager)

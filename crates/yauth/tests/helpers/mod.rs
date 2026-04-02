@@ -1,8 +1,10 @@
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use testcontainers::ImageExt;
 use testcontainers::runners::AsyncRunner;
 use testcontainers_modules::postgres::Postgres;
+use tokio::sync::OnceCell;
 use yauth::AsyncDieselConnectionManager;
 use yauth::AsyncPgConnection;
 use yauth::DieselPool;
@@ -15,21 +17,35 @@ pub struct TestDb {
     _container: Option<testcontainers::ContainerAsync<Postgres>>,
 }
 
+/// Shared testcontainer — started once, reused across all tests.
+/// Migrations run once at init. Tests use unique data to avoid conflicts.
+static SHARED_DB: OnceCell<Option<TestDb>> = OnceCell::const_new();
+
 impl TestDb {
-    pub async fn try_new() -> Option<Self> {
+    /// Get or create the shared test database. Returns None if no DB available.
+    pub async fn shared() -> Option<&'static TestDb> {
+        SHARED_DB
+            .get_or_init(|| async { Self::try_new().await })
+            .await
+            .as_ref()
+    }
+
+    async fn try_new() -> Option<Self> {
         if let Ok(url) = std::env::var("DATABASE_URL") {
             let manager = AsyncDieselConnectionManager::<AsyncPgConnection>::new(&url);
             let pool = DieselPool::builder(manager)
-                .max_size(4)
+                .max_size(8)
                 .build()
                 .expect("failed to build diesel deadpool");
 
             match pool.get().await {
                 Ok(_) => {
-                    return Some(Self {
+                    let db = Self {
                         pool,
                         _container: None,
-                    });
+                    };
+                    Self::init_schema(&db.pool).await;
+                    return Some(db);
                 }
                 Err(e) => {
                     eprintln!("DATABASE_URL set but cannot connect: {e}");
@@ -53,17 +69,19 @@ impl TestDb {
         let url = format!("postgres://postgres:postgres@127.0.0.1:{host_port}/postgres");
         let manager = AsyncDieselConnectionManager::<AsyncPgConnection>::new(&url);
         let pool = DieselPool::builder(manager)
-            .max_size(4)
+            .max_size(8)
             .build()
             .expect("failed to build diesel deadpool");
 
         for attempt in 1..=30 {
             match pool.get().await {
                 Ok(_) => {
-                    return Some(Self {
+                    let db = Self {
                         pool,
                         _container: Some(container),
-                    });
+                    };
+                    Self::init_schema(&db.pool).await;
+                    return Some(db);
                 }
                 Err(_) if attempt < 30 => {
                     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -75,6 +93,13 @@ impl TestDb {
             }
         }
         None
+    }
+
+    async fn init_schema(pool: &DbPool) {
+        drop_yauth_tables(pool).await;
+        yauth::migration::diesel_migrations::run_migrations(pool)
+            .await
+            .expect("failed to run migrations");
     }
 }
 

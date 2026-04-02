@@ -108,9 +108,17 @@ async fn diesel_session_create_validate_delete() {
 
     // Build state for session operations
     let config = YAuthConfig::default();
-    let state = YAuthBuilder::new(db.pool.clone(), config)
-        .build()
-        .into_state();
+    let mut builder = YAuthBuilder::new(db.pool.clone(), config);
+    #[cfg(feature = "bearer")]
+    {
+        builder = builder.with_bearer(yauth::config::BearerConfig {
+            jwt_secret: "test-secret".into(),
+            access_token_ttl: Duration::from_secs(900),
+            refresh_token_ttl: Duration::from_secs(86400),
+            audience: None,
+        });
+    }
+    let state = builder.build().into_state();
 
     // --- Create session ---
     let (token, session_id) = yauth::auth::session::create_session(
@@ -172,9 +180,17 @@ async fn diesel_pool_sharing() {
 
     // Build YAuth with the pool
     let config = YAuthConfig::default();
-    let state = YAuthBuilder::new(db.pool.clone(), config)
-        .build()
-        .into_state();
+    let mut builder = YAuthBuilder::new(db.pool.clone(), config);
+    #[cfg(feature = "bearer")]
+    {
+        builder = builder.with_bearer(yauth::config::BearerConfig {
+            jwt_secret: "test-secret".into(),
+            access_token_ttl: Duration::from_secs(900),
+            refresh_token_ttl: Duration::from_secs(86400),
+            audience: None,
+        });
+    }
+    let state = builder.build().into_state();
 
     // Use the pool directly for a raw query
     {

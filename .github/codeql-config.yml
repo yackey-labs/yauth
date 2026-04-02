@@ -1,0 +1,7 @@
+name: "yauth CodeQL config"
+
+paths-ignore:
+  - "**/tests/**"
+  - "**/pentest/**"
+  - "**/examples/**"
+  - "crates/yauth/src/auth/pentest.rs"

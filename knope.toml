@@ -34,16 +34,22 @@ name = "release"
 [[workflows.steps]]
 type = "PrepareRelease"
 
+# Regenerate OpenAPI spec + TS client (version field comes from Cargo.toml)
+[[workflows.steps]]
+type = "Command"
+command = "bun generate"
+shell = true
+
 # Reformat knope's 2-space JSON to match Biome tab convention
 [[workflows.steps]]
 type = "Command"
 command = "bun biome format --write packages/shared/package.json packages/client/package.json packages/ui-solidjs/package.json packages/ui-vue/package.json"
 shell = true
 
-# Stage the reformatted files (PrepareRelease staged the 2-space originals)
+# Stage the reformatted + regenerated files
 [[workflows.steps]]
 type = "Command"
-command = "git add packages/shared/package.json packages/client/package.json packages/ui-solidjs/package.json packages/ui-vue/package.json"
+command = "git add packages/shared/package.json packages/client/package.json packages/ui-solidjs/package.json packages/ui-vue/package.json openapi.json packages/client/src/generated.ts packages/client/src/generated.msw.ts"
 
 [[workflows.steps]]
 type = "Command"

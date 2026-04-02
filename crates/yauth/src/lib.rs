@@ -292,12 +292,23 @@ impl YAuthBuilder {
     }
 
     /// Use Redis for all ephemeral stores (sessions, rate limits, challenges, revocation).
-    /// Postgres remains the source of truth for durable data (users, passwords, etc.).
-    /// Use Redis for all ephemeral stores (sessions, rate limits, challenges, revocation).
-    /// Postgres remains the source of truth for durable data (users, passwords, etc.).
+    /// Keys are prefixed with `yauth:`. Postgres remains the source of truth for
+    /// durable data (users, passwords, etc.).
     #[cfg(feature = "redis")]
     pub fn with_redis(mut self, conn: ::redis::aio::ConnectionManager) -> Self {
-        self.store_backend = StoreBackend::Redis(Box::new(conn));
+        self.store_backend = StoreBackend::Redis(Box::new(conn), "yauth".into());
+        self
+    }
+
+    /// Use Redis with a custom key prefix. Useful when multiple apps share a Redis instance.
+    /// Example: `.with_redis_prefixed(conn, "freshstrings")` → keys like `freshstrings:session:{hash}`
+    #[cfg(feature = "redis")]
+    pub fn with_redis_prefixed(
+        mut self,
+        conn: ::redis::aio::ConnectionManager,
+        prefix: impl Into<String>,
+    ) -> Self {
+        self.store_backend = StoreBackend::Redis(Box::new(conn), prefix.into());
         self
     }
 
@@ -325,9 +336,9 @@ impl YAuthBuilder {
                 stores::postgres::PostgresChallengeStore::new(self.db.clone()),
             ),
             #[cfg(feature = "redis")]
-            StoreBackend::Redis(conn) => {
-                std::sync::Arc::new(stores::redis::RedisChallengeStore::new(*conn.clone()))
-            }
+            StoreBackend::Redis(conn, prefix) => std::sync::Arc::new(
+                stores::redis::RedisChallengeStore::new(*conn.clone()).with_prefix(prefix.clone()),
+            ),
         };
 
         // Build rate limit store
@@ -340,9 +351,9 @@ impl YAuthBuilder {
                 stores::postgres::PostgresRateLimitStore::new(self.db.clone()),
             ),
             #[cfg(feature = "redis")]
-            StoreBackend::Redis(conn) => {
-                std::sync::Arc::new(stores::redis::RedisRateLimitStore::new(*conn.clone()))
-            }
+            StoreBackend::Redis(conn, prefix) => std::sync::Arc::new(
+                stores::redis::RedisRateLimitStore::new(*conn.clone()).with_prefix(prefix.clone()),
+            ),
         };
 
         // Build session store
@@ -352,25 +363,26 @@ impl YAuthBuilder {
                 std::sync::Arc::new(stores::postgres::PostgresSessionStore::new(self.db.clone()))
             }
             #[cfg(feature = "redis")]
-            StoreBackend::Redis(conn) => {
-                std::sync::Arc::new(stores::redis::RedisSessionStore::new(*conn.clone()))
-            }
+            StoreBackend::Redis(conn, prefix) => std::sync::Arc::new(
+                stores::redis::RedisSessionStore::new(*conn.clone()).with_prefix(prefix.clone()),
+            ),
         };
 
         // Build revocation store
-        let revocation_store: std::sync::Arc<dyn stores::RevocationStore> =
-            match &self.store_backend {
-                StoreBackend::Memory => {
-                    std::sync::Arc::new(stores::memory::MemoryRevocationStore::new())
-                }
-                StoreBackend::Postgres => std::sync::Arc::new(
-                    stores::postgres::PostgresRevocationStore::new(self.db.clone()),
-                ),
-                #[cfg(feature = "redis")]
-                StoreBackend::Redis(conn) => {
-                    std::sync::Arc::new(stores::redis::RedisRevocationStore::new(*conn.clone()))
-                }
-            };
+        let revocation_store: std::sync::Arc<dyn stores::RevocationStore> = match &self
+            .store_backend
+        {
+            StoreBackend::Memory => {
+                std::sync::Arc::new(stores::memory::MemoryRevocationStore::new())
+            }
+            StoreBackend::Postgres => std::sync::Arc::new(
+                stores::postgres::PostgresRevocationStore::new(self.db.clone()),
+            ),
+            #[cfg(feature = "redis")]
+            StoreBackend::Redis(conn, prefix) => std::sync::Arc::new(
+                stores::redis::RedisRevocationStore::new(*conn.clone()).with_prefix(prefix.clone()),
+            ),
+        };
 
         // Build email service
         let email_service = self.config.smtp.as_ref().map(|smtp| {

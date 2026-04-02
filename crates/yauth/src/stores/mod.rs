@@ -12,7 +12,7 @@ pub enum StoreBackend {
     Memory,
     Postgres,
     #[cfg(feature = "redis")]
-    Redis(Box<::redis::aio::ConnectionManager>),
+    Redis(Box<::redis::aio::ConnectionManager>, String),
 }
 
 impl std::fmt::Debug for StoreBackend {
@@ -21,7 +21,7 @@ impl std::fmt::Debug for StoreBackend {
             Self::Memory => write!(f, "Memory"),
             Self::Postgres => write!(f, "Postgres"),
             #[cfg(feature = "redis")]
-            Self::Redis(_) => write!(f, "Redis"),
+            Self::Redis(_, prefix) => write!(f, "Redis(prefix={prefix})"),
         }
     }
 }

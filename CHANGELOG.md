@@ -1,3 +1,10 @@
+## 0.3.1 (2026-04-02)
+
+### Fixes
+
+- regenerate OpenAPI spec during knope release (#21)
+- remove examples from knope versioned_files (#22)
+
 ## 0.3.0 (2026-04-02)
 
 ### Breaking Changes

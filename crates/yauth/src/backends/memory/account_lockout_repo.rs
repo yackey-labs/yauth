@@ -95,6 +95,7 @@ impl AccountLockRepository for InMemoryAccountLockRepo {
         Box::pin(async move {
             let mut map = self.locks.write().unwrap();
             if let Some(lock) = map.get_mut(&id) {
+                lock.failed_count = 0;
                 lock.locked_until = None;
                 lock.locked_reason = None;
                 lock.updated_at = Utc::now().naive_utc();

@@ -91,24 +91,28 @@ impl RefreshTokenRepository for DieselRefreshTokenRepo {
 
     fn find_password_hash_by_user_id(&self, user_id: Uuid) -> RepoFuture<'_, Option<String>> {
         Box::pin(async move {
-            let mut conn = self
-                .pool
-                .get()
-                .await
-                .map_err(|e| RepoError::Internal(e.into()))?;
-            #[derive(diesel::QueryableByName)]
-            struct PasswordRow {
-                #[diesel(sql_type = diesel::sql_types::Text)]
-                password_hash: String,
-            }
-            let result =
-                diesel::sql_query("SELECT password_hash FROM yauth_passwords WHERE user_id = $1")
-                    .bind::<diesel::sql_types::Uuid, _>(user_id)
-                    .get_result::<PasswordRow>(&mut conn)
+            #[cfg(feature = "email-password")]
+            {
+                let mut conn = self
+                    .pool
+                    .get()
+                    .await
+                    .map_err(|e| RepoError::Internal(e.into()))?;
+                use super::schema::yauth_passwords;
+                let result = yauth_passwords::table
+                    .find(user_id)
+                    .select(yauth_passwords::password_hash)
+                    .first::<String>(&mut conn)
                     .await
                     .optional()
                     .map_err(|e| RepoError::Internal(e.into()))?;
-            Ok(result.map(|r| r.password_hash))
+                Ok(result)
+            }
+            #[cfg(not(feature = "email-password"))]
+            {
+                let _ = user_id;
+                Ok(None)
+            }
         })
     }
 }

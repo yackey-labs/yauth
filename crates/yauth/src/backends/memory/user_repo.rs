@@ -113,6 +113,13 @@ impl UserRepository for InMemoryUserRepo {
 
     fn delete(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
+            // Look up user email before removal (needed for magic link cascade)
+            #[cfg(feature = "magic-link")]
+            let user_email = {
+                let map = self.storage.users.read().unwrap();
+                map.get(&id).map(|u| u.email.to_lowercase())
+            };
+
             // Remove the user
             {
                 let mut map = self.storage.users.write().unwrap();
@@ -194,6 +201,13 @@ impl UserRepository for InMemoryUserRepo {
                     let mut map = self.storage.unlock_tokens.write().unwrap();
                     map.retain(|_, t| t.user_id != id);
                 }
+            }
+
+            // Cascade: magic links (keyed by email, not user_id)
+            #[cfg(feature = "magic-link")]
+            if let Some(ref email) = user_email {
+                let mut map = self.storage.magic_links.write().unwrap();
+                map.retain(|_, l| l.email.to_lowercase() != *email);
             }
 
             Ok(())
@@ -319,10 +333,16 @@ impl InMemoryAuditLogRepo {
 
 impl sealed::Sealed for InMemoryAuditLogRepo {}
 
+const AUDIT_LOG_MAX: usize = 10_000;
+const AUDIT_LOG_EVICT: usize = 1_000;
+
 impl AuditLogRepository for InMemoryAuditLogRepo {
     fn create(&self, input: domain::NewAuditLog) -> RepoFuture<'_, ()> {
         Box::pin(async move {
             let mut logs = self.logs.write().unwrap();
+            if logs.len() >= AUDIT_LOG_MAX {
+                logs.drain(..AUDIT_LOG_EVICT);
+            }
             logs.push(input);
             Ok(())
         })

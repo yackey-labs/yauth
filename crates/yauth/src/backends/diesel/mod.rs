@@ -5,7 +5,14 @@
 
 pub mod migrations;
 mod models;
-pub(crate) mod schema;
+pub mod schema;
+
+/// Re-exports of Diesel-annotated types used by the Postgres ephemeral store.
+pub(crate) mod store_types {
+    pub(crate) use super::models::{
+        DieselChallenge as Challenge, DieselNewSession as NewSession, DieselSession as Session,
+    };
+}
 
 #[cfg(feature = "account-lockout")]
 mod account_lockout_repo;

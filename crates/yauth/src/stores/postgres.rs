@@ -8,8 +8,8 @@ use uuid::Uuid;
 use super::{
     ChallengeStore, RateLimitResult, RateLimitStore, RevocationStore, SessionStore, StoredSession,
 };
-use crate::db::models::{Challenge, NewSession, Session};
-use crate::db::schema::{yauth_challenges, yauth_sessions};
+use crate::backends::diesel::schema::{yauth_challenges, yauth_sessions};
+use crate::backends::diesel::store_types::{Challenge, NewSession, Session};
 use crate::state::DbPool;
 
 // ---------------------------------------------------------------------------

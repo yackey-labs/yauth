@@ -1,8 +1,6 @@
 pub mod auth;
 pub mod backends;
 pub mod config;
-#[cfg(feature = "diesel-backend")]
-pub mod db;
 pub mod domain;
 pub mod error;
 pub mod middleware;

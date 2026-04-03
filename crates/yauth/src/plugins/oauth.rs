@@ -11,7 +11,6 @@ use oauth2::{
     RedirectUrl, Scope, TokenResponse, TokenUrl,
 };
 use serde::{Deserialize, Serialize};
-use tracing::{info, warn};
 use uuid::Uuid;
 
 use diesel::prelude::*;
@@ -368,7 +367,7 @@ async fn store_state(
         db_insert_oauth_state(&mut conn, state_token, provider, redirect_url, expires_at)
             .await
             .map_err(|e| {
-                tracing::error!("Failed to store OAuth state: {}", e);
+                crate::otel::record_error("oauth_state_store_failed", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
     }
@@ -399,14 +398,11 @@ async fn consume_state(
         let s = db_find_and_delete_oauth_state(&mut conn, state_token)
             .await
             .map_err(|e| {
-                tracing::error!("DB error looking up OAuth state: {}", e);
+                crate::otel::record_error("oauth_state_lookup_error", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?
             .ok_or_else(|| {
-                warn!(
-                    event = "yauth.oauth.state_invalid",
-                    "OAuth state parameter not found"
-                );
+                crate::otel::add_event("oauth_state_invalid", vec![]);
                 api_err(
                     StatusCode::BAD_REQUEST,
                     "Invalid or expired state parameter",
@@ -424,10 +420,7 @@ async fn consume_state(
     // Check expiry
     let now = chrono::Utc::now().fixed_offset();
     if stored.expires_at < now {
-        warn!(
-            event = "yauth.oauth.state_expired",
-            "OAuth state parameter expired"
-        );
+        crate::otel::add_event("oauth_state_expired", vec![]);
         return Err(api_err(
             StatusCode::BAD_REQUEST,
             "State parameter has expired. Please try again.",
@@ -436,11 +429,15 @@ async fn consume_state(
 
     // Check provider matches
     if stored.provider != expected_provider {
-        warn!(
-            event = "yauth.oauth.state_mismatch",
-            expected = %expected_provider,
-            actual = %stored.provider,
-            "OAuth state provider mismatch"
+        crate::otel::add_event(
+            "oauth_state_provider_mismatch",
+            #[cfg(feature = "telemetry")]
+            vec![
+                opentelemetry::KeyValue::new("expected_provider", expected_provider.to_string()),
+                opentelemetry::KeyValue::new("actual_provider", stored.provider.clone()),
+            ],
+            #[cfg(not(feature = "telemetry"))]
+            vec![],
         );
         return Err(api_err(StatusCode::BAD_REQUEST, "State parameter mismatch"));
     }
@@ -507,7 +504,7 @@ async fn fetch_userinfo(
         .send()
         .await
         .map_err(|e| {
-            tracing::error!("Failed to fetch userinfo: {}", e);
+            crate::otel::record_error("oauth_userinfo_fetch_failed", &e);
             api_err(
                 StatusCode::BAD_GATEWAY,
                 "Failed to fetch user info from provider",
@@ -517,11 +514,15 @@ async fn fetch_userinfo(
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        tracing::error!(
-            event = "yauth.oauth.userinfo_error",
-            status = %status,
-            body = %body,
-            "Provider userinfo endpoint returned error"
+        crate::otel::add_event(
+            "oauth_userinfo_error",
+            #[cfg(feature = "telemetry")]
+            vec![
+                opentelemetry::KeyValue::new("http.status", status.to_string()),
+                opentelemetry::KeyValue::new("response.body", body.clone()),
+            ],
+            #[cfg(not(feature = "telemetry"))]
+            vec![],
         );
         return Err(api_err(
             StatusCode::BAD_GATEWAY,
@@ -530,7 +531,7 @@ async fn fetch_userinfo(
     }
 
     resp.json::<serde_json::Value>().await.map_err(|e| {
-        tracing::error!("Failed to parse userinfo JSON: {}", e);
+        crate::otel::record_error("oauth_userinfo_parse_failed", &e);
         api_err(StatusCode::BAD_GATEWAY, "Invalid response from provider")
     })
 }
@@ -546,7 +547,7 @@ async fn fetch_primary_email(emails_url: &str, access_token: &str) -> Result<Str
         .send()
         .await
         .map_err(|e| {
-            tracing::warn!("Failed to fetch emails endpoint: {}", e);
+            crate::otel::record_error("oauth_emails_fetch_failed", &e);
             api_err(
                 StatusCode::BAD_GATEWAY,
                 "Failed to fetch emails from provider",
@@ -561,7 +562,7 @@ async fn fetch_primary_email(emails_url: &str, access_token: &str) -> Result<Str
     }
 
     let emails: Vec<serde_json::Value> = resp.json().await.map_err(|e| {
-        tracing::warn!("Failed to parse emails JSON: {}", e);
+        crate::otel::record_error("oauth_emails_parse_failed", &e);
         api_err(StatusCode::BAD_GATEWAY, "Invalid emails response")
     })?;
 
@@ -610,7 +611,7 @@ async fn handle_callback(
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| {
-            tracing::error!("Failed to build HTTP client: {}", e);
+            crate::otel::record_error("oauth_http_client_build_failed", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?;
 
@@ -619,8 +620,11 @@ async fn handle_callback(
         .request_async(&http_client)
         .await
         .map_err(|e| {
-            tracing::error!(event = "yauth.oauth.token_exchange_error", error = %e, "OAuth token exchange failed");
-            api_err(StatusCode::BAD_GATEWAY, "Failed to exchange authorization code")
+            crate::otel::record_error("oauth_token_exchange_failed", &e);
+            api_err(
+                StatusCode::BAD_GATEWAY,
+                "Failed to exchange authorization code",
+            )
         })?;
 
     let access_token = token_result.access_token().secret().clone();
@@ -657,7 +661,7 @@ async fn handle_callback(
             db_find_oauth_account_by_provider(&mut conn, provider, &userinfo.id)
                 .await
                 .map_err(|e| {
-                    tracing::error!("DB error: {}", e);
+                    crate::otel::record_error("db_error", &e);
                     api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
                 })?
         };
@@ -682,7 +686,7 @@ async fn handle_callback(
             )
             .await
             .map_err(|e| {
-                tracing::error!("Failed to link OAuth account: {}", e);
+                crate::otel::record_error("oauth_account_link_failed", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
         }
@@ -698,7 +702,7 @@ async fn handle_callback(
             let u = find_user_by_id(&mut conn, link_user_id)
                 .await
                 .map_err(|e| {
-                    tracing::error!("DB error: {}", e);
+                    crate::otel::record_error("db_error", &e);
                     api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
                 })?
                 .ok_or_else(|| api_err(StatusCode::INTERNAL_SERVER_ERROR, "User not found"))?;
@@ -714,11 +718,20 @@ async fn handle_callback(
             session::create_session(state, user.id, None, None, state.config.session_ttl)
                 .await
                 .map_err(|e| {
-                    tracing::error!("Failed to create session: {}", e);
+                    crate::otel::record_error("session_create_failed", &e);
                     api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
                 })?;
 
-        info!(event = "yauth.oauth.account_linked", user_id = %user.id, provider = %provider, "OAuth account linked");
+        crate::otel::add_event(
+            "oauth_account_linked",
+            #[cfg(feature = "telemetry")]
+            vec![
+                opentelemetry::KeyValue::new("user.id", user.id.to_string()),
+                opentelemetry::KeyValue::new("oauth.provider", provider.to_string()),
+            ],
+            #[cfg(not(feature = "telemetry"))]
+            vec![],
+        );
         state
             .write_audit_log(
                 Some(user.id),
@@ -743,7 +756,7 @@ async fn handle_callback(
         db_find_oauth_account_by_provider(&mut conn, provider, &userinfo.id)
             .await
             .map_err(|e| {
-                tracing::error!("DB error: {}", e);
+                crate::otel::record_error("db_error", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?
     };
@@ -767,7 +780,7 @@ async fn handle_callback(
             )
             .await
             .map_err(|e| {
-                tracing::error!("Failed to update OAuth tokens: {}", e);
+                crate::otel::record_error("oauth_tokens_update_failed", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
         }
@@ -776,12 +789,21 @@ async fn handle_callback(
             let u = find_user_by_id(&mut conn, account.user_id)
                 .await
                 .map_err(|e| {
-                    tracing::error!("DB error: {}", e);
+                    crate::otel::record_error("db_error", &e);
                     api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
                 })?
                 .ok_or_else(|| api_err(StatusCode::INTERNAL_SERVER_ERROR, "User not found"))?;
             if u.banned {
-                warn!(event = "yauth.oauth.login.banned", provider = %provider, user_id = %u.id, "OAuth login attempt by banned user");
+                crate::otel::add_event(
+                    "oauth_login_banned_user",
+                    #[cfg(feature = "telemetry")]
+                    vec![
+                        opentelemetry::KeyValue::new("oauth.provider", provider.to_string()),
+                        opentelemetry::KeyValue::new("user.id", u.id.to_string()),
+                    ],
+                    #[cfg(not(feature = "telemetry"))]
+                    vec![],
+                );
                 return Err(api_err(StatusCode::FORBIDDEN, "Account suspended"));
             }
             CallbackUserInfo {
@@ -792,7 +814,16 @@ async fn handle_callback(
             }
         };
 
-        info!(event = "yauth.oauth.login", user_id = %user.id, provider = %provider, "User logged in via OAuth");
+        crate::otel::add_event(
+            "oauth_login_succeeded",
+            #[cfg(feature = "telemetry")]
+            vec![
+                opentelemetry::KeyValue::new("user.id", user.id.to_string()),
+                opentelemetry::KeyValue::new("oauth.provider", provider.to_string()),
+            ],
+            #[cfg(not(feature = "telemetry"))]
+            vec![],
+        );
         state
             .write_audit_log(
                 Some(user.id),
@@ -806,14 +837,20 @@ async fn handle_callback(
     } else {
         // New user — create user and OAuth account
         let email = userinfo.email.ok_or_else(|| {
-            warn!(event = "yauth.oauth.no_email", provider = %provider, "OAuth provider did not return email");
+            crate::otel::add_event(
+            "oauth_no_email",
+            #[cfg(feature = "telemetry")]
+            vec![opentelemetry::KeyValue::new("oauth.provider", provider.to_string())],
+            #[cfg(not(feature = "telemetry"))]
+            vec![],
+        );
             api_err(StatusCode::BAD_REQUEST, "Email not provided by OAuth provider. Please ensure your account has a verified email.")
         })?;
         let email = email.trim().to_lowercase();
 
         let existing_user = {
             find_user_by_email(&mut conn, &email).await.map_err(|e| {
-                tracing::error!("DB error: {}", e);
+                crate::otel::record_error("db_error", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?
         };
@@ -822,7 +859,13 @@ async fn handle_callback(
             (existing.id, existing.display_name, existing.email_verified)
         } else {
             if !state.config.allow_signups {
-                warn!(event = "yauth.oauth.signup_disabled", email = %email, "OAuth signup attempted while signups are disabled");
+                crate::otel::add_event(
+                    "oauth_signup_disabled",
+                    #[cfg(feature = "telemetry")]
+                    vec![opentelemetry::KeyValue::new("user.email", email.clone())],
+                    #[cfg(not(feature = "telemetry"))]
+                    vec![],
+                );
                 return Err(api_err(
                     StatusCode::FORBIDDEN,
                     "Registration is currently disabled",
@@ -833,7 +876,7 @@ async fn handle_callback(
                 db_insert_user(&mut conn, user_id, &email, userinfo.name.as_deref())
                     .await
                     .map_err(|e| {
-                        tracing::error!("Failed to create user: {}", e);
+                        crate::otel::record_error("user_create_failed", &e);
                         api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
                     })?;
             }
@@ -853,12 +896,21 @@ async fn handle_callback(
             )
             .await
             .map_err(|e| {
-                tracing::error!("Failed to create OAuth account: {}", e);
+                crate::otel::record_error("oauth_account_create_failed", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
         }
 
-        info!(event = "yauth.oauth.register", user_id = %uid, provider = %provider, "New user registered via OAuth");
+        crate::otel::add_event(
+            "oauth_user_registered",
+            #[cfg(feature = "telemetry")]
+            vec![
+                opentelemetry::KeyValue::new("user.id", uid.to_string()),
+                opentelemetry::KeyValue::new("oauth.provider", provider.to_string()),
+            ],
+            #[cfg(not(feature = "telemetry"))]
+            vec![],
+        );
         state
             .write_audit_log(
                 Some(uid),
@@ -881,7 +933,7 @@ async fn handle_callback(
         session::create_session(state, user_info.id, None, None, state.config.session_ttl)
             .await
             .map_err(|e| {
-                tracing::error!("Failed to create session: {}", e);
+                crate::otel::record_error("session_create_failed", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
 
@@ -945,7 +997,16 @@ async fn authorize(
     }
     let (auth_url, _csrf_token) = auth_request.url();
 
-    info!(event = "yauth.oauth.authorize_start", provider = %provider, "OAuth authorization flow started");
+    crate::otel::add_event(
+        "oauth_authorize_start",
+        #[cfg(feature = "telemetry")]
+        vec![opentelemetry::KeyValue::new(
+            "oauth.provider",
+            provider.to_string(),
+        )],
+        #[cfg(not(feature = "telemetry"))]
+        vec![],
+    );
     Ok(Redirect::temporary(auth_url.as_str()))
 }
 
@@ -959,7 +1020,17 @@ async fn callback_get(
             .error_description
             .as_deref()
             .unwrap_or("Unknown error");
-        warn!(event = "yauth.oauth.callback_error", provider = %provider, error = %error, description = %desc, "OAuth provider returned error");
+        crate::otel::add_event(
+            "oauth_callback_error",
+            #[cfg(feature = "telemetry")]
+            vec![
+                opentelemetry::KeyValue::new("oauth.provider", provider.to_string()),
+                opentelemetry::KeyValue::new("error", error.clone()),
+                opentelemetry::KeyValue::new("error.description", desc.to_string()),
+            ],
+            #[cfg(not(feature = "telemetry"))]
+            vec![],
+        );
         return Err(api_err(
             StatusCode::BAD_REQUEST,
             &format!("OAuth error: {} - {}", error, desc),
@@ -1047,7 +1118,7 @@ async fn list_accounts(
         let accounts = db_find_oauth_accounts_by_user(&mut conn, user.id)
             .await
             .map_err(|e| {
-                tracing::error!("Failed to list OAuth accounts: {}", e);
+                crate::otel::record_error("oauth_accounts_list_failed", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
         use chrono::TimeZone;
@@ -1079,7 +1150,7 @@ async fn unlink_provider(
         let account = db_find_oauth_account_by_user_and_provider(&mut conn, user.id, &provider)
             .await
             .map_err(|e| {
-                tracing::error!("Failed to find OAuth account: {}", e);
+                crate::otel::record_error("oauth_account_find_failed", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?
             .ok_or_else(|| {
@@ -1091,12 +1162,21 @@ async fn unlink_provider(
         db_delete_oauth_account(&mut conn, account.id)
             .await
             .map_err(|e| {
-                tracing::error!("Failed to unlink OAuth account: {}", e);
+                crate::otel::record_error("oauth_account_unlink_failed", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
     }
 
-    info!(event = "yauth.oauth.account_unlinked", user_id = %user.id, provider = %provider, "OAuth account unlinked");
+    crate::otel::add_event(
+        "oauth_account_unlinked",
+        #[cfg(feature = "telemetry")]
+        vec![
+            opentelemetry::KeyValue::new("user.id", user.id.to_string()),
+            opentelemetry::KeyValue::new("oauth.provider", provider.to_string()),
+        ],
+        #[cfg(not(feature = "telemetry"))]
+        vec![],
+    );
     state
         .write_audit_log(
             Some(user.id),
@@ -1125,7 +1205,7 @@ async fn start_link(
         db_find_oauth_account_by_user_and_provider(&mut conn, user.id, &provider)
             .await
             .map_err(|e| {
-                tracing::error!("DB error: {}", e);
+                crate::otel::record_error("db_error", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?
     };
@@ -1155,7 +1235,16 @@ async fn start_link(
     }
     let (auth_url, _csrf_token) = auth_request.url();
 
-    info!(event = "yauth.oauth.link_start", user_id = %user.id, provider = %provider, "OAuth account linking flow started");
+    crate::otel::add_event(
+        "oauth_link_start",
+        #[cfg(feature = "telemetry")]
+        vec![
+            opentelemetry::KeyValue::new("user.id", user.id.to_string()),
+            opentelemetry::KeyValue::new("oauth.provider", provider.to_string()),
+        ],
+        #[cfg(not(feature = "telemetry"))]
+        vec![],
+    );
 
     Ok(Json(AuthorizeResponse {
         auth_url: auth_url.to_string(),

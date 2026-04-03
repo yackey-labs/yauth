@@ -9,7 +9,6 @@ use diesel::prelude::*;
 use diesel::result::OptionalExtension;
 use diesel_async_crate::RunQueryDsl;
 use serde::{Deserialize, Serialize};
-use tracing::{info, warn};
 use uuid::Uuid;
 use webauthn_rs::Webauthn;
 use webauthn_rs::prelude::*;
@@ -205,7 +204,7 @@ async fn register_begin(
     let user = find_user_by_id(&mut conn, auth_user.id)
         .await
         .map_err(|e| {
-            tracing::error!("DB error: {}", e);
+            crate::otel::record_error("db_error", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?
         .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "User not found"))?;
@@ -215,7 +214,7 @@ async fn register_begin(
         let existing_creds = db_find_credentials_by_user(&mut conn, user.id)
             .await
             .map_err(|e| {
-                tracing::error!("DB error: {}", e);
+                crate::otel::record_error("db_error", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
         existing_creds
@@ -239,13 +238,13 @@ async fn register_begin(
     let (ccr, reg_state) = webauthn
         .start_passkey_registration(user.id, &user.email, display_name, exclude_opt)
         .map_err(|e| {
-            tracing::error!("WebAuthn registration start error: {}", e);
+            crate::otel::record_error("passkey_registration_start_error", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "WebAuthn error")
         })?;
 
     // Store registration state in challenge store
     let reg_state_json = serde_json::to_value(&reg_state).map_err(|e| {
-        tracing::error!("Serialize error: {}", e);
+        crate::otel::record_error("serialize_error", &e);
         api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
     })?;
 
@@ -255,7 +254,7 @@ async fn register_begin(
         .set(&challenge_key, reg_state_json, CHALLENGE_TTL_SECS)
         .await
         .map_err(|e| {
-            tracing::error!("Challenge store error: {}", e);
+            crate::otel::record_error("passkey_challenge_store_error", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?;
 
@@ -266,7 +265,7 @@ async fn register_begin(
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct RegisterFinishRequest {
     pub name: String,
-    #[schema(value_type = Object)]
+    #[cfg_attr(feature = "openapi", schema(value_type = Object))]
     pub credential: RegisterPublicKeyCredential,
 }
 
@@ -282,7 +281,7 @@ async fn register_finish(
         .get(&challenge_key)
         .await
         .map_err(|e| {
-            tracing::error!("Challenge store error: {}", e);
+            crate::otel::record_error("passkey_challenge_store_error", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?
         .ok_or_else(|| api_err(StatusCode::BAD_REQUEST, "No pending registration"))?;
@@ -291,19 +290,19 @@ async fn register_finish(
     let _ = state.challenge_store.delete(&challenge_key).await;
 
     let reg_state: PasskeyRegistration = serde_json::from_value(reg_state_json).map_err(|e| {
-        tracing::error!("Deserialize error: {}", e);
+        crate::otel::record_error("deserialize_error", &e);
         api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
     })?;
 
     let passkey = webauthn
         .finish_passkey_registration(&input.credential, &reg_state)
         .map_err(|e| {
-            tracing::error!("WebAuthn registration finish error: {}", e);
+            crate::otel::record_error("passkey_registration_finish_error", &e);
             api_err(StatusCode::BAD_REQUEST, "Registration verification failed")
         })?;
 
     let credential_json = serde_json::to_value(&passkey).map_err(|e| {
-        tracing::error!("Serialize error: {}", e);
+        crate::otel::record_error("serialize_error", &e);
         api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
     })?;
 
@@ -324,12 +323,21 @@ async fn register_finish(
         )
         .await
         .map_err(|e| {
-            tracing::error!("Failed to save credential: {}", e);
+            crate::otel::record_error("passkey_credential_save_failed", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?;
     }
 
-    info!(event = "yauth.passkey.registered", user_id = %auth_user.id, "Passkey registered");
+    crate::otel::add_event(
+        "passkey_registered",
+        #[cfg(feature = "telemetry")]
+        vec![opentelemetry::KeyValue::new(
+            "user.id",
+            auth_user.id.to_string(),
+        )],
+        #[cfg(not(feature = "telemetry"))]
+        vec![],
+    );
 
     state
         .write_audit_log(
@@ -380,7 +388,13 @@ async fn login_begin(
             .check(&format!("passkey_login:{}", email))
             .await
         {
-            warn!(event = "yauth.passkey.login.rate_limited", email = %email, "Passkey login rate limited");
+            crate::otel::add_event(
+                "passkey_login_rate_limited",
+                #[cfg(feature = "telemetry")]
+                vec![opentelemetry::KeyValue::new("user.email", email.clone())],
+                #[cfg(not(feature = "telemetry"))]
+                vec![],
+            );
             return Err(api_err(StatusCode::TOO_MANY_REQUESTS, "Too many requests"));
         }
 
@@ -388,7 +402,7 @@ async fn login_begin(
             find_user_by_email(&mut conn, &email)
                 .await
                 .map_err(|e| {
-                    tracing::error!("DB error: {}", e);
+                    crate::otel::record_error("db_error", &e);
                     api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
                 })?
                 .ok_or_else(|| {
@@ -403,7 +417,7 @@ async fn login_begin(
             db_find_credentials_by_user(&mut conn, user.id)
                 .await
                 .map_err(|e| {
-                    tracing::error!("DB error: {}", e);
+                    crate::otel::record_error("db_error", &e);
                     api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
                 })?
         };
@@ -430,12 +444,12 @@ async fn login_begin(
         let (rcr, auth_state) = webauthn
             .start_passkey_authentication(&passkeys)
             .map_err(|e| {
-                tracing::error!("WebAuthn auth start error: {}", e);
+                crate::otel::record_error("passkey_auth_start_error", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "WebAuthn error")
             })?;
 
         let auth_state_json = serde_json::to_value(&auth_state).map_err(|e| {
-            tracing::error!("Serialize error: {}", e);
+            crate::otel::record_error("serialize_error", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?;
 
@@ -449,20 +463,17 @@ async fn login_begin(
     } else {
         // --- Discoverable (usernameless) flow ---
         if !state.rate_limiter.check("passkey_login:discoverable").await {
-            warn!(
-                event = "yauth.passkey.login.rate_limited",
-                "Discoverable passkey login rate limited"
-            );
+            crate::otel::add_event("passkey_discoverable_login_rate_limited", vec![]);
             return Err(api_err(StatusCode::TOO_MANY_REQUESTS, "Too many requests"));
         }
 
         let (rcr, auth_state) = webauthn.start_discoverable_authentication().map_err(|e| {
-            tracing::error!("WebAuthn discoverable auth start error: {}", e);
+            crate::otel::record_error("passkey_discoverable_auth_start_error", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "WebAuthn error")
         })?;
 
         let auth_state_json = serde_json::to_value(&auth_state).map_err(|e| {
-            tracing::error!("Serialize error: {}", e);
+            crate::otel::record_error("serialize_error", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?;
 
@@ -480,7 +491,7 @@ async fn login_begin(
         .set(&challenge_key, challenge_data, CHALLENGE_TTL_SECS)
         .await
         .map_err(|e| {
-            tracing::error!("Challenge store error: {}", e);
+            crate::otel::record_error("passkey_challenge_store_error", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?;
 
@@ -494,7 +505,7 @@ async fn login_begin(
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct PasskeyLoginFinishRequest {
     pub challenge_id: Uuid,
-    #[schema(value_type = Object)]
+    #[cfg_attr(feature = "openapi", schema(value_type = Object))]
     pub credential: PublicKeyCredential,
 }
 
@@ -509,7 +520,7 @@ async fn login_finish(
         .get(&challenge_key)
         .await
         .map_err(|e| {
-            tracing::error!("Challenge store error: {}", e);
+            crate::otel::record_error("passkey_challenge_store_error", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?
         .ok_or_else(|| api_err(StatusCode::BAD_REQUEST, "No pending authentication"))?;
@@ -537,7 +548,7 @@ async fn login_finish(
         // --- Discoverable flow ---
         let auth_state: DiscoverableAuthentication = serde_json::from_value(auth_state_json)
             .map_err(|e| {
-                tracing::error!("Deserialize error: {}", e);
+                crate::otel::record_error("deserialize_error", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
 
@@ -545,7 +556,7 @@ async fn login_finish(
         let (uid, _cred_id) = webauthn
             .identify_discoverable_authentication(&input.credential)
             .map_err(|e| {
-                tracing::error!("WebAuthn identify error: {}", e);
+                crate::otel::record_error("passkey_identify_error", &e);
                 api_err(StatusCode::UNAUTHORIZED, "Authentication failed")
             })?;
 
@@ -553,7 +564,7 @@ async fn login_finish(
         let creds = db_find_credentials_by_user(&mut conn, uid)
             .await
             .map_err(|e| {
-                tracing::error!("DB error: {}", e);
+                crate::otel::record_error("db_error", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
         if creds.is_empty() {
@@ -571,7 +582,7 @@ async fn login_finish(
         let _auth_result = webauthn
             .finish_discoverable_authentication(&input.credential, auth_state, &discoverable_keys)
             .map_err(|e| {
-                tracing::error!("WebAuthn discoverable auth finish error: {}", e);
+                crate::otel::record_error("passkey_discoverable_auth_finish_error", &e);
                 api_err(StatusCode::UNAUTHORIZED, "Authentication failed")
             })?;
 
@@ -588,14 +599,14 @@ async fn login_finish(
 
         let auth_state: PasskeyAuthentication =
             serde_json::from_value(auth_state_json).map_err(|e| {
-                tracing::error!("Deserialize error: {}", e);
+                crate::otel::record_error("deserialize_error", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
 
         let _auth_result = webauthn
             .finish_passkey_authentication(&input.credential, &auth_state)
             .map_err(|e| {
-                tracing::error!("WebAuthn auth finish error: {}", e);
+                crate::otel::record_error("passkey_auth_finish_error", &e);
                 api_err(StatusCode::UNAUTHORIZED, "Authentication failed")
             })?;
 
@@ -609,19 +620,28 @@ async fn login_finish(
         session::create_session(&state, user_id, None, None, state.config.session_ttl)
             .await
             .map_err(|e| {
-                tracing::error!("Failed to create session: {}", e);
+                crate::otel::record_error("session_create_failed", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
 
     let user = find_user_by_id(&mut conn, user_id)
         .await
         .map_err(|e| {
-            tracing::error!("DB error: {}", e);
+            crate::otel::record_error("db_error", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?
         .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "User not found"))?;
 
-    info!(event = "yauth.passkey.login", user_id = %user.id, email = %user.email, "Passkey login successful");
+    crate::otel::add_event(
+        "passkey_login_succeeded",
+        #[cfg(feature = "telemetry")]
+        vec![
+            opentelemetry::KeyValue::new("user.id", user.id.to_string()),
+            opentelemetry::KeyValue::new("user.email", user.email.clone()),
+        ],
+        #[cfg(not(feature = "telemetry"))]
+        vec![],
+    );
 
     state
         .write_audit_log(
@@ -678,7 +698,7 @@ async fn list_passkeys(
         let creds = db_find_credentials_by_user(&mut conn, auth_user.id)
             .await
             .map_err(|e| {
-                tracing::error!("DB error: {}", e);
+                crate::otel::record_error("db_error", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
         creds
@@ -714,7 +734,7 @@ async fn delete_passkey(
         let cred = db_find_credential_by_id_and_user(&mut conn, id, auth_user.id)
             .await
             .map_err(|e| {
-                tracing::error!("DB error: {}", e);
+                crate::otel::record_error("db_error", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?
             .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "Passkey not found"))?;
@@ -722,12 +742,21 @@ async fn delete_passkey(
         db_delete_credential(&mut conn, cred.id)
             .await
             .map_err(|e| {
-                tracing::error!("Failed to delete passkey: {}", e);
+                crate::otel::record_error("passkey_delete_failed", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
     }
 
-    info!(event = "yauth.passkey.deleted", user_id = %auth_user.id, passkey_id = %id, "Passkey deleted");
+    crate::otel::add_event(
+        "passkey_deleted",
+        #[cfg(feature = "telemetry")]
+        vec![
+            opentelemetry::KeyValue::new("user.id", auth_user.id.to_string()),
+            opentelemetry::KeyValue::new("passkey.id", id.to_string()),
+        ],
+        #[cfg(not(feature = "telemetry"))]
+        vec![],
+    );
 
     state
         .write_audit_log(

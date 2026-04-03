@@ -36,11 +36,10 @@ pub enum AuthMethod {
 
 /// Record authenticated user context on the current (SERVER) span.
 fn record_auth_user_on_span(user: &AuthUser) {
-    let span = tracing::Span::current();
-    span.record("user.id", tracing::field::display(&user.id));
-    span.record("user.email", user.email.as_str());
-    span.record("user.roles", user.role.as_str());
-    span.record(
+    crate::otel::set_attribute("user.id", user.id.to_string());
+    crate::otel::set_attribute("user.email", user.email.clone());
+    crate::otel::set_attribute("user.roles", user.role.clone());
+    crate::otel::set_attribute(
         "yauth.auth_method",
         match &user.auth_method {
             AuthMethod::Session => "session",
@@ -100,13 +99,13 @@ pub async fn auth_middleware(
                         return next.run(req).await;
                     }
                     Err(e) => {
-                        tracing::error!("User lookup failed: {}", e);
+                        crate::otel::record_error("user_lookup_failed", &e);
                     }
                 }
             }
             Ok(None) => {}
             Err(e) => {
-                tracing::error!("Session validation error: {}", e);
+                crate::otel::record_error("session_validation_error", &e);
             }
         }
     }

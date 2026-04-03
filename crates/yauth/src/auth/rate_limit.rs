@@ -42,7 +42,7 @@ impl RateLimiter {
             entry.push(now);
         } else {
             // Record rate limiting on the parent SERVER span
-            tracing::Span::current().record("yauth.rate_limited", true);
+            crate::otel::set_attribute("yauth.rate_limited", true);
         }
         allowed
     }

@@ -7,6 +7,8 @@ pub mod plugin;
 pub mod state;
 pub mod stores;
 
+pub(crate) mod otel;
+
 pub mod plugins;
 #[cfg(feature = "openapi")]
 pub mod routes_meta;

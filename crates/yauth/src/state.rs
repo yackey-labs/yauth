@@ -83,7 +83,7 @@ impl YAuthState {
         let mut conn = match self.db.get().await {
             Ok(c) => c,
             Err(e) => {
-                tracing::error!("Failed to get connection for audit log: {}", e);
+                crate::otel::record_error("audit_log_connection_failed", &e);
                 return;
             }
         };
@@ -101,7 +101,7 @@ impl YAuthState {
             .execute(&mut conn)
             .await;
         if let Err(e) = result {
-            tracing::error!("Failed to write audit log: {}", e);
+            crate::otel::record_error("audit_log_write_failed", &e);
         }
     }
 }

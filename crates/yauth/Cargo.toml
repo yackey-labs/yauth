@@ -24,7 +24,7 @@ oauth2-server = ["dep:url", "dep:base64", "dep:serde_urlencoded"]
 account-lockout = []
 webhooks = ["dep:hmac", "dep:url"]
 oidc = ["bearer", "oauth2-server"]
-telemetry = ["dep:tracing-opentelemetry", "dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:opentelemetry-semantic-conventions"]
+telemetry = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:opentelemetry-semantic-conventions", "dep:opentelemetry-http"]
 openapi = ["dep:utoipa"]
 redis = ["dep:redis"]
 full = ["email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link", "admin", "status", "oauth2-server", "account-lockout", "webhooks", "oidc", "telemetry", "openapi"]
@@ -51,9 +51,6 @@ sha2 = "0.10"
 uuid = { workspace = true }
 chrono = { workspace = true }
 
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-
 lettre = { workspace = true }
 reqwest = { workspace = true }
 
@@ -78,13 +75,16 @@ serde_urlencoded = { version = "0.7", optional = true }
 # Feature-gated: Webhooks
 hmac = { version = "0.12", optional = true }
 
-tracing-opentelemetry = { workspace = true, optional = true }
 opentelemetry = { workspace = true, optional = true }
 opentelemetry_sdk = { workspace = true, optional = true }
 opentelemetry-otlp = { workspace = true, optional = true }
 opentelemetry-semantic-conventions = { workspace = true, optional = true }
+opentelemetry-http = { workspace = true, optional = true }
+
+log = "0.4"
 
 [dev-dependencies]
+env_logger = "0.11"
 totp-rs = { workspace = true }
 uuid = { workspace = true }
 base64 = "0.22"

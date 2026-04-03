@@ -1,7 +1,6 @@
 use lettre::message::header::ContentType;
 use lettre::transport::smtp::client::Tls;
 use lettre::{Message, SmtpTransport, Transport};
-use tracing::info;
 
 #[derive(Clone)]
 pub struct EmailService {
@@ -77,10 +76,12 @@ impl EmailService {
 
         self.send(to, "Verify your email address", body)?;
 
-        info!(
-            event = "yauth.email.verification_sent",
-            to = to,
-            "Verification email sent"
+        crate::otel::add_event(
+            "verification_email_sent",
+            #[cfg(feature = "telemetry")]
+            vec![opentelemetry::KeyValue::new("email.to", to.to_string())],
+            #[cfg(not(feature = "telemetry"))]
+            vec![],
         );
         Ok(())
     }
@@ -114,10 +115,12 @@ impl EmailService {
 
         self.send(to, "Sign in to your account", body)?;
 
-        info!(
-            event = "yauth.email.magic_link_sent",
-            to = to,
-            "Magic link email sent"
+        crate::otel::add_event(
+            "magic_link_email_sent",
+            #[cfg(feature = "telemetry")]
+            vec![opentelemetry::KeyValue::new("email.to", to.to_string())],
+            #[cfg(not(feature = "telemetry"))]
+            vec![],
         );
         Ok(())
     }
@@ -151,10 +154,12 @@ impl EmailService {
 
         self.send(to, "Reset your password", body)?;
 
-        info!(
-            event = "yauth.email.password_reset_sent",
-            to = to,
-            "Password reset email sent"
+        crate::otel::add_event(
+            "password_reset_email_sent",
+            #[cfg(feature = "telemetry")]
+            vec![opentelemetry::KeyValue::new("email.to", to.to_string())],
+            #[cfg(not(feature = "telemetry"))]
+            vec![],
         );
         Ok(())
     }

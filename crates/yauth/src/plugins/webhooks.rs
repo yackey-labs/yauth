@@ -13,7 +13,6 @@ use diesel_async_crate::RunQueryDsl;
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
-use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::config::WebhookConfig;
@@ -209,7 +208,7 @@ impl YAuthPlugin for WebhookPlugin {
             if let Err(e) =
                 dispatch_webhooks_diesel(db, event_clone, max_retries, retry_delay, timeout).await
             {
-                error!("Webhook dispatch error: {}", e);
+                crate::otel::record_error("webhook_dispatch_error", &e);
             }
         });
 
@@ -278,10 +277,15 @@ async fn dispatch_webhooks_diesel(
 
         // Defense in depth: skip delivery if URL fails SSRF check (may pre-date validation)
         if !is_ssrf_safe(&webhook.url) {
-            warn!(
-                webhook_id = %webhook.id,
-                url = %webhook.url,
-                "Skipping webhook delivery: URL points to internal or private network"
+            crate::otel::add_event(
+                "webhook_skipped_private_url",
+                #[cfg(feature = "telemetry")]
+                vec![
+                    opentelemetry::KeyValue::new("webhook.id", webhook.id.to_string()),
+                    opentelemetry::KeyValue::new("webhook.url", webhook.url.clone()),
+                ],
+                #[cfg(not(feature = "telemetry"))]
+                vec![],
             );
             continue;
         }
@@ -333,15 +337,20 @@ async fn dispatch_webhooks_diesel(
                         )
                         .await
                         {
-                            error!("Failed to record webhook delivery: {}", e);
+                            crate::otel::record_error("webhook_delivery_record_failed", &e);
                         }
                         break;
                     } else if (500..600).contains(&(status as u16)) && attempt <= max_retries {
-                        warn!(
-                            webhook_id = %webhook.id,
-                            status = status,
-                            attempt = attempt,
-                            "Webhook delivery got 5xx, retrying"
+                        crate::otel::add_event(
+                            "webhook_delivery_5xx_retry",
+                            #[cfg(feature = "telemetry")]
+                            vec![
+                                opentelemetry::KeyValue::new("webhook.id", webhook.id.to_string()),
+                                opentelemetry::KeyValue::new("http.status", status.to_string()),
+                                opentelemetry::KeyValue::new("attempt", attempt as i64),
+                            ],
+                            #[cfg(not(feature = "telemetry"))]
+                            vec![],
                         );
                         tokio::time::sleep(retry_delay).await;
                         continue;
@@ -352,11 +361,16 @@ async fn dispatch_webhooks_diesel(
                 Err(e) => {
                     last_body = Some(e.to_string());
                     if attempt <= max_retries {
-                        warn!(
-                            webhook_id = %webhook.id,
-                            error = %e,
-                            attempt = attempt,
-                            "Webhook delivery failed, retrying"
+                        crate::otel::add_event(
+                            "webhook_delivery_failed_retry",
+                            #[cfg(feature = "telemetry")]
+                            vec![
+                                opentelemetry::KeyValue::new("webhook.id", webhook.id.to_string()),
+                                opentelemetry::KeyValue::new("error.message", e.to_string()),
+                                opentelemetry::KeyValue::new("attempt", attempt as i64),
+                            ],
+                            #[cfg(not(feature = "telemetry"))]
+                            vec![],
                         );
                         tokio::time::sleep(retry_delay).await;
                     }
@@ -380,7 +394,7 @@ async fn dispatch_webhooks_diesel(
             )
             .await
             {
-                error!("Failed to record webhook delivery: {}", e);
+                crate::otel::record_error("webhook_delivery_record_failed", &e);
             }
         }
     }
@@ -594,15 +608,19 @@ async fn create_webhook(
         db_insert_webhook(&mut conn, id, &input.url, &secret, &events_json, now)
             .await
             .map_err(|e| {
-                error!("DB error creating webhook: {}", e);
+                crate::otel::record_error("webhook_create_db_error", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
 
-        info!(
-            event = "yauth.webhook.created",
-            admin_id = %admin.id,
-            webhook_id = %id,
-            "Admin created webhook"
+        crate::otel::add_event(
+            "webhook_created",
+            #[cfg(feature = "telemetry")]
+            vec![
+                opentelemetry::KeyValue::new("admin.id", admin.id.to_string()),
+                opentelemetry::KeyValue::new("webhook.id", id.to_string()),
+            ],
+            #[cfg(not(feature = "telemetry"))]
+            vec![],
         );
 
         state
@@ -644,7 +662,7 @@ async fn list_webhooks(
             .await
             .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
         let webhooks = find_all_webhooks(&mut conn).await.map_err(|e| {
-            error!("DB error listing webhooks: {}", e);
+            crate::otel::record_error("webhook_list_db_error", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?;
         webhooks.into_iter().map(Into::into).collect()
@@ -672,7 +690,7 @@ async fn get_webhook(
         let webhook = find_webhook_by_id(&mut conn, id)
             .await
             .map_err(|e| {
-                error!("DB error fetching webhook: {}", e);
+                crate::otel::record_error("webhook_fetch_db_error", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?
             .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "Webhook not found"))?;
@@ -680,7 +698,7 @@ async fn get_webhook(
         let deliveries = find_recent_deliveries(&mut conn, id, 50)
             .await
             .map_err(|e| {
-                error!("DB error fetching deliveries: {}", e);
+                crate::otel::record_error("webhook_deliveries_fetch_db_error", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
 
@@ -717,7 +735,7 @@ async fn update_webhook(
         find_webhook_by_id(&mut conn, id)
             .await
             .map_err(|e| {
-                error!("DB error fetching webhook: {}", e);
+                crate::otel::record_error("webhook_fetch_db_error", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?
             .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "Webhook not found"))?;
@@ -744,7 +762,7 @@ async fn update_webhook(
         )
         .await
         .map_err(|e| {
-            error!("DB error updating webhook: {}", e);
+            crate::otel::record_error("webhook_update_db_error", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?
         .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "Webhook not found"))?;
@@ -752,11 +770,15 @@ async fn update_webhook(
         updated.into()
     };
 
-    info!(
-        event = "yauth.webhook.updated",
-        admin_id = %admin.id,
-        webhook_id = %id,
-        "Admin updated webhook"
+    crate::otel::add_event(
+        "webhook_updated",
+        #[cfg(feature = "telemetry")]
+        vec![
+            opentelemetry::KeyValue::new("admin.id", admin.id.to_string()),
+            opentelemetry::KeyValue::new("webhook.id", id.to_string()),
+        ],
+        #[cfg(not(feature = "telemetry"))]
+        vec![],
     );
 
     Ok(Json(response))
@@ -781,22 +803,26 @@ async fn delete_webhook(
         find_webhook_by_id(&mut conn, id)
             .await
             .map_err(|e| {
-                error!("DB error fetching webhook: {}", e);
+                crate::otel::record_error("webhook_fetch_db_error", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?
             .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "Webhook not found"))?;
 
         db_delete_webhook(&mut conn, id).await.map_err(|e| {
-            error!("DB error deleting webhook: {}", e);
+            crate::otel::record_error("webhook_delete_db_error", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?;
     }
 
-    info!(
-        event = "yauth.webhook.deleted",
-        admin_id = %admin.id,
-        webhook_id = %id,
-        "Admin deleted webhook"
+    crate::otel::add_event(
+        "webhook_deleted",
+        #[cfg(feature = "telemetry")]
+        vec![
+            opentelemetry::KeyValue::new("admin.id", admin.id.to_string()),
+            opentelemetry::KeyValue::new("webhook.id", id.to_string()),
+        ],
+        #[cfg(not(feature = "telemetry"))]
+        vec![],
     );
 
     state
@@ -830,7 +856,7 @@ async fn test_webhook(
         let webhook = find_webhook_by_id(&mut conn, id)
             .await
             .map_err(|e| {
-                error!("DB error fetching webhook: {}", e);
+                crate::otel::record_error("webhook_fetch_db_error", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?
             .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "Webhook not found"))?;
@@ -905,7 +931,7 @@ async fn test_webhook(
         )
         .await
         .map_err(|e| {
-            error!("DB error recording test delivery: {}", e);
+            crate::otel::record_error("webhook_test_delivery_record_db_error", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?;
     }

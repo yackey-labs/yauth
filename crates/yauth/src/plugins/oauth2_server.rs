@@ -12,7 +12,6 @@ use diesel_async_crate::RunQueryDsl;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::auth::crypto;
@@ -690,16 +689,20 @@ async fn authorize_post(
         )
         .await
         {
-            tracing::error!("Failed to store authorization code: {}", e);
+            crate::otel::record_error("oauth2_auth_code_store_failed", &e);
             return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
         }
     }
 
-    info!(
-        event = "yauth.oauth2.authorize_approved",
-        user_id = %auth_user.id,
-        client_id = %input.client_id,
-        "User approved OAuth2 authorization"
+    crate::otel::add_event(
+        "oauth2_authorize_approved",
+        #[cfg(feature = "telemetry")]
+        vec![
+            opentelemetry::KeyValue::new("user.id", auth_user.id.to_string()),
+            opentelemetry::KeyValue::new("client.id", input.client_id.clone()),
+        ],
+        #[cfg(not(feature = "telemetry"))]
+        vec![],
     );
 
     state
@@ -976,7 +979,7 @@ async fn handle_authorization_code_grant(
         db_find_auth_code_by_hash(&mut conn, &code_hash)
             .await
             .map_err(|e| {
-                tracing::error!("DB error: {}", e);
+                crate::otel::record_error("db_error", &e);
                 oauth2_error(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "server_error",
@@ -984,10 +987,7 @@ async fn handle_authorization_code_grant(
                 )
             })?
             .ok_or_else(|| {
-                warn!(
-                    event = "yauth.oauth2.invalid_code",
-                    "Authorization code not found"
-                );
+                crate::otel::add_event("oauth2_invalid_code", vec![]);
                 oauth2_error(
                     StatusCode::BAD_REQUEST,
                     "invalid_grant",
@@ -998,11 +998,15 @@ async fn handle_authorization_code_grant(
 
     // Check if code was already used
     if stored_code.used {
-        warn!(
-            event = "yauth.oauth2.code_reuse",
-            client_id = %stored_code.client_id,
-            user_id = %stored_code.user_id,
-            "Authorization code reuse detected"
+        crate::otel::add_event(
+            "oauth2_code_reuse_detected",
+            #[cfg(feature = "telemetry")]
+            vec![
+                opentelemetry::KeyValue::new("client.id", stored_code.client_id.clone()),
+                opentelemetry::KeyValue::new("user.id", stored_code.user_id.to_string()),
+            ],
+            #[cfg(not(feature = "telemetry"))]
+            vec![],
         );
         return Err(oauth2_error(
             StatusCode::BAD_REQUEST,
@@ -1014,10 +1018,7 @@ async fn handle_authorization_code_grant(
     // Check expiration
     let now_naive = Utc::now().naive_utc();
     if stored_code.expires_at < now_naive {
-        warn!(
-            event = "yauth.oauth2.code_expired",
-            "Authorization code expired"
-        );
+        crate::otel::add_event("oauth2_code_expired", vec![]);
         return Err(oauth2_error(
             StatusCode::BAD_REQUEST,
             "invalid_grant",
@@ -1054,10 +1055,7 @@ async fn handle_authorization_code_grant(
 
     let computed_challenge = pkce_s256_challenge(code_verifier);
     if computed_challenge != stored_code.code_challenge {
-        warn!(
-            event = "yauth.oauth2.pkce_mismatch",
-            "PKCE verification failed"
-        );
+        crate::otel::add_event("oauth2_pkce_mismatch", vec![]);
         return Err(oauth2_error(
             StatusCode::BAD_REQUEST,
             "invalid_grant",
@@ -1077,7 +1075,7 @@ async fn handle_authorization_code_grant(
         db_mark_auth_code_used(&mut conn, stored_code.id)
             .await
             .map_err(|e| {
-                tracing::error!("Failed to mark auth code as used: {}", e);
+                crate::otel::record_error("oauth2_auth_code_mark_used_failed", &e);
                 oauth2_error(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "server_error",
@@ -1098,7 +1096,7 @@ async fn handle_authorization_code_grant(
         find_user_by_id(&mut conn, stored_code.user_id)
             .await
             .map_err(|e| {
-                tracing::error!("DB error: {}", e);
+                crate::otel::record_error("db_error", &e);
                 oauth2_error(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "server_error",
@@ -1186,11 +1184,15 @@ async fn handle_authorization_code_grant(
 
         let expires_in = bearer_config.access_token_ttl.as_secs();
 
-        info!(
-            event = "yauth.oauth2.token_issued",
-            user_id = %user.id,
-            client_id = %client_id,
-            "OAuth2 access token issued via authorization_code grant"
+        crate::otel::add_event(
+            "oauth2_token_issued_auth_code",
+            #[cfg(feature = "telemetry")]
+            vec![
+                opentelemetry::KeyValue::new("user.id", user.id.to_string()),
+                opentelemetry::KeyValue::new("client.id", client_id.to_string()),
+            ],
+            #[cfg(not(feature = "telemetry"))]
+            vec![],
         );
 
         state
@@ -1219,7 +1221,7 @@ async fn handle_authorization_code_grant(
                     stored_code.nonce.as_deref(),
                 )
                 .map_err(|e| {
-                    tracing::error!("Failed to generate id_token: {}", e);
+                    crate::otel::record_error("oauth2_id_token_generate_failed", &e);
                     oauth2_error(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         "server_error",
@@ -1292,7 +1294,7 @@ async fn handle_oauth2_refresh_token(
             let row = db_find_refresh_token_by_hash(&mut conn, &token_hash)
                 .await
                 .map_err(|e| {
-                    tracing::error!("DB error: {}", e);
+                    crate::otel::record_error("db_error", &e);
                     oauth2_error(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         "server_error",
@@ -1316,10 +1318,15 @@ async fn handle_oauth2_refresh_token(
         };
 
         if stored.revoked {
-            warn!(
-                event = "yauth.oauth2.refresh_reuse",
-                family_id = %stored.family_id,
-                "Refresh token reuse detected — revoking family"
+            crate::otel::add_event(
+                "oauth2_refresh_token_reuse_detected",
+                #[cfg(feature = "telemetry")]
+                vec![opentelemetry::KeyValue::new(
+                    "token.family_id",
+                    stored.family_id.to_string(),
+                )],
+                #[cfg(not(feature = "telemetry"))]
+                vec![],
             );
             {
                 let mut conn = state.db.get().await.ok();
@@ -1357,7 +1364,7 @@ async fn handle_oauth2_refresh_token(
             db_revoke_refresh_token(&mut conn, stored.id)
                 .await
                 .map_err(|e| {
-                    tracing::error!("Failed to revoke old refresh token: {}", e);
+                    crate::otel::record_error("oauth2_refresh_token_revoke_failed", &e);
                     oauth2_error(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         "server_error",
@@ -1378,7 +1385,7 @@ async fn handle_oauth2_refresh_token(
             find_user_by_id(&mut conn, user_id)
                 .await
                 .map_err(|e| {
-                    tracing::error!("DB error: {}", e);
+                    crate::otel::record_error("db_error", &e);
                     oauth2_error(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         "server_error",
@@ -1573,7 +1580,7 @@ async fn dynamic_client_registration(
         )
         .await
         .map_err(|e| {
-            tracing::error!("Failed to register client: {}", e);
+            crate::otel::record_error("oauth2_client_register_failed", &e);
             api_err(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Failed to register client",
@@ -1581,11 +1588,15 @@ async fn dynamic_client_registration(
         })?;
     }
 
-    info!(
-        event = "yauth.oauth2.client_registered",
-        client_id = %client_id,
-        client_name = ?input.client_name,
-        "New OAuth2 client registered"
+    crate::otel::add_event(
+        "oauth2_client_registered",
+        #[cfg(feature = "telemetry")]
+        vec![
+            opentelemetry::KeyValue::new("client.id", client_id.to_string()),
+            opentelemetry::KeyValue::new("client.name", format!("{:?}", input.client_name)),
+        ],
+        #[cfg(not(feature = "telemetry"))]
+        vec![],
     );
 
     Ok((
@@ -1626,7 +1637,7 @@ async fn generate_unique_user_code_diesel(
         let existing = db_find_device_code_by_user_code_pending(conn, &code)
             .await
             .map_err(|e| {
-                tracing::error!("DB error checking user code uniqueness: {}", e);
+                crate::otel::record_error("oauth2_user_code_uniqueness_check_error", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
         if existing.is_none() {
@@ -1711,7 +1722,7 @@ async fn device_authorization(
         )
         .await
         {
-            tracing::error!("Failed to store device code: {}", e);
+            crate::otel::record_error("oauth2_device_code_store_failed", &e);
             return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
         }
     }
@@ -1723,10 +1734,15 @@ async fn device_authorization(
 
     let verification_uri_complete = Some(format!("{}?user_code={}", verification_uri, user_code));
 
-    info!(
-        event = "yauth.oauth2.device_auth_initiated",
-        client_id = %input.client_id,
-        "Device authorization flow initiated"
+    crate::otel::add_event(
+        "oauth2_device_auth_initiated",
+        #[cfg(feature = "telemetry")]
+        vec![opentelemetry::KeyValue::new(
+            "client.id",
+            input.client_id.clone(),
+        )],
+        #[cfg(not(feature = "telemetry"))]
+        vec![],
     );
 
     state
@@ -1847,7 +1863,7 @@ async fn device_verify_get(
                 .into_response();
             }
             Err(e) => {
-                tracing::error!("DB error looking up device code: {}", e);
+                crate::otel::record_error("oauth2_device_code_lookup_error", &e);
                 return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
                     .into_response();
             }
@@ -1919,7 +1935,7 @@ async fn device_verify_post(
                 );
             }
             Err(e) => {
-                tracing::error!("DB error: {}", e);
+                crate::otel::record_error("db_error", &e);
                 return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
                     .into_response();
             }
@@ -1952,16 +1968,20 @@ async fn device_verify_post(
             None
         };
         if let Err(e) = db_update_device_code_status(&mut conn, dc.id, new_status, user_id).await {
-            tracing::error!("Failed to update device code status: {}", e);
+            crate::otel::record_error("oauth2_device_code_update_failed", &e);
             return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
         }
     }
 
-    info!(
-        event = "yauth.oauth2.device_auth_decision",
-        user_id = %auth_user.id,
-        approved = input.approved,
-        "User {} device authorization", if input.approved { "approved" } else { "denied" }
+    crate::otel::add_event(
+        "oauth2_device_auth_decision",
+        #[cfg(feature = "telemetry")]
+        vec![
+            opentelemetry::KeyValue::new("user.id", auth_user.id.to_string()),
+            opentelemetry::KeyValue::new("approved", input.approved),
+        ],
+        #[cfg(not(feature = "telemetry"))]
+        vec![],
     );
 
     state
@@ -2038,7 +2058,7 @@ async fn handle_device_code_grant(
         let row = db_find_device_code_by_hash(&mut conn, &device_code_hash)
             .await
             .map_err(|e| {
-                tracing::error!("DB error: {}", e);
+                crate::otel::record_error("db_error", &e);
                 oauth2_error(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "server_error",
@@ -2169,7 +2189,7 @@ async fn handle_device_code_grant(
         db_update_device_code_status(&mut conn, stored.id, "used", stored.user_id)
             .await
             .map_err(|e| {
-                tracing::error!("Failed to mark device code as used: {}", e);
+                crate::otel::record_error("oauth2_device_code_mark_used_failed", &e);
                 oauth2_error(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "server_error",
@@ -2190,7 +2210,7 @@ async fn handle_device_code_grant(
         find_user_by_id(&mut conn, user_id)
             .await
             .map_err(|e| {
-                tracing::error!("DB error: {}", e);
+                crate::otel::record_error("db_error", &e);
                 oauth2_error(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "server_error",
@@ -2271,11 +2291,15 @@ async fn handle_device_code_grant(
 
         let expires_in = bearer_config.access_token_ttl.as_secs();
 
-        info!(
-            event = "yauth.oauth2.token_issued",
-            user_id = %user.id,
-            client_id = %client_id,
-            "OAuth2 access token issued via device_code grant"
+        crate::otel::add_event(
+            "oauth2_token_issued_device_code",
+            #[cfg(feature = "telemetry")]
+            vec![
+                opentelemetry::KeyValue::new("user.id", user.id.to_string()),
+                opentelemetry::KeyValue::new("client.id", client_id.to_string()),
+            ],
+            #[cfg(not(feature = "telemetry"))]
+            vec![],
         );
 
         state
@@ -2515,10 +2539,12 @@ async fn revoke_endpoint(
                         }
                     }
 
-                    info!(
-                        event = "yauth.oauth2.token_revoked",
-                        token_type = "refresh_token",
-                        "OAuth2 refresh token revoked"
+                    crate::otel::add_event(
+                        "oauth2_token_revoked",
+                        #[cfg(feature = "telemetry")]
+                        vec![opentelemetry::KeyValue::new("token.type", "refresh_token")],
+                        #[cfg(not(feature = "telemetry"))]
+                        vec![],
                     );
                     return StatusCode::OK.into_response();
                 }
@@ -2577,10 +2603,15 @@ async fn handle_client_credentials_grant(
         crypto::hash_token(client_secret).as_bytes(),
         secret_hash.as_bytes(),
     ) {
-        warn!(
-            event = "yauth.oauth2.client_auth_failed",
-            client_id = %client_id,
-            "Client credentials authentication failed"
+        crate::otel::add_event(
+            "oauth2_client_auth_failed",
+            #[cfg(feature = "telemetry")]
+            vec![opentelemetry::KeyValue::new(
+                "client.id",
+                client_id.to_string(),
+            )],
+            #[cfg(not(feature = "telemetry"))]
+            vec![],
         );
         return Err(oauth2_error(
             StatusCode::UNAUTHORIZED,
@@ -2669,7 +2700,7 @@ async fn handle_client_credentials_grant(
             &jsonwebtoken::EncodingKey::from_secret(bearer_config.jwt_secret.as_bytes()),
         )
         .map_err(|e| {
-            tracing::error!("JWT encoding error: {}", e);
+            crate::otel::record_error("jwt_encoding_error", &e);
             oauth2_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "server_error",
@@ -2679,10 +2710,15 @@ async fn handle_client_credentials_grant(
 
         let expires_in = bearer_config.access_token_ttl.as_secs();
 
-        info!(
-            event = "yauth.oauth2.token_issued",
-            client_id = %client_id,
-            "OAuth2 access token issued via client_credentials grant"
+        crate::otel::add_event(
+            "oauth2_token_issued_client_credentials",
+            #[cfg(feature = "telemetry")]
+            vec![opentelemetry::KeyValue::new(
+                "client.id",
+                client_id.to_string(),
+            )],
+            #[cfg(not(feature = "telemetry"))]
+            vec![],
         );
 
         state
@@ -2822,7 +2858,7 @@ async fn lookup_client(state: &YAuthState, client_id: &str) -> Result<Oauth2Clie
     db_find_client_by_client_id(&mut conn, client_id)
         .await
         .map_err(|e| {
-            tracing::error!("DB error looking up client: {}", e);
+            crate::otel::record_error("oauth2_client_lookup_error", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?
         .ok_or_else(|| api_err(StatusCode::BAD_REQUEST, "Unknown client_id"))
@@ -2933,7 +2969,7 @@ async fn save_consent(
         let mut conn = match state.db.get().await {
             Ok(c) => c,
             Err(e) => {
-                tracing::error!("Pool error saving consent: {}", e);
+                crate::otel::record_error("oauth2_consent_pool_error", &e);
                 return;
             }
         };
@@ -2944,7 +2980,7 @@ async fn save_consent(
                 if let Err(e) =
                     db_update_consent(&mut conn, existing.id, scopes.as_ref(), now).await
                 {
-                    tracing::error!("Failed to update consent: {}", e);
+                    crate::otel::record_error("oauth2_consent_update_failed", &e);
                 }
             }
             _ => {
@@ -2958,7 +2994,7 @@ async fn save_consent(
                 )
                 .await
                 {
-                    tracing::error!("Failed to save consent: {}", e);
+                    crate::otel::record_error("oauth2_consent_save_failed", &e);
                 }
             }
         }
@@ -2991,7 +3027,7 @@ async fn create_refresh_token_for_oauth2_diesel(
     )
     .await
     .map_err(|e| {
-        tracing::error!("Failed to create refresh token: {}", e);
+        crate::otel::record_error("refresh_token_create_failed", &e);
         api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
     })?;
 

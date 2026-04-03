@@ -9,7 +9,6 @@ use diesel::prelude::*;
 use diesel::result::OptionalExtension;
 use diesel_async_crate::RunQueryDsl;
 use serde::{Deserialize, Serialize};
-use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::auth::crypto;
@@ -213,17 +212,21 @@ async fn create_api_key(
         )
         .await
         .map_err(|e| {
-            tracing::error!("Failed to create API key: {}", e);
+            crate::otel::record_error("api_key_create_failed", &e);
             err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?;
     }
 
-    info!(
-        event = "yauth.api_key.created",
-        user_id = %user.id,
-        key_id = %api_key_id,
-        prefix = %prefix,
-        "API key created"
+    crate::otel::add_event(
+        "api_key_created",
+        #[cfg(feature = "telemetry")]
+        vec![
+            opentelemetry::KeyValue::new("user.id", user.id.to_string()),
+            opentelemetry::KeyValue::new("key.id", api_key_id.to_string()),
+            opentelemetry::KeyValue::new("key.prefix", prefix.clone()),
+        ],
+        #[cfg(not(feature = "telemetry"))]
+        vec![],
     );
 
     state
@@ -264,7 +267,7 @@ async fn list_api_keys(
         let keys = db_list_api_keys_by_user(&mut conn, user.id)
             .await
             .map_err(|e| {
-                tracing::error!("Failed to list API keys: {}", e);
+                crate::otel::record_error("api_key_list_failed", &e);
                 err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
 
@@ -305,23 +308,27 @@ async fn delete_api_key(
         let key = db_find_api_key_by_id_and_user(&mut conn, id, user.id)
             .await
             .map_err(|e| {
-                tracing::error!("Failed to find API key: {}", e);
+                crate::otel::record_error("api_key_find_failed", &e);
                 err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
 
         let key = key.ok_or_else(|| err(StatusCode::NOT_FOUND, "API key not found"))?;
 
         db_delete_api_key(&mut conn, key.id).await.map_err(|e| {
-            tracing::error!("Failed to delete API key: {}", e);
+            crate::otel::record_error("api_key_delete_failed", &e);
             err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?;
     }
 
-    info!(
-        event = "yauth.api_key.deleted",
-        user_id = %user.id,
-        key_id = %id,
-        "API key deleted"
+    crate::otel::add_event(
+        "api_key_deleted",
+        #[cfg(feature = "telemetry")]
+        vec![
+            opentelemetry::KeyValue::new("user.id", user.id.to_string()),
+            opentelemetry::KeyValue::new("key.id", id.to_string()),
+        ],
+        #[cfg(not(feature = "telemetry"))]
+        vec![],
     );
 
     state
@@ -367,10 +374,15 @@ pub async fn validate_api_key(key: &str, state: &YAuthState) -> Result<AuthUser,
     if let Some(expires_at) = api_key.expires_at {
         let now = chrono::Utc::now().naive_utc();
         if expires_at < now {
-            warn!(
-                event = "yauth.api_key.expired",
-                prefix = %prefix,
-                "Expired API key used"
+            crate::otel::add_event(
+                "api_key_expired",
+                #[cfg(feature = "telemetry")]
+                vec![opentelemetry::KeyValue::new(
+                    "key.prefix",
+                    prefix.to_string(),
+                )],
+                #[cfg(not(feature = "telemetry"))]
+                vec![],
             );
             return Err("API key has expired".to_string());
         }
@@ -379,10 +391,15 @@ pub async fn validate_api_key(key: &str, state: &YAuthState) -> Result<AuthUser,
     // Timing-safe comparison of the full key hash
     let computed_hash = crypto::hash_token(key);
     if !crypto::constant_time_eq(computed_hash.as_bytes(), api_key.key_hash.as_bytes()) {
-        warn!(
-            event = "yauth.api_key.invalid",
-            prefix = %prefix,
-            "API key secret mismatch"
+        crate::otel::add_event(
+            "api_key_secret_mismatch",
+            #[cfg(feature = "telemetry")]
+            vec![opentelemetry::KeyValue::new(
+                "key.prefix",
+                prefix.to_string(),
+            )],
+            #[cfg(not(feature = "telemetry"))]
+            vec![],
         );
         return Err("Invalid API key".to_string());
     }
@@ -391,7 +408,7 @@ pub async fn validate_api_key(key: &str, state: &YAuthState) -> Result<AuthUser,
     let now = chrono::Utc::now().fixed_offset();
     {
         if let Err(e) = db_update_api_key_last_used(&mut conn, api_key.id, now).await {
-            tracing::error!("Failed to update API key last_used_at: {}", e);
+            crate::otel::record_error("api_key_last_used_update_failed", &e);
         }
     }
 
@@ -402,11 +419,15 @@ pub async fn validate_api_key(key: &str, state: &YAuthState) -> Result<AuthUser,
         .ok_or_else(|| "User not found".to_string())?;
 
     if user.banned {
-        warn!(
-            event = "yauth.api_key.banned",
-            user_id = %user.id,
-            prefix = %prefix,
-            "API key used by banned user"
+        crate::otel::add_event(
+            "api_key_banned_user",
+            #[cfg(feature = "telemetry")]
+            vec![
+                opentelemetry::KeyValue::new("user.id", user.id.to_string()),
+                opentelemetry::KeyValue::new("key.prefix", prefix.to_string()),
+            ],
+            #[cfg(not(feature = "telemetry"))]
+            vec![],
         );
         return Err("Account suspended".to_string());
     }

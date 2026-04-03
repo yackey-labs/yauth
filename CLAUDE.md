@@ -66,7 +66,7 @@ bash pentest/pentest-yauth.sh        # Run full pentest suite (255+ cases, 0 FAI
 | `bearer` | JWT access/refresh tokens | No |
 | `api-key` | API key generation + validation | No |
 | `admin` | User management, ban/unban, impersonation | No |
-| `telemetry` | OpenTelemetry tracing bridge | No |
+| `telemetry` | Native OpenTelemetry SDK instrumentation (spans, span events, context propagation) | No |
 | `openapi` | utoipa OpenAPI spec generation (for client codegen) | No |
 | `redis` | Redis store backend (sessions, rate limits, challenges, revocation) | No |
 | `full` | All of the above | No |
@@ -174,8 +174,13 @@ If CI publishes to crates.io/npm but fails before pushing the version commit and
 
 ## Telemetry
 
-Uses the honeycomb plugin for OTel instrumentation guidance. Key points:
-- `tracing` + `tracing-opentelemetry` for Rust spans
+Uses native OpenTelemetry SDK (no `tracing` crate). Key points:
+- `opentelemetry` + `opentelemetry_sdk` + `opentelemetry-otlp` for Rust spans (direct SDK, no tracing bridge)
+- Errors/warnings in request handlers are OTel **span events** (not disconnected logs) — visible in Honeycomb trace waterfall
+- `crate::otel` helper module provides `record_error()`, `add_event()`, `set_attribute()`, `with_span()` — all compile to no-ops when `telemetry` feature is disabled
+- `telemetry::init()` registers `TraceContextPropagator` for W3C traceparent/tracestate propagation
+- `telemetry::layer::trace_middleware` creates native OTel server spans with context attached via `cx.attach()` and stored in request extensions
+- Operational logging uses `log` crate (not `tracing`) — library does NOT init a log subscriber
 - `@opentelemetry/sdk-trace-web` for frontend
 - CORS must include `traceparent` and `tracestate` headers
 - Health checks excluded from tracing

@@ -6,7 +6,6 @@ use axum::{
     routing::{delete, get, post},
 };
 use serde::{Deserialize, Serialize};
-use tracing::{info, warn};
 use uuid::Uuid;
 
 use totp_rs::{Algorithm, Secret, TOTP};
@@ -215,7 +214,7 @@ impl YAuthPlugin for MfaPlugin {
                             let mut conn = match db.get().await {
                                 Ok(c) => c,
                                 Err(e) => {
-                                    tracing::error!("Pool error checking MFA status: {}", e);
+                                    crate::otel::record_error("mfa_pool_error", &e);
                                     return EventResponse::Continue;
                                 }
                             };
@@ -223,7 +222,7 @@ impl YAuthPlugin for MfaPlugin {
                                 Ok(Some(_)) => true,
                                 Ok(None) => false,
                                 Err(e) => {
-                                    tracing::error!("DB error checking MFA status: {}", e);
+                                    crate::otel::record_error("mfa_db_status_check_error", &e);
                                     return EventResponse::Continue;
                                 }
                             }
@@ -236,18 +235,25 @@ impl YAuthPlugin for MfaPlugin {
                             let value = serde_json::json!({ "user_id": user_id.to_string() });
 
                             if let Err(e) = challenge_store.set(&key, value, 300).await {
-                                tracing::error!("Failed to store MFA pending session: {}", e);
+                                crate::otel::record_error("mfa_pending_session_store_failed", &e);
                                 return EventResponse::Block {
                                     status: 500,
                                     message: "Internal error".to_string(),
                                 };
                             }
 
-                            info!(
-                                event = "yauth.mfa.required",
-                                user_id = %user_id,
-                                pending_session_id = %pending_id,
-                                "MFA verification required"
+                            crate::otel::add_event(
+                                "mfa_required",
+                                #[cfg(feature = "telemetry")]
+                                vec![
+                                    opentelemetry::KeyValue::new("user.id", user_id.to_string()),
+                                    opentelemetry::KeyValue::new(
+                                        "pending_session.id",
+                                        pending_id.to_string(),
+                                    ),
+                                ],
+                                #[cfg(not(feature = "telemetry"))]
+                                vec![],
                             );
 
                             EventResponse::RequireMfa {
@@ -341,7 +347,7 @@ fn build_totp(
 ) -> Result<TOTP, (StatusCode, Json<serde_json::Value>)> {
     let secret = Secret::Encoded(secret_base32.to_string());
     let secret_bytes = secret.to_bytes().map_err(|e| {
-        tracing::error!("Failed to decode TOTP secret: {}", e);
+        crate::otel::record_error("totp_secret_decode_failed", &e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": "Internal error" })),
@@ -358,7 +364,7 @@ fn build_totp(
         user_email.to_string(),
     )
     .map_err(|e| {
-        tracing::error!("Failed to build TOTP: {}", e);
+        crate::otel::record_error("totp_build_failed", &e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": "Internal error" })),
@@ -381,7 +387,7 @@ async fn store_backup_codes(
         db_insert_backup_code(conn, Uuid::new_v4(), user_id, &code_hash)
             .await
             .map_err(|e| {
-                tracing::error!("Failed to store backup code: {}", e);
+                crate::otel::record_error("mfa_backup_code_store_failed", &e);
                 err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
     }
@@ -397,7 +403,7 @@ async fn delete_all_backup_codes(
     db_delete_all_backup_codes(conn, user_id)
         .await
         .map_err(|e| {
-            tracing::error!("Failed to delete backup codes: {}", e);
+            crate::otel::record_error("mfa_backup_codes_delete_failed", &e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({ "error": "Internal error" })),
@@ -431,7 +437,7 @@ async fn setup_totp(
         db_find_totp_secret(&mut conn, user.id, true)
             .await
             .map_err(|e| {
-                tracing::error!("DB error: {}", e);
+                crate::otel::record_error("db_error", &e);
                 err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?
     };
@@ -458,14 +464,14 @@ async fn setup_totp(
         1,
         30,
         secret.to_bytes().map_err(|e| {
-            tracing::error!("Failed to get secret bytes: {}", e);
+            crate::otel::record_error("totp_secret_bytes_failed", &e);
             err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?,
         Some(issuer.to_string()),
         user.email.clone(),
     )
     .map_err(|e| {
-        tracing::error!("Failed to create TOTP: {}", e);
+        crate::otel::record_error("totp_create_failed", &e);
         err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
     })?;
 
@@ -477,7 +483,7 @@ async fn setup_totp(
         db_insert_totp_secret(&mut conn, Uuid::new_v4(), user.id, &secret_base32, false)
             .await
             .map_err(|e| {
-                tracing::error!("Failed to store TOTP secret: {}", e);
+                crate::otel::record_error("totp_secret_store_failed", &e);
                 err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
     }
@@ -490,10 +496,12 @@ async fn setup_totp(
     let backup_codes =
         store_backup_codes(&mut conn, user.id, state.mfa_config.backup_code_count).await?;
 
-    info!(
-        event = "yauth.mfa.totp_setup",
-        user_id = %user.id,
-        "TOTP setup initiated, awaiting confirmation"
+    crate::otel::add_event(
+        "mfa_totp_setup",
+        #[cfg(feature = "telemetry")]
+        vec![opentelemetry::KeyValue::new("user.id", user.id.to_string())],
+        #[cfg(not(feature = "telemetry"))]
+        vec![],
     );
 
     Ok(Json(SetupTotpResponse {
@@ -525,7 +533,7 @@ async fn confirm_totp(
         db_find_totp_secret(&mut conn, user.id, false)
             .await
             .map_err(|e| {
-                tracing::error!("DB error: {}", e);
+                crate::otel::record_error("db_error", &e);
                 err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?
             .ok_or_else(|| {
@@ -546,10 +554,12 @@ async fn confirm_totp(
     let is_valid = totp.check_current(&input.code).unwrap_or(false);
 
     if !is_valid {
-        warn!(
-            event = "yauth.mfa.totp_confirm_failed",
-            user_id = %user.id,
-            "Invalid TOTP code during confirmation"
+        crate::otel::add_event(
+            "mfa_totp_confirm_failed",
+            #[cfg(feature = "telemetry")]
+            vec![opentelemetry::KeyValue::new("user.id", user.id.to_string())],
+            #[cfg(not(feature = "telemetry"))]
+            vec![],
         );
         return Err(err(
             StatusCode::BAD_REQUEST,
@@ -562,15 +572,17 @@ async fn confirm_totp(
         db_update_totp_secret_verified(&mut conn, totp_record.id)
             .await
             .map_err(|e| {
-                tracing::error!("Failed to verify TOTP secret: {}", e);
+                crate::otel::record_error("totp_verify_failed", &e);
                 err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
     }
 
-    info!(
-        event = "yauth.mfa.totp_enabled",
-        user_id = %user.id,
-        "TOTP MFA enabled successfully"
+    crate::otel::add_event(
+        "mfa_totp_enabled",
+        #[cfg(feature = "telemetry")]
+        vec![opentelemetry::KeyValue::new("user.id", user.id.to_string())],
+        #[cfg(not(feature = "telemetry"))]
+        vec![],
     );
 
     state
@@ -607,7 +619,7 @@ async fn disable_totp(
         db_delete_totp_secrets_by_user(&mut conn, user.id, None)
             .await
             .map_err(|e| {
-                tracing::error!("Failed to delete TOTP secret: {}", e);
+                crate::otel::record_error("totp_secret_delete_failed", &e);
                 err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?
     };
@@ -621,10 +633,12 @@ async fn disable_totp(
         delete_all_backup_codes(&mut conn, user.id).await?;
     }
 
-    info!(
-        event = "yauth.mfa.totp_disabled",
-        user_id = %user.id,
-        "TOTP MFA disabled, backup codes deleted"
+    crate::otel::add_event(
+        "mfa_totp_disabled",
+        #[cfg(feature = "telemetry")]
+        vec![opentelemetry::KeyValue::new("user.id", user.id.to_string())],
+        #[cfg(not(feature = "telemetry"))]
+        vec![],
     );
 
     state
@@ -658,7 +672,7 @@ async fn verify_mfa(
         .get(&key)
         .await
         .map_err(|e| {
-            tracing::error!("Challenge store error: {}", e);
+            crate::otel::record_error("mfa_challenge_store_error", &e);
             err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?
         .ok_or_else(|| {
@@ -692,7 +706,7 @@ async fn verify_mfa(
         db_find_totp_secret(&mut conn, user_id, true)
             .await
             .map_err(|e| {
-                tracing::error!("DB error: {}", e);
+                crate::otel::record_error("db_error", &e);
                 err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?
     };
@@ -709,7 +723,7 @@ async fn verify_mfa(
         let u = find_user_by_id(&mut conn, user_id)
             .await
             .map_err(|e| {
-                tracing::error!("DB error: {}", e);
+                crate::otel::record_error("db_error", &e);
                 err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?
             .ok_or_else(|| err(StatusCode::INTERNAL_SERVER_ERROR, "User not found"))?;
@@ -743,7 +757,7 @@ async fn verify_mfa(
             db_find_unused_backup_codes(&mut conn, user_id)
                 .await
                 .map_err(|e| {
-                    tracing::error!("DB error: {}", e);
+                    crate::otel::record_error("db_error", &e);
                     err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
                 })?
         };
@@ -755,16 +769,18 @@ async fn verify_mfa(
                     db_mark_backup_code_used(&mut conn, bc.id)
                         .await
                         .map_err(|e| {
-                            tracing::error!("Failed to mark backup code as used: {}", e);
+                            crate::otel::record_error("mfa_backup_code_mark_used_failed", &e);
                             err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
                         })?;
                 }
 
                 verified = true;
-                info!(
-                    event = "yauth.mfa.backup_code_used",
-                    user_id = %user_id,
-                    "Backup code used for MFA verification"
+                crate::otel::add_event(
+                    "mfa_backup_code_used",
+                    #[cfg(feature = "telemetry")]
+                    vec![opentelemetry::KeyValue::new("user.id", user_id.to_string())],
+                    #[cfg(not(feature = "telemetry"))]
+                    vec![],
                 );
                 break;
             }
@@ -772,10 +788,12 @@ async fn verify_mfa(
     }
 
     if !verified {
-        warn!(
-            event = "yauth.mfa.verify_failed",
-            user_id = %user_id,
-            "MFA verification failed — invalid code"
+        crate::otel::add_event(
+            "mfa_verify_failed",
+            #[cfg(feature = "telemetry")]
+            vec![opentelemetry::KeyValue::new("user.id", user_id.to_string())],
+            #[cfg(not(feature = "telemetry"))]
+            vec![],
         );
         return Err(err(StatusCode::UNAUTHORIZED, "Invalid MFA code"));
     }
@@ -787,14 +805,16 @@ async fn verify_mfa(
         session::create_session(&state, user_id, None, None, state.config.session_ttl)
             .await
             .map_err(|e| {
-                tracing::error!("Failed to create session: {}", e);
+                crate::otel::record_error("session_create_failed", &e);
                 err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
 
-    info!(
-        event = "yauth.mfa.verified",
-        user_id = %user_id,
-        "MFA verification successful, session created"
+    crate::otel::add_event(
+        "mfa_verified",
+        #[cfg(feature = "telemetry")]
+        vec![opentelemetry::KeyValue::new("user.id", user_id.to_string())],
+        #[cfg(not(feature = "telemetry"))]
+        vec![],
     );
 
     state
@@ -838,7 +858,7 @@ async fn get_backup_code_count(
         let codes = db_find_unused_backup_codes(&mut conn, user.id)
             .await
             .map_err(|e| {
-                tracing::error!("DB error: {}", e);
+                crate::otel::record_error("db_error", &e);
                 err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
         codes.len()
@@ -868,7 +888,7 @@ async fn regenerate_backup_codes(
         db_find_totp_secret(&mut conn, user.id, true)
             .await
             .map_err(|e| {
-                tracing::error!("DB error: {}", e);
+                crate::otel::record_error("db_error", &e);
                 err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?
     };
@@ -888,11 +908,15 @@ async fn regenerate_backup_codes(
     // Generate and store fresh backup codes
     let codes = store_backup_codes(&mut conn, user.id, state.mfa_config.backup_code_count).await?;
 
-    info!(
-        event = "yauth.mfa.backup_codes_regenerated",
-        user_id = %user.id,
-        count = codes.len(),
-        "Backup codes regenerated"
+    crate::otel::add_event(
+        "mfa_backup_codes_regenerated",
+        #[cfg(feature = "telemetry")]
+        vec![
+            opentelemetry::KeyValue::new("user.id", user.id.to_string()),
+            opentelemetry::KeyValue::new("count", codes.len() as i64),
+        ],
+        #[cfg(not(feature = "telemetry"))]
+        vec![],
     );
 
     Ok(Json(BackupCodesResponse {

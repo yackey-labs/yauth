@@ -55,18 +55,32 @@ pub fn verify_password_sync(password: &str, hash: &str) -> Result<bool, password
 /// Async password hashing that offloads CPU-intensive Argon2 to a blocking thread.
 pub async fn hash_password(password: &str) -> Result<String, password_hash::Error> {
     let password = password.to_owned();
-    tokio::task::spawn_blocking(move || hash_password_sync(&password))
-        .await
-        .expect("password hash task panicked")
+    // Capture the current OTel context so the blocking thread can parent its span correctly.
+    // Without this, spawn_blocking runs on a different thread with an empty Context::current().
+    #[cfg(feature = "telemetry")]
+    let parent_cx = opentelemetry::Context::current();
+    tokio::task::spawn_blocking(move || {
+        #[cfg(feature = "telemetry")]
+        let _guard = parent_cx.attach();
+        hash_password_sync(&password)
+    })
+    .await
+    .expect("password hash task panicked")
 }
 
 /// Async password verification that offloads CPU-intensive Argon2 to a blocking thread.
 pub async fn verify_password(password: &str, hash: &str) -> Result<bool, password_hash::Error> {
     let password = password.to_owned();
     let hash = hash.to_owned();
-    tokio::task::spawn_blocking(move || verify_password_sync(&password, &hash))
-        .await
-        .expect("password verify task panicked")
+    #[cfg(feature = "telemetry")]
+    let parent_cx = opentelemetry::Context::current();
+    tokio::task::spawn_blocking(move || {
+        #[cfg(feature = "telemetry")]
+        let _guard = parent_cx.attach();
+        verify_password_sync(&password, &hash)
+    })
+    .await
+    .expect("password verify task panicked")
 }
 
 #[cfg(test)]

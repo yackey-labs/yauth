@@ -1,7 +1,11 @@
 pub mod memory;
+#[cfg(feature = "diesel-backend")]
 pub mod postgres;
 #[cfg(feature = "redis")]
 pub mod redis;
+
+use std::future::Future;
+use std::pin::Pin;
 
 use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
@@ -10,6 +14,7 @@ use uuid::Uuid;
 #[derive(Clone)]
 pub enum StoreBackend {
     Memory,
+    #[cfg(feature = "diesel-backend")]
     Postgres,
     #[cfg(feature = "redis")]
     Redis(Box<::redis::aio::ConnectionManager>, String),
@@ -19,6 +24,7 @@ impl std::fmt::Debug for StoreBackend {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Memory => write!(f, "Memory"),
+            #[cfg(feature = "diesel-backend")]
             Self::Postgres => write!(f, "Postgres"),
             #[cfg(feature = "redis")]
             Self::Redis(_, prefix) => write!(f, "Redis(prefix={prefix})"),
@@ -30,9 +36,13 @@ impl std::fmt::Debug for StoreBackend {
 // Rate Limiting
 // ---------------------------------------------------------------------------
 
-#[async_trait::async_trait]
 pub trait RateLimitStore: Send + Sync {
-    async fn check(&self, key: &str, limit: u32, window_secs: u64) -> RateLimitResult;
+    fn check(
+        &self,
+        key: &str,
+        limit: u32,
+        window_secs: u64,
+    ) -> Pin<Box<dyn Future<Output = RateLimitResult> + Send + '_>>;
 }
 
 #[derive(Debug, Clone)]
@@ -46,11 +56,18 @@ pub struct RateLimitResult {
 // Challenge (CSRF, WebAuthn)
 // ---------------------------------------------------------------------------
 
-#[async_trait::async_trait]
 pub trait ChallengeStore: Send + Sync {
-    async fn set(&self, key: &str, value: serde_json::Value, ttl_secs: u64) -> Result<(), String>;
-    async fn get(&self, key: &str) -> Result<Option<serde_json::Value>, String>;
-    async fn delete(&self, key: &str) -> Result<(), String>;
+    fn set(
+        &self,
+        key: &str,
+        value: serde_json::Value,
+        ttl_secs: u64,
+    ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + '_>>;
+    fn get(
+        &self,
+        key: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<serde_json::Value>, String>> + Send + '_>>;
+    fn delete(&self, key: &str) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + '_>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -68,40 +85,58 @@ pub struct StoredSession {
     pub created_at: NaiveDateTime,
 }
 
-#[async_trait::async_trait]
 pub trait SessionStore: Send + Sync {
     /// Store a new session. Returns the session UUID.
-    async fn create(
+    fn create(
         &self,
         user_id: Uuid,
         token_hash: String,
         ip_address: Option<String>,
         user_agent: Option<String>,
         ttl: std::time::Duration,
-    ) -> Result<Uuid, String>;
+    ) -> Pin<Box<dyn Future<Output = Result<Uuid, String>> + Send + '_>>;
 
     /// Look up a session by token hash. Returns None if not found or expired.
-    async fn validate(&self, token_hash: &str) -> Result<Option<StoredSession>, String>;
+    fn validate(
+        &self,
+        token_hash: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<StoredSession>, String>> + Send + '_>>;
 
     /// Delete a session by token hash. Returns true if a session was deleted.
-    async fn delete(&self, token_hash: &str) -> Result<bool, String>;
+    fn delete(
+        &self,
+        token_hash: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<bool, String>> + Send + '_>>;
 
     /// Delete all sessions for a user. Returns count deleted.
-    async fn delete_all_for_user(&self, user_id: Uuid) -> Result<u64, String>;
+    fn delete_all_for_user(
+        &self,
+        user_id: Uuid,
+    ) -> Pin<Box<dyn Future<Output = Result<u64, String>> + Send + '_>>;
 
     /// Delete all sessions for a user except the one matching `keep_hash`.
-    async fn delete_others_for_user(&self, user_id: Uuid, keep_hash: &str) -> Result<u64, String>;
+    fn delete_others_for_user(
+        &self,
+        user_id: Uuid,
+        keep_hash: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<u64, String>> + Send + '_>>;
 }
 
 // ---------------------------------------------------------------------------
 // JTI Revocation (for bearer token invalidation)
 // ---------------------------------------------------------------------------
 
-#[async_trait::async_trait]
 pub trait RevocationStore: Send + Sync {
     /// Revoke a JTI. The entry auto-expires after `ttl`.
-    async fn revoke(&self, jti: &str, ttl: std::time::Duration) -> Result<(), String>;
+    fn revoke(
+        &self,
+        jti: &str,
+        ttl: std::time::Duration,
+    ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + '_>>;
 
     /// Check if a JTI has been revoked.
-    async fn is_revoked(&self, jti: &str) -> Result<bool, String>;
+    fn is_revoked(
+        &self,
+        jti: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<bool, String>> + Send + '_>>;
 }

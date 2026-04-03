@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -35,37 +37,53 @@ impl MemoryChallengeStore {
     }
 }
 
-#[async_trait::async_trait]
 impl ChallengeStore for MemoryChallengeStore {
-    async fn set(&self, key: &str, value: serde_json::Value, ttl_secs: u64) -> Result<(), String> {
-        let mut map = self.entries.lock().await;
-        // Cleanup expired entries if map is large
-        if map.len() > 1000 {
-            let now = Instant::now();
-            map.retain(|_, e| e.expires_at > now);
-        }
-        map.insert(
-            key.to_string(),
-            ChallengeEntry {
-                value,
-                expires_at: Instant::now() + Duration::from_secs(ttl_secs),
-            },
-        );
-        Ok(())
+    fn set(
+        &self,
+        key: &str,
+        value: serde_json::Value,
+        ttl_secs: u64,
+    ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + '_>> {
+        let key = key.to_string();
+        Box::pin(async move {
+            let mut map = self.entries.lock().await;
+            // Cleanup expired entries if map is large
+            if map.len() > 1000 {
+                let now = Instant::now();
+                map.retain(|_, e| e.expires_at > now);
+            }
+            map.insert(
+                key,
+                ChallengeEntry {
+                    value,
+                    expires_at: Instant::now() + Duration::from_secs(ttl_secs),
+                },
+            );
+            Ok(())
+        })
     }
 
-    async fn get(&self, key: &str) -> Result<Option<serde_json::Value>, String> {
-        let map = self.entries.lock().await;
-        match map.get(key) {
-            Some(entry) if entry.expires_at > Instant::now() => Ok(Some(entry.value.clone())),
-            _ => Ok(None),
-        }
+    fn get(
+        &self,
+        key: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<serde_json::Value>, String>> + Send + '_>> {
+        let key = key.to_string();
+        Box::pin(async move {
+            let map = self.entries.lock().await;
+            match map.get(&key) {
+                Some(entry) if entry.expires_at > Instant::now() => Ok(Some(entry.value.clone())),
+                _ => Ok(None),
+            }
+        })
     }
 
-    async fn delete(&self, key: &str) -> Result<(), String> {
-        let mut map = self.entries.lock().await;
-        map.remove(key);
-        Ok(())
+    fn delete(&self, key: &str) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + '_>> {
+        let key = key.to_string();
+        Box::pin(async move {
+            let mut map = self.entries.lock().await;
+            map.remove(&key);
+            Ok(())
+        })
     }
 }
 
@@ -91,52 +109,57 @@ impl MemoryRateLimitStore {
     }
 }
 
-#[async_trait::async_trait]
 impl RateLimitStore for MemoryRateLimitStore {
-    async fn check(&self, key: &str, limit: u32, window_secs: u64) -> RateLimitResult {
-        let mut map = self.entries.lock().await;
-        let now = Instant::now();
-        let window = Duration::from_secs(if window_secs > 0 {
-            window_secs
-        } else {
-            self.default_window_secs
-        });
-        let max = if limit > 0 { limit } else { self.default_limit };
-
-        // Cleanup if map is large
-        if map.len() > 10_000 {
-            map.retain(|_, e| {
-                e.timestamps.retain(|t| now.duration_since(*t) < window);
-                !e.timestamps.is_empty()
+    fn check(
+        &self,
+        key: &str,
+        limit: u32,
+        window_secs: u64,
+    ) -> Pin<Box<dyn Future<Output = RateLimitResult> + Send + '_>> {
+        let key = key.to_string();
+        Box::pin(async move {
+            let mut map = self.entries.lock().await;
+            let now = Instant::now();
+            let window = Duration::from_secs(if window_secs > 0 {
+                window_secs
+            } else {
+                self.default_window_secs
             });
-        }
+            let max = if limit > 0 { limit } else { self.default_limit };
 
-        let entry = map
-            .entry(key.to_string())
-            .or_insert_with(|| RateLimitEntry {
+            // Cleanup if map is large
+            if map.len() > 10_000 {
+                map.retain(|_, e| {
+                    e.timestamps.retain(|t| now.duration_since(*t) < window);
+                    !e.timestamps.is_empty()
+                });
+            }
+
+            let entry = map.entry(key).or_insert_with(|| RateLimitEntry {
                 timestamps: Vec::new(),
             });
-        entry.timestamps.retain(|t| now.duration_since(*t) < window);
+            entry.timestamps.retain(|t| now.duration_since(*t) < window);
 
-        if entry.timestamps.len() >= max as usize {
-            let oldest = entry.timestamps.first().copied().unwrap_or(now);
-            let retry_after = window
-                .checked_sub(now.duration_since(oldest))
-                .unwrap_or_default()
-                .as_secs();
-            RateLimitResult {
-                allowed: false,
-                remaining: 0,
-                retry_after,
+            if entry.timestamps.len() >= max as usize {
+                let oldest = entry.timestamps.first().copied().unwrap_or(now);
+                let retry_after = window
+                    .checked_sub(now.duration_since(oldest))
+                    .unwrap_or_default()
+                    .as_secs();
+                RateLimitResult {
+                    allowed: false,
+                    remaining: 0,
+                    retry_after,
+                }
+            } else {
+                entry.timestamps.push(now);
+                RateLimitResult {
+                    allowed: true,
+                    remaining: max - entry.timestamps.len() as u32,
+                    retry_after: 0,
+                }
             }
-        } else {
-            entry.timestamps.push(now);
-            RateLimitResult {
-                allowed: true,
-                remaining: max - entry.timestamps.len() as u32,
-                retry_after: 0,
-            }
-        }
+        })
     }
 }
 
@@ -160,68 +183,93 @@ impl MemorySessionStore {
     }
 }
 
-#[async_trait::async_trait]
 impl SessionStore for MemorySessionStore {
-    async fn create(
+    fn create(
         &self,
         user_id: Uuid,
         token_hash: String,
         ip_address: Option<String>,
         user_agent: Option<String>,
         ttl: Duration,
-    ) -> Result<Uuid, String> {
-        let mut map = self.entries.lock().await;
-        // Cleanup expired entries if map is large
-        if map.len() > 1000 {
-            let now = Utc::now().naive_utc();
-            map.retain(|_, s| s.expires_at > now);
-        }
-        let id = Uuid::new_v4();
-        let now = Utc::now().naive_utc();
-        let expires_at = now + chrono::Duration::from_std(ttl).map_err(|e| e.to_string())?;
-        let session = StoredSession {
-            id,
-            user_id,
-            ip_address,
-            user_agent,
-            expires_at,
-            created_at: now,
-        };
-        map.insert(token_hash, session);
-        Ok(id)
-    }
-
-    async fn validate(&self, token_hash: &str) -> Result<Option<StoredSession>, String> {
-        let mut map = self.entries.lock().await;
-        let now = Utc::now().naive_utc();
-        match map.get(token_hash) {
-            Some(session) if session.expires_at > now => Ok(Some(session.clone())),
-            Some(_) => {
-                // Expired — remove it
-                map.remove(token_hash);
-                Ok(None)
+    ) -> Pin<Box<dyn Future<Output = Result<Uuid, String>> + Send + '_>> {
+        Box::pin(async move {
+            let mut map = self.entries.lock().await;
+            // Cleanup expired entries if map is large
+            if map.len() > 1000 {
+                let now = Utc::now().naive_utc();
+                map.retain(|_, s| s.expires_at > now);
             }
-            None => Ok(None),
-        }
+            let id = Uuid::new_v4();
+            let now = Utc::now().naive_utc();
+            let expires_at = now + chrono::Duration::from_std(ttl).map_err(|e| e.to_string())?;
+            let session = StoredSession {
+                id,
+                user_id,
+                ip_address,
+                user_agent,
+                expires_at,
+                created_at: now,
+            };
+            map.insert(token_hash, session);
+            Ok(id)
+        })
     }
 
-    async fn delete(&self, token_hash: &str) -> Result<bool, String> {
-        let mut map = self.entries.lock().await;
-        Ok(map.remove(token_hash).is_some())
+    fn validate(
+        &self,
+        token_hash: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<StoredSession>, String>> + Send + '_>> {
+        let token_hash = token_hash.to_string();
+        Box::pin(async move {
+            let mut map = self.entries.lock().await;
+            let now = Utc::now().naive_utc();
+            match map.get(&token_hash) {
+                Some(session) if session.expires_at > now => Ok(Some(session.clone())),
+                Some(_) => {
+                    // Expired — remove it
+                    map.remove(&token_hash);
+                    Ok(None)
+                }
+                None => Ok(None),
+            }
+        })
     }
 
-    async fn delete_all_for_user(&self, user_id: Uuid) -> Result<u64, String> {
-        let mut map = self.entries.lock().await;
-        let before = map.len();
-        map.retain(|_, s| s.user_id != user_id);
-        Ok((before - map.len()) as u64)
+    fn delete(
+        &self,
+        token_hash: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<bool, String>> + Send + '_>> {
+        let token_hash = token_hash.to_string();
+        Box::pin(async move {
+            let mut map = self.entries.lock().await;
+            Ok(map.remove(&token_hash).is_some())
+        })
     }
 
-    async fn delete_others_for_user(&self, user_id: Uuid, keep_hash: &str) -> Result<u64, String> {
-        let mut map = self.entries.lock().await;
-        let before = map.len();
-        map.retain(|key, s| !(s.user_id == user_id && key != keep_hash));
-        Ok((before - map.len()) as u64)
+    fn delete_all_for_user(
+        &self,
+        user_id: Uuid,
+    ) -> Pin<Box<dyn Future<Output = Result<u64, String>> + Send + '_>> {
+        Box::pin(async move {
+            let mut map = self.entries.lock().await;
+            let before = map.len();
+            map.retain(|_, s| s.user_id != user_id);
+            Ok((before - map.len()) as u64)
+        })
+    }
+
+    fn delete_others_for_user(
+        &self,
+        user_id: Uuid,
+        keep_hash: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<u64, String>> + Send + '_>> {
+        let keep_hash = keep_hash.to_string();
+        Box::pin(async move {
+            let mut map = self.entries.lock().await;
+            let before = map.len();
+            map.retain(|key, s| !(s.user_id == user_id && key != &keep_hash));
+            Ok((before - map.len()) as u64)
+        })
     }
 }
 
@@ -249,30 +297,42 @@ impl MemoryRevocationStore {
     }
 }
 
-#[async_trait::async_trait]
 impl RevocationStore for MemoryRevocationStore {
-    async fn revoke(&self, jti: &str, ttl: Duration) -> Result<(), String> {
-        let mut map = self.entries.lock().await;
-        // Cleanup expired entries if map is large
-        if map.len() > 1000 {
-            let now = Instant::now();
-            map.retain(|_, e| e.expires_at > now);
-        }
-        map.insert(
-            jti.to_string(),
-            RevocationEntry {
-                expires_at: Instant::now() + ttl,
-            },
-        );
-        Ok(())
+    fn revoke(
+        &self,
+        jti: &str,
+        ttl: Duration,
+    ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + '_>> {
+        let jti = jti.to_string();
+        Box::pin(async move {
+            let mut map = self.entries.lock().await;
+            // Cleanup expired entries if map is large
+            if map.len() > 1000 {
+                let now = Instant::now();
+                map.retain(|_, e| e.expires_at > now);
+            }
+            map.insert(
+                jti,
+                RevocationEntry {
+                    expires_at: Instant::now() + ttl,
+                },
+            );
+            Ok(())
+        })
     }
 
-    async fn is_revoked(&self, jti: &str) -> Result<bool, String> {
-        let map = self.entries.lock().await;
-        match map.get(jti) {
-            Some(entry) if entry.expires_at > Instant::now() => Ok(true),
-            _ => Ok(false),
-        }
+    fn is_revoked(
+        &self,
+        jti: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<bool, String>> + Send + '_>> {
+        let jti = jti.to_string();
+        Box::pin(async move {
+            let map = self.entries.lock().await;
+            match map.get(&jti) {
+                Some(entry) if entry.expires_at > Instant::now() => Ok(true),
+                _ => Ok(false),
+            }
+        })
     }
 }
 

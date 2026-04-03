@@ -259,6 +259,7 @@ pub trait DatabaseBackend: Send + Sync {
     ///
     /// Returns `None` for non-Postgres backends. When `None`, the builder
     /// uses memory-based ephemeral stores unless Redis is explicitly configured.
+    #[cfg(feature = "diesel-backend")]
     fn postgres_pool_for_stores(&self) -> Option<crate::state::DbPool> {
         None
     }
@@ -277,6 +278,7 @@ impl DatabaseBackend for Box<dyn DatabaseBackend> {
         (**self).repositories()
     }
 
+    #[cfg(feature = "diesel-backend")]
     fn postgres_pool_for_stores(&self) -> Option<crate::state::DbPool> {
         (**self).postgres_pool_for_stores()
     }

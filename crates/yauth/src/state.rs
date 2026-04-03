@@ -6,6 +6,7 @@ use crate::stores::{ChallengeStore, RateLimitStore, RevocationStore, SessionStor
 use std::sync::Arc;
 use uuid::Uuid;
 
+#[cfg(feature = "diesel-backend")]
 pub type DbPool =
     diesel_async_crate::pooled_connection::deadpool::Pool<diesel_async_crate::AsyncPgConnection>;
 

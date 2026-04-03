@@ -263,3 +263,21 @@ pub trait DatabaseBackend: Send + Sync {
         None
     }
 }
+
+/// Blanket impl so `Box<dyn DatabaseBackend>` can be passed directly to `YAuthBuilder::new`.
+impl DatabaseBackend for Box<dyn DatabaseBackend> {
+    fn migrate(
+        &self,
+        features: &EnabledFeatures,
+    ) -> Pin<Box<dyn Future<Output = Result<(), RepoError>> + Send + '_>> {
+        (**self).migrate(features)
+    }
+
+    fn repositories(&self) -> Repositories {
+        (**self).repositories()
+    }
+
+    fn postgres_pool_for_stores(&self) -> Option<crate::state::DbPool> {
+        (**self).postgres_pool_for_stores()
+    }
+}

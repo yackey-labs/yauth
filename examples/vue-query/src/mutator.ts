@@ -18,9 +18,7 @@ type MutatorOptions = {
 	signal?: AbortSignal;
 };
 
-export const customFetch = async <T>(
-	options: MutatorOptions,
-): Promise<T> => {
+export const customFetch = async <T>(options: MutatorOptions): Promise<T> => {
 	const { url, method, headers, data, params, signal } = options;
 
 	const searchParams = params

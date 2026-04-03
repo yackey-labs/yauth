@@ -11,9 +11,10 @@ const successMessage = ref<string | null>(null);
 
 const register = useEmailPasswordRegister({
 	mutation: {
-		onSuccess: (data: any) => {
+		onSuccess: (data) => {
+			const result = data as Record<string, string> | undefined;
 			successMessage.value =
-				data?.message || "Registration successful! Please log in.";
+				result?.message || "Registration successful! Please log in.";
 			setTimeout(() => router.push("/login"), 2000);
 		},
 	},

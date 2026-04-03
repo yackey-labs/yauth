@@ -1,6 +1,7 @@
 use chrono::NaiveDateTime;
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use uuid::Uuid;
 
 use super::schema::*;
@@ -57,7 +58,7 @@ pub struct UpdateUser {
 // Core: yauth_sessions
 // ──────────────────────────────────────────────
 
-#[derive(Debug, Clone, Queryable, Selectable, Serialize, Deserialize)]
+#[derive(Clone, Queryable, Selectable, Serialize, Deserialize)]
 #[diesel(table_name = yauth_sessions)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct Session {
@@ -70,7 +71,21 @@ pub struct Session {
     pub created_at: NaiveDateTime,
 }
 
-#[derive(Debug, Clone, Insertable, Serialize, Deserialize)]
+impl fmt::Debug for Session {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Session")
+            .field("id", &self.id)
+            .field("user_id", &self.user_id)
+            .field("token_hash", &"[REDACTED]")
+            .field("ip_address", &self.ip_address)
+            .field("user_agent", &self.user_agent)
+            .field("expires_at", &self.expires_at)
+            .field("created_at", &self.created_at)
+            .finish()
+    }
+}
+
+#[derive(Clone, Insertable, Serialize, Deserialize)]
 #[diesel(table_name = yauth_sessions)]
 pub struct NewSession {
     pub id: Uuid,
@@ -80,6 +95,20 @@ pub struct NewSession {
     pub user_agent: Option<String>,
     pub expires_at: NaiveDateTime,
     pub created_at: NaiveDateTime,
+}
+
+impl fmt::Debug for NewSession {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NewSession")
+            .field("id", &self.id)
+            .field("user_id", &self.user_id)
+            .field("token_hash", &"[REDACTED]")
+            .field("ip_address", &self.ip_address)
+            .field("user_agent", &self.user_agent)
+            .field("expires_at", &self.expires_at)
+            .field("created_at", &self.created_at)
+            .finish()
+    }
 }
 
 // ──────────────────────────────────────────────
@@ -535,7 +564,7 @@ pub struct NewConsent {
 // ──────────────────────────────────────────────
 
 #[cfg(feature = "oauth2-server")]
-#[derive(Debug, Clone, Queryable, Selectable, Serialize, Deserialize)]
+#[derive(Clone, Queryable, Selectable, Serialize, Deserialize)]
 #[diesel(table_name = yauth_device_codes)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct DeviceCode {
@@ -553,7 +582,7 @@ pub struct DeviceCode {
 }
 
 #[cfg(feature = "oauth2-server")]
-#[derive(Debug, Clone, Insertable, Serialize, Deserialize)]
+#[derive(Clone, Insertable, Serialize, Deserialize)]
 #[diesel(table_name = yauth_device_codes)]
 pub struct NewDeviceCode {
     pub id: Uuid,
@@ -633,7 +662,7 @@ pub struct NewUnlockToken {
 // ──────────────────────────────────────────────
 
 #[cfg(feature = "webhooks")]
-#[derive(Debug, Clone, Queryable, Selectable, Serialize, Deserialize)]
+#[derive(Clone, Queryable, Selectable, Serialize, Deserialize)]
 #[diesel(table_name = yauth_webhooks)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct Webhook {
@@ -647,7 +676,7 @@ pub struct Webhook {
 }
 
 #[cfg(feature = "webhooks")]
-#[derive(Debug, Clone, Insertable, Serialize, Deserialize)]
+#[derive(Clone, Insertable, Serialize, Deserialize)]
 #[diesel(table_name = yauth_webhooks)]
 pub struct NewWebhook {
     pub id: Uuid,
@@ -660,7 +689,7 @@ pub struct NewWebhook {
 }
 
 #[cfg(feature = "webhooks")]
-#[derive(Debug, Clone, AsChangeset, Serialize, Deserialize)]
+#[derive(Clone, AsChangeset, Serialize, Deserialize)]
 #[diesel(table_name = yauth_webhooks)]
 pub struct UpdateWebhook {
     pub url: Option<String>,

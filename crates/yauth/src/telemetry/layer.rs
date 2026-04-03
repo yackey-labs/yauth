@@ -1,7 +1,7 @@
 use axum::{extract::MatchedPath, extract::Request, middleware::Next, response::Response};
 use opentelemetry::context::FutureExt as OtelFutureExt;
 use opentelemetry::trace::{SpanKind, Status, TraceContextExt, Tracer};
-use opentelemetry::{global, KeyValue};
+use opentelemetry::{KeyValue, global};
 use opentelemetry_http::HeaderExtractor;
 use opentelemetry_semantic_conventions::attribute::{
     HTTP_REQUEST_METHOD, HTTP_RESPONSE_STATUS_CODE, HTTP_ROUTE, URL_PATH,

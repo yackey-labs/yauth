@@ -1,20 +1,11 @@
 use axum::{extract::MatchedPath, extract::Request, middleware::Next, response::Response};
+use opentelemetry::KeyValue;
 use opentelemetry::global;
-use opentelemetry::propagation::Extractor;
-use tracing_opentelemetry::OpenTelemetrySpanExt;
-
-/// Adapter to extract W3C traceparent/tracestate from HTTP request headers.
-struct HeaderExtractor<'a>(&'a axum::http::HeaderMap);
-
-impl Extractor for HeaderExtractor<'_> {
-    fn get(&self, key: &str) -> Option<&str> {
-        self.0.get(key).and_then(|v| v.to_str().ok())
-    }
-
-    fn keys(&self) -> Vec<&str> {
-        self.0.keys().map(|k| k.as_str()).collect()
-    }
-}
+use opentelemetry::trace::{SpanKind, Status, TraceContextExt, Tracer};
+use opentelemetry_http::HeaderExtractor;
+use opentelemetry_semantic_conventions::attribute::{
+    HTTP_REQUEST_METHOD, HTTP_RESPONSE_STATUS_CODE, HTTP_ROUTE, URL_PATH,
+};
 
 pub async fn trace_middleware(req: Request, next: Next) -> Response {
     let path = req.uri().path().to_string();
@@ -36,41 +27,36 @@ pub async fn trace_middleware(req: Request, next: Next) -> Response {
         propagator.extract(&HeaderExtractor(req.headers()))
     });
 
-    let span = tracing::info_span!(
-        "HTTP request",
-        otel.name = %format!("{} {}", method, route),
-        otel.kind = "Server",
-        http.request.method = %method,
-        http.route = %route,
-        url.path = %path,
-        http.response.status_code = tracing::field::Empty,
-        otel.status_code = tracing::field::Empty,
-        // User context — OTel semconv user.* namespace (populated after auth)
-        user.id = tracing::field::Empty,
-        user.email = tracing::field::Empty,
-        user.roles = tracing::field::Empty,
-        // Auth operation context
-        yauth.auth_method = tracing::field::Empty,
-        yauth.session_found = tracing::field::Empty,
-        yauth.rate_limited = tracing::field::Empty,
-        yauth.hibp.breach_count = tracing::field::Empty,
-        yauth.mfa_required = tracing::field::Empty,
-    );
+    let tracer = global::tracer("yauth");
+    let span = tracer
+        .span_builder(format!("{method} {route}"))
+        .with_kind(SpanKind::Server)
+        .with_attributes(vec![
+            KeyValue::new(HTTP_REQUEST_METHOD, method),
+            KeyValue::new(HTTP_ROUTE, route),
+            KeyValue::new(URL_PATH, path),
+        ])
+        .start_with_context(&tracer, &parent_cx);
 
-    // Link the tracing span to the incoming OTel context so frontend and backend
-    // traces share the same trace ID.
-    let _ = span.set_parent(parent_cx);
+    let cx = parent_cx.with_span(span);
 
-    let response = {
-        use tracing::Instrument;
-        next.run(req).instrument(span.clone()).await
-    };
+    // Attach context so Context::current() returns it inside handlers.
+    // The guard must live across the .await — it is !Send but stays in the same task.
+    let _guard = cx.clone().attach();
+
+    // Store context in request extensions for code that receives the request object.
+    let mut req = req;
+    req.extensions_mut().insert(cx.clone());
+
+    let response = next.run(req).await;
 
     let status = response.status().as_u16();
-    span.record("http.response.status_code", status);
+    let span_ref = cx.span();
+    span_ref.set_attribute(KeyValue::new(HTTP_RESPONSE_STATUS_CODE, i64::from(status)));
     if status >= 500 {
-        span.record("otel.status_code", "ERROR");
+        span_ref.set_status(Status::error(format!("HTTP {status}")));
     }
+    span_ref.end();
 
     response
 }

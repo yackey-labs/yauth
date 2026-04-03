@@ -202,7 +202,7 @@ impl PostgresRateLimitStore {
 impl RateLimitStore for PostgresRateLimitStore {
     async fn check(&self, key: &str, limit: u32, window_secs: u64) -> RateLimitResult {
         if let Err(e) = self.ensure_init().await {
-            tracing::error!("rate limit store init failed: {e}");
+            crate::otel::record_error("rate_limit_store_init_failed", &e);
             return RateLimitResult {
                 allowed: true,
                 remaining: limit.saturating_sub(1),
@@ -256,7 +256,7 @@ impl RateLimitStore for PostgresRateLimitStore {
                         rate_limit_result(count, limit, window_start, window_secs)
                     }
                     Err(e) => {
-                        tracing::error!("rate limit check failed: {e}");
+                        crate::otel::record_error("rate_limit_check_failed", &e);
                         RateLimitResult {
                             allowed: true,
                             remaining: limit.saturating_sub(1),
@@ -266,7 +266,7 @@ impl RateLimitStore for PostgresRateLimitStore {
                 }
             }
             Err(e) => {
-                tracing::error!("rate limit pool error: {e}");
+                crate::otel::record_error("rate_limit_pool_error", &e);
                 RateLimitResult {
                     allowed: true,
                     remaining: limit.saturating_sub(1),

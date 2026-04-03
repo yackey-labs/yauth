@@ -83,8 +83,7 @@ pub async fn validate_session(
 
     let session = state.session_store.validate(&token_hash).await?;
 
-    let span = tracing::Span::current();
-    span.record("yauth.session_found", session.is_some());
+    crate::otel::set_attribute("yauth.session_found", session.is_some());
 
     match session {
         Some(s) => {
@@ -94,12 +93,16 @@ pub async fn validate_session(
                 && let (Some(session_ip), Some(req_ip)) = (&s.ip_address, request_ip)
                 && session_ip != req_ip
             {
-                tracing::warn!(
-                    event = "yauth.session.ip_mismatch",
-                    session_id = %s.id,
-                    session_ip = %session_ip,
-                    request_ip = %req_ip,
-                    "Session IP mismatch"
+                crate::otel::add_event(
+                    "session_ip_mismatch",
+                    #[cfg(feature = "telemetry")]
+                    vec![
+                        opentelemetry::KeyValue::new("session_id", s.id.to_string()),
+                        opentelemetry::KeyValue::new("session_ip", session_ip.clone()),
+                        opentelemetry::KeyValue::new("request_ip", req_ip.to_string()),
+                    ],
+                    #[cfg(not(feature = "telemetry"))]
+                    vec![],
                 );
                 if binding.ip_mismatch_action == BindingAction::Invalidate {
                     state.session_store.delete(&token_hash).await?;
@@ -111,10 +114,12 @@ pub async fn validate_session(
                 && let (Some(session_ua), Some(req_ua)) = (&s.user_agent, request_ua)
                 && session_ua != req_ua
             {
-                tracing::warn!(
-                    event = "yauth.session.ua_mismatch",
-                    session_id = %s.id,
-                    "Session User-Agent mismatch"
+                crate::otel::add_event(
+                    "session_ua_mismatch",
+                    #[cfg(feature = "telemetry")]
+                    vec![opentelemetry::KeyValue::new("session_id", s.id.to_string())],
+                    #[cfg(not(feature = "telemetry"))]
+                    vec![],
                 );
                 if binding.ua_mismatch_action == BindingAction::Invalidate {
                     state.session_store.delete(&token_hash).await?;

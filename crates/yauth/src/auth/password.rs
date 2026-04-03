@@ -4,21 +4,52 @@ use rand::rngs::OsRng;
 
 /// Synchronous password hashing — only for use in non-async contexts (e.g. startup, tests).
 pub fn hash_password_sync(password: &str) -> Result<String, password_hash::Error> {
-    let _span = tracing::info_span!("yauth.password_hash").entered();
-    let salt = SaltString::generate(&mut OsRng);
-    let argon2 = Argon2::default();
-    Ok(argon2
-        .hash_password(password.as_bytes(), &salt)?
-        .to_string())
+    #[cfg(feature = "telemetry")]
+    {
+        crate::otel::with_span(
+            "yauth.password_hash",
+            opentelemetry::trace::SpanKind::Internal,
+            || {
+                let salt = SaltString::generate(&mut OsRng);
+                let argon2 = Argon2::default();
+                Ok(argon2
+                    .hash_password(password.as_bytes(), &salt)?
+                    .to_string())
+            },
+        )
+    }
+    #[cfg(not(feature = "telemetry"))]
+    {
+        let salt = SaltString::generate(&mut OsRng);
+        let argon2 = Argon2::default();
+        Ok(argon2
+            .hash_password(password.as_bytes(), &salt)?
+            .to_string())
+    }
 }
 
 /// Synchronous password verification — only for use in non-async contexts (e.g. tests).
 pub fn verify_password_sync(password: &str, hash: &str) -> Result<bool, password_hash::Error> {
-    let _span = tracing::info_span!("yauth.password_verify").entered();
-    let parsed = PasswordHash::new(hash)?;
-    Ok(Argon2::default()
-        .verify_password(password.as_bytes(), &parsed)
-        .is_ok())
+    #[cfg(feature = "telemetry")]
+    {
+        crate::otel::with_span(
+            "yauth.password_verify",
+            opentelemetry::trace::SpanKind::Internal,
+            || {
+                let parsed = PasswordHash::new(hash)?;
+                Ok(Argon2::default()
+                    .verify_password(password.as_bytes(), &parsed)
+                    .is_ok())
+            },
+        )
+    }
+    #[cfg(not(feature = "telemetry"))]
+    {
+        let parsed = PasswordHash::new(hash)?;
+        Ok(Argon2::default()
+            .verify_password(password.as_bytes(), &parsed)
+            .is_ok())
+    }
 }
 
 /// Async password hashing that offloads CPU-intensive Argon2 to a blocking thread.

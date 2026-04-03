@@ -9,7 +9,6 @@ use diesel::prelude::*;
 use diesel::result::OptionalExtension;
 use diesel_async_crate::RunQueryDsl;
 use serde::{Deserialize, Serialize};
-use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::auth::session::session_set_cookie;
@@ -197,7 +196,13 @@ async fn send_magic_link(
         .check(&format!("magic-link:{}", email))
         .await
     {
-        warn!(event = "yauth.magic_link.rate_limited", email = %email, "Magic link rate limited");
+        crate::otel::add_event(
+            "magic_link_rate_limited",
+            #[cfg(feature = "telemetry")]
+            vec![opentelemetry::KeyValue::new("user.email", email.clone())],
+            #[cfg(not(feature = "telemetry"))]
+            vec![],
+        );
         return Err(api_err(StatusCode::TOO_MANY_REQUESTS, "Too many requests"));
     }
 
@@ -219,20 +224,32 @@ async fn send_magic_link(
 
     let user_opt = {
         find_user_by_email(&mut conn, &email).await.map_err(|e| {
-            tracing::error!("DB error: {}", e);
+            crate::otel::record_error("db_error", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?
     };
 
     if user_opt.is_none() && (!ml_config.allow_signup || !state.config.allow_signups) {
-        info!(event = "yauth.magic_link.no_user", email = %email, "Magic link requested for non-existent email (signup disabled)");
+        crate::otel::add_event(
+            "magic_link_no_user",
+            #[cfg(feature = "telemetry")]
+            vec![opentelemetry::KeyValue::new("user.email", email.clone())],
+            #[cfg(not(feature = "telemetry"))]
+            vec![],
+        );
         return Ok(success_msg);
     }
 
     if let Some(ref u) = user_opt
         && u.banned
     {
-        warn!(event = "yauth.magic_link.banned", email = %email, "Magic link requested for banned user");
+        crate::otel::add_event(
+            "magic_link_banned_user",
+            #[cfg(feature = "telemetry")]
+            vec![opentelemetry::KeyValue::new("user.email", email.clone())],
+            #[cfg(not(feature = "telemetry"))]
+            vec![],
+        );
         return Ok(success_msg);
     }
 
@@ -253,7 +270,7 @@ async fn send_magic_link(
         db_insert_magic_link(&mut conn, Uuid::new_v4(), &email, &token_hash, expires_at)
             .await
             .map_err(|e| {
-                tracing::error!("Failed to create magic link: {}", e);
+                crate::otel::record_error("magic_link_create_failed", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
     }
@@ -261,13 +278,19 @@ async fn send_magic_link(
     if let Some(ref email_service) = state.email_service
         && let Err(e) = email_service.send_magic_link_email(&email, &token)
     {
-        tracing::error!("Failed to send magic link email: {}", e);
+        crate::otel::record_error("send_magic_link_email_failed", &e);
     }
 
     state.emit_event(&AuthEvent::MagicLinkSent {
         email: email.clone(),
     });
-    info!(event = "yauth.magic_link.sent", email = %email, "Magic link sent");
+    crate::otel::add_event(
+        "magic_link_sent",
+        #[cfg(feature = "telemetry")]
+        vec![opentelemetry::KeyValue::new("user.email", email.clone())],
+        #[cfg(not(feature = "telemetry"))]
+        vec![],
+    );
 
     Ok(success_msg)
 }
@@ -297,7 +320,7 @@ async fn verify_magic_link(
         db_find_unused_magic_link_by_token(&mut conn, &token_hash)
             .await
             .map_err(|e| {
-                tracing::error!("DB error: {}", e);
+                crate::otel::record_error("db_error", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?
             .ok_or_else(|| api_err(StatusCode::BAD_REQUEST, "Invalid or expired magic link"))?
@@ -320,7 +343,7 @@ async fn verify_magic_link(
         db_mark_magic_link_used(&mut conn, ml_id)
             .await
             .map_err(|e| {
-                tracing::error!("Failed to mark magic link as used: {}", e);
+                crate::otel::record_error("magic_link_mark_used_failed", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
     }
@@ -330,7 +353,7 @@ async fn verify_magic_link(
 
     let user_opt = {
         find_user_by_email(&mut conn, email).await.map_err(|e| {
-            tracing::error!("DB error: {}", e);
+            crate::otel::record_error("db_error", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?
     };
@@ -338,7 +361,16 @@ async fn verify_magic_link(
     let (user_model, is_new_user) = match user_opt {
         Some(u) => {
             if u.banned {
-                warn!(event = "yauth.magic_link.verify_banned", email = %email, "Magic link verify for banned user");
+                crate::otel::add_event(
+                    "magic_link_verify_banned_user",
+                    #[cfg(feature = "telemetry")]
+                    vec![opentelemetry::KeyValue::new(
+                        "user.email",
+                        email.to_string(),
+                    )],
+                    #[cfg(not(feature = "telemetry"))]
+                    vec![],
+                );
                 return Err(api_err(StatusCode::FORBIDDEN, "Account suspended"));
             }
             (u, false)
@@ -353,7 +385,16 @@ async fn verify_magic_link(
 
             let user_id = Uuid::new_v4();
             let role = if state.should_auto_admin().await {
-                tracing::info!(event = "yauth.register.auto_admin", email = %email, "First user — assigning admin role");
+                crate::otel::add_event(
+                    "register_auto_admin",
+                    #[cfg(feature = "telemetry")]
+                    vec![opentelemetry::KeyValue::new(
+                        "user.email",
+                        email.to_string(),
+                    )],
+                    #[cfg(not(feature = "telemetry"))]
+                    vec![],
+                );
                 "admin".to_string()
             } else {
                 ml_config
@@ -367,12 +408,21 @@ async fn verify_magic_link(
                 db_insert_user(&mut conn, user_id, email, &role)
                     .await
                     .map_err(|e| {
-                        tracing::error!("Failed to create user via magic link: {}", e);
+                        crate::otel::record_error("magic_link_user_create_failed", &e);
                         api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
                     })?;
             }
 
-            info!(event = "yauth.magic_link.user_created", email = %email, user_id = %user_id, "User auto-created via magic link");
+            crate::otel::add_event(
+                "magic_link_user_created",
+                #[cfg(feature = "telemetry")]
+                vec![
+                    opentelemetry::KeyValue::new("user.email", email.to_string()),
+                    opentelemetry::KeyValue::new("user.id", user_id.to_string()),
+                ],
+                #[cfg(not(feature = "telemetry"))]
+                vec![],
+            );
             state.emit_event(&AuthEvent::UserRegistered {
                 user_id,
                 email: email.clone(),
@@ -402,7 +452,7 @@ async fn verify_magic_link(
             db_set_user_email_verified(&mut conn, user_model.id)
                 .await
                 .map_err(|e| {
-                    tracing::error!("Failed to update user email_verified: {}", e);
+                    crate::otel::record_error("user_email_verified_update_failed", &e);
                     api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
                 })?;
         }
@@ -412,7 +462,7 @@ async fn verify_magic_link(
         session::create_session(&state, user_model.id, None, None, state.config.session_ttl)
             .await
             .map_err(|e| {
-                tracing::error!("Failed to create session: {}", e);
+                crate::otel::record_error("session_create_failed", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
 
@@ -425,9 +475,17 @@ async fn verify_magic_link(
         method: "magic-link".to_string(),
     });
 
-    info!(
-        event = "yauth.magic_link.verified", email = %email, user_id = %user_model.id,
-        is_new_user = is_new_user, magic_link_id = %ml_id, "Magic link verified, session created"
+    crate::otel::add_event(
+        "magic_link_verified",
+        #[cfg(feature = "telemetry")]
+        vec![
+            opentelemetry::KeyValue::new("user.email", email.to_string()),
+            opentelemetry::KeyValue::new("user.id", user_model.id.to_string()),
+            opentelemetry::KeyValue::new("is_new_user", is_new_user),
+            opentelemetry::KeyValue::new("magic_link.id", ml_id.to_string()),
+        ],
+        #[cfg(not(feature = "telemetry"))]
+        vec![],
     );
 
     Ok((

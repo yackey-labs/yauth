@@ -7,7 +7,6 @@ use axum::{
 };
 use axum_extra::extract::cookie::CookieJar;
 use serde::{Deserialize, Serialize};
-use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::auth::{crypto, hibp, input, password, password_policy, session};
@@ -127,10 +126,7 @@ async fn register(
     Json(input): Json<RegisterRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     if !state.config.allow_signups {
-        warn!(
-            event = "yauth.register.disabled",
-            "Registration attempted while signups are disabled"
-        );
+        crate::otel::add_event("register_disabled", vec![]);
         return Err(api_err(
             StatusCode::FORBIDDEN,
             "Registration is currently disabled",
@@ -138,10 +134,7 @@ async fn register(
     }
 
     if !state.rate_limiter.check("register").await {
-        warn!(
-            event = "yauth.register.rate_limited",
-            "Registration rate limited"
-        );
+        crate::otel::add_event("register_rate_limited", vec![]);
         return Err(api_err(StatusCode::TOO_MANY_REQUESTS, "Too many requests"));
     }
 
@@ -177,7 +170,13 @@ async fn register(
     if ep_config.hibp_check
         && let Some(breach_msg) = hibp::validate_password_not_breached(&pwd).await
     {
-        warn!(event = "yauth.register.breached_password", email = %email, "Breached password rejected");
+        crate::otel::add_event(
+            "register_breached_password",
+            #[cfg(feature = "telemetry")]
+            vec![opentelemetry::KeyValue::new("user.email", email.clone())],
+            #[cfg(not(feature = "telemetry"))]
+            vec![],
+        );
         return Err(api_err(StatusCode::BAD_REQUEST, &breach_msg));
     }
 
@@ -196,25 +195,37 @@ async fn register(
             .await
             .optional()
             .map_err(|e| {
-                tracing::error!("DB error: {}", e);
+                crate::otel::record_error("db_error", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
 
         if existing.is_some() {
-            warn!(event = "yauth.register.duplicate", email = %email, "Registration attempt with existing email");
+            crate::otel::add_event(
+                "register_duplicate_email",
+                #[cfg(feature = "telemetry")]
+                vec![opentelemetry::KeyValue::new("user.email", email.clone())],
+                #[cfg(not(feature = "telemetry"))]
+                vec![],
+            );
             return Err(api_err(StatusCode::CONFLICT, "Registration failed"));
         }
     }
     // conn dropped here — hash runs on blocking thread without holding a DB connection
     let password_hash = password::hash_password(&pwd).await.map_err(|e| {
-        tracing::error!("Password hash error: {}", e);
+        crate::otel::record_error("password_hash_error", &e);
         api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
     })?;
 
     let user_id = Uuid::new_v4();
 
     let role = if state.should_auto_admin().await {
-        info!(event = "yauth.register.auto_admin", email = %email, "First user — assigning admin role");
+        crate::otel::add_event(
+            "register_auto_admin",
+            #[cfg(feature = "telemetry")]
+            vec![opentelemetry::KeyValue::new("user.email", email.clone())],
+            #[cfg(not(feature = "telemetry"))]
+            vec![],
+        );
         "admin".to_string()
     } else {
         "user".to_string()
@@ -254,7 +265,7 @@ async fn register(
             ));
         }
         Err(e) => {
-            tracing::error!("Failed to create user: {}", e);
+            crate::otel::record_error("user_create_failed", &e);
             return Err(api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"));
         }
     }
@@ -269,7 +280,7 @@ async fn register(
         .execute(&mut conn)
         .await
         .map_err(|e| {
-            tracing::error!("Failed to store password: {}", e);
+            crate::otel::record_error("password_store_failed", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?;
 
@@ -292,18 +303,27 @@ async fn register(
             .execute(&mut conn)
             .await
             .map_err(|e| {
-                tracing::error!("Failed to create email verification: {}", e);
+                crate::otel::record_error("email_verification_create_failed", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
 
         if let Some(ref email_service) = state.email_service
             && let Err(e) = email_service.send_verification_email(&email, &token)
         {
-            tracing::error!("Failed to send verification email: {}", e);
+            crate::otel::record_error("send_verification_email_failed", &e);
         }
     }
 
-    info!(event = "yauth.register", email = %email, user_id = %user_id, "User registered");
+    crate::otel::add_event(
+        "user_registered",
+        #[cfg(feature = "telemetry")]
+        vec![
+            opentelemetry::KeyValue::new("user.email", email.clone()),
+            opentelemetry::KeyValue::new("user.id", user_id.to_string()),
+        ],
+        #[cfg(not(feature = "telemetry"))]
+        vec![],
+    );
 
     state
         .write_audit_log(
@@ -334,7 +354,13 @@ async fn login(
     let password_input = input::sanitize_password(&input.password);
 
     if !state.rate_limiter.check(&format!("login:{}", email)).await {
-        warn!(event = "yauth.login.rate_limited", email = %email, "Login rate limited");
+        crate::otel::add_event(
+            "login_rate_limited",
+            #[cfg(feature = "telemetry")]
+            vec![opentelemetry::KeyValue::new("user.email", email.clone())],
+            #[cfg(not(feature = "telemetry"))]
+            vec![],
+        );
         return Err(api_err(StatusCode::TOO_MANY_REQUESTS, "Too many requests"));
     }
 
@@ -361,7 +387,7 @@ async fn login(
             .await
             .optional()
             .map_err(|e| {
-                tracing::error!("DB error: {}", e);
+                crate::otel::record_error("db_error", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
 
@@ -374,7 +400,7 @@ async fn login(
                     .await
                     .optional()
                     .map_err(|e| {
-                        tracing::error!("DB error: {}", e);
+                        crate::otel::record_error("db_error", &e);
                         api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
                     })?;
                 let h = pwd
@@ -402,12 +428,24 @@ async fn login(
     match (user_opt, valid) {
         (Some(u), true) => {
             if u.banned {
-                warn!(event = "yauth.login.banned", email = %u.email, "Login attempt by banned user");
+                crate::otel::add_event(
+                    "login_banned_user",
+                    #[cfg(feature = "telemetry")]
+                    vec![opentelemetry::KeyValue::new("user.email", u.email.clone())],
+                    #[cfg(not(feature = "telemetry"))]
+                    vec![],
+                );
                 return Err(api_err(StatusCode::FORBIDDEN, "Account suspended"));
             }
 
             if state.email_password_config.require_email_verification && !u.email_verified {
-                warn!(event = "yauth.login.email_not_verified", email = %u.email, "Login attempt with unverified email");
+                crate::otel::add_event(
+                    "login_email_not_verified",
+                    #[cfg(feature = "telemetry")]
+                    vec![opentelemetry::KeyValue::new("user.email", u.email.clone())],
+                    #[cfg(not(feature = "telemetry"))]
+                    vec![],
+                );
                 return Err(api_err(
                     StatusCode::FORBIDDEN,
                     "Email not verified. Please check your inbox or request a new verification email.",
@@ -423,7 +461,16 @@ async fn login(
                 EventResponse::RequireMfa {
                     pending_session_id, ..
                 } => {
-                    info!(event = "yauth.login.mfa_required", email = %u.email, user_id = %u.id, "Login requires MFA");
+                    crate::otel::add_event(
+                        "login_mfa_required",
+                        #[cfg(feature = "telemetry")]
+                        vec![
+                            opentelemetry::KeyValue::new("user.email", u.email.clone()),
+                            opentelemetry::KeyValue::new("user.id", u.id.to_string()),
+                        ],
+                        #[cfg(not(feature = "telemetry"))]
+                        vec![],
+                    );
                     Ok(Json(serde_json::json!({
                         "mfa_required": true,
                         "pending_session_id": pending_session_id,
@@ -431,7 +478,13 @@ async fn login(
                     .into_response())
                 }
                 EventResponse::Block { status, message } => {
-                    warn!(event = "yauth.login.blocked", email = %u.email, "Login blocked");
+                    crate::otel::add_event(
+                        "login_blocked",
+                        #[cfg(feature = "telemetry")]
+                        vec![opentelemetry::KeyValue::new("user.email", u.email.clone())],
+                        #[cfg(not(feature = "telemetry"))]
+                        vec![],
+                    );
                     let status_code =
                         StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
                     Err(api_err(status_code, &message))
@@ -450,11 +503,20 @@ async fn login(
                         session::create_session(&state, u.id, None, None, session_ttl)
                             .await
                             .map_err(|e| {
-                                tracing::error!("Failed to create session: {}", e);
+                                crate::otel::record_error("session_create_failed", &e);
                                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
                             })?;
 
-                    info!(event = "yauth.login", email = %u.email, user_id = %u.id, "User logged in");
+                    crate::otel::add_event(
+                        "login_succeeded",
+                        #[cfg(feature = "telemetry")]
+                        vec![
+                            opentelemetry::KeyValue::new("user.email", u.email.clone()),
+                            opentelemetry::KeyValue::new("user.id", u.id.to_string()),
+                        ],
+                        #[cfg(not(feature = "telemetry"))]
+                        vec![],
+                    );
 
                     state
                         .write_audit_log(
@@ -479,7 +541,13 @@ async fn login(
             }
         }
         _ => {
-            warn!(event = "yauth.login.failed", email = %email, "Failed login attempt");
+            crate::otel::add_event(
+                "login_failed",
+                #[cfg(feature = "telemetry")]
+                vec![opentelemetry::KeyValue::new("user.email", email.clone())],
+                #[cfg(not(feature = "telemetry"))]
+                vec![],
+            );
             state.write_audit_log(
                 None,
                 "login_failed",
@@ -540,7 +608,7 @@ async fn verify_email(
             .await
             .optional()
             .map_err(|e| {
-                tracing::error!("DB error: {}", e);
+                crate::otel::record_error("db_error", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?
             .ok_or_else(|| {
@@ -578,7 +646,7 @@ async fn verify_email(
             .execute(&mut conn)
             .await
             .map_err(|e| {
-                tracing::error!("Failed to update user: {}", e);
+                crate::otel::record_error("user_update_failed", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
 
@@ -590,7 +658,16 @@ async fn verify_email(
         .await
         .ok();
 
-        info!(event = "yauth.email.verified", user_id = %verification.user_id, "Email verified");
+        crate::otel::add_event(
+            "email_verified",
+            #[cfg(feature = "telemetry")]
+            vec![opentelemetry::KeyValue::new(
+                "user.id",
+                verification.user_id.to_string(),
+            )],
+            #[cfg(not(feature = "telemetry"))]
+            vec![],
+        );
         state
             .write_audit_log(Some(verification.user_id), "email_verified", None, None)
             .await;
@@ -633,7 +710,7 @@ async fn resend_verification(
         .await
         .optional()
         .map_err(|e| {
-            tracing::error!("DB error: {}", e);
+            crate::otel::record_error("db_error", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?;
 
@@ -666,17 +743,23 @@ async fn resend_verification(
         .execute(&mut conn)
         .await
         .map_err(|e| {
-            tracing::error!("Failed to create verification: {}", e);
+            crate::otel::record_error("verification_create_failed", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?;
 
     if let Some(ref email_service) = state.email_service
         && let Err(e) = email_service.send_verification_email(&email, &token)
     {
-        tracing::error!("Failed to send verification email: {}", e);
+        crate::otel::record_error("send_verification_email_failed", &e);
     }
 
-    info!(event = "yauth.email.verification_resent", email = %email, "Verification email resent");
+    crate::otel::add_event(
+        "verification_email_resent",
+        #[cfg(feature = "telemetry")]
+        vec![opentelemetry::KeyValue::new("user.email", email.clone())],
+        #[cfg(not(feature = "telemetry"))]
+        vec![],
+    );
     Ok(success_msg)
 }
 
@@ -712,7 +795,7 @@ async fn forgot_password(
         .await
         .optional()
         .map_err(|e| {
-            tracing::error!("DB error: {}", e);
+            crate::otel::record_error("db_error", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?;
 
@@ -750,17 +833,26 @@ async fn forgot_password(
         .execute(&mut conn)
         .await
         .map_err(|e| {
-            tracing::error!("Failed to create password reset: {}", e);
+            crate::otel::record_error("password_reset_create_failed", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?;
 
     if let Some(ref email_service) = state.email_service
         && let Err(e) = email_service.send_password_reset_email(&user_email, &token)
     {
-        tracing::error!("Failed to send password reset email: {}", e);
+        crate::otel::record_error("send_password_reset_email_failed", &e);
     }
 
-    info!(event = "yauth.password.reset_requested", email = %email, user_id = %user_id, "Password reset email sent");
+    crate::otel::add_event(
+        "password_reset_requested",
+        #[cfg(feature = "telemetry")]
+        vec![
+            opentelemetry::KeyValue::new("user.email", email.clone()),
+            opentelemetry::KeyValue::new("user.id", user_id.to_string()),
+        ],
+        #[cfg(not(feature = "telemetry"))]
+        vec![],
+    );
     Ok(success_msg)
 }
 
@@ -828,7 +920,7 @@ async fn reset_password(
             .await
             .optional()
             .map_err(|e| {
-                tracing::error!("DB error: {}", e);
+                crate::otel::record_error("db_error", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?
             .ok_or_else(|| api_err(StatusCode::BAD_REQUEST, "Invalid or expired reset link"))?;
@@ -855,7 +947,7 @@ async fn reset_password(
     let new_hash = password::hash_password(&reset_password)
         .await
         .map_err(|e| {
-            tracing::error!("Password hash error: {}", e);
+            crate::otel::record_error("password_hash_error", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?;
 
@@ -873,7 +965,7 @@ async fn reset_password(
         .execute(&mut conn)
         .await
         .map_err(|e| {
-            tracing::error!("Failed to update password: {}", e);
+            crate::otel::record_error("password_update_failed", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?;
 
@@ -893,7 +985,7 @@ async fn reset_password(
         .execute(&mut conn)
         .await
         .map_err(|e| {
-            tracing::error!("Failed to update user: {}", e);
+            crate::otel::record_error("user_update_failed", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?;
 
@@ -907,7 +999,16 @@ async fn reset_password(
         .await
         .ok();
 
-    info!(event = "yauth.password.reset", user_id = %reset_info.user_id, "Password reset successfully");
+    crate::otel::add_event(
+        "password_reset_completed",
+        #[cfg(feature = "telemetry")]
+        vec![opentelemetry::KeyValue::new(
+            "user.id",
+            reset_info.user_id.to_string(),
+        )],
+        #[cfg(not(feature = "telemetry"))]
+        vec![],
+    );
     state
         .write_audit_log(Some(reset_info.user_id), "password_reset", None, None)
         .await;
@@ -970,7 +1071,7 @@ async fn change_password(
             .await
             .optional()
             .map_err(|e| {
-                tracing::error!("DB error: {}", e);
+                crate::otel::record_error("db_error", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
 
@@ -986,7 +1087,13 @@ async fn change_password(
         .await
         .unwrap_or(false);
     if !valid || !has_record {
-        warn!(event = "yauth.password.change_failed", user_id = %user.id, "Wrong current password");
+        crate::otel::add_event(
+            "password_change_failed",
+            #[cfg(feature = "telemetry")]
+            vec![opentelemetry::KeyValue::new("user.id", user.id.to_string())],
+            #[cfg(not(feature = "telemetry"))]
+            vec![],
+        );
         return Err(api_err(
             StatusCode::UNAUTHORIZED,
             "Current password is incorrect",
@@ -1001,7 +1108,7 @@ async fn change_password(
 
     // Hash runs on blocking thread without holding a DB connection
     let new_hash = password::hash_password(&new_password).await.map_err(|e| {
-        tracing::error!("Password hash error: {}", e);
+        crate::otel::record_error("password_hash_error", &e);
         api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
     })?;
 
@@ -1017,7 +1124,7 @@ async fn change_password(
         .execute(&mut conn)
         .await
         .map_err(|e| {
-            tracing::error!("Failed to update password: {}", e);
+            crate::otel::record_error("password_update_failed", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?;
 
@@ -1033,7 +1140,13 @@ async fn change_password(
 
     state.emit_event(&AuthEvent::PasswordChanged { user_id: user.id });
 
-    info!(event = "yauth.password.changed", user_id = %user.id, "Password changed successfully");
+    crate::otel::add_event(
+        "password_changed",
+        #[cfg(feature = "telemetry")]
+        vec![opentelemetry::KeyValue::new("user.id", user.id.to_string())],
+        #[cfg(not(feature = "telemetry"))]
+        vec![],
+    );
     state
         .write_audit_log(Some(user.id), "password_changed", None, None)
         .await;

@@ -10,7 +10,6 @@ use diesel::prelude::*;
 use diesel::result::OptionalExtension;
 use diesel_async_crate::RunQueryDsl;
 use serde::{Deserialize, Serialize};
-use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::auth::crypto;
@@ -294,7 +293,7 @@ async fn handle_login_failed(
     let mut conn = match db.get().await {
         Ok(c) => c,
         Err(e) => {
-            tracing::error!("Pool error in lockout handler: {}", e);
+            crate::otel::record_error("lockout_pool_error", &e);
             return EventResponse::Continue;
         }
     };
@@ -304,7 +303,7 @@ async fn handle_login_failed(
         Ok(Some(id)) => id,
         Ok(None) => return EventResponse::Continue,
         Err(e) => {
-            tracing::error!("DB error looking up user for lockout: {}", e);
+            crate::otel::record_error("lockout_user_lookup_error", &e);
             return EventResponse::Continue;
         }
     };
@@ -317,12 +316,12 @@ async fn handle_login_failed(
         Ok(None) => match insert_lock(&mut conn, Uuid::new_v4(), user_id, now).await {
             Ok(r) => r,
             Err(e) => {
-                tracing::error!("Failed to create account lock record: {}", e);
+                crate::otel::record_error("lockout_create_lock_failed", &e);
                 return EventResponse::Continue;
             }
         },
         Err(e) => {
-            tracing::error!("DB error checking account lock: {}", e);
+            crate::otel::record_error("lockout_check_lock_error", &e);
             return EventResponse::Continue;
         }
     };
@@ -331,11 +330,15 @@ async fn handle_login_failed(
     if let Some(locked_until) = lock_record.locked_until {
         let locked_until_fo = locked_until.and_utc().fixed_offset();
         if now < locked_until_fo {
-            warn!(
-                event = "yauth.lockout.blocked",
-                email = %email,
-                locked_until = %locked_until_fo,
-                "Login attempt on locked account"
+            crate::otel::add_event(
+                "lockout_blocked",
+                #[cfg(feature = "telemetry")]
+                vec![
+                    opentelemetry::KeyValue::new("user.email", email.to_string()),
+                    opentelemetry::KeyValue::new("locked_until", locked_until_fo.to_string()),
+                ],
+                #[cfg(not(feature = "telemetry"))]
+                vec![],
             );
             return EventResponse::Block {
                 status: 423,
@@ -348,7 +351,7 @@ async fn handle_login_failed(
         if config.auto_unlock
             && let Err(e) = update_lock_auto_unlock(&mut conn, lock_record.id, now).await
         {
-            tracing::error!("Failed to auto-unlock expired lock: {}", e);
+            crate::otel::record_error("lockout_auto_unlock_failed", &e);
         }
     }
 
@@ -357,7 +360,7 @@ async fn handle_login_failed(
         Ok(Some(r)) => r,
         Ok(None) => return EventResponse::Continue,
         Err(e) => {
-            tracing::error!("DB error re-reading account lock: {}", e);
+            crate::otel::record_error("lockout_reread_lock_error", &e);
             return EventResponse::Continue;
         }
     };
@@ -388,17 +391,21 @@ async fn handle_login_failed(
         )
         .await
         {
-            tracing::error!("Failed to update account lock: {}", e);
+            crate::otel::record_error("lockout_update_lock_failed", &e);
             return EventResponse::Continue;
         }
 
-        warn!(
-            event = "yauth.lockout.locked",
-            email = %email,
-            user_id = %user_id,
-            lock_count = new_lock_count,
-            locked_until = %locked_until,
-            "Account locked due to too many failed attempts"
+        crate::otel::add_event(
+            "lockout_account_locked",
+            #[cfg(feature = "telemetry")]
+            vec![
+                opentelemetry::KeyValue::new("user.email", email.to_string()),
+                opentelemetry::KeyValue::new("user.id", user_id.to_string()),
+                opentelemetry::KeyValue::new("lock_count", new_lock_count as i64),
+                opentelemetry::KeyValue::new("locked_until", locked_until.to_string()),
+            ],
+            #[cfg(not(feature = "telemetry"))]
+            vec![],
         );
 
         return EventResponse::Block {
@@ -412,7 +419,7 @@ async fn handle_login_failed(
 
     // Just increment - not yet locked
     if let Err(e) = update_lock_increment(&mut conn, lock_record.id, new_failed_count, now).await {
-        tracing::error!("Failed to update failed count: {}", e);
+        crate::otel::record_error("lockout_update_failed_count_error", &e);
     }
 
     EventResponse::Continue
@@ -427,7 +434,7 @@ async fn handle_login_succeeded(
     let mut conn = match db.get().await {
         Ok(c) => c,
         Err(e) => {
-            tracing::error!("Pool error in lockout handler: {}", e);
+            crate::otel::record_error("lockout_pool_error", &e);
             return EventResponse::Continue;
         }
     };
@@ -438,7 +445,7 @@ async fn handle_login_succeeded(
         Ok(Some(r)) => r,
         Ok(None) => return EventResponse::Continue,
         Err(e) => {
-            tracing::error!("DB error checking account lock on success: {}", e);
+            crate::otel::record_error("lockout_check_lock_on_success_error", &e);
             return EventResponse::Continue;
         }
     };
@@ -447,11 +454,15 @@ async fn handle_login_succeeded(
     if let Some(locked_until) = lock_record.locked_until {
         let locked_until_fo = locked_until.and_utc().fixed_offset();
         if now < locked_until_fo {
-            warn!(
-                event = "yauth.lockout.blocked_valid_creds",
-                user_id = %user_id,
-                locked_until = %locked_until_fo,
-                "Valid credentials but account is locked"
+            crate::otel::add_event(
+                "lockout_blocked_valid_credentials",
+                #[cfg(feature = "telemetry")]
+                vec![
+                    opentelemetry::KeyValue::new("user.id", user_id.to_string()),
+                    opentelemetry::KeyValue::new("locked_until", locked_until_fo.to_string()),
+                ],
+                #[cfg(not(feature = "telemetry"))]
+                vec![],
             );
             return EventResponse::Block {
                 status: 423,
@@ -465,7 +476,7 @@ async fn handle_login_succeeded(
 
     // Reset failed count on successful login
     if let Err(e) = update_lock_auto_unlock(&mut conn, lock_record.id, now).await {
-        tracing::error!("Failed to reset account lock on success: {}", e);
+        crate::otel::record_error("lockout_reset_on_success_failed", &e);
     }
 
     EventResponse::Continue
@@ -537,10 +548,15 @@ async fn request_unlock(
         .check(&format!("unlock_request:{}", email))
         .await
     {
-        warn!(
-            event = "yauth.lockout.unlock_rate_limited",
-            email = %email,
-            "Unlock request rate limited"
+        crate::otel::add_event(
+            "lockout_unlock_rate_limited",
+            #[cfg(feature = "telemetry")]
+            vec![opentelemetry::KeyValue::new(
+                "user.email",
+                email.to_string(),
+            )],
+            #[cfg(not(feature = "telemetry"))]
+            vec![],
         );
         return Err(api_err(StatusCode::TOO_MANY_REQUESTS, "Too many requests"));
     }
@@ -560,7 +576,7 @@ async fn request_unlock(
         find_user_by_email_id(&mut conn, &email)
             .await
             .map_err(|e| {
-                tracing::error!("DB error: {}", e);
+                crate::otel::record_error("db_error", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?
             .map(|id| FoundUser { id })
@@ -570,7 +586,7 @@ async fn request_unlock(
         // Check if account is actually locked
         let is_locked = {
             let lock_record = find_lock_by_user(&mut conn, user.id).await.map_err(|e| {
-                tracing::error!("DB error: {}", e);
+                crate::otel::record_error("db_error", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
 
@@ -601,7 +617,7 @@ async fn request_unlock(
             )
             .await
             .map_err(|e| {
-                tracing::error!("Failed to store unlock token: {}", e);
+                crate::otel::record_error("lockout_store_unlock_token_failed", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
 
@@ -610,16 +626,20 @@ async fn request_unlock(
                 let unlock_url =
                     format!("{}/account/unlock?token={}", state.config.base_url, token);
                 if let Err(e) = email_service.send_unlock_email(&email, &unlock_url) {
-                    tracing::error!("Failed to send unlock email: {}", e);
+                    crate::otel::record_error("lockout_send_unlock_email_failed", &e);
                     // Don't fail the request - still return generic message
                 }
             }
 
-            info!(
-                event = "yauth.lockout.unlock_email_sent",
-                email = %email,
-                user_id = %user.id,
-                "Account unlock email sent"
+            crate::otel::add_event(
+                "lockout_unlock_email_sent",
+                #[cfg(feature = "telemetry")]
+                vec![
+                    opentelemetry::KeyValue::new("user.email", email.to_string()),
+                    opentelemetry::KeyValue::new("user.id", user.id.to_string()),
+                ],
+                #[cfg(not(feature = "telemetry"))]
+                vec![],
             );
 
             state
@@ -667,7 +687,7 @@ async fn unlock_account(
         let found = find_unlock_token_by_hash(&mut conn, &token_hash)
             .await
             .map_err(|e| {
-                tracing::error!("DB error: {}", e);
+                crate::otel::record_error("db_error", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
         match found {
@@ -704,15 +724,19 @@ async fn unlock_account(
     reset_account_lock_diesel(&mut conn, user_id, false)
         .await
         .map_err(|e| {
-            tracing::error!("Failed to reset account lock: {}", e);
+            crate::otel::record_error("lockout_reset_lock_failed", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?;
 
-    info!(
-        event = "yauth.lockout.unlocked",
-        user_id = %user_id,
-        method = "token",
-        "Account unlocked via token"
+    crate::otel::add_event(
+        "lockout_account_unlocked",
+        #[cfg(feature = "telemetry")]
+        vec![
+            opentelemetry::KeyValue::new("user.id", user_id.to_string()),
+            opentelemetry::KeyValue::new("unlock.method", "token"),
+        ],
+        #[cfg(not(feature = "telemetry"))]
+        vec![],
     );
 
     state
@@ -746,7 +770,7 @@ async fn admin_unlock(
 
     // Verify target user exists
     let exists = find_user_exists(&mut conn, user_id).await.map_err(|e| {
-        tracing::error!("DB error: {}", e);
+        crate::otel::record_error("db_error", &e);
         api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
     })?;
     if !exists {
@@ -757,19 +781,23 @@ async fn admin_unlock(
     reset_account_lock_diesel(&mut conn, user_id, true)
         .await
         .map_err(|e| {
-            tracing::error!("Failed to reset account lock: {}", e);
+            crate::otel::record_error("lockout_reset_lock_failed", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?;
 
     // Delete any pending unlock tokens
     let _ = delete_unlock_tokens_for_user(&mut conn, user_id).await;
 
-    info!(
-        event = "yauth.lockout.unlocked",
-        user_id = %user_id,
-        admin_id = %auth_user.id,
-        method = "admin",
-        "Account unlocked by admin"
+    crate::otel::add_event(
+        "lockout_account_unlocked",
+        #[cfg(feature = "telemetry")]
+        vec![
+            opentelemetry::KeyValue::new("user.id", user_id.to_string()),
+            opentelemetry::KeyValue::new("admin.id", auth_user.id.to_string()),
+            opentelemetry::KeyValue::new("unlock.method", "admin"),
+        ],
+        #[cfg(not(feature = "telemetry"))]
+        vec![],
     );
 
     state

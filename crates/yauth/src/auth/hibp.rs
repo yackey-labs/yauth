@@ -1,5 +1,4 @@
 use sha1::{Digest, Sha1};
-use tracing::{info, warn};
 
 /// Check if a password has been found in data breaches using the
 /// HaveIBeenPwned Passwords API with k-anonymity.
@@ -8,72 +7,102 @@ use tracing::{info, warn};
 /// Returns Err only on network/parse errors — callers should treat errors as
 /// "unable to check" rather than blocking registration.
 pub async fn check_password_breach(password: &str) -> Result<u64, String> {
-    use tracing::Instrument;
+    #[cfg(feature = "telemetry")]
+    let span_cx =
+        crate::otel::start_span("yauth.hibp_check", opentelemetry::trace::SpanKind::Client);
+    #[cfg(not(feature = "telemetry"))]
+    let span_cx = crate::otel::start_span("yauth.hibp_check", ());
 
-    let parent_span = tracing::Span::current();
-    let child_span = tracing::info_span!(
-        "yauth.hibp_check",
-        otel.kind = "Client",
-        http.request.method = "GET",
-        yauth.hibp.breach_count = tracing::field::Empty,
-    );
+    let result = check_password_breach_inner(password, &span_cx).await;
 
-    async {
-        let mut hasher = Sha1::new();
-        hasher.update(password.as_bytes());
-        let hash = format!("{:X}", hasher.finalize());
-
-        let prefix = &hash[..5];
-        let suffix = &hash[5..];
-
-        let url = format!("https://api.pwnedpasswords.com/range/{}", prefix);
-
-        let client = reqwest::Client::builder()
-            .user_agent("yauth-security-check")
-            .timeout(std::time::Duration::from_secs(5))
-            .build()
-            .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
-
-        let response = client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| format!("HIBP API request failed: {}", e))?;
-
-        if !response.status().is_success() {
-            return Err(format!("HIBP API returned status {}", response.status()));
-        }
-
-        let body = response
-            .text()
-            .await
-            .map_err(|e| format!("Failed to read HIBP response: {}", e))?;
-
-        for line in body.lines() {
-            let parts: Vec<&str> = line.split(':').collect();
-            if parts.len() == 2 && parts[0].trim().eq_ignore_ascii_case(suffix) {
-                let count: u64 = parts[1].trim().parse().unwrap_or(1);
-                // Record on both the child span and the parent SERVER span
-                tracing::Span::current().record("yauth.hibp.breach_count", count);
-                parent_span.record("yauth.hibp.breach_count", count);
-                info!(
-                    event = "yauth.hibp.breached",
-                    breach_count = count,
-                    "Password found in {} data breaches",
-                    count
+    match &result {
+        Ok(count) => {
+            crate::otel::set_attribute_on_cx(&span_cx, "yauth.hibp.breach_count", *count as i64);
+            if *count > 0 {
+                crate::otel::add_event_on_cx(
+                    &span_cx,
+                    "hibp_password_breached",
+                    #[cfg(feature = "telemetry")]
+                    vec![opentelemetry::KeyValue::new(
+                        "yauth.hibp.breach_count",
+                        *count as i64,
+                    )],
+                    #[cfg(not(feature = "telemetry"))]
+                    vec![],
                 );
-                return Ok(count);
             }
         }
-
-        // Record zero breaches
-        tracing::Span::current().record("yauth.hibp.breach_count", 0u64);
-        parent_span.record("yauth.hibp.breach_count", 0u64);
-
-        Ok(0)
+        Err(e) => {
+            crate::otel::record_error_on_cx(&span_cx, "hibp_request_failed", e);
+        }
     }
-    .instrument(child_span)
-    .await
+
+    crate::otel::end_span(&span_cx);
+    result
+}
+
+async fn check_password_breach_inner<CX>(password: &str, _cx: &CX) -> Result<u64, String> {
+    let mut hasher = Sha1::new();
+    hasher.update(password.as_bytes());
+    let hash = format!("{:X}", hasher.finalize());
+
+    let prefix = &hash[..5];
+    let suffix = &hash[5..];
+
+    let url = format!("https://api.pwnedpasswords.com/range/{}", prefix);
+
+    let client = reqwest::Client::builder()
+        .user_agent("yauth-security-check")
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("HIBP API request failed: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("HIBP API returned status {}", response.status()));
+    }
+
+    let body = response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read HIBP response: {}", e))?;
+
+    for line in body.lines() {
+        let parts: Vec<&str> = line.split(':').collect();
+        if parts.len() == 2 && parts[0].trim().eq_ignore_ascii_case(suffix) {
+            let count: u64 = parts[1].trim().parse().unwrap_or(1);
+            return Ok(count);
+        }
+    }
+
+    Ok(0)
+}
+
+/// Check password and return a user-friendly error message if breached.
+/// Returns None if password is safe, Some(message) if breached.
+/// On API errors, logs a warning and returns None (fail-open to not block registration).
+pub async fn validate_password_not_breached(password: &str) -> Option<String> {
+    match check_password_breach(password).await {
+        Ok(0) => None,
+        Ok(count) => {
+            // Record breach count on the parent (server) span now that we're back in parent context
+            crate::otel::set_attribute("yauth.hibp.breach_count", count as i64);
+            Some(format!(
+                "This password has been found in {} data breach{}. Please choose a different password.",
+                count,
+                if count == 1 { "" } else { "es" }
+            ))
+        }
+        Err(e) => {
+            crate::otel::record_error("hibp_check_failed", &e);
+            None
+        }
+    }
 }
 
 /// Parse a HIBP response body to find a matching suffix, returning the breach count.
@@ -86,28 +115,6 @@ fn parse_hibp_response(suffix: &str, body: &str) -> u64 {
         }
     }
     0
-}
-
-/// Check password and return a user-friendly error message if breached.
-/// Returns None if password is safe, Some(message) if breached.
-/// On API errors, logs a warning and returns None (fail-open to not block registration).
-pub async fn validate_password_not_breached(password: &str) -> Option<String> {
-    match check_password_breach(password).await {
-        Ok(0) => None,
-        Ok(count) => Some(format!(
-            "This password has been found in {} data breach{}. Please choose a different password.",
-            count,
-            if count == 1 { "" } else { "es" }
-        )),
-        Err(e) => {
-            warn!(
-                event = "yauth.hibp.check_failed",
-                error = %e,
-                "Failed to check HaveIBeenPwned API, allowing registration"
-            );
-            None
-        }
-    }
 }
 
 #[cfg(test)]

@@ -56,14 +56,9 @@ use yauth::prelude::*;
 #[tokio::main]
 async fn main() {
     // -----------------------------------------------------------------------
-    // 1. Initialize tracing / logging
+    // 1. Initialize logging
     // -----------------------------------------------------------------------
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info,yauth=debug,server=debug".into()),
-        )
-        .init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     // -----------------------------------------------------------------------
     // 2. Read configuration from environment variables
@@ -102,7 +97,7 @@ async fn main() {
         .unwrap_or(true);
 
     if smtp_config.is_none() {
-        tracing::warn!(
+        log::warn!(
             "SMTP_HOST not set — email sending is disabled. \
              Set SMTP_HOST, SMTP_PORT, and SMTP_FROM to enable."
         );
@@ -111,18 +106,18 @@ async fn main() {
     // -----------------------------------------------------------------------
     // 3. Connect to the database and run migrations
     // -----------------------------------------------------------------------
-    tracing::info!("Connecting to database...");
+    log::info!("Connecting to database...");
     let config =
         yauth::AsyncDieselConnectionManager::<yauth::AsyncPgConnection>::new(&database_url);
     let pool = yauth::DieselPool::builder(config)
         .build()
         .expect("Failed to create connection pool");
 
-    tracing::info!("Running migrations...");
+    log::info!("Running migrations...");
     yauth::migration::diesel_migrations::run_migrations(&pool)
         .await
         .expect("Failed to run migrations");
-    tracing::info!("Migrations complete.");
+    log::info!("Migrations complete.");
 
     // -----------------------------------------------------------------------
     // 4. Build the YAuth instance with all plugins enabled
@@ -202,7 +197,7 @@ async fn main() {
     // Optional Redis store backend
     #[cfg(feature = "redis")]
     let builder = if let Ok(redis_url) = env::var("REDIS_URL") {
-        tracing::info!("Using Redis store backend: {}", redis_url);
+        log::info!("Using Redis store backend: {}", redis_url);
         let client = redis::Client::open(redis_url).expect("Invalid REDIS_URL");
         let conn = client
             .get_connection_manager()
@@ -246,18 +241,18 @@ async fn main() {
     // -----------------------------------------------------------------------
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = TcpListener::bind(addr).await.expect("Failed to bind port");
-    tracing::info!("YAuth example server listening on http://0.0.0.0:{}", port);
-    tracing::info!("  Health:  GET  http://localhost:{}/api/health", port);
-    tracing::info!(
+    log::info!("YAuth example server listening on http://0.0.0.0:{}", port);
+    log::info!("  Health:  GET  http://localhost:{}/api/health", port);
+    log::info!(
         "  Me:      GET  http://localhost:{}/api/me  (requires auth)",
         port
     );
-    tracing::info!(
+    log::info!(
         "  Auth:    POST http://localhost:{}/api/auth/register",
         port
     );
-    tracing::info!("           POST http://localhost:{}/api/auth/login", port);
-    tracing::info!("           GET  http://localhost:{}/api/auth/session", port);
+    log::info!("           POST http://localhost:{}/api/auth/login", port);
+    log::info!("           GET  http://localhost:{}/api/auth/session", port);
 
     axum::serve(listener, app).await.expect("Server error");
 }

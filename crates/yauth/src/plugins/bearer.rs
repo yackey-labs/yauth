@@ -11,7 +11,6 @@ use diesel::result::OptionalExtension;
 use diesel_async_crate::RunQueryDsl;
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
-use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::auth::{crypto, password};
@@ -238,7 +237,7 @@ fn create_jwt_internal(
         &EncodingKey::from_secret(config.jwt_secret.as_bytes()),
     )
     .map_err(|e| {
-        tracing::error!("JWT encoding error: {}", e);
+        crate::otel::record_error("jwt_encoding_error", &e);
         api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
     })?;
 
@@ -267,7 +266,7 @@ async fn create_refresh_token_diesel(
     )
     .await
     .map_err(|e| {
-        tracing::error!("Failed to create refresh token: {}", e);
+        crate::otel::record_error("refresh_token_create_failed", &e);
         api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
     })?;
 
@@ -289,7 +288,13 @@ async fn create_token(
         .check(&format!("bearer_login:{}", email))
         .await
     {
-        warn!(event = "yauth.bearer.login.rate_limited", email = %email, "Bearer login rate limited");
+        crate::otel::add_event(
+            "bearer_login_rate_limited",
+            #[cfg(feature = "telemetry")]
+            vec![opentelemetry::KeyValue::new("user.email", email.clone())],
+            #[cfg(not(feature = "telemetry"))]
+            vec![],
+        );
         return Err(api_err(StatusCode::TOO_MANY_REQUESTS, "Too many requests"));
     }
 
@@ -301,14 +306,14 @@ async fn create_token(
 
     let (user_opt, hash) = {
         let user = find_user_by_email(&mut conn, &email).await.map_err(|e| {
-            tracing::error!("DB error: {}", e);
+            crate::otel::record_error("db_error", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?;
 
         match &user {
             Some(u) => {
                 let pwd_hash = db_find_password_hash(&mut conn, u.id).await.map_err(|e| {
-                    tracing::error!("DB error: {}", e);
+                    crate::otel::record_error("db_error", &e);
                     api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
                 })?;
                 let h = pwd_hash.unwrap_or_else(|| state.dummy_hash.clone());
@@ -325,11 +330,23 @@ async fn create_token(
     match (user_opt, valid) {
         (Some(u), true) => {
             if u.banned {
-                warn!(event = "yauth.bearer.login.banned", email = %u.email, "Bearer login attempt by banned user");
+                crate::otel::add_event(
+                    "bearer_login_banned_user",
+                    #[cfg(feature = "telemetry")]
+                    vec![opentelemetry::KeyValue::new("user.email", u.email.clone())],
+                    #[cfg(not(feature = "telemetry"))]
+                    vec![],
+                );
                 return Err(api_err(StatusCode::FORBIDDEN, "Account suspended"));
             }
             if !u.email_verified {
-                warn!(event = "yauth.bearer.login.email_not_verified", email = %u.email, "Bearer login attempt with unverified email");
+                crate::otel::add_event(
+                    "bearer_login_email_not_verified",
+                    #[cfg(feature = "telemetry")]
+                    vec![opentelemetry::KeyValue::new("user.email", u.email.clone())],
+                    #[cfg(not(feature = "telemetry"))]
+                    vec![],
+                );
                 return Err(api_err(
                     StatusCode::FORBIDDEN,
                     "Email not verified. Please check your inbox or request a new verification email.",
@@ -353,11 +370,15 @@ async fn create_token(
 
             let expires_in = config.access_token_ttl.as_secs();
 
-            info!(
-                event = "yauth.bearer.login",
-                email = %u.email,
-                user_id = %u.id,
-                "User authenticated via bearer token"
+            crate::otel::add_event(
+                "bearer_login_succeeded",
+                #[cfg(feature = "telemetry")]
+                vec![
+                    opentelemetry::KeyValue::new("user.email", u.email.clone()),
+                    opentelemetry::KeyValue::new("user.id", u.id.to_string()),
+                ],
+                #[cfg(not(feature = "telemetry"))]
+                vec![],
             );
 
             state
@@ -377,7 +398,13 @@ async fn create_token(
             }))
         }
         _ => {
-            warn!(event = "yauth.bearer.login.failed", email = %email, "Failed bearer login attempt");
+            crate::otel::add_event(
+                "bearer_login_failed",
+                #[cfg(feature = "telemetry")]
+                vec![opentelemetry::KeyValue::new("user.email", email.clone())],
+                #[cfg(not(feature = "telemetry"))]
+                vec![],
+            );
             state.write_audit_log(
                 None, "login_failed",
                 Some(serde_json::json!({ "email": email, "method": "bearer", "reason": "invalid_credentials" })),
@@ -419,25 +446,28 @@ async fn refresh_token(
         let found = db_find_refresh_token_by_hash(&mut conn, &token_hash)
             .await
             .map_err(|e| {
-                tracing::error!("DB error: {}", e);
+                crate::otel::record_error("db_error", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
         match found {
             Some(t) => t,
             None => {
-                warn!(
-                    event = "yauth.bearer.refresh.invalid",
-                    "Refresh token not found"
-                );
+                crate::otel::add_event("bearer_refresh_token_not_found", vec![]);
                 return Err(api_err(StatusCode::UNAUTHORIZED, "Invalid refresh token"));
             }
         }
     };
 
     if stored.revoked {
-        warn!(
-            event = "yauth.bearer.refresh.reuse_detected", family_id = %stored.family_id,
-            user_id = %stored.user_id, "Refresh token reuse detected — revoking entire family"
+        crate::otel::add_event(
+            "bearer_refresh_token_reuse_detected",
+            #[cfg(feature = "telemetry")]
+            vec![
+                opentelemetry::KeyValue::new("token.family_id", stored.family_id.to_string()),
+                opentelemetry::KeyValue::new("user.id", stored.user_id.to_string()),
+            ],
+            #[cfg(not(feature = "telemetry"))]
+            vec![],
         );
         {
             let _ = db_revoke_family(&mut conn, stored.family_id).await;
@@ -450,7 +480,16 @@ async fn refresh_token(
 
     let now_naive = Utc::now().naive_utc();
     if stored.expires_at < now_naive {
-        warn!(event = "yauth.bearer.refresh.expired", user_id = %stored.user_id, "Expired refresh token used");
+        crate::otel::add_event(
+            "bearer_refresh_token_expired",
+            #[cfg(feature = "telemetry")]
+            vec![opentelemetry::KeyValue::new(
+                "user.id",
+                stored.user_id.to_string(),
+            )],
+            #[cfg(not(feature = "telemetry"))]
+            vec![],
+        );
         return Err(api_err(
             StatusCode::UNAUTHORIZED,
             "Refresh token has expired",
@@ -465,7 +504,7 @@ async fn refresh_token(
         db_revoke_refresh_token(&mut conn, stored.id)
             .await
             .map_err(|e| {
-                tracing::error!("Failed to revoke old refresh token: {}", e);
+                crate::otel::record_error("refresh_token_revoke_failed", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
     }
@@ -475,14 +514,20 @@ async fn refresh_token(
         find_user_by_id(&mut conn, user_id)
             .await
             .map_err(|e| {
-                tracing::error!("DB error: {}", e);
+                crate::otel::record_error("db_error", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?
             .ok_or_else(|| api_err(StatusCode::UNAUTHORIZED, "User not found"))?
     };
 
     if user.banned {
-        warn!(event = "yauth.bearer.refresh.banned", user_id = %user.id, "Refresh attempt by banned user");
+        crate::otel::add_event(
+            "bearer_refresh_banned_user",
+            #[cfg(feature = "telemetry")]
+            vec![opentelemetry::KeyValue::new("user.id", user.id.to_string())],
+            #[cfg(not(feature = "telemetry"))]
+            vec![],
+        );
         return Err(api_err(StatusCode::FORBIDDEN, "Account suspended"));
     }
 
@@ -500,9 +545,15 @@ async fn refresh_token(
 
     let expires_in = config.access_token_ttl.as_secs();
 
-    info!(
-        event = "yauth.bearer.refresh", user_id = %jwt_user.id,
-        family_id = %family_id, "Refresh token rotated"
+    crate::otel::add_event(
+        "bearer_refresh_token_rotated",
+        #[cfg(feature = "telemetry")]
+        vec![
+            opentelemetry::KeyValue::new("user.id", jwt_user.id.to_string()),
+            opentelemetry::KeyValue::new("token.family_id", family_id.to_string()),
+        ],
+        #[cfg(not(feature = "telemetry"))]
+        vec![],
     );
 
     Ok(Json(TokenResponse {
@@ -543,7 +594,7 @@ async fn revoke_token(
         db_find_refresh_token_by_hash(&mut conn, &token_hash)
             .await
             .map_err(|e| {
-                tracing::error!("DB error: {}", e);
+                crate::otel::record_error("db_error", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?
     };
@@ -565,7 +616,7 @@ async fn revoke_token(
             db_revoke_refresh_token(&mut conn, stored.id)
                 .await
                 .map_err(|e| {
-                    tracing::error!("Failed to revoke refresh token: {}", e);
+                    crate::otel::record_error("refresh_token_revoke_failed", &e);
                     api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
                 })?;
         }
@@ -577,11 +628,20 @@ async fn revoke_token(
     if let Some(jti) = extract_jti_from_auth_header(&headers, &state) {
         let ttl = state.bearer_config.access_token_ttl;
         if let Err(e) = state.revocation_store.revoke(&jti, ttl).await {
-            tracing::warn!("Failed to revoke access token JTI: {}", e);
+            crate::otel::record_error("bearer_jti_revoke_failed", &e);
         }
     }
 
-    info!(event = "yauth.bearer.revoked", user_id = %auth_user.id, "Refresh token revoked");
+    crate::otel::add_event(
+        "bearer_token_revoked",
+        #[cfg(feature = "telemetry")]
+        vec![opentelemetry::KeyValue::new(
+            "user.id",
+            auth_user.id.to_string(),
+        )],
+        #[cfg(not(feature = "telemetry"))]
+        vec![],
+    );
     state
         .write_audit_log(Some(auth_user.id), "bearer_token_revoked", None, None)
         .await;

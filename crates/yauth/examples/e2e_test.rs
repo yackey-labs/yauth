@@ -19,18 +19,16 @@ const MAILPIT_API: &str = "http://127.0.0.1:8026/api/v1";
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter("info,yauth=debug,e2e_test=debug")
-        .init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
-    tracing::info!("=== YAuth E2E Test (Full) ===");
+    log::info!("=== YAuth E2E Test (Full) ===");
 
     let config = yauth::AsyncDieselConnectionManager::<yauth::AsyncPgConnection>::new(DB_URL);
     let db = yauth::DieselPool::builder(config)
         .build()
         .expect("Failed to create connection pool");
 
-    tracing::info!("Running migrations (fresh)...");
+    log::info!("Running migrations (fresh)...");
     // Drop all yauth tables first for a fresh start
     {
         use yauth::RunQueryDsl;
@@ -50,19 +48,19 @@ async fn main() {
         .build()
         .unwrap();
 
-    tracing::info!("Server running at {}:{}", BASE_URL, port);
+    log::info!("Server running at {}:{}", BASE_URL, port);
     clear_mailpit().await;
 
     let mut test_num = 0;
     let mut pass = |name: &str| {
         test_num += 1;
-        tracing::info!("  PASS test {}: {}", test_num, name);
+        log::info!("  PASS test {}: {}", test_num, name);
     };
 
     // =========================================================================
     // SECTION 1: Email-Password Flow
     // =========================================================================
-    tracing::info!("\n=== Email-Password Flow ===");
+    log::info!("\n=== Email-Password Flow ===");
 
     // Register
     let res = client
@@ -213,7 +211,7 @@ async fn main() {
     // =========================================================================
     // SECTION 2: Bearer Token Flow
     // =========================================================================
-    tracing::info!("\n=== Bearer Token Flow ===");
+    log::info!("\n=== Bearer Token Flow ===");
 
     // Get bearer token via email/password
     let res = anon
@@ -309,7 +307,7 @@ async fn main() {
     // =========================================================================
     // SECTION 2b: Bearer Token Scope & Audience Claims
     // =========================================================================
-    tracing::info!("\n=== Bearer Token Scope & Audience Claims ===");
+    log::info!("\n=== Bearer Token Scope & Audience Claims ===");
 
     // POST /token with scope returns JWT with scope claim
     let res = anon
@@ -487,7 +485,7 @@ async fn main() {
     // =========================================================================
     // SECTION 3: API Key Flow
     // =========================================================================
-    tracing::info!("\n=== API Key Flow ===");
+    log::info!("\n=== API Key Flow ===");
 
     // Login with cookies for protected routes
     let authed = reqwest::Client::builder()
@@ -592,7 +590,7 @@ async fn main() {
     // =========================================================================
     // SECTION 4: MFA/TOTP Flow
     // =========================================================================
-    tracing::info!("\n=== MFA/TOTP Flow ===");
+    log::info!("\n=== MFA/TOTP Flow ===");
 
     // Setup TOTP (requires auth — use authed client)
     let res = authed
@@ -682,7 +680,7 @@ async fn main() {
     // If it returns a normal session, MFA event wiring needs to be added.
     if has_mfa_challenge {
         let pending_id = login_resp["pending_session_id"].as_str().unwrap();
-        tracing::info!("MFA challenge received, pending_session_id: {}", pending_id);
+        log::info!("MFA challenge received, pending_session_id: {}", pending_id);
 
         // Generate fresh TOTP code
         let mfa_code = totp.generate_current().unwrap();
@@ -738,7 +736,7 @@ async fn main() {
         assert_eq!(res.status(), 200);
         pass("POST /mfa/verify completes MFA login with backup code");
     } else {
-        tracing::warn!(
+        log::warn!(
             "MFA event wiring not active in login handler — skipping MFA login tests. \
              Login response: {}",
             login_resp
@@ -782,7 +780,7 @@ async fn main() {
     // =========================================================================
     // SECTION 5: Admin Flow
     // =========================================================================
-    tracing::info!("\n=== Admin Flow ===");
+    log::info!("\n=== Admin Flow ===");
 
     // Promote user to admin directly in DB
     let user_uuid: uuid::Uuid = user_id.parse().unwrap();
@@ -1032,7 +1030,7 @@ async fn main() {
     // =========================================================================
     // SECTION 6: OAuth2 Authorization Server Flow
     // =========================================================================
-    tracing::info!("\n=== OAuth2 Authorization Server Flow ===");
+    log::info!("\n=== OAuth2 Authorization Server Flow ===");
 
     // Start a server with OAuth2 AS enabled
     let oauth2_port = start_server_with_oauth2(db.clone()).await;
@@ -1320,7 +1318,7 @@ async fn main() {
     // =========================================================================
     // DONE
     // =========================================================================
-    tracing::info!("\n=== All {} tests passed! ===", test_num);
+    log::info!("\n=== All {} tests passed! ===", test_num);
     drop(db);
 }
 

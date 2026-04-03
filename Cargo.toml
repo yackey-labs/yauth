@@ -36,10 +36,6 @@ chrono = { version = "0.4", features = ["serde"] }
 # Error handling
 thiserror = "2"
 
-# Logging & tracing (always available)
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-
 # Email
 lettre = { version = "0.11", default-features = false, features = ["tokio1-rustls-tls", "smtp-transport", "builder", "hostname"] }
 
@@ -60,11 +56,11 @@ oauth2 = { version = "5" }
 jsonwebtoken = { version = "10", features = ["rust_crypto"] }
 
 # Feature-gated: Telemetry (OTel)
-tracing-opentelemetry = { version = "0.32" }
 opentelemetry = { version = "0.31" }
 opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.31", features = ["grpc-tonic"] }
 opentelemetry-semantic-conventions = { version = "0.31" }
+opentelemetry-http = { version = "0.31" }
 
 # Code generation
 utoipa = { version = "5", features = ["axum_extras", "uuid", "chrono"] }

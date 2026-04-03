@@ -8,7 +8,6 @@ use axum::{
 };
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
-use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::auth::{crypto, session};
@@ -217,7 +216,7 @@ async fn list_users(
                 .get_result(&mut conn)
                 .await
                 .map_err(|e| {
-                    tracing::error!("DB error counting users: {}", e);
+                    crate::otel::record_error("admin_db_count_users_error", &e);
                     api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
                 })?;
 
@@ -234,7 +233,7 @@ async fn list_users(
                 .load(&mut conn)
                 .await
                 .map_err(|e| {
-                    tracing::error!("DB error listing users: {}", e);
+                    crate::otel::record_error("admin_db_list_users_error", &e);
                     api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
                 })?;
 
@@ -246,7 +245,7 @@ async fn list_users(
                 .get_result(&mut conn)
                 .await
                 .map_err(|e| {
-                    tracing::error!("DB error counting users: {}", e);
+                    crate::otel::record_error("admin_db_count_users_error", &e);
                     api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
                 })?;
 
@@ -258,7 +257,7 @@ async fn list_users(
                 .load(&mut conn)
                 .await
                 .map_err(|e| {
-                    tracing::error!("DB error listing users: {}", e);
+                    crate::otel::record_error("admin_db_list_users_error", &e);
                     api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
                 })?;
 
@@ -298,7 +297,7 @@ async fn get_user(
         .await
         .optional()
         .map_err(|e| {
-            tracing::error!("DB error fetching user: {}", e);
+            crate::otel::record_error("admin_db_fetch_user_error", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?
         .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "User not found"))?;
@@ -331,7 +330,7 @@ async fn update_user(
             .await
             .optional()
             .map_err(|e| {
-                tracing::error!("DB error fetching user: {}", e);
+                crate::otel::record_error("admin_db_fetch_user_error", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?
             .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "User not found"))?;
@@ -353,18 +352,22 @@ async fn update_user(
             .get_result(&mut conn)
             .await
             .map_err(|e| {
-                tracing::error!("DB error updating user: {}", e);
+                crate::otel::record_error("admin_db_update_user_error", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
 
         updated
     };
 
-    info!(
-        event = "yauth.admin.user_updated",
-        admin_id = %admin.id,
-        target_id = %id,
-        "Admin updated user"
+    crate::otel::add_event(
+        "admin_user_updated",
+        #[cfg(feature = "telemetry")]
+        vec![
+            opentelemetry::KeyValue::new("admin.id", admin.id.to_string()),
+            opentelemetry::KeyValue::new("target.id", id.to_string()),
+        ],
+        #[cfg(not(feature = "telemetry"))]
+        vec![],
     );
 
     state
@@ -406,7 +409,7 @@ async fn delete_user(
             .await
             .optional()
             .map_err(|e| {
-                tracing::error!("DB error fetching user: {}", e);
+                crate::otel::record_error("admin_db_fetch_user_error", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?
             .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "User not found"))?;
@@ -415,16 +418,20 @@ async fn delete_user(
             .execute(&mut conn)
             .await
             .map_err(|e| {
-                tracing::error!("DB error deleting user: {}", e);
+                crate::otel::record_error("admin_db_delete_user_error", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
     }
 
-    info!(
-        event = "yauth.admin.user_deleted",
-        admin_id = %admin.id,
-        target_id = %id,
-        "Admin deleted user"
+    crate::otel::add_event(
+        "admin_user_deleted",
+        #[cfg(feature = "telemetry")]
+        vec![
+            opentelemetry::KeyValue::new("admin.id", admin.id.to_string()),
+            opentelemetry::KeyValue::new("target.id", id.to_string()),
+        ],
+        #[cfg(not(feature = "telemetry"))]
+        vec![],
     );
 
     state
@@ -480,7 +487,7 @@ async fn ban_user(
             .await
             .optional()
             .map_err(|e| {
-                tracing::error!("DB error fetching user: {}", e);
+                crate::otel::record_error("admin_db_fetch_user_error", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?
             .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "User not found"))?;
@@ -502,7 +509,7 @@ async fn ban_user(
             .get_result(&mut conn)
             .await
             .map_err(|e| {
-                tracing::error!("DB error banning user: {}", e);
+                crate::otel::record_error("admin_db_ban_user_error", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
 
@@ -514,13 +521,17 @@ async fn ban_user(
         .await
         .unwrap_or(0);
 
-    info!(
-        event = "yauth.admin.user_banned",
-        admin_id = %admin.id,
-        target_id = %id,
-        sessions_deleted = deleted_sessions,
-        reason = ?input.reason,
-        "Admin banned user"
+    crate::otel::add_event(
+        "admin_user_banned",
+        #[cfg(feature = "telemetry")]
+        vec![
+            opentelemetry::KeyValue::new("admin.id", admin.id.to_string()),
+            opentelemetry::KeyValue::new("target.id", id.to_string()),
+            opentelemetry::KeyValue::new("sessions_deleted", deleted_sessions.to_string()),
+            opentelemetry::KeyValue::new("reason", format!("{:?}", input.reason)),
+        ],
+        #[cfg(not(feature = "telemetry"))]
+        vec![],
     );
 
     state
@@ -558,7 +569,7 @@ async fn unban_user(
             .await
             .optional()
             .map_err(|e| {
-                tracing::error!("DB error fetching user: {}", e);
+                crate::otel::record_error("admin_db_fetch_user_error", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?
             .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "User not found"))?;
@@ -580,18 +591,22 @@ async fn unban_user(
             .get_result(&mut conn)
             .await
             .map_err(|e| {
-                tracing::error!("DB error unbanning user: {}", e);
+                crate::otel::record_error("admin_db_unban_user_error", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
 
         updated
     };
 
-    info!(
-        event = "yauth.admin.user_unbanned",
-        admin_id = %admin.id,
-        target_id = %id,
-        "Admin unbanned user"
+    crate::otel::add_event(
+        "admin_user_unbanned",
+        #[cfg(feature = "telemetry")]
+        vec![
+            opentelemetry::KeyValue::new("admin.id", admin.id.to_string()),
+            opentelemetry::KeyValue::new("target.id", id.to_string()),
+        ],
+        #[cfg(not(feature = "telemetry"))]
+        vec![],
     );
 
     state
@@ -636,7 +651,7 @@ async fn impersonate_user(
         .await
         .optional()
         .map_err(|e| {
-            tracing::error!("DB error fetching user: {}", e);
+            crate::otel::record_error("admin_db_fetch_user_error", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?
         .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "User not found"))?;
@@ -663,7 +678,7 @@ async fn impersonate_user(
         .execute(&mut conn)
         .await
         .map_err(|e| {
-            tracing::error!("DB error creating impersonation session: {}", e);
+            crate::otel::record_error("admin_impersonation_session_error", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?;
 
@@ -685,16 +700,20 @@ async fn impersonate_user(
         .execute(&mut conn)
         .await
         .map_err(|e| {
-            tracing::error!("DB error writing audit log: {}", e);
+            crate::otel::record_error("admin_audit_log_write_error", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?;
 
-    warn!(
-        event = "yauth.admin.impersonate",
-        admin_id = %admin.id,
-        target_id = %id,
-        session_id = %session_id,
-        "Admin impersonated user"
+    crate::otel::add_event(
+        "admin_impersonated_user",
+        #[cfg(feature = "telemetry")]
+        vec![
+            opentelemetry::KeyValue::new("admin.id", admin.id.to_string()),
+            opentelemetry::KeyValue::new("target.id", id.to_string()),
+            opentelemetry::KeyValue::new("session.id", session_id.to_string()),
+        ],
+        #[cfg(not(feature = "telemetry"))]
+        vec![],
     );
 
     Ok(Json(serde_json::json!({
@@ -729,7 +748,7 @@ async fn list_sessions(
         .get_result(&mut conn)
         .await
         .map_err(|e| {
-            tracing::error!("DB error counting sessions: {}", e);
+            crate::otel::record_error("admin_db_count_sessions_error", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?;
 
@@ -741,7 +760,7 @@ async fn list_sessions(
         .load(&mut conn)
         .await
         .map_err(|e| {
-            tracing::error!("DB error listing sessions: {}", e);
+            crate::otel::record_error("admin_db_list_sessions_error", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?
         .into_iter()
@@ -779,7 +798,7 @@ async fn delete_session(
             .await
             .optional()
             .map_err(|e| {
-                tracing::error!("DB error fetching session: {}", e);
+                crate::otel::record_error("admin_db_fetch_session_error", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?
             .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "Session not found"))?;
@@ -790,19 +809,23 @@ async fn delete_session(
             .execute(&mut conn)
             .await
             .map_err(|e| {
-                tracing::error!("DB error deleting session: {}", e);
+                crate::otel::record_error("admin_db_delete_session_error", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
 
         uid
     };
 
-    info!(
-        event = "yauth.admin.session_deleted",
-        admin_id = %admin.id,
-        session_id = %id,
-        session_user_id = %session_user_id,
-        "Admin deleted session"
+    crate::otel::add_event(
+        "admin_session_deleted",
+        #[cfg(feature = "telemetry")]
+        vec![
+            opentelemetry::KeyValue::new("admin.id", admin.id.to_string()),
+            opentelemetry::KeyValue::new("session.id", id.to_string()),
+            opentelemetry::KeyValue::new("session.user_id", session_user_id.to_string()),
+        ],
+        #[cfg(not(feature = "telemetry"))]
+        vec![],
     );
 
     state

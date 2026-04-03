@@ -118,7 +118,7 @@ async fn update_profile(
     let mut conn = match state.db.get().await {
         Ok(c) => c,
         Err(e) => {
-            tracing::error!("Pool error: {}", e);
+            crate::otel::record_error("pool_error", &e);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({ "error": "Internal error" })),
@@ -155,7 +155,7 @@ async fn update_profile(
             })),
         ),
         Err(e) => {
-            tracing::error!("DB error updating profile: {}", e);
+            crate::otel::record_error("profile_update_db_error", &e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({ "error": "Internal error" })),

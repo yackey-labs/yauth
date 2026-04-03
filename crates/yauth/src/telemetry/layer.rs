@@ -1,7 +1,7 @@
 use axum::{extract::MatchedPath, extract::Request, middleware::Next, response::Response};
-use opentelemetry::KeyValue;
-use opentelemetry::global;
+use opentelemetry::context::FutureExt as OtelFutureExt;
 use opentelemetry::trace::{SpanKind, Status, TraceContextExt, Tracer};
+use opentelemetry::{global, KeyValue};
 use opentelemetry_http::HeaderExtractor;
 use opentelemetry_semantic_conventions::attribute::{
     HTTP_REQUEST_METHOD, HTTP_RESPONSE_STATUS_CODE, HTTP_ROUTE, URL_PATH,
@@ -40,15 +40,14 @@ pub async fn trace_middleware(req: Request, next: Next) -> Response {
 
     let cx = parent_cx.with_span(span);
 
-    // Attach context so Context::current() returns it inside handlers.
-    // The guard must live across the .await — it is !Send but stays in the same task.
-    let _guard = cx.clone().attach();
-
     // Store context in request extensions for code that receives the request object.
     let mut req = req;
     req.extensions_mut().insert(cx.clone());
 
-    let response = next.run(req).await;
+    // Propagate context across the .await using FutureExt::with_context() instead of
+    // cx.attach() — ContextGuard is !Send and cannot be held across .await in Axum
+    // middleware (which requires Send futures for the multi-threaded Tokio scheduler).
+    let response = next.run(req).with_context(cx.clone()).await;
 
     let status = response.status().as_u16();
     let span_ref = cx.span();

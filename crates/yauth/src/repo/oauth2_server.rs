@@ -4,10 +4,7 @@ use uuid::Uuid;
 
 /// Repository for OAuth2 server clients.
 pub trait Oauth2ClientRepository: sealed::Sealed + Send + Sync {
-    fn find_by_client_id(
-        &self,
-        client_id: &str,
-    ) -> RepoFuture<'_, Option<domain::Oauth2Client>>;
+    fn find_by_client_id(&self, client_id: &str) -> RepoFuture<'_, Option<domain::Oauth2Client>>;
 
     fn create(&self, input: domain::NewOauth2Client) -> RepoFuture<'_, ()>;
 }
@@ -38,11 +35,7 @@ pub trait ConsentRepository: sealed::Sealed + Send + Sync {
 
     fn create(&self, input: domain::NewConsent) -> RepoFuture<'_, ()>;
 
-    fn update_scopes(
-        &self,
-        id: Uuid,
-        scopes: Option<serde_json::Value>,
-    ) -> RepoFuture<'_, ()>;
+    fn update_scopes(&self, id: Uuid, scopes: Option<serde_json::Value>) -> RepoFuture<'_, ()>;
 }
 
 /// Repository for device authorization flow codes.
@@ -60,12 +53,7 @@ pub trait DeviceCodeRepository: sealed::Sealed + Send + Sync {
     fn create(&self, input: domain::NewDeviceCode) -> RepoFuture<'_, ()>;
 
     /// Update status, user_id, and/or other fields on a device code.
-    fn update_status(
-        &self,
-        id: Uuid,
-        status: &str,
-        user_id: Option<Uuid>,
-    ) -> RepoFuture<'_, ()>;
+    fn update_status(&self, id: Uuid, status: &str, user_id: Option<Uuid>) -> RepoFuture<'_, ()>;
 
     fn update_last_polled(&self, id: Uuid) -> RepoFuture<'_, ()>;
 

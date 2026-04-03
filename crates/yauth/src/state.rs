@@ -1,11 +1,8 @@
 use crate::auth::{email::EmailService, rate_limit::RateLimiter};
 use crate::config::YAuthConfig;
-use crate::db::models::NewAuditLog;
-use crate::db::schema::{yauth_audit_log, yauth_users};
 use crate::plugin::{AuthEvent, EventResponse, PluginContext, YAuthPlugin};
+use crate::repo::Repositories;
 use crate::stores::{ChallengeStore, RateLimitStore, RevocationStore, SessionStore};
-use diesel::QueryDsl;
-use diesel::result::OptionalExtension;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -14,7 +11,7 @@ pub type DbPool =
 
 #[derive(Clone)]
 pub struct YAuthState {
-    pub db: DbPool,
+    pub repos: Repositories,
     pub config: Arc<YAuthConfig>,
     pub dummy_hash: String,
     pub rate_limiter: RateLimiter,
@@ -59,18 +56,10 @@ impl YAuthState {
         if !self.config.auto_admin_first_user {
             return false;
         }
-        let mut conn = match self.db.get().await {
-            Ok(c) => c,
-            Err(_) => return false,
-        };
-        use diesel_async_crate::RunQueryDsl;
-        let exists: Option<Uuid> = yauth_users::table
-            .select(yauth_users::id)
-            .first::<Uuid>(&mut conn)
-            .await
-            .optional()
-            .unwrap_or(Some(Uuid::nil()));
-        exists.is_none()
+        match self.repos.users.any_exists().await {
+            Ok(exists) => !exists,
+            Err(_) => false,
+        }
     }
 
     pub async fn write_audit_log(
@@ -80,15 +69,7 @@ impl YAuthState {
         metadata: Option<serde_json::Value>,
         ip_address: Option<String>,
     ) {
-        let mut conn = match self.db.get().await {
-            Ok(c) => c,
-            Err(e) => {
-                crate::otel::record_error("audit_log_connection_failed", &e);
-                return;
-            }
-        };
-        use diesel_async_crate::RunQueryDsl;
-        let new_log = NewAuditLog {
+        let new_log = crate::domain::NewAuditLog {
             id: Uuid::new_v4(),
             user_id,
             event_type: event_type.to_string(),
@@ -96,11 +77,7 @@ impl YAuthState {
             ip_address,
             created_at: chrono::Utc::now().naive_utc(),
         };
-        let result = diesel::insert_into(yauth_audit_log::table)
-            .values(&new_log)
-            .execute(&mut conn)
-            .await;
-        if let Err(e) = result {
+        if let Err(e) = self.repos.audit.create(new_log).await {
             crate::otel::record_error("audit_log_write_failed", &e);
         }
     }

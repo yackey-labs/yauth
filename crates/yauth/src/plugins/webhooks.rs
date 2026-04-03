@@ -7,163 +7,19 @@ use axum::{
     routing::{delete, get, post, put},
 };
 use chrono::Utc;
-use diesel::prelude::*;
-use diesel::result::OptionalExtension;
-use diesel_async_crate::RunQueryDsl;
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use uuid::Uuid;
 
 use crate::config::WebhookConfig;
-use crate::db::models::{NewWebhook, NewWebhookDelivery, UpdateWebhook, Webhook, WebhookDelivery};
-use crate::db::schema::{yauth_webhook_deliveries, yauth_webhooks};
 use crate::error::{ApiError, api_err};
 use crate::middleware::{AuthUser, require_admin};
 use crate::plugin::{AuthEvent, EventResponse, PluginContext, YAuthPlugin};
+use crate::repo::Repositories;
 use crate::state::YAuthState;
 
 type HmacSha256 = Hmac<Sha256>;
-
-// ---------------------------------------------------------------------------
-// Diesel-async helpers
-// ---------------------------------------------------------------------------
-
-type Conn = diesel_async_crate::AsyncPgConnection;
-type DbResult<T> = Result<T, String>;
-
-async fn find_active_webhooks(conn: &mut Conn) -> DbResult<Vec<Webhook>> {
-    yauth_webhooks::table
-        .filter(yauth_webhooks::active.eq(true))
-        .select(Webhook::as_select())
-        .load(conn)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-async fn find_all_webhooks(conn: &mut Conn) -> DbResult<Vec<Webhook>> {
-    yauth_webhooks::table
-        .order(yauth_webhooks::created_at.desc())
-        .select(Webhook::as_select())
-        .load(conn)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-async fn find_webhook_by_id(conn: &mut Conn, id: Uuid) -> DbResult<Option<Webhook>> {
-    yauth_webhooks::table
-        .filter(yauth_webhooks::id.eq(id))
-        .select(Webhook::as_select())
-        .first(conn)
-        .await
-        .optional()
-        .map_err(|e| e.to_string())
-}
-
-async fn db_insert_webhook(
-    conn: &mut Conn,
-    id: Uuid,
-    url: &str,
-    secret: &str,
-    events: &serde_json::Value,
-    now: chrono::DateTime<chrono::FixedOffset>,
-) -> DbResult<()> {
-    let new_webhook = NewWebhook {
-        id,
-        url: url.to_string(),
-        secret: secret.to_string(),
-        events: events.clone(),
-        active: true,
-        created_at: now.naive_utc(),
-        updated_at: now.naive_utc(),
-    };
-    diesel::insert_into(yauth_webhooks::table)
-        .values(&new_webhook)
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-async fn db_update_webhook(
-    conn: &mut Conn,
-    id: Uuid,
-    url: Option<&str>,
-    events: Option<&serde_json::Value>,
-    secret: Option<&str>,
-    active: Option<bool>,
-    now: chrono::DateTime<chrono::FixedOffset>,
-) -> DbResult<Option<Webhook>> {
-    let changeset = UpdateWebhook {
-        url: url.map(|s| s.to_string()),
-        events: events.cloned(),
-        secret: secret.map(|s| s.to_string()),
-        active,
-        updated_at: Some(now.naive_utc()),
-    };
-    diesel::update(yauth_webhooks::table.filter(yauth_webhooks::id.eq(id)))
-        .set(&changeset)
-        .returning(Webhook::as_returning())
-        .get_result(conn)
-        .await
-        .optional()
-        .map_err(|e| e.to_string())
-}
-
-async fn db_delete_webhook(conn: &mut Conn, id: Uuid) -> DbResult<()> {
-    diesel::delete(yauth_webhooks::table.filter(yauth_webhooks::id.eq(id)))
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn insert_delivery(
-    conn: &mut Conn,
-    id: Uuid,
-    webhook_id: Uuid,
-    event_type: &str,
-    payload: &serde_json::Value,
-    status_code: Option<i16>,
-    response_body: Option<&str>,
-    success: bool,
-    attempt: i32,
-    now: chrono::DateTime<chrono::FixedOffset>,
-) -> DbResult<()> {
-    let new_delivery = NewWebhookDelivery {
-        id,
-        webhook_id,
-        event_type: event_type.to_string(),
-        payload: payload.clone(),
-        status_code,
-        response_body: response_body.map(|s| s.to_string()),
-        success,
-        attempt,
-        created_at: now.naive_utc(),
-    };
-    diesel::insert_into(yauth_webhook_deliveries::table)
-        .values(&new_delivery)
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-async fn find_recent_deliveries(
-    conn: &mut Conn,
-    webhook_id: Uuid,
-    limit: i64,
-) -> DbResult<Vec<WebhookDelivery>> {
-    yauth_webhook_deliveries::table
-        .filter(yauth_webhook_deliveries::webhook_id.eq(webhook_id))
-        .order(yauth_webhook_deliveries::created_at.desc())
-        .limit(limit)
-        .select(WebhookDelivery::as_select())
-        .load(conn)
-        .await
-        .map_err(|e| e.to_string())
-}
 
 pub struct WebhookPlugin {
     config: WebhookConfig,
@@ -198,7 +54,7 @@ impl YAuthPlugin for WebhookPlugin {
     }
 
     fn on_event(&self, event: &AuthEvent, ctx: &PluginContext) -> EventResponse {
-        let db = ctx.state.db.clone();
+        let repos = ctx.state.repos.clone();
         let event_clone = event.clone();
         let max_retries = self.config.max_retries;
         let retry_delay = self.config.retry_delay;
@@ -206,7 +62,7 @@ impl YAuthPlugin for WebhookPlugin {
 
         tokio::spawn(async move {
             if let Err(e) =
-                dispatch_webhooks_diesel(db, event_clone, max_retries, retry_delay, timeout).await
+                dispatch_webhooks(repos, event_clone, max_retries, retry_delay, timeout).await
             {
                 crate::otel::record_error("webhook_dispatch_error", &e);
             }
@@ -246,10 +102,8 @@ fn event_type_name(event: &AuthEvent) -> &'static str {
 // Webhook dispatch (background task)
 // ---------------------------------------------------------------------------
 
-async fn dispatch_webhooks_diesel(
-    pool: diesel_async_crate::pooled_connection::deadpool::Pool<
-        diesel_async_crate::AsyncPgConnection,
-    >,
+async fn dispatch_webhooks(
+    repos: Repositories,
     event: AuthEvent,
     max_retries: u32,
     retry_delay: std::time::Duration,
@@ -258,13 +112,12 @@ async fn dispatch_webhooks_diesel(
     let event_type = event_type_name(&event);
     let payload = serde_json::to_value(&event)?;
 
-    // Load webhooks in a scoped block so the connection is dropped before HTTP I/O
-    let webhooks = {
-        let mut conn = pool.get().await.map_err(|e| e.to_string())?;
-        find_active_webhooks(&mut conn)
-            .await
-            .map_err(|e| e.to_string())?
-    };
+    // Load active webhooks
+    let webhooks = repos
+        .webhooks_repo
+        .find_active()
+        .await
+        .map_err(|e| e.to_string())?;
 
     let client = reqwest::Client::builder().timeout(timeout).build()?;
 
@@ -322,21 +175,18 @@ async fn dispatch_webhooks_diesel(
 
                     if (200..300).contains(&(status as u16)) {
                         success = true;
-                        let mut conn = pool.get().await.map_err(|e| e.to_string())?;
-                        if let Err(e) = insert_delivery(
-                            &mut conn,
-                            Uuid::new_v4(),
-                            webhook.id,
-                            event_type,
-                            &body,
-                            Some(status),
-                            Some(&truncate_response(&resp_body)),
-                            true,
-                            attempt as i32,
-                            Utc::now().fixed_offset(),
-                        )
-                        .await
-                        {
+                        let new_delivery = crate::domain::NewWebhookDelivery {
+                            id: Uuid::new_v4(),
+                            webhook_id: webhook.id,
+                            event_type: event_type.to_string(),
+                            payload: body.clone(),
+                            status_code: Some(status),
+                            response_body: Some(truncate_response(&resp_body)),
+                            success: true,
+                            attempt: attempt as i32,
+                            created_at: Utc::now().naive_utc(),
+                        };
+                        if let Err(e) = repos.webhook_deliveries.create(new_delivery).await {
                             crate::otel::record_error("webhook_delivery_record_failed", &e);
                         }
                         break;
@@ -379,21 +229,18 @@ async fn dispatch_webhooks_diesel(
         }
 
         if !success {
-            let mut conn = pool.get().await.map_err(|e| e.to_string())?;
-            if let Err(e) = insert_delivery(
-                &mut conn,
-                Uuid::new_v4(),
-                webhook.id,
-                event_type,
-                &body,
-                last_status,
-                last_body.as_deref().map(truncate_response).as_deref(),
-                false,
-                (max_retries + 1) as i32,
-                Utc::now().fixed_offset(),
-            )
-            .await
-            {
+            let new_delivery = crate::domain::NewWebhookDelivery {
+                id: Uuid::new_v4(),
+                webhook_id: webhook.id,
+                event_type: event_type.to_string(),
+                payload: body.clone(),
+                status_code: last_status,
+                response_body: last_body.as_deref().map(truncate_response),
+                success: false,
+                attempt: (max_retries + 1) as i32,
+                created_at: Utc::now().naive_utc(),
+            };
+            if let Err(e) = repos.webhook_deliveries.create(new_delivery).await {
                 crate::otel::record_error("webhook_delivery_record_failed", &e);
             }
         }
@@ -466,8 +313,8 @@ pub struct WebhookDeliveryResponse {
     pub created_at: String,
 }
 
-impl From<Webhook> for WebhookResponse {
-    fn from(r: Webhook) -> Self {
+impl From<crate::domain::Webhook> for WebhookResponse {
+    fn from(r: crate::domain::Webhook) -> Self {
         use chrono::TimeZone;
         let events: Vec<String> = serde_json::from_value(r.events).unwrap_or_default();
         let created = chrono::Utc.from_utc_datetime(&r.created_at);
@@ -483,8 +330,8 @@ impl From<Webhook> for WebhookResponse {
     }
 }
 
-impl From<WebhookDelivery> for WebhookDeliveryResponse {
-    fn from(r: WebhookDelivery) -> Self {
+impl From<crate::domain::WebhookDelivery> for WebhookDeliveryResponse {
+    fn from(r: crate::domain::WebhookDelivery) -> Self {
         use chrono::TimeZone;
         let created = chrono::Utc.from_utc_datetime(&r.created_at);
         Self {
@@ -594,57 +441,62 @@ async fn create_webhook(
         .secret
         .unwrap_or_else(crate::auth::crypto::generate_token);
 
-    let now = Utc::now().fixed_offset();
+    let now = Utc::now();
     let id = Uuid::new_v4();
     let events_json = serde_json::to_value(&input.events).unwrap();
 
-    {
-        let mut conn = state
-            .db
-            .get()
-            .await
-            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
+    let new_webhook = crate::domain::NewWebhook {
+        id,
+        url: input.url.clone(),
+        secret: secret.clone(),
+        events: events_json,
+        active: true,
+        created_at: now.naive_utc(),
+        updated_at: now.naive_utc(),
+    };
 
-        db_insert_webhook(&mut conn, id, &input.url, &secret, &events_json, now)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("webhook_create_db_error", &e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
+    state
+        .repos
+        .webhooks_repo
+        .create(new_webhook)
+        .await
+        .map_err(|e| {
+            crate::otel::record_error("webhook_create_db_error", &e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
 
-        crate::otel::add_event(
+    crate::otel::add_event(
+        "webhook_created",
+        #[cfg(feature = "telemetry")]
+        vec![
+            opentelemetry::KeyValue::new("admin.id", admin.id.to_string()),
+            opentelemetry::KeyValue::new("webhook.id", id.to_string()),
+        ],
+        #[cfg(not(feature = "telemetry"))]
+        vec![],
+    );
+
+    state
+        .write_audit_log(
+            Some(admin.id),
             "webhook_created",
-            #[cfg(feature = "telemetry")]
-            vec![
-                opentelemetry::KeyValue::new("admin.id", admin.id.to_string()),
-                opentelemetry::KeyValue::new("webhook.id", id.to_string()),
-            ],
-            #[cfg(not(feature = "telemetry"))]
-            vec![],
-        );
+            Some(serde_json::json!({ "webhook_id": id, "url": input.url })),
+            None,
+        )
+        .await;
 
-        state
-            .write_audit_log(
-                Some(admin.id),
-                "webhook_created",
-                Some(serde_json::json!({ "webhook_id": id, "url": input.url })),
-                None,
-            )
-            .await;
-
-        Ok((
-            StatusCode::CREATED,
-            Json(serde_json::json!({
-                "id": id,
-                "url": input.url,
-                "secret": secret,
-                "events": input.events,
-                "active": true,
-                "created_at": now.to_rfc3339(),
-                "updated_at": now.to_rfc3339(),
-            })),
-        ))
-    }
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "id": id,
+            "url": input.url,
+            "secret": secret,
+            "events": input.events,
+            "active": true,
+            "created_at": now.to_rfc3339(),
+            "updated_at": now.to_rfc3339(),
+        })),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -655,18 +507,12 @@ async fn list_webhooks(
     State(state): State<YAuthState>,
     Extension(_admin): Extension<AuthUser>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let responses: Vec<WebhookResponse> = {
-        let mut conn = state
-            .db
-            .get()
-            .await
-            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-        let webhooks = find_all_webhooks(&mut conn).await.map_err(|e| {
-            crate::otel::record_error("webhook_list_db_error", &e);
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
-        webhooks.into_iter().map(Into::into).collect()
-    };
+    let webhooks = state.repos.webhooks_repo.find_all().await.map_err(|e| {
+        crate::otel::record_error("webhook_list_db_error", &e);
+        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+    })?;
+
+    let responses: Vec<WebhookResponse> = webhooks.into_iter().map(Into::into).collect();
 
     Ok(Json(serde_json::json!({ "webhooks": responses })))
 }
@@ -680,35 +526,33 @@ async fn get_webhook(
     Extension(_admin): Extension<AuthUser>,
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let detail = {
-        let mut conn = state
-            .db
-            .get()
-            .await
-            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
+    let webhook = state
+        .repos
+        .webhooks_repo
+        .find_by_id(id)
+        .await
+        .map_err(|e| {
+            crate::otel::record_error("webhook_fetch_db_error", &e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?
+        .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "Webhook not found"))?;
 
-        let webhook = find_webhook_by_id(&mut conn, id)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("webhook_fetch_db_error", &e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?
-            .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "Webhook not found"))?;
+    let deliveries = state
+        .repos
+        .webhook_deliveries
+        .find_by_webhook_id(id, 50)
+        .await
+        .map_err(|e| {
+            crate::otel::record_error("webhook_deliveries_fetch_db_error", &e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
 
-        let deliveries = find_recent_deliveries(&mut conn, id, 50)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("webhook_deliveries_fetch_db_error", &e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
+    let delivery_responses: Vec<WebhookDeliveryResponse> =
+        deliveries.into_iter().map(Into::into).collect();
 
-        let delivery_responses: Vec<WebhookDeliveryResponse> =
-            deliveries.into_iter().map(Into::into).collect();
-
-        WebhookDetailResponse {
-            webhook: webhook.into(),
-            recent_deliveries: delivery_responses,
-        }
+    let detail = WebhookDetailResponse {
+        webhook: webhook.into(),
+        recent_deliveries: delivery_responses,
     };
 
     Ok(Json(detail))
@@ -724,51 +568,48 @@ async fn update_webhook(
     Path(id): Path<Uuid>,
     Json(input): Json<UpdateWebhookRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let response: WebhookResponse = {
-        let mut conn = state
-            .db
-            .get()
-            .await
-            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-
-        // Check existence first
-        find_webhook_by_id(&mut conn, id)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("webhook_fetch_db_error", &e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?
-            .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "Webhook not found"))?;
-
-        // Validate URL if being updated
-        if let Some(ref url) = input.url {
-            validate_webhook_url(url)?;
-        }
-
-        let events_json = input
-            .events
-            .as_ref()
-            .map(|e| serde_json::to_value(e).unwrap());
-        let now = Utc::now().fixed_offset();
-
-        let updated = db_update_webhook(
-            &mut conn,
-            id,
-            input.url.as_deref(),
-            events_json.as_ref(),
-            input.secret.as_deref(),
-            input.active,
-            now,
-        )
+    // Check existence first
+    state
+        .repos
+        .webhooks_repo
+        .find_by_id(id)
         .await
         .map_err(|e| {
-            crate::otel::record_error("webhook_update_db_error", &e);
+            crate::otel::record_error("webhook_fetch_db_error", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?
         .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "Webhook not found"))?;
 
-        updated.into()
+    // Validate URL if being updated
+    if let Some(ref url) = input.url {
+        validate_webhook_url(url)?;
+    }
+
+    let events_json = input
+        .events
+        .as_ref()
+        .map(|e| serde_json::to_value(e).unwrap());
+    let now = Utc::now();
+
+    let changeset = crate::domain::UpdateWebhook {
+        url: input.url.clone(),
+        events: events_json,
+        secret: input.secret.clone(),
+        active: input.active,
+        updated_at: Some(now.naive_utc()),
     };
+
+    let updated = state
+        .repos
+        .webhooks_repo
+        .update(id, changeset)
+        .await
+        .map_err(|e| {
+            crate::otel::record_error("webhook_update_db_error", &e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
+
+    let response: WebhookResponse = updated.into();
 
     crate::otel::add_event(
         "webhook_updated",
@@ -793,26 +634,21 @@ async fn delete_webhook(
     Extension(admin): Extension<AuthUser>,
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
-    {
-        let mut conn = state
-            .db
-            .get()
-            .await
-            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-
-        find_webhook_by_id(&mut conn, id)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("webhook_fetch_db_error", &e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?
-            .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "Webhook not found"))?;
-
-        db_delete_webhook(&mut conn, id).await.map_err(|e| {
-            crate::otel::record_error("webhook_delete_db_error", &e);
+    state
+        .repos
+        .webhooks_repo
+        .find_by_id(id)
+        .await
+        .map_err(|e| {
+            crate::otel::record_error("webhook_fetch_db_error", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
-    }
+        })?
+        .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "Webhook not found"))?;
+
+    state.repos.webhooks_repo.delete(id).await.map_err(|e| {
+        crate::otel::record_error("webhook_delete_db_error", &e);
+        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+    })?;
 
     crate::otel::add_event(
         "webhook_deleted",
@@ -846,25 +682,20 @@ async fn test_webhook(
     Extension(admin): Extension<AuthUser>,
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
-    // Fetch webhook URL, secret, and id
-    let (webhook_id, webhook_url, webhook_secret) = {
-        let mut conn = state
-            .db
-            .get()
-            .await
-            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-        let webhook = find_webhook_by_id(&mut conn, id)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("webhook_fetch_db_error", &e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?
-            .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "Webhook not found"))?;
-        (webhook.id, webhook.url, webhook.secret)
-    };
+    // Fetch webhook
+    let webhook = state
+        .repos
+        .webhooks_repo
+        .find_by_id(id)
+        .await
+        .map_err(|e| {
+            crate::otel::record_error("webhook_fetch_db_error", &e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?
+        .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "Webhook not found"))?;
 
     // SSRF check before sending test delivery
-    if !is_ssrf_safe(&webhook_url) {
+    if !is_ssrf_safe(&webhook.url) {
         return Err(api_err(
             StatusCode::BAD_REQUEST,
             "Webhook URL must not point to internal or private networks",
@@ -878,12 +709,12 @@ async fn test_webhook(
             "triggered_by": admin.id,
         },
         "timestamp": Utc::now().to_rfc3339(),
-        "webhook_id": webhook_id,
+        "webhook_id": webhook.id,
     });
     let body_str = serde_json::to_string(&body)
         .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Serialization error"))?;
 
-    let signature = compute_signature(&webhook_secret, &body_str);
+    let signature = compute_signature(&webhook.secret, &body_str);
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
@@ -891,7 +722,7 @@ async fn test_webhook(
         .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "HTTP client error"))?;
 
     let result = client
-        .post(&webhook_url)
+        .post(&webhook.url)
         .header("Content-Type", "application/json")
         .header("X-YAuth-Signature", format!("sha256={}", signature))
         .header("X-YAuth-Event", "test")
@@ -910,31 +741,27 @@ async fn test_webhook(
     };
 
     // Record delivery
-    {
-        let mut conn = state
-            .db
-            .get()
-            .await
-            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
+    let new_delivery = crate::domain::NewWebhookDelivery {
+        id: Uuid::new_v4(),
+        webhook_id: webhook.id,
+        event_type: "test".to_string(),
+        payload: body,
+        status_code,
+        response_body: response_body.clone(),
+        success,
+        attempt: 1,
+        created_at: Utc::now().naive_utc(),
+    };
 
-        insert_delivery(
-            &mut conn,
-            Uuid::new_v4(),
-            webhook_id,
-            "test",
-            &body,
-            status_code,
-            response_body.as_deref(),
-            success,
-            1,
-            Utc::now().fixed_offset(),
-        )
+    state
+        .repos
+        .webhook_deliveries
+        .create(new_delivery)
         .await
         .map_err(|e| {
             crate::otel::record_error("webhook_test_delivery_record_db_error", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?;
-    }
 
     Ok(Json(serde_json::json!({
         "success": success,

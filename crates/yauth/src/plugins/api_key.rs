@@ -5,113 +5,13 @@ use axum::{
     response::IntoResponse,
     routing::{delete, get, post},
 };
-use diesel::prelude::*;
-use diesel::result::OptionalExtension;
-use diesel_async_crate::RunQueryDsl;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::auth::crypto;
-use crate::db::models::{ApiKey, NewApiKey};
-use crate::db::schema::yauth_api_keys;
 use crate::middleware::{AuthMethod, AuthUser};
 use crate::plugin::{PluginContext, YAuthPlugin};
 use crate::state::YAuthState;
-
-type Conn = diesel_async_crate::AsyncPgConnection;
-type DbResult<T> = Result<T, String>;
-
-#[allow(clippy::too_many_arguments)]
-async fn db_insert_api_key(
-    conn: &mut Conn,
-    id: Uuid,
-    user_id: Uuid,
-    key_prefix: &str,
-    key_hash: &str,
-    name: &str,
-    scopes: Option<serde_json::Value>,
-    expires_at: Option<chrono::DateTime<chrono::FixedOffset>>,
-    created_at: chrono::DateTime<chrono::FixedOffset>,
-) -> DbResult<()> {
-    let new_key = NewApiKey {
-        id,
-        user_id,
-        key_prefix: key_prefix.to_string(),
-        key_hash: key_hash.to_string(),
-        name: name.to_string(),
-        scopes,
-        expires_at: expires_at.map(|t| t.naive_utc()),
-        created_at: created_at.naive_utc(),
-    };
-    diesel::insert_into(yauth_api_keys::table)
-        .values(&new_key)
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-async fn db_list_api_keys_by_user(conn: &mut Conn, user_id: Uuid) -> DbResult<Vec<ApiKey>> {
-    // No pagination — API key count per user is naturally small
-    yauth_api_keys::table
-        .filter(yauth_api_keys::user_id.eq(user_id))
-        .order(yauth_api_keys::created_at.desc())
-        .select(ApiKey::as_select())
-        .load(conn)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-async fn db_find_api_key_by_id_and_user(
-    conn: &mut Conn,
-    id: Uuid,
-    user_id: Uuid,
-) -> DbResult<Option<ApiKey>> {
-    yauth_api_keys::table
-        .filter(
-            yauth_api_keys::id
-                .eq(id)
-                .and(yauth_api_keys::user_id.eq(user_id)),
-        )
-        .select(ApiKey::as_select())
-        .first(conn)
-        .await
-        .optional()
-        .map_err(|e| e.to_string())
-}
-
-async fn db_delete_api_key(conn: &mut Conn, id: Uuid) -> DbResult<()> {
-    diesel::delete(yauth_api_keys::table.filter(yauth_api_keys::id.eq(id)))
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-async fn db_find_api_key_by_prefix(conn: &mut Conn, prefix: &str) -> DbResult<Option<ApiKey>> {
-    yauth_api_keys::table
-        .filter(yauth_api_keys::key_prefix.eq(prefix))
-        .select(ApiKey::as_select())
-        .first(conn)
-        .await
-        .optional()
-        .map_err(|e| e.to_string())
-}
-
-async fn db_update_api_key_last_used(
-    conn: &mut Conn,
-    id: Uuid,
-    now: chrono::DateTime<chrono::FixedOffset>,
-) -> DbResult<()> {
-    diesel::update(yauth_api_keys::table.filter(yauth_api_keys::id.eq(id)))
-        .set(yauth_api_keys::last_used_at.eq(now.naive_utc()))
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-use crate::db::find_user_by_id;
 
 pub struct ApiKeyPlugin;
 
@@ -183,39 +83,31 @@ async fn create_api_key(
     let full_key = format!("yauth_{}_{}", prefix, secret);
     let key_hash = crypto::hash_token(&full_key);
 
-    let now = chrono::Utc::now().fixed_offset();
+    let now = chrono::Utc::now().naive_utc();
 
     let expires_at = input
         .expires_in_days
-        .map(|days| (chrono::Utc::now() + chrono::Duration::days(i64::from(days))).fixed_offset());
+        .map(|days| (chrono::Utc::now() + chrono::Duration::days(i64::from(days))).naive_utc());
 
     let scopes_json = input.scopes.as_ref().map(|s| serde_json::json!(s));
 
     let api_key_id = Uuid::new_v4();
 
-    {
-        let mut conn = state
-            .db
-            .get()
-            .await
-            .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-        db_insert_api_key(
-            &mut conn,
-            api_key_id,
-            user.id,
-            &prefix,
-            &key_hash,
-            &name,
-            scopes_json,
-            expires_at,
-            now,
-        )
-        .await
-        .map_err(|e| {
-            crate::otel::record_error("api_key_create_failed", &e);
-            err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
-    }
+    let new_key = crate::domain::NewApiKey {
+        id: api_key_id,
+        user_id: user.id,
+        key_prefix: prefix.clone(),
+        key_hash,
+        name: name.clone(),
+        scopes: scopes_json,
+        expires_at,
+        created_at: now,
+    };
+
+    state.repos.api_keys.create(new_key).await.map_err(|e| {
+        crate::otel::record_error("api_key_create_failed", &e);
+        err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+    })?;
 
     crate::otel::add_event(
         "api_key_created",
@@ -238,6 +130,9 @@ async fn create_api_key(
         )
         .await;
 
+    let expires_at_fixed = expires_at.map(|t| t.and_utc().fixed_offset());
+    let created_at_fixed = now.and_utc().fixed_offset();
+
     Ok((
         StatusCode::CREATED,
         Json(CreateApiKeyResponse {
@@ -246,8 +141,8 @@ async fn create_api_key(
             name,
             prefix,
             scopes: input.scopes,
-            expires_at,
-            created_at: now,
+            expires_at: expires_at_fixed,
+            created_at: created_at_fixed,
         }),
     ))
 }
@@ -258,36 +153,33 @@ async fn list_api_keys(
 ) -> Result<Json<Vec<ApiKeyResponse>>, (StatusCode, Json<serde_json::Value>)> {
     let err = |status: StatusCode, msg: &str| (status, Json(serde_json::json!({ "error": msg })));
 
-    let response: Vec<ApiKeyResponse> = {
-        let mut conn = state
-            .db
-            .get()
-            .await
-            .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-        let keys = db_list_api_keys_by_user(&mut conn, user.id)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("api_key_list_failed", &e);
-                err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
+    let keys = state
+        .repos
+        .api_keys
+        .list_by_user_id(user.id)
+        .await
+        .map_err(|e| {
+            crate::otel::record_error("api_key_list_failed", &e);
+            err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
 
-        keys.into_iter()
-            .map(|k| {
-                let scopes = k
-                    .scopes
-                    .and_then(|v| serde_json::from_value::<Vec<String>>(v).ok());
-                ApiKeyResponse {
-                    id: k.id,
-                    name: k.name,
-                    prefix: k.key_prefix,
-                    scopes,
-                    last_used_at: k.last_used_at.map(|t| t.and_utc().fixed_offset()),
-                    expires_at: k.expires_at.map(|t| t.and_utc().fixed_offset()),
-                    created_at: k.created_at.and_utc().fixed_offset(),
-                }
-            })
-            .collect()
-    };
+    let response: Vec<ApiKeyResponse> = keys
+        .into_iter()
+        .map(|k| {
+            let scopes = k
+                .scopes
+                .and_then(|v| serde_json::from_value::<Vec<String>>(v).ok());
+            ApiKeyResponse {
+                id: k.id,
+                name: k.name,
+                prefix: k.key_prefix,
+                scopes,
+                last_used_at: k.last_used_at.map(|t| t.and_utc().fixed_offset()),
+                expires_at: k.expires_at.map(|t| t.and_utc().fixed_offset()),
+                created_at: k.created_at.and_utc().fixed_offset(),
+            }
+        })
+        .collect();
 
     Ok(Json(response))
 }
@@ -299,26 +191,22 @@ async fn delete_api_key(
 ) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
     let err = |status: StatusCode, msg: &str| (status, Json(serde_json::json!({ "error": msg })));
 
-    {
-        let mut conn = state
-            .db
-            .get()
-            .await
-            .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-        let key = db_find_api_key_by_id_and_user(&mut conn, id, user.id)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("api_key_find_failed", &e);
-                err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
-
-        let key = key.ok_or_else(|| err(StatusCode::NOT_FOUND, "API key not found"))?;
-
-        db_delete_api_key(&mut conn, key.id).await.map_err(|e| {
-            crate::otel::record_error("api_key_delete_failed", &e);
+    let key = state
+        .repos
+        .api_keys
+        .find_by_id_and_user(id, user.id)
+        .await
+        .map_err(|e| {
+            crate::otel::record_error("api_key_find_failed", &e);
             err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?;
-    }
+
+    let key = key.ok_or_else(|| err(StatusCode::NOT_FOUND, "API key not found"))?;
+
+    state.repos.api_keys.delete(key.id).await.map_err(|e| {
+        crate::otel::record_error("api_key_delete_failed", &e);
+        err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+    })?;
 
     crate::otel::add_event(
         "api_key_deleted",
@@ -358,19 +246,16 @@ pub async fn validate_api_key(key: &str, state: &YAuthState) -> Result<AuthUser,
         return Err("Invalid API key format".to_string());
     }
 
-    let mut conn = state
-        .db
-        .get()
-        .await
-        .map_err(|e| format!("Pool error: {}", e))?;
-
     // Look up by prefix
-    let api_key = db_find_api_key_by_prefix(&mut conn, prefix)
+    let api_key = state
+        .repos
+        .api_keys
+        .find_by_prefix(prefix)
         .await
         .map_err(|e| format!("Database error: {}", e))?
         .ok_or_else(|| "Invalid API key".to_string())?;
 
-    // Check expiration
+    // Check expiration (repo should already filter expired keys, but double-check)
     if let Some(expires_at) = api_key.expires_at {
         let now = chrono::Utc::now().naive_utc();
         if expires_at < now {
@@ -405,15 +290,15 @@ pub async fn validate_api_key(key: &str, state: &YAuthState) -> Result<AuthUser,
     }
 
     // Update last_used_at (best-effort, don't fail auth if this errors)
-    let now = chrono::Utc::now().fixed_offset();
-    {
-        if let Err(e) = db_update_api_key_last_used(&mut conn, api_key.id, now).await {
-            crate::otel::record_error("api_key_last_used_update_failed", &e);
-        }
+    if let Err(e) = state.repos.api_keys.update_last_used(api_key.id).await {
+        crate::otel::record_error("api_key_last_used_update_failed", &e);
     }
 
     // Look up the user
-    let user = find_user_by_id(&mut conn, api_key.user_id)
+    let user = state
+        .repos
+        .users
+        .find_by_id(api_key.user_id)
         .await
         .map_err(|e| format!("Database error: {}", e))?
         .ok_or_else(|| "User not found".to_string())?;

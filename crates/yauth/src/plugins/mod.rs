@@ -46,8 +46,6 @@ use axum::{
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
-use crate::db::models::User;
-use crate::db::schema::yauth_users;
 use crate::middleware::AuthUser;
 use crate::plugin::PluginContext;
 use crate::state::YAuthState;
@@ -112,35 +110,18 @@ async fn update_profile(
     Extension(user): Extension<AuthUser>,
     Json(input): Json<UpdateProfileRequest>,
 ) -> impl axum::response::IntoResponse {
-    use diesel::prelude::*;
-    use diesel_async_crate::RunQueryDsl;
-
-    let mut conn = match state.db.get().await {
-        Ok(c) => c,
-        Err(e) => {
-            crate::otel::record_error("pool_error", &e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "Internal error" })),
-            );
-        }
-    };
-
     let display_name = input
         .display_name
         .map(|n| n.trim().to_string())
         .filter(|n| !n.is_empty());
 
-    let result: Result<User, _> = diesel::update(yauth_users::table.find(user.id))
-        .set((
-            yauth_users::display_name.eq(&display_name),
-            yauth_users::updated_at.eq(Utc::now().naive_utc()),
-        ))
-        .returning(User::as_returning())
-        .get_result(&mut conn)
-        .await;
+    let changes = crate::domain::UpdateUser {
+        display_name: Some(display_name),
+        updated_at: Some(Utc::now().naive_utc()),
+        ..Default::default()
+    };
 
-    match result {
+    match state.repos.users.update(user.id, changes).await {
         Ok(updated) => (
             StatusCode::OK,
             Json(serde_json::json!({

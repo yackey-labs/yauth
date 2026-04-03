@@ -1,6 +1,6 @@
-use chrono::NaiveDateTime;
 use super::{RepoFuture, sealed};
 use crate::domain;
+use chrono::NaiveDateTime;
 use uuid::Uuid;
 
 /// Repository for account lock tracking.
@@ -35,10 +35,7 @@ pub trait AccountLockRepository: sealed::Sealed + Send + Sync {
 ///
 /// - **`find_by_token_hash`**: MUST return `None` if expired.
 pub trait UnlockTokenRepository: sealed::Sealed + Send + Sync {
-    fn find_by_token_hash(
-        &self,
-        token_hash: &str,
-    ) -> RepoFuture<'_, Option<domain::UnlockToken>>;
+    fn find_by_token_hash(&self, token_hash: &str) -> RepoFuture<'_, Option<domain::UnlockToken>>;
 
     fn create(&self, input: domain::NewUnlockToken) -> RepoFuture<'_, ()>;
 

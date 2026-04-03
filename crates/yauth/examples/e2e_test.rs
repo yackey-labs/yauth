@@ -10,6 +10,10 @@ use std::time::Duration;
 use tokio::net::TcpListener;
 use totp_rs::{Algorithm, Secret, TOTP};
 
+use yauth::backends::diesel::{
+    AsyncDieselConnectionManager, AsyncPgConnection, DieselBackend, DieselPool,
+};
+
 type Pool = yauth::state::DbPool;
 
 const BASE_URL: &str = "http://127.0.0.1";
@@ -23,24 +27,21 @@ async fn main() {
 
     log::info!("=== YAuth E2E Test (Full) ===");
 
-    let config = yauth::AsyncDieselConnectionManager::<yauth::AsyncPgConnection>::new(DB_URL);
-    let db = yauth::DieselPool::builder(config)
+    let config = AsyncDieselConnectionManager::<AsyncPgConnection>::new(DB_URL);
+    let db = DieselPool::builder(config)
         .build()
         .expect("Failed to create connection pool");
 
     log::info!("Running migrations (fresh)...");
     // Drop all yauth tables first for a fresh start
     {
-        use yauth::RunQueryDsl;
+        use yauth::backends::diesel::RunQueryDsl;
         let mut conn = db.get().await.expect("Failed to get connection");
         let _ = diesel::sql_query("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
             .execute(&mut conn)
             .await;
     }
-    yauth::migration::diesel_migrations::run_migrations(&db)
-        .await
-        .expect("Migration failed");
-
+    // Migrations run automatically during build(), but we need a fresh schema first
     let port = start_server(db.clone()).await;
     let api = format!("{}:{}/api/auth", BASE_URL, port);
     let client = reqwest::Client::builder()
@@ -785,7 +786,7 @@ async fn main() {
     // Promote user to admin directly in DB
     let user_uuid: uuid::Uuid = user_id.parse().unwrap();
     {
-        use yauth::RunQueryDsl;
+        use yauth::backends::diesel::RunQueryDsl;
         let mut conn = db.get().await.expect("Failed to get connection");
         diesel::sql_query("UPDATE yauth_users SET role = 'admin' WHERE id = $1")
             .bind::<diesel::sql_types::Uuid, _>(user_uuid)
@@ -1326,7 +1327,7 @@ async fn start_server(db: Pool) -> u16 {
     use yauth::prelude::*;
 
     let auth = YAuthBuilder::new(
-        db,
+        DieselBackend::from_pool(db),
         yauth::config::YAuthConfig {
             base_url: "http://127.0.0.1:0".into(),
             session_cookie_name: "session".into(),
@@ -1361,7 +1362,9 @@ async fn start_server(db: Pool) -> u16 {
     })
     .with_api_key()
     .with_admin()
-    .build();
+    .build()
+    .await
+    .expect("Failed to build YAuth");
 
     let auth_state = auth.state().clone();
     let app = axum::Router::new()
@@ -1383,7 +1386,7 @@ async fn start_server_with_audience(db: Pool, audience: &str) -> u16 {
     use yauth::prelude::*;
 
     let auth = YAuthBuilder::new(
-        db,
+        DieselBackend::from_pool(db),
         yauth::config::YAuthConfig {
             base_url: "http://127.0.0.1:0".into(),
             session_cookie_name: "session_aud".into(),
@@ -1408,7 +1411,9 @@ async fn start_server_with_audience(db: Pool, audience: &str) -> u16 {
         refresh_token_ttl: Duration::from_secs(86400),
         audience: Some(audience.to_string()),
     })
-    .build();
+    .build()
+    .await
+    .expect("Failed to build YAuth");
 
     let auth_state = auth.state().clone();
 
@@ -1447,7 +1452,7 @@ async fn start_server_with_oauth2(db: Pool) -> u16 {
     use yauth::prelude::*;
 
     let auth = YAuthBuilder::new(
-        db,
+        DieselBackend::from_pool(db),
         yauth::config::YAuthConfig {
             base_url: "http://127.0.0.1:0".into(),
             session_cookie_name: "session_oauth2".into(),
@@ -1483,7 +1488,9 @@ async fn start_server_with_oauth2(db: Pool) -> u16 {
         allow_dynamic_registration: true,
         ..Default::default()
     })
-    .build();
+    .build()
+    .await
+    .expect("Failed to build YAuth");
 
     let auth_state = auth.state().clone();
     let app = axum::Router::new()

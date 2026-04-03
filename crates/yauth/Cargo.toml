@@ -10,7 +10,8 @@ categories = ["authentication", "web-programming"]
 publish = true
 
 [features]
-default = ["email-password"]
+default = ["email-password", "diesel-backend"]
+diesel-backend = []
 email-password = []
 passkey = ["dep:webauthn-rs"]
 mfa = ["dep:totp-rs"]
@@ -27,7 +28,7 @@ oidc = ["bearer", "oauth2-server"]
 telemetry = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:opentelemetry-semantic-conventions", "dep:opentelemetry-http"]
 openapi = ["dep:utoipa"]
 redis = ["dep:redis"]
-full = ["email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link", "admin", "status", "oauth2-server", "account-lockout", "webhooks", "oidc", "telemetry", "openapi"]
+full = ["email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link", "admin", "status", "oauth2-server", "account-lockout", "webhooks", "oidc", "telemetry", "openapi", "diesel-backend"]
 
 [dependencies]
 axum = { workspace = true }

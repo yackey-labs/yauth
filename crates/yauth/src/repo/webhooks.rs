@@ -12,11 +12,7 @@ pub trait WebhookRepository: sealed::Sealed + Send + Sync {
 
     fn create(&self, input: domain::NewWebhook) -> RepoFuture<'_, ()>;
 
-    fn update(
-        &self,
-        id: Uuid,
-        changes: domain::UpdateWebhook,
-    ) -> RepoFuture<'_, domain::Webhook>;
+    fn update(&self, id: Uuid, changes: domain::UpdateWebhook) -> RepoFuture<'_, domain::Webhook>;
 
     fn delete(&self, id: Uuid) -> RepoFuture<'_, ()>;
 }

@@ -10,156 +10,11 @@ use uuid::Uuid;
 
 use totp_rs::{Algorithm, Secret, TOTP};
 
-use diesel::prelude::*;
-use diesel::result::OptionalExtension;
-use diesel_async_crate::RunQueryDsl;
-
 use crate::auth::{crypto, session};
 use crate::config::MfaConfig;
-use crate::db::models::{BackupCode, NewBackupCode, NewTotpSecret, TotpSecret};
-use crate::db::schema::{yauth_backup_codes, yauth_totp_secrets};
 use crate::middleware::AuthUser;
 use crate::plugin::{AuthEvent, EventResponse, PluginContext, YAuthPlugin};
 use crate::state::YAuthState;
-
-// ---------------------------------------------------------------------------
-// Database helpers
-// ---------------------------------------------------------------------------
-
-type Conn = diesel_async_crate::AsyncPgConnection;
-type DbResult<T> = Result<T, String>;
-
-use crate::db::find_user_by_id;
-
-async fn db_find_totp_secret(
-    conn: &mut Conn,
-    user_id: Uuid,
-    verified: bool,
-) -> DbResult<Option<TotpSecret>> {
-    yauth_totp_secrets::table
-        .filter(
-            yauth_totp_secrets::user_id
-                .eq(user_id)
-                .and(yauth_totp_secrets::verified.eq(verified)),
-        )
-        .select(TotpSecret::as_select())
-        .first(conn)
-        .await
-        .optional()
-        .map_err(|e| e.to_string())
-}
-
-async fn db_insert_totp_secret(
-    conn: &mut Conn,
-    id: Uuid,
-    user_id: Uuid,
-    encrypted_secret: &str,
-    verified: bool,
-) -> DbResult<()> {
-    let now = chrono::Utc::now().naive_utc();
-    let new_secret = NewTotpSecret {
-        id,
-        user_id,
-        encrypted_secret: encrypted_secret.to_string(),
-        verified,
-        created_at: now,
-    };
-    diesel::insert_into(yauth_totp_secrets::table)
-        .values(&new_secret)
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-async fn db_delete_totp_secrets_by_user(
-    conn: &mut Conn,
-    user_id: Uuid,
-    verified_filter: Option<bool>,
-) -> DbResult<u64> {
-    if let Some(v) = verified_filter {
-        let result = diesel::delete(
-            yauth_totp_secrets::table.filter(
-                yauth_totp_secrets::user_id
-                    .eq(user_id)
-                    .and(yauth_totp_secrets::verified.eq(v)),
-            ),
-        )
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-        Ok(result as u64)
-    } else {
-        let result = diesel::delete(
-            yauth_totp_secrets::table.filter(yauth_totp_secrets::user_id.eq(user_id)),
-        )
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-        Ok(result as u64)
-    }
-}
-
-async fn db_update_totp_secret_verified(conn: &mut Conn, id: Uuid) -> DbResult<()> {
-    diesel::update(yauth_totp_secrets::table.find(id))
-        .set(yauth_totp_secrets::verified.eq(true))
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-async fn db_find_unused_backup_codes(conn: &mut Conn, user_id: Uuid) -> DbResult<Vec<BackupCode>> {
-    yauth_backup_codes::table
-        .filter(
-            yauth_backup_codes::user_id
-                .eq(user_id)
-                .and(yauth_backup_codes::used.eq(false)),
-        )
-        .select(BackupCode::as_select())
-        .load(conn)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-async fn db_insert_backup_code(
-    conn: &mut Conn,
-    id: Uuid,
-    user_id: Uuid,
-    code_hash: &str,
-) -> DbResult<()> {
-    let now = chrono::Utc::now().naive_utc();
-    let new_code = NewBackupCode {
-        id,
-        user_id,
-        code_hash: code_hash.to_string(),
-        used: false,
-        created_at: now,
-    };
-    diesel::insert_into(yauth_backup_codes::table)
-        .values(&new_code)
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-async fn db_delete_all_backup_codes(conn: &mut Conn, user_id: Uuid) -> DbResult<()> {
-    diesel::delete(yauth_backup_codes::table.filter(yauth_backup_codes::user_id.eq(user_id)))
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-async fn db_mark_backup_code_used(conn: &mut Conn, id: Uuid) -> DbResult<()> {
-    diesel::update(yauth_backup_codes::table.find(id))
-        .set(yauth_backup_codes::used.eq(true))
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
 
 // ---------------------------------------------------------------------------
 // Plugin struct
@@ -201,7 +56,7 @@ impl YAuthPlugin for MfaPlugin {
         match event {
             AuthEvent::LoginSucceeded { user_id, .. } => {
                 let user_id = *user_id;
-                let db = ctx.state.db.clone();
+                let repos = ctx.state.repos.clone();
                 let challenge_store = ctx.state.challenge_store.clone();
 
                 // Run the async DB lookup synchronously within the current runtime.
@@ -210,21 +65,12 @@ impl YAuthPlugin for MfaPlugin {
                 tokio::task::block_in_place(|| {
                     tokio::runtime::Handle::current().block_on(async {
                         // Check if user has a verified TOTP secret
-                        let has_mfa = {
-                            let mut conn = match db.get().await {
-                                Ok(c) => c,
-                                Err(e) => {
-                                    crate::otel::record_error("mfa_pool_error", &e);
-                                    return EventResponse::Continue;
-                                }
-                            };
-                            match db_find_totp_secret(&mut conn, user_id, true).await {
-                                Ok(Some(_)) => true,
-                                Ok(None) => false,
-                                Err(e) => {
-                                    crate::otel::record_error("mfa_db_status_check_error", &e);
-                                    return EventResponse::Continue;
-                                }
+                        let has_mfa = match repos.totp.find_by_user_id(user_id, Some(true)).await {
+                            Ok(Some(_)) => true,
+                            Ok(None) => false,
+                            Err(e) => {
+                                crate::otel::record_error("mfa_db_status_check_error", &e);
+                                return EventResponse::Continue;
                             }
                         };
 
@@ -374,42 +220,37 @@ fn build_totp(
 
 /// Store backup codes in the database for a user, returning the plaintext codes.
 async fn store_backup_codes(
-    conn: &mut diesel_async_crate::AsyncPgConnection,
+    state: &YAuthState,
     user_id: Uuid,
     count: usize,
 ) -> Result<Vec<String>, (StatusCode, Json<serde_json::Value>)> {
-    let err = |status: StatusCode, msg: &str| (status, Json(serde_json::json!({ "error": msg })));
-
     let codes = generate_backup_codes(count);
 
     for code in &codes {
         let code_hash = crypto::hash_token(code);
-        db_insert_backup_code(conn, Uuid::new_v4(), user_id, &code_hash)
+        let now = chrono::Utc::now().naive_utc();
+        let new_code = crate::domain::NewBackupCode {
+            id: Uuid::new_v4(),
+            user_id,
+            code_hash,
+            used: false,
+            created_at: now,
+        };
+        state
+            .repos
+            .backup_codes
+            .create(new_code)
             .await
             .map_err(|e| {
                 crate::otel::record_error("mfa_backup_code_store_failed", &e);
-                err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": "Internal error" })),
+                )
             })?;
     }
 
     Ok(codes)
-}
-
-/// Delete all backup codes for a user.
-async fn delete_all_backup_codes(
-    conn: &mut diesel_async_crate::AsyncPgConnection,
-    user_id: Uuid,
-) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
-    db_delete_all_backup_codes(conn, user_id)
-        .await
-        .map_err(|e| {
-            crate::otel::record_error("mfa_backup_codes_delete_failed", &e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "Internal error" })),
-            )
-        })?;
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -426,21 +267,16 @@ async fn setup_totp(
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let err = |status: StatusCode, msg: &str| (status, Json(serde_json::json!({ "error": msg })));
 
-    let mut conn = state
-        .db
-        .get()
-        .await
-        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-
     // Check if user already has a verified TOTP secret
-    let existing = {
-        db_find_totp_secret(&mut conn, user.id, true)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("db_error", &e);
-                err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?
-    };
+    let existing = state
+        .repos
+        .totp
+        .find_by_user_id(user.id, Some(true))
+        .await
+        .map_err(|e| {
+            crate::otel::record_error("db_error", &e);
+            err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
 
     if existing.is_some() {
         return Err(err(
@@ -450,9 +286,7 @@ async fn setup_totp(
     }
 
     // Delete any existing unverified secret for this user (e.g. abandoned setup)
-    {
-        let _ = db_delete_totp_secrets_by_user(&mut conn, user.id, Some(false)).await;
-    }
+    let _ = state.repos.totp.delete_for_user(user.id, Some(false)).await;
 
     // Generate TOTP secret
     let secret = Secret::generate_secret();
@@ -479,22 +313,24 @@ async fn setup_totp(
     let secret_base32 = secret.to_encoded().to_string();
 
     // Store unverified TOTP secret
-    {
-        db_insert_totp_secret(&mut conn, Uuid::new_v4(), user.id, &secret_base32, false)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("totp_secret_store_failed", &e);
-                err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
-    }
+    let now = chrono::Utc::now().naive_utc();
+    let new_secret = crate::domain::NewTotpSecret {
+        id: Uuid::new_v4(),
+        user_id: user.id,
+        encrypted_secret: secret_base32.clone(),
+        verified: false,
+        created_at: now,
+    };
+    state.repos.totp.create(new_secret).await.map_err(|e| {
+        crate::otel::record_error("totp_secret_store_failed", &e);
+        err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+    })?;
 
     // Delete any existing backup codes and generate fresh ones
-    {
-        delete_all_backup_codes(&mut conn, user.id).await?;
-    }
+    let _ = state.repos.backup_codes.delete_all_for_user(user.id).await;
 
     let backup_codes =
-        store_backup_codes(&mut conn, user.id, state.mfa_config.backup_code_count).await?;
+        store_backup_codes(&state, user.id, state.mfa_config.backup_code_count).await?;
 
     crate::otel::add_event(
         "mfa_totp_setup",
@@ -522,27 +358,22 @@ async fn confirm_totp(
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let err = |status: StatusCode, msg: &str| (status, Json(serde_json::json!({ "error": msg })));
 
-    let mut conn = state
-        .db
-        .get()
-        .await
-        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-
     // Find the unverified TOTP secret for this user
-    let totp_record = {
-        db_find_totp_secret(&mut conn, user.id, false)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("db_error", &e);
-                err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?
-            .ok_or_else(|| {
-                err(
-                    StatusCode::BAD_REQUEST,
-                    "No pending TOTP setup found. Call POST /mfa/totp/setup first.",
-                )
-            })?
-    };
+    let totp_record = state
+        .repos
+        .totp
+        .find_by_user_id(user.id, Some(false))
+        .await
+        .map_err(|e| {
+            crate::otel::record_error("db_error", &e);
+            err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?
+        .ok_or_else(|| {
+            err(
+                StatusCode::BAD_REQUEST,
+                "No pending TOTP setup found. Call POST /mfa/totp/setup first.",
+            )
+        })?;
 
     // Build TOTP from stored secret and verify the code
     let totp = build_totp(
@@ -568,14 +399,15 @@ async fn confirm_totp(
     }
 
     // Mark the secret as verified
-    {
-        db_update_totp_secret_verified(&mut conn, totp_record.id)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("totp_verify_failed", &e);
-                err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
-    }
+    state
+        .repos
+        .totp
+        .mark_verified(totp_record.id)
+        .await
+        .map_err(|e| {
+            crate::otel::record_error("totp_verify_failed", &e);
+            err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
 
     crate::otel::add_event(
         "mfa_totp_enabled",
@@ -608,30 +440,52 @@ async fn disable_totp(
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let err = |status: StatusCode, msg: &str| (status, Json(serde_json::json!({ "error": msg })));
 
-    let mut conn = state
-        .db
-        .get()
+    // Check if user has any TOTP secret (verified or not) before trying to delete
+    let has_verified = state
+        .repos
+        .totp
+        .find_by_user_id(user.id, Some(true))
         .await
-        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
+        .map_err(|e| {
+            crate::otel::record_error("totp_secret_check_failed", &e);
+            err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
 
-    // Delete TOTP secret (verified or not)
-    let rows_affected = {
-        db_delete_totp_secrets_by_user(&mut conn, user.id, None)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("totp_secret_delete_failed", &e);
-                err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?
-    };
+    let has_unverified = state
+        .repos
+        .totp
+        .find_by_user_id(user.id, Some(false))
+        .await
+        .map_err(|e| {
+            crate::otel::record_error("totp_secret_check_failed", &e);
+            err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
 
-    if rows_affected == 0 {
+    if has_verified.is_none() && has_unverified.is_none() {
         return Err(err(StatusCode::NOT_FOUND, "TOTP MFA is not enabled"));
     }
 
+    // Delete TOTP secret (verified or not)
+    state
+        .repos
+        .totp
+        .delete_for_user(user.id, None)
+        .await
+        .map_err(|e| {
+            crate::otel::record_error("totp_secret_delete_failed", &e);
+            err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
+
     // Delete all backup codes
-    {
-        delete_all_backup_codes(&mut conn, user.id).await?;
-    }
+    state
+        .repos
+        .backup_codes
+        .delete_all_for_user(user.id)
+        .await
+        .map_err(|e| {
+            crate::otel::record_error("mfa_backup_codes_delete_failed", &e);
+            err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
 
     crate::otel::add_event(
         "mfa_totp_disabled",
@@ -695,21 +549,16 @@ async fn verify_mfa(
         )
     })?;
 
-    let mut conn = state
-        .db
-        .get()
-        .await
-        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-
     // Load the user's verified TOTP secret
-    let totp_record = {
-        db_find_totp_secret(&mut conn, user_id, true)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("db_error", &e);
-                err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?
-    };
+    let totp_record = state
+        .repos
+        .totp
+        .find_by_user_id(user_id, Some(true))
+        .await
+        .map_err(|e| {
+            crate::otel::record_error("db_error", &e);
+            err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
 
     // Load the user for the email (needed to build the TOTP)
     struct UserData {
@@ -720,7 +569,10 @@ async fn verify_mfa(
     }
 
     let user = {
-        let u = find_user_by_id(&mut conn, user_id)
+        let u = state
+            .repos
+            .users
+            .find_by_id(user_id)
             .await
             .map_err(|e| {
                 crate::otel::record_error("db_error", &e);
@@ -753,26 +605,28 @@ async fn verify_mfa(
     if !verified {
         let code_hash = crypto::hash_token(&input.code);
 
-        let backup_codes = {
-            db_find_unused_backup_codes(&mut conn, user_id)
-                .await
-                .map_err(|e| {
-                    crate::otel::record_error("db_error", &e);
-                    err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-                })?
-        };
+        let backup_codes = state
+            .repos
+            .backup_codes
+            .find_unused_by_user_id(user_id)
+            .await
+            .map_err(|e| {
+                crate::otel::record_error("db_error", &e);
+                err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?;
 
         for bc in backup_codes {
             if crypto::constant_time_eq(bc.code_hash.as_bytes(), code_hash.as_bytes()) {
                 // Mark backup code as used
-                {
-                    db_mark_backup_code_used(&mut conn, bc.id)
-                        .await
-                        .map_err(|e| {
-                            crate::otel::record_error("mfa_backup_code_mark_used_failed", &e);
-                            err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-                        })?;
-                }
+                state
+                    .repos
+                    .backup_codes
+                    .mark_used(bc.id)
+                    .await
+                    .map_err(|e| {
+                        crate::otel::record_error("mfa_backup_code_mark_used_failed", &e);
+                        err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+                    })?;
 
                 verified = true;
                 crate::otel::add_event(
@@ -847,24 +701,22 @@ async fn get_backup_code_count(
     State(state): State<YAuthState>,
     Extension(user): Extension<AuthUser>,
 ) -> Result<Json<BackupCodeCountResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let err = |status: StatusCode, msg: &str| (status, Json(serde_json::json!({ "error": msg })));
+    let codes = state
+        .repos
+        .backup_codes
+        .find_unused_by_user_id(user.id)
+        .await
+        .map_err(|e| {
+            crate::otel::record_error("db_error", &e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Internal error" })),
+            )
+        })?;
 
-    let remaining = {
-        let mut conn = state
-            .db
-            .get()
-            .await
-            .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-        let codes = db_find_unused_backup_codes(&mut conn, user.id)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("db_error", &e);
-                err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
-        codes.len()
-    };
-
-    Ok(Json(BackupCodeCountResponse { remaining }))
+    Ok(Json(BackupCodeCountResponse {
+        remaining: codes.len(),
+    }))
 }
 
 /// POST /mfa/backup-codes/regenerate (protected)
@@ -877,21 +729,16 @@ async fn regenerate_backup_codes(
 ) -> Result<Json<BackupCodesResponse>, (StatusCode, Json<serde_json::Value>)> {
     let err = |status: StatusCode, msg: &str| (status, Json(serde_json::json!({ "error": msg })));
 
-    let mut conn = state
-        .db
-        .get()
-        .await
-        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-
     // Ensure MFA is enabled
-    let has_mfa = {
-        db_find_totp_secret(&mut conn, user.id, true)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("db_error", &e);
-                err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?
-    };
+    let has_mfa = state
+        .repos
+        .totp
+        .find_by_user_id(user.id, Some(true))
+        .await
+        .map_err(|e| {
+            crate::otel::record_error("db_error", &e);
+            err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
 
     if has_mfa.is_none() {
         return Err(err(
@@ -901,12 +748,18 @@ async fn regenerate_backup_codes(
     }
 
     // Delete old backup codes
-    {
-        delete_all_backup_codes(&mut conn, user.id).await?;
-    }
+    state
+        .repos
+        .backup_codes
+        .delete_all_for_user(user.id)
+        .await
+        .map_err(|e| {
+            crate::otel::record_error("mfa_backup_codes_delete_failed", &e);
+            err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
 
     // Generate and store fresh backup codes
-    let codes = store_backup_codes(&mut conn, user.id, state.mfa_config.backup_code_count).await?;
+    let codes = store_backup_codes(&state, user.id, state.mfa_config.backup_code_count).await?;
 
     crate::otel::add_event(
         "mfa_backup_codes_regenerated",

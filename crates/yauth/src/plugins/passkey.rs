@@ -5,9 +5,6 @@ use axum::{
     response::IntoResponse,
     routing::{delete, get, post},
 };
-use diesel::prelude::*;
-use diesel::result::OptionalExtension;
-use diesel_async_crate::RunQueryDsl;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use webauthn_rs::Webauthn;
@@ -15,8 +12,6 @@ use webauthn_rs::prelude::*;
 
 use crate::auth::session;
 use crate::config::PasskeyConfig;
-use crate::db::models::{NewWebauthnCredential, WebauthnCredential};
-use crate::db::schema::yauth_webauthn_credentials;
 use crate::error::{ApiError, api_err};
 use crate::middleware::AuthUser;
 use crate::plugin::{PluginContext, YAuthPlugin};
@@ -105,89 +100,6 @@ impl YAuthPlugin for PasskeyPlugin {
 
 use crate::auth::session::session_set_cookie;
 
-// ---------------------------------------------------------------------------
-// Database helpers
-// ---------------------------------------------------------------------------
-
-type Conn = diesel_async_crate::AsyncPgConnection;
-type DbResult<T> = Result<T, String>;
-
-use crate::db::{find_user_by_email, find_user_by_id};
-
-async fn db_find_credentials_by_user(
-    conn: &mut Conn,
-    user_id: Uuid,
-) -> DbResult<Vec<WebauthnCredential>> {
-    yauth_webauthn_credentials::table
-        .filter(yauth_webauthn_credentials::user_id.eq(user_id))
-        .select(WebauthnCredential::as_select())
-        .load(conn)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-async fn db_insert_credential(
-    conn: &mut Conn,
-    id: Uuid,
-    user_id: Uuid,
-    name: &str,
-    credential: &serde_json::Value,
-) -> DbResult<()> {
-    let now = chrono::Utc::now().naive_utc();
-    let new_cred = NewWebauthnCredential {
-        id,
-        user_id,
-        name: name.to_string(),
-        aaguid: None,
-        device_name: None,
-        credential: credential.clone(),
-        created_at: now,
-    };
-    diesel::insert_into(yauth_webauthn_credentials::table)
-        .values(&new_cred)
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-async fn db_update_credentials_last_used(conn: &mut Conn, user_id: Uuid) -> DbResult<()> {
-    diesel::update(
-        yauth_webauthn_credentials::table.filter(yauth_webauthn_credentials::user_id.eq(user_id)),
-    )
-    .set(yauth_webauthn_credentials::last_used_at.eq(chrono::Utc::now().naive_utc()))
-    .execute(conn)
-    .await
-    .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-async fn db_find_credential_by_id_and_user(
-    conn: &mut Conn,
-    id: Uuid,
-    user_id: Uuid,
-) -> DbResult<Option<WebauthnCredential>> {
-    yauth_webauthn_credentials::table
-        .filter(
-            yauth_webauthn_credentials::id
-                .eq(id)
-                .and(yauth_webauthn_credentials::user_id.eq(user_id)),
-        )
-        .select(WebauthnCredential::as_select())
-        .first(conn)
-        .await
-        .optional()
-        .map_err(|e| e.to_string())
-}
-
-async fn db_delete_credential(conn: &mut Conn, id: Uuid) -> DbResult<()> {
-    diesel::delete(yauth_webauthn_credentials::table.filter(yauth_webauthn_credentials::id.eq(id)))
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
 // --- Registration ---
 
 async fn register_begin(
@@ -195,13 +107,10 @@ async fn register_begin(
     Extension(auth_user): Extension<AuthUser>,
     webauthn: Arc<Webauthn>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let mut conn = state
-        .db
-        .get()
-        .await
-        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-
-    let user = find_user_by_id(&mut conn, auth_user.id)
+    let user = state
+        .repos
+        .users
+        .find_by_id(auth_user.id)
         .await
         .map_err(|e| {
             crate::otel::record_error("db_error", &e);
@@ -209,19 +118,20 @@ async fn register_begin(
         })?
         .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "User not found"))?;
 
-    // Get existing credentials to exclude
-    let existing_passkeys: Vec<Passkey> = {
-        let existing_creds = db_find_credentials_by_user(&mut conn, user.id)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("db_error", &e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
-        existing_creds
-            .into_iter()
-            .filter_map(|c| serde_json::from_value(c.credential).ok())
-            .collect()
-    };
+    let existing_creds = state
+        .repos
+        .passkeys
+        .find_by_user_id(user.id)
+        .await
+        .map_err(|e| {
+            crate::otel::record_error("db_error", &e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
+
+    let existing_passkeys: Vec<Passkey> = existing_creds
+        .into_iter()
+        .filter_map(|c| serde_json::from_value(c.credential).ok())
+        .collect();
 
     let exclude_opt = if existing_passkeys.is_empty() {
         None
@@ -242,7 +152,6 @@ async fn register_begin(
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "WebAuthn error")
         })?;
 
-    // Store registration state in challenge store
     let reg_state_json = serde_json::to_value(&reg_state).map_err(|e| {
         crate::otel::record_error("serialize_error", &e);
         api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
@@ -286,7 +195,6 @@ async fn register_finish(
         })?
         .ok_or_else(|| api_err(StatusCode::BAD_REQUEST, "No pending registration"))?;
 
-    // Clean up challenge
     let _ = state.challenge_store.delete(&challenge_key).await;
 
     let reg_state: PasskeyRegistration = serde_json::from_value(reg_state_json).map_err(|e| {
@@ -308,25 +216,20 @@ async fn register_finish(
 
     let passkey_name = input.name;
 
-    {
-        let mut conn = state
-            .db
-            .get()
-            .await
-            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-        db_insert_credential(
-            &mut conn,
-            Uuid::new_v4(),
-            auth_user.id,
-            &passkey_name,
-            &credential_json,
-        )
-        .await
-        .map_err(|e| {
-            crate::otel::record_error("passkey_credential_save_failed", &e);
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
-    }
+    let new_cred = crate::domain::NewWebauthnCredential {
+        id: Uuid::new_v4(),
+        user_id: auth_user.id,
+        name: passkey_name.clone(),
+        aaguid: None,
+        device_name: None,
+        credential: credential_json,
+        created_at: chrono::Utc::now().naive_utc(),
+    };
+
+    state.repos.passkeys.create(new_cred).await.map_err(|e| {
+        crate::otel::record_error("passkey_credential_save_failed", &e);
+        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+    })?;
 
     crate::otel::add_event(
         "passkey_registered",
@@ -373,14 +276,7 @@ async fn login_begin(
 ) -> Result<Json<PasskeyLoginBeginResponse>, ApiError> {
     let challenge_id = Uuid::new_v4();
 
-    let mut conn = state
-        .db
-        .get()
-        .await
-        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-
     let (rcr, challenge_data) = if let Some(ref email_raw) = input.email {
-        // --- Email-based flow ---
         let email = email_raw.trim().to_lowercase();
 
         if !state
@@ -398,29 +294,31 @@ async fn login_begin(
             return Err(api_err(StatusCode::TOO_MANY_REQUESTS, "Too many requests"));
         }
 
-        let user = {
-            find_user_by_email(&mut conn, &email)
-                .await
-                .map_err(|e| {
-                    crate::otel::record_error("db_error", &e);
-                    api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-                })?
-                .ok_or_else(|| {
-                    api_err(
-                        StatusCode::BAD_REQUEST,
-                        "No passkeys registered for this email",
-                    )
-                })?
-        };
+        let user = state
+            .repos
+            .users
+            .find_by_email(&email)
+            .await
+            .map_err(|e| {
+                crate::otel::record_error("db_error", &e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?
+            .ok_or_else(|| {
+                api_err(
+                    StatusCode::BAD_REQUEST,
+                    "No passkeys registered for this email",
+                )
+            })?;
 
-        let creds: Vec<WebauthnCredential> = {
-            db_find_credentials_by_user(&mut conn, user.id)
-                .await
-                .map_err(|e| {
-                    crate::otel::record_error("db_error", &e);
-                    api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-                })?
-        };
+        let creds = state
+            .repos
+            .passkeys
+            .find_by_user_id(user.id)
+            .await
+            .map_err(|e| {
+                crate::otel::record_error("db_error", &e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?;
 
         if creds.is_empty() {
             return Err(api_err(
@@ -461,7 +359,6 @@ async fn login_begin(
 
         (rcr, data)
     } else {
-        // --- Discoverable (usernameless) flow ---
         if !state.rate_limiter.check("passkey_login:discoverable").await {
             crate::otel::add_event("passkey_discoverable_login_rate_limited", vec![]);
             return Err(api_err(StatusCode::TOO_MANY_REQUESTS, "Too many requests"));
@@ -525,7 +422,6 @@ async fn login_finish(
         })?
         .ok_or_else(|| api_err(StatusCode::BAD_REQUEST, "No pending authentication"))?;
 
-    // Clean up challenge
     let _ = state.challenge_store.delete(&challenge_key).await;
 
     let discoverable = challenge_data
@@ -538,21 +434,13 @@ async fn login_finish(
         .cloned()
         .ok_or_else(|| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
 
-    let mut conn = state
-        .db
-        .get()
-        .await
-        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-
     let user_id = if discoverable {
-        // --- Discoverable flow ---
         let auth_state: DiscoverableAuthentication = serde_json::from_value(auth_state_json)
             .map_err(|e| {
                 crate::otel::record_error("deserialize_error", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
 
-        // Identify which user owns this credential
         let (uid, _cred_id) = webauthn
             .identify_discoverable_authentication(&input.credential)
             .map_err(|e| {
@@ -560,8 +448,10 @@ async fn login_finish(
                 api_err(StatusCode::UNAUTHORIZED, "Authentication failed")
             })?;
 
-        // Load user's passkeys from DB
-        let creds = db_find_credentials_by_user(&mut conn, uid)
+        let creds = state
+            .repos
+            .passkeys
+            .find_by_user_id(uid)
             .await
             .map_err(|e| {
                 crate::otel::record_error("db_error", &e);
@@ -588,7 +478,6 @@ async fn login_finish(
 
         uid
     } else {
-        // --- Email-based flow ---
         let user_id: Uuid = serde_json::from_value(
             challenge_data
                 .get("user_id")
@@ -613,8 +502,8 @@ async fn login_finish(
         user_id
     };
 
-    // Update last_used_at for credentials (best-effort)
-    let _ = update_credential_last_used(&state, user_id).await;
+    // Update last_used_at (best-effort)
+    let _ = state.repos.passkeys.update_last_used(user_id).await;
 
     let (token, _session_id) =
         session::create_session(&state, user_id, None, None, state.config.session_ttl)
@@ -624,7 +513,10 @@ async fn login_finish(
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
 
-    let user = find_user_by_id(&mut conn, user_id)
+    let user = state
+        .repos
+        .users
+        .find_by_id(user_id)
         .await
         .map_err(|e| {
             crate::otel::record_error("db_error", &e);
@@ -666,14 +558,6 @@ async fn login_finish(
     ))
 }
 
-async fn update_credential_last_used(state: &YAuthState, user_id: Uuid) -> Result<(), ()> {
-    let mut conn = state.db.get().await.map_err(|_| ())?;
-    db_update_credentials_last_used(&mut conn, user_id)
-        .await
-        .map_err(|_| ())?;
-    Ok(())
-}
-
 // --- Passkey Management ---
 
 #[derive(Serialize)]
@@ -689,33 +573,30 @@ async fn list_passkeys(
     State(state): State<YAuthState>,
     Extension(auth_user): Extension<AuthUser>,
 ) -> Result<Json<Vec<PasskeyInfo>>, ApiError> {
-    let passkeys = {
-        let mut conn = state
-            .db
-            .get()
-            .await
-            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-        let creds = db_find_credentials_by_user(&mut conn, auth_user.id)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("db_error", &e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
-        creds
-            .into_iter()
-            .map(|c| {
-                use chrono::TimeZone;
-                PasskeyInfo {
-                    id: c.id,
-                    name: c.name,
-                    created_at: chrono::Utc.from_utc_datetime(&c.created_at).fixed_offset(),
-                    last_used_at: c
-                        .last_used_at
-                        .map(|dt| chrono::Utc.from_utc_datetime(&dt).fixed_offset()),
-                }
-            })
-            .collect::<Vec<_>>()
-    };
+    let creds = state
+        .repos
+        .passkeys
+        .find_by_user_id(auth_user.id)
+        .await
+        .map_err(|e| {
+            crate::otel::record_error("db_error", &e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
+
+    let passkeys = creds
+        .into_iter()
+        .map(|c| {
+            use chrono::TimeZone;
+            PasskeyInfo {
+                id: c.id,
+                name: c.name,
+                created_at: chrono::Utc.from_utc_datetime(&c.created_at).fixed_offset(),
+                last_used_at: c
+                    .last_used_at
+                    .map(|dt| chrono::Utc.from_utc_datetime(&dt).fixed_offset()),
+            }
+        })
+        .collect::<Vec<_>>();
 
     Ok(Json(passkeys))
 }
@@ -725,27 +606,21 @@ async fn delete_passkey(
     Extension(auth_user): Extension<AuthUser>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
-    {
-        let mut conn = state
-            .db
-            .get()
-            .await
-            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-        let cred = db_find_credential_by_id_and_user(&mut conn, id, auth_user.id)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("db_error", &e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?
-            .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "Passkey not found"))?;
+    let cred = state
+        .repos
+        .passkeys
+        .find_by_id_and_user(id, auth_user.id)
+        .await
+        .map_err(|e| {
+            crate::otel::record_error("db_error", &e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?
+        .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "Passkey not found"))?;
 
-        db_delete_credential(&mut conn, cred.id)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("passkey_delete_failed", &e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
-    }
+    state.repos.passkeys.delete(cred.id).await.map_err(|e| {
+        crate::otel::record_error("passkey_delete_failed", &e);
+        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+    })?;
 
     crate::otel::add_event(
         "passkey_deleted",

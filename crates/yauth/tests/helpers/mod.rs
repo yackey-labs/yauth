@@ -1,14 +1,12 @@
-use std::sync::OnceLock;
 use std::time::Duration;
 
 use testcontainers::ImageExt;
 use testcontainers::runners::AsyncRunner;
 use testcontainers_modules::postgres::Postgres;
 use tokio::sync::OnceCell;
-use yauth::AsyncDieselConnectionManager;
-use yauth::AsyncPgConnection;
-use yauth::DieselPool;
-use yauth::RunQueryDsl;
+use yauth::backends::diesel::{
+    AsyncDieselConnectionManager, AsyncPgConnection, DieselPool, RunQueryDsl,
+};
 use yauth::state::DbPool;
 
 /// Holds a database pool and optionally the testcontainer that backs it.
@@ -97,7 +95,7 @@ impl TestDb {
 
     async fn init_schema(pool: &DbPool) {
         drop_yauth_tables(pool).await;
-        yauth::migration::diesel_migrations::run_migrations(pool)
+        yauth::backends::diesel::migrations::run_migrations(pool)
             .await
             .expect("failed to run migrations");
     }

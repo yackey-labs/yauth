@@ -104,27 +104,18 @@ async fn main() {
     }
 
     // -----------------------------------------------------------------------
-    // 3. Connect to the database and run migrations
+    // 3. Create the database backend
     // -----------------------------------------------------------------------
     log::info!("Connecting to database...");
-    let config =
-        yauth::AsyncDieselConnectionManager::<yauth::AsyncPgConnection>::new(&database_url);
-    let pool = yauth::DieselPool::builder(config)
-        .build()
-        .expect("Failed to create connection pool");
-
-    log::info!("Running migrations...");
-    yauth::migration::diesel_migrations::run_migrations(&pool)
-        .await
-        .expect("Failed to run migrations");
-    log::info!("Migrations complete.");
+    let backend = yauth::backends::diesel::DieselBackend::new(&database_url)
+        .expect("Failed to create database backend");
 
     // -----------------------------------------------------------------------
     // 4. Build the YAuth instance with all plugins enabled
     // -----------------------------------------------------------------------
     #[allow(unused_mut)]
     let mut builder = YAuthBuilder::new(
-        pool,
+        backend,
         yauth::config::YAuthConfig {
             base_url: base_url.clone(),
             session_cookie_name,
@@ -208,7 +199,7 @@ async fn main() {
         builder
     };
 
-    let auth = builder.build();
+    let auth = builder.build().await.expect("Failed to build YAuth");
 
     // -----------------------------------------------------------------------
     // 5. Build the Axum application

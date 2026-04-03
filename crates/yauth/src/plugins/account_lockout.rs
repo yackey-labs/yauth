@@ -6,225 +6,16 @@ use axum::{
     routing::post,
 };
 use chrono::Utc;
-use diesel::prelude::*;
-use diesel::result::OptionalExtension;
-use diesel_async_crate::RunQueryDsl;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::auth::crypto;
 use crate::config::AccountLockoutConfig;
-use crate::db::models::{AccountLock, NewAccountLock, NewUnlockToken, UnlockToken};
-use crate::db::schema::{yauth_account_locks, yauth_unlock_tokens, yauth_users};
 use crate::error::api_err;
 use crate::middleware::require_admin;
 use crate::plugin::{AuthEvent, EventResponse, PluginContext, YAuthPlugin};
+use crate::repo::Repositories;
 use crate::state::YAuthState;
-
-// ---------------------------------------------------------------------------
-// Diesel-async helpers
-// ---------------------------------------------------------------------------
-
-type Conn = diesel_async_crate::AsyncPgConnection;
-type DbResult<T> = Result<T, String>;
-
-async fn find_user_by_email_id(conn: &mut Conn, email: &str) -> DbResult<Option<Uuid>> {
-    yauth_users::table
-        .filter(yauth_users::email.eq(email))
-        .select(yauth_users::id)
-        .first::<Uuid>(conn)
-        .await
-        .optional()
-        .map_err(|e| e.to_string())
-}
-
-async fn find_user_exists(conn: &mut Conn, user_id: Uuid) -> DbResult<bool> {
-    let row: Option<Uuid> = yauth_users::table
-        .filter(yauth_users::id.eq(user_id))
-        .select(yauth_users::id)
-        .first(conn)
-        .await
-        .optional()
-        .map_err(|e| e.to_string())?;
-    Ok(row.is_some())
-}
-
-async fn find_lock_by_user(conn: &mut Conn, user_id: Uuid) -> DbResult<Option<AccountLock>> {
-    yauth_account_locks::table
-        .filter(yauth_account_locks::user_id.eq(user_id))
-        .select(AccountLock::as_select())
-        .first(conn)
-        .await
-        .optional()
-        .map_err(|e| e.to_string())
-}
-
-async fn insert_lock(
-    conn: &mut Conn,
-    id: Uuid,
-    user_id: Uuid,
-    now: chrono::DateTime<chrono::FixedOffset>,
-) -> DbResult<AccountLock> {
-    let new_lock = NewAccountLock {
-        id,
-        user_id,
-        failed_count: 0,
-        locked_until: None,
-        lock_count: 0,
-        locked_reason: None,
-        created_at: now.naive_utc(),
-        updated_at: now.naive_utc(),
-    };
-    diesel::insert_into(yauth_account_locks::table)
-        .values(&new_lock)
-        .returning(AccountLock::as_returning())
-        .get_result(conn)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-async fn update_lock_auto_unlock(
-    conn: &mut Conn,
-    lock_id: Uuid,
-    now: chrono::DateTime<chrono::FixedOffset>,
-) -> DbResult<()> {
-    diesel::update(yauth_account_locks::table.filter(yauth_account_locks::id.eq(lock_id)))
-        .set((
-            yauth_account_locks::failed_count.eq(0),
-            yauth_account_locks::locked_until.eq(None::<chrono::NaiveDateTime>),
-            yauth_account_locks::locked_reason.eq(None::<String>),
-            yauth_account_locks::updated_at.eq(now.naive_utc()),
-        ))
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-async fn update_lock_increment(
-    conn: &mut Conn,
-    lock_id: Uuid,
-    failed_count: i32,
-    now: chrono::DateTime<chrono::FixedOffset>,
-) -> DbResult<()> {
-    diesel::update(yauth_account_locks::table.filter(yauth_account_locks::id.eq(lock_id)))
-        .set((
-            yauth_account_locks::failed_count.eq(failed_count),
-            yauth_account_locks::updated_at.eq(now.naive_utc()),
-        ))
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-async fn update_lock_locked(
-    conn: &mut Conn,
-    lock_id: Uuid,
-    failed_count: i32,
-    locked_until: chrono::DateTime<chrono::FixedOffset>,
-    lock_count: i32,
-    reason: &str,
-    now: chrono::DateTime<chrono::FixedOffset>,
-) -> DbResult<()> {
-    diesel::update(yauth_account_locks::table.filter(yauth_account_locks::id.eq(lock_id)))
-        .set((
-            yauth_account_locks::failed_count.eq(failed_count),
-            yauth_account_locks::locked_until.eq(Some(locked_until.naive_utc())),
-            yauth_account_locks::lock_count.eq(lock_count),
-            yauth_account_locks::locked_reason.eq(Some(reason.to_string())),
-            yauth_account_locks::updated_at.eq(now.naive_utc()),
-        ))
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-async fn update_lock_reset(
-    conn: &mut Conn,
-    lock_id: Uuid,
-    reset_lock_count: bool,
-    now: chrono::DateTime<chrono::FixedOffset>,
-) -> DbResult<()> {
-    if reset_lock_count {
-        diesel::update(yauth_account_locks::table.filter(yauth_account_locks::id.eq(lock_id)))
-            .set((
-                yauth_account_locks::failed_count.eq(0),
-                yauth_account_locks::locked_until.eq(None::<chrono::NaiveDateTime>),
-                yauth_account_locks::locked_reason.eq(None::<String>),
-                yauth_account_locks::lock_count.eq(0),
-                yauth_account_locks::updated_at.eq(now.naive_utc()),
-            ))
-            .execute(conn)
-            .await
-            .map_err(|e| e.to_string())?;
-    } else {
-        diesel::update(yauth_account_locks::table.filter(yauth_account_locks::id.eq(lock_id)))
-            .set((
-                yauth_account_locks::failed_count.eq(0),
-                yauth_account_locks::locked_until.eq(None::<chrono::NaiveDateTime>),
-                yauth_account_locks::locked_reason.eq(None::<String>),
-                yauth_account_locks::updated_at.eq(now.naive_utc()),
-            ))
-            .execute(conn)
-            .await
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
-async fn find_unlock_token_by_hash(
-    conn: &mut Conn,
-    token_hash: &str,
-) -> DbResult<Option<UnlockToken>> {
-    yauth_unlock_tokens::table
-        .filter(yauth_unlock_tokens::token_hash.eq(token_hash))
-        .select(UnlockToken::as_select())
-        .first(conn)
-        .await
-        .optional()
-        .map_err(|e| e.to_string())
-}
-
-async fn delete_unlock_token(conn: &mut Conn, id: Uuid) -> DbResult<()> {
-    diesel::delete(yauth_unlock_tokens::table.filter(yauth_unlock_tokens::id.eq(id)))
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-async fn delete_unlock_tokens_for_user(conn: &mut Conn, user_id: Uuid) -> DbResult<()> {
-    diesel::delete(yauth_unlock_tokens::table.filter(yauth_unlock_tokens::user_id.eq(user_id)))
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-async fn insert_unlock_token(
-    conn: &mut Conn,
-    id: Uuid,
-    user_id: Uuid,
-    token_hash: &str,
-    expires_at: chrono::DateTime<chrono::FixedOffset>,
-    now: chrono::DateTime<chrono::FixedOffset>,
-) -> DbResult<()> {
-    let new_token = NewUnlockToken {
-        id,
-        user_id,
-        token_hash: token_hash.to_string(),
-        expires_at: expires_at.naive_utc(),
-        created_at: now.naive_utc(),
-    };
-    diesel::insert_into(yauth_unlock_tokens::table)
-        .values(&new_token)
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
 
 // ---------------------------------------------------------------------------
 // Plugin struct
@@ -257,22 +48,22 @@ impl YAuthPlugin for AccountLockoutPlugin {
         match event {
             AuthEvent::LoginFailed { email, .. } => {
                 let email = email.clone();
-                let db = ctx.state.db.clone();
+                let repos = ctx.state.repos.clone();
                 let config = ctx.state.account_lockout_config.clone();
 
                 tokio::task::block_in_place(|| {
                     tokio::runtime::Handle::current()
-                        .block_on(async { handle_login_failed(&db, &config, &email).await })
+                        .block_on(async { handle_login_failed(&repos, &config, &email).await })
                 })
             }
             AuthEvent::LoginSucceeded { user_id, .. } => {
                 let user_id = *user_id;
-                let db = ctx.state.db.clone();
+                let repos = ctx.state.repos.clone();
                 let config = ctx.state.account_lockout_config.clone();
 
                 tokio::task::block_in_place(|| {
                     tokio::runtime::Handle::current()
-                        .block_on(async { handle_login_succeeded(&db, &config, user_id).await })
+                        .block_on(async { handle_login_succeeded(&repos, &config, user_id).await })
                 })
             }
             _ => EventResponse::Continue,
@@ -286,21 +77,13 @@ impl YAuthPlugin for AccountLockoutPlugin {
 
 /// Check if account is locked, increment failed count, lock if threshold exceeded.
 async fn handle_login_failed(
-    db: &crate::state::DbPool,
+    repos: &Repositories,
     config: &AccountLockoutConfig,
     email: &str,
 ) -> EventResponse {
-    let mut conn = match db.get().await {
-        Ok(c) => c,
-        Err(e) => {
-            crate::otel::record_error("lockout_pool_error", &e);
-            return EventResponse::Continue;
-        }
-    };
-
     // Find user by email
-    let user_id = match find_user_by_email_id(&mut conn, email).await {
-        Ok(Some(id)) => id,
+    let user_id = match repos.users.find_by_email(email).await {
+        Ok(Some(u)) => u.id,
         Ok(None) => return EventResponse::Continue,
         Err(e) => {
             crate::otel::record_error("lockout_user_lookup_error", &e);
@@ -311,15 +94,27 @@ async fn handle_login_failed(
     let now = Utc::now().fixed_offset();
 
     // Find or create account lock record
-    let lock_record = match find_lock_by_user(&mut conn, user_id).await {
+    let lock_record = match repos.account_locks.find_by_user_id(user_id).await {
         Ok(Some(r)) => r,
-        Ok(None) => match insert_lock(&mut conn, Uuid::new_v4(), user_id, now).await {
-            Ok(r) => r,
-            Err(e) => {
-                crate::otel::record_error("lockout_create_lock_failed", &e);
-                return EventResponse::Continue;
+        Ok(None) => {
+            let new_lock = crate::domain::NewAccountLock {
+                id: Uuid::new_v4(),
+                user_id,
+                failed_count: 0,
+                locked_until: None,
+                lock_count: 0,
+                locked_reason: None,
+                created_at: now.naive_utc(),
+                updated_at: now.naive_utc(),
+            };
+            match repos.account_locks.create(new_lock).await {
+                Ok(r) => r,
+                Err(e) => {
+                    crate::otel::record_error("lockout_create_lock_failed", &e);
+                    return EventResponse::Continue;
+                }
             }
-        },
+        }
         Err(e) => {
             crate::otel::record_error("lockout_check_lock_error", &e);
             return EventResponse::Continue;
@@ -349,14 +144,14 @@ async fn handle_login_failed(
             };
         }
         if config.auto_unlock
-            && let Err(e) = update_lock_auto_unlock(&mut conn, lock_record.id, now).await
+            && let Err(e) = repos.account_locks.auto_unlock(lock_record.id).await
         {
             crate::otel::record_error("lockout_auto_unlock_failed", &e);
         }
     }
 
     // Re-read lock record after potential auto-unlock reset
-    let lock_record = match find_lock_by_user(&mut conn, user_id).await {
+    let lock_record = match repos.account_locks.find_by_user_id(user_id).await {
         Ok(Some(r)) => r,
         Ok(None) => return EventResponse::Continue,
         Err(e) => {
@@ -369,10 +164,23 @@ async fn handle_login_failed(
     let window_start = now - chrono::Duration::seconds(config.attempt_window.as_secs() as i64);
     let updated_at_fo = lock_record.updated_at.and_utc().fixed_offset();
     let new_failed_count = if updated_at_fo < window_start {
+        // Window expired — reset then increment (result: 1)
+        if let Err(e) = repos.account_locks.reset_failed_count(lock_record.id).await {
+            crate::otel::record_error("lockout_reset_failed_count_error", &e);
+        }
         1
     } else {
         lock_record.failed_count + 1
     };
+
+    // Increment failed count
+    if let Err(e) = repos
+        .account_locks
+        .increment_failed_count(lock_record.id)
+        .await
+    {
+        crate::otel::record_error("lockout_update_failed_count_error", &e);
+    }
 
     // Check if we have exceeded the threshold
     if new_failed_count >= config.max_failed_attempts as i32 {
@@ -380,16 +188,15 @@ async fn handle_login_failed(
         let lockout_duration = calculate_lockout_duration(config, new_lock_count as u32);
         let locked_until = now + chrono::Duration::seconds(lockout_duration.as_secs() as i64);
 
-        if let Err(e) = update_lock_locked(
-            &mut conn,
-            lock_record.id,
-            new_failed_count,
-            locked_until,
-            new_lock_count,
-            "Too many failed login attempts",
-            now,
-        )
-        .await
+        if let Err(e) = repos
+            .account_locks
+            .set_locked(
+                lock_record.id,
+                Some(locked_until.naive_utc()),
+                Some("Too many failed login attempts"),
+                new_lock_count,
+            )
+            .await
         {
             crate::otel::record_error("lockout_update_lock_failed", &e);
             return EventResponse::Continue;
@@ -417,31 +224,18 @@ async fn handle_login_failed(
         };
     }
 
-    // Just increment - not yet locked
-    if let Err(e) = update_lock_increment(&mut conn, lock_record.id, new_failed_count, now).await {
-        crate::otel::record_error("lockout_update_failed_count_error", &e);
-    }
-
     EventResponse::Continue
 }
 
 /// On successful login, check if account is locked first. If not, reset failed count.
 async fn handle_login_succeeded(
-    db: &crate::state::DbPool,
+    repos: &Repositories,
     _config: &AccountLockoutConfig,
     user_id: Uuid,
 ) -> EventResponse {
-    let mut conn = match db.get().await {
-        Ok(c) => c,
-        Err(e) => {
-            crate::otel::record_error("lockout_pool_error", &e);
-            return EventResponse::Continue;
-        }
-    };
-
     let now = Utc::now().fixed_offset();
 
-    let lock_record = match find_lock_by_user(&mut conn, user_id).await {
+    let lock_record = match repos.account_locks.find_by_user_id(user_id).await {
         Ok(Some(r)) => r,
         Ok(None) => return EventResponse::Continue,
         Err(e) => {
@@ -475,7 +269,7 @@ async fn handle_login_succeeded(
     }
 
     // Reset failed count on successful login
-    if let Err(e) = update_lock_auto_unlock(&mut conn, lock_record.id, now).await {
+    if let Err(e) = repos.account_locks.auto_unlock(lock_record.id).await {
         crate::otel::record_error("lockout_reset_on_success_failed", &e);
     }
 
@@ -561,65 +355,57 @@ async fn request_unlock(
         return Err(api_err(StatusCode::TOO_MANY_REQUESTS, "Too many requests"));
     }
 
-    let mut conn = state
-        .db
-        .get()
-        .await
-        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-
-    struct FoundUser {
-        id: Uuid,
-    }
-
     // Look up user (don't leak whether user exists)
-    let user_opt = {
-        find_user_by_email_id(&mut conn, &email)
+    let user_opt = state.repos.users.find_by_email(&email).await.map_err(|e| {
+        crate::otel::record_error("db_error", &e);
+        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+    })?;
+
+    if let Some(user) = user_opt {
+        // Check if account is actually locked
+        let lock_record = state
+            .repos
+            .account_locks
+            .find_by_user_id(user.id)
             .await
             .map_err(|e| {
                 crate::otel::record_error("db_error", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?
-            .map(|id| FoundUser { id })
-    };
-
-    if let Some(user) = user_opt {
-        // Check if account is actually locked
-        let is_locked = {
-            let lock_record = find_lock_by_user(&mut conn, user.id).await.map_err(|e| {
-                crate::otel::record_error("db_error", &e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
 
-            lock_record
-                .as_ref()
-                .and_then(|r| r.locked_until)
-                .map(|until| Utc::now().fixed_offset() < until.and_utc().fixed_offset())
-                .unwrap_or(false)
-        };
+        let is_locked = lock_record
+            .as_ref()
+            .and_then(|r| r.locked_until)
+            .map(|until| Utc::now().fixed_offset() < until.and_utc().fixed_offset())
+            .unwrap_or(false);
 
         if is_locked {
             // Delete any existing unlock tokens for this user
-            let _ = delete_unlock_tokens_for_user(&mut conn, user.id).await;
+            let _ = state.repos.unlock_tokens.delete_all_for_user(user.id).await;
 
             // Generate unlock token
             let token = crypto::generate_token();
             let token_hash = crypto::hash_token(&token);
-            let now = Utc::now().fixed_offset();
+            let now = Utc::now();
             let expires_at = now + chrono::Duration::hours(1);
 
-            insert_unlock_token(
-                &mut conn,
-                Uuid::new_v4(),
-                user.id,
-                &token_hash,
-                expires_at,
-                now,
-            )
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("lockout_store_unlock_token_failed", &e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
+            let new_token = crate::domain::NewUnlockToken {
+                id: Uuid::new_v4(),
+                user_id: user.id,
+                token_hash,
+                expires_at: expires_at.naive_utc(),
+                created_at: now.naive_utc(),
+            };
+
+            state
+                .repos
+                .unlock_tokens
+                .create(new_token)
+                .await
+                .map_err(|e| {
+                    crate::otel::record_error("lockout_store_unlock_token_failed", &e);
+                    api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+                })?;
 
             // Send unlock email if SMTP is configured
             if let Some(ref email_service) = state.email_service {
@@ -668,60 +454,26 @@ async fn unlock_account(
     }
 
     let token_hash = crypto::hash_token(&token);
-    let now = Utc::now().fixed_offset();
 
-    struct FoundToken {
-        id: Uuid,
-        user_id: Uuid,
-        expires_at: chrono::DateTime<chrono::FixedOffset>,
-    }
-
-    let mut conn = state
-        .db
-        .get()
+    // Find the unlock token (repo filters expired tokens)
+    let unlock_token = state
+        .repos
+        .unlock_tokens
+        .find_by_token_hash(&token_hash)
         .await
-        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-
-    // Find the unlock token
-    let unlock_token = {
-        let found = find_unlock_token_by_hash(&mut conn, &token_hash)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("db_error", &e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
-        match found {
-            Some(t) => FoundToken {
-                id: t.id,
-                user_id: t.user_id,
-                expires_at: t.expires_at.and_utc().fixed_offset(),
-            },
-            None => {
-                return Err(api_err(
-                    StatusCode::BAD_REQUEST,
-                    "Invalid or expired unlock token",
-                ));
-            }
-        }
-    };
-
-    // Check expiry
-    if now > unlock_token.expires_at {
-        // Delete the expired token
-        let _ = delete_unlock_token(&mut conn, unlock_token.id).await;
-        return Err(api_err(
-            StatusCode::BAD_REQUEST,
-            "Invalid or expired unlock token",
-        ));
-    }
+        .map_err(|e| {
+            crate::otel::record_error("db_error", &e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?
+        .ok_or_else(|| api_err(StatusCode::BAD_REQUEST, "Invalid or expired unlock token"))?;
 
     let user_id = unlock_token.user_id;
 
     // Delete the token (one-time use)
-    let _ = delete_unlock_token(&mut conn, unlock_token.id).await;
+    let _ = state.repos.unlock_tokens.delete(unlock_token.id).await;
 
     // Reset the account lock (keep lock_count for exponential backoff history)
-    reset_account_lock_diesel(&mut conn, user_id, false)
+    reset_account_lock(&state.repos, user_id, false)
         .await
         .map_err(|e| {
             crate::otel::record_error("lockout_reset_lock_failed", &e);
@@ -762,23 +514,17 @@ async fn admin_unlock(
     axum::Extension(auth_user): axum::Extension<crate::middleware::AuthUser>,
     Path(user_id): Path<Uuid>,
 ) -> Result<Json<AccountLockoutMessageResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let mut conn = state
-        .db
-        .get()
-        .await
-        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-
     // Verify target user exists
-    let exists = find_user_exists(&mut conn, user_id).await.map_err(|e| {
+    let exists = state.repos.users.find_by_id(user_id).await.map_err(|e| {
         crate::otel::record_error("db_error", &e);
         api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
     })?;
-    if !exists {
+    if exists.is_none() {
         return Err(api_err(StatusCode::NOT_FOUND, "User not found"));
     }
 
     // Reset the account lock fully (including lock_count for admin unlock)
-    reset_account_lock_diesel(&mut conn, user_id, true)
+    reset_account_lock(&state.repos, user_id, true)
         .await
         .map_err(|e| {
             crate::otel::record_error("lockout_reset_lock_failed", &e);
@@ -786,7 +532,7 @@ async fn admin_unlock(
         })?;
 
     // Delete any pending unlock tokens
-    let _ = delete_unlock_tokens_for_user(&mut conn, user_id).await;
+    let _ = state.repos.unlock_tokens.delete_all_for_user(user_id).await;
 
     crate::otel::add_event(
         "lockout_account_unlocked",
@@ -823,17 +569,24 @@ async fn admin_unlock(
 
 /// Reset the account lock. When `reset_lock_count` is true, also resets the
 /// lock_count (used for admin unlock to clear exponential backoff history).
-async fn reset_account_lock_diesel(
-    conn: &mut diesel_async_crate::AsyncPgConnection,
+async fn reset_account_lock(
+    repos: &Repositories,
     user_id: Uuid,
     reset_lock_count: bool,
-) -> Result<(), String> {
-    let now = Utc::now().fixed_offset();
-
-    let lock_record = find_lock_by_user(conn, user_id).await?;
+) -> Result<(), crate::repo::RepoError> {
+    let lock_record = repos.account_locks.find_by_user_id(user_id).await?;
 
     if let Some(record) = lock_record {
-        update_lock_reset(conn, record.id, reset_lock_count, now).await?;
+        // auto_unlock clears locked_until, locked_reason, and failed_count
+        repos.account_locks.auto_unlock(record.id).await?;
+
+        if reset_lock_count {
+            // Also reset the lock_count for admin unlock
+            repos
+                .account_locks
+                .set_locked(record.id, None, None, 0)
+                .await?;
+        }
     }
 
     Ok(())

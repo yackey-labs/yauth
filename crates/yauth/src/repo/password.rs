@@ -35,10 +35,8 @@ pub trait EmailVerificationRepository: sealed::Sealed + Send + Sync {
 ///
 /// - **`find_by_token_hash`**: MUST return `None` if the token is expired or already used.
 pub trait PasswordResetRepository: sealed::Sealed + Send + Sync {
-    fn find_by_token_hash(
-        &self,
-        token_hash: &str,
-    ) -> RepoFuture<'_, Option<domain::PasswordReset>>;
+    fn find_by_token_hash(&self, token_hash: &str)
+    -> RepoFuture<'_, Option<domain::PasswordReset>>;
 
     fn create(&self, input: domain::NewPasswordReset) -> RepoFuture<'_, ()>;
 

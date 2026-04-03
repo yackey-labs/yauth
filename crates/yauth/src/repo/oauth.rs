@@ -1,6 +1,6 @@
-use chrono::NaiveDateTime;
 use super::{RepoFuture, sealed};
 use crate::domain;
+use chrono::NaiveDateTime;
 use uuid::Uuid;
 
 /// Repository for OAuth account links.

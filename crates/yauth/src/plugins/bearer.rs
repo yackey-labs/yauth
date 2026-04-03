@@ -6,17 +6,12 @@ use axum::{
     routing::post,
 };
 use chrono::Utc;
-use diesel::prelude::*;
-use diesel::result::OptionalExtension;
-use diesel_async_crate::RunQueryDsl;
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::auth::{crypto, password};
 use crate::config::BearerConfig;
-use crate::db::models::{NewRefreshToken, RefreshToken};
-use crate::db::schema::yauth_refresh_tokens;
 use crate::error::{ApiError, api_err};
 use crate::middleware::{AuthMethod, AuthUser};
 use crate::plugin::{PluginContext, YAuthPlugin};
@@ -50,91 +45,6 @@ impl YAuthPlugin for BearerPlugin {
     fn protected_routes(&self, _ctx: &PluginContext) -> Option<Router<YAuthState>> {
         Some(Router::new().route("/token/revoke", post(revoke_token)))
     }
-}
-
-// ---------------------------------------------------------------------------
-// Database helpers
-// ---------------------------------------------------------------------------
-
-type Conn = diesel_async_crate::AsyncPgConnection;
-type DbResult<T> = Result<T, String>;
-
-use crate::db::{find_user_by_email, find_user_by_id};
-
-// Password table is gated behind email-password feature in schema.rs,
-// but bearer can be enabled independently. Keep as raw SQL to avoid
-// cross-feature dependency.
-async fn db_find_password_hash(conn: &mut Conn, user_id: Uuid) -> DbResult<Option<String>> {
-    #[derive(diesel::QueryableByName)]
-    struct PasswordRow {
-        #[diesel(sql_type = diesel::sql_types::Text)]
-        password_hash: String,
-    }
-    diesel::sql_query("SELECT password_hash FROM yauth_passwords WHERE user_id = $1")
-        .bind::<diesel::sql_types::Uuid, _>(user_id)
-        .get_result::<PasswordRow>(conn)
-        .await
-        .optional()
-        .map_err(|e| e.to_string())
-        .map(|opt| opt.map(|p| p.password_hash))
-}
-
-async fn db_insert_refresh_token(
-    conn: &mut Conn,
-    id: Uuid,
-    user_id: Uuid,
-    token_hash: &str,
-    family_id: Uuid,
-    expires_at: chrono::DateTime<chrono::FixedOffset>,
-) -> DbResult<()> {
-    let new_token = NewRefreshToken {
-        id,
-        user_id,
-        token_hash: token_hash.to_string(),
-        family_id,
-        expires_at: expires_at.naive_utc(),
-        revoked: false,
-        created_at: chrono::Utc::now().naive_utc(),
-    };
-    diesel::insert_into(yauth_refresh_tokens::table)
-        .values(&new_token)
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-async fn db_find_refresh_token_by_hash(
-    conn: &mut Conn,
-    token_hash: &str,
-) -> DbResult<Option<RefreshToken>> {
-    yauth_refresh_tokens::table
-        .filter(yauth_refresh_tokens::token_hash.eq(token_hash))
-        .select(RefreshToken::as_select())
-        .first(conn)
-        .await
-        .optional()
-        .map_err(|e| e.to_string())
-}
-
-async fn db_revoke_refresh_token(conn: &mut Conn, id: Uuid) -> DbResult<()> {
-    diesel::update(yauth_refresh_tokens::table.filter(yauth_refresh_tokens::id.eq(id)))
-        .set(yauth_refresh_tokens::revoked.eq(true))
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-async fn db_revoke_family(conn: &mut Conn, family_id: Uuid) -> DbResult<()> {
-    diesel::update(
-        yauth_refresh_tokens::table.filter(yauth_refresh_tokens::family_id.eq(family_id)),
-    )
-    .set(yauth_refresh_tokens::revoked.eq(true))
-    .execute(conn)
-    .await
-    .map_err(|e| e.to_string())?;
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -244,8 +154,8 @@ fn create_jwt_internal(
     Ok((token, jti))
 }
 
-async fn create_refresh_token_diesel(
-    conn: &mut diesel_async_crate::AsyncPgConnection,
+async fn create_refresh_token_repo(
+    state: &YAuthState,
     user_id: Uuid,
     family_id: Uuid,
     ttl: std::time::Duration,
@@ -254,21 +164,27 @@ async fn create_refresh_token_diesel(
     let token_hash = crypto::hash_token(&raw_token);
     let expires_at = (Utc::now()
         + chrono::Duration::from_std(ttl).unwrap_or(chrono::Duration::days(7)))
-    .fixed_offset();
+    .naive_utc();
 
-    db_insert_refresh_token(
-        conn,
-        Uuid::new_v4(),
+    let new_token = crate::domain::NewRefreshToken {
+        id: Uuid::new_v4(),
         user_id,
-        &token_hash,
+        token_hash,
         family_id,
         expires_at,
-    )
-    .await
-    .map_err(|e| {
-        crate::otel::record_error("refresh_token_create_failed", &e);
-        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-    })?;
+        revoked: false,
+        created_at: Utc::now().naive_utc(),
+    };
+
+    state
+        .repos
+        .refresh_tokens
+        .create(new_token)
+        .await
+        .map_err(|e| {
+            crate::otel::record_error("refresh_token_create_failed", &e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
 
     Ok(raw_token)
 }
@@ -298,26 +214,25 @@ async fn create_token(
         return Err(api_err(StatusCode::TOO_MANY_REQUESTS, "Too many requests"));
     }
 
-    let mut conn = state
-        .db
-        .get()
-        .await
-        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-
     let (user_opt, hash) = {
-        let user = find_user_by_email(&mut conn, &email).await.map_err(|e| {
+        let user = state.repos.users.find_by_email(&email).await.map_err(|e| {
             crate::otel::record_error("db_error", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?;
 
-        match &user {
+        match user {
             Some(u) => {
-                let pwd_hash = db_find_password_hash(&mut conn, u.id).await.map_err(|e| {
-                    crate::otel::record_error("db_error", &e);
-                    api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-                })?;
+                let pwd_hash = state
+                    .repos
+                    .refresh_tokens
+                    .find_password_hash_by_user_id(u.id)
+                    .await
+                    .map_err(|e| {
+                        crate::otel::record_error("db_error", &e);
+                        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+                    })?;
                 let h = pwd_hash.unwrap_or_else(|| state.dummy_hash.clone());
-                (Some(u.clone()), h)
+                (Some(u), h)
             }
             None => (None, state.dummy_hash.clone()),
         }
@@ -365,7 +280,7 @@ async fn create_token(
             let family_id = Uuid::new_v4();
 
             let refresh_token =
-                create_refresh_token_diesel(&mut conn, u.id, family_id, config.refresh_token_ttl)
+                create_refresh_token_repo(&state, u.id, family_id, config.refresh_token_ttl)
                     .await?;
 
             let expires_in = config.access_token_ttl.as_secs();
@@ -436,25 +351,21 @@ async fn refresh_token(
 
     let token_hash = crypto::hash_token(raw_token);
 
-    let mut conn = state
-        .db
-        .get()
+    let stored = state
+        .repos
+        .refresh_tokens
+        .find_by_token_hash(&token_hash)
         .await
-        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
+        .map_err(|e| {
+            crate::otel::record_error("db_error", &e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
 
-    let stored = {
-        let found = db_find_refresh_token_by_hash(&mut conn, &token_hash)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("db_error", &e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
-        match found {
-            Some(t) => t,
-            None => {
-                crate::otel::add_event("bearer_refresh_token_not_found", vec![]);
-                return Err(api_err(StatusCode::UNAUTHORIZED, "Invalid refresh token"));
-            }
+    let stored = match stored {
+        Some(t) => t,
+        None => {
+            crate::otel::add_event("bearer_refresh_token_not_found", vec![]);
+            return Err(api_err(StatusCode::UNAUTHORIZED, "Invalid refresh token"));
         }
     };
 
@@ -469,9 +380,11 @@ async fn refresh_token(
             #[cfg(not(feature = "telemetry"))]
             vec![],
         );
-        {
-            let _ = db_revoke_family(&mut conn, stored.family_id).await;
-        }
+        let _ = state
+            .repos
+            .refresh_tokens
+            .revoke_family(stored.family_id)
+            .await;
         return Err(api_err(
             StatusCode::UNAUTHORIZED,
             "Refresh token has been revoked",
@@ -500,25 +413,27 @@ async fn refresh_token(
     let user_id = stored.user_id;
 
     // Revoke old token
-    {
-        db_revoke_refresh_token(&mut conn, stored.id)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("refresh_token_revoke_failed", &e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
-    }
+    state
+        .repos
+        .refresh_tokens
+        .revoke(stored.id)
+        .await
+        .map_err(|e| {
+            crate::otel::record_error("refresh_token_revoke_failed", &e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
 
     // Look up user
-    let user = {
-        find_user_by_id(&mut conn, user_id)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("db_error", &e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?
-            .ok_or_else(|| api_err(StatusCode::UNAUTHORIZED, "User not found"))?
-    };
+    let user = state
+        .repos
+        .users
+        .find_by_id(user_id)
+        .await
+        .map_err(|e| {
+            crate::otel::record_error("db_error", &e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?
+        .ok_or_else(|| api_err(StatusCode::UNAUTHORIZED, "User not found"))?;
 
     if user.banned {
         crate::otel::add_event(
@@ -540,8 +455,7 @@ async fn refresh_token(
     let (access_token, _jti) = create_jwt_internal(&jwt_user, config, None)?;
 
     let new_refresh =
-        create_refresh_token_diesel(&mut conn, jwt_user.id, family_id, config.refresh_token_ttl)
-            .await?;
+        create_refresh_token_repo(&state, jwt_user.id, family_id, config.refresh_token_ttl).await?;
 
     let expires_in = config.access_token_ttl.as_secs();
 
@@ -584,20 +498,15 @@ async fn revoke_token(
 
     let token_hash = crypto::hash_token(raw_token);
 
-    let mut conn = state
-        .db
-        .get()
+    let stored_opt = state
+        .repos
+        .refresh_tokens
+        .find_by_token_hash(&token_hash)
         .await
-        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-
-    let stored_opt = {
-        db_find_refresh_token_by_hash(&mut conn, &token_hash)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("db_error", &e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?
-    };
+        .map_err(|e| {
+            crate::otel::record_error("db_error", &e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
 
     let stored = match stored_opt {
         Some(t) => t,
@@ -612,14 +521,15 @@ async fn revoke_token(
     }
 
     if !stored.revoked {
-        {
-            db_revoke_refresh_token(&mut conn, stored.id)
-                .await
-                .map_err(|e| {
-                    crate::otel::record_error("refresh_token_revoke_failed", &e);
-                    api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-                })?;
-        }
+        state
+            .repos
+            .refresh_tokens
+            .revoke(stored.id)
+            .await
+            .map_err(|e| {
+                crate::otel::record_error("refresh_token_revoke_failed", &e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?;
     }
 
     // Revoke the caller's access token JTI so it cannot be used for the
@@ -725,17 +635,13 @@ pub async fn validate_jwt(token: &str, state: &YAuthState) -> Result<AuthUser, S
         .as_deref()
         .map(|s| s.split_whitespace().map(String::from).collect());
 
-    let user = {
-        let mut conn = state
-            .db
-            .get()
-            .await
-            .map_err(|e| format!("Pool error: {}", e))?;
-        find_user_by_id(&mut conn, user_id)
-            .await
-            .map_err(|e| format!("DB error during JWT validation: {}", e))?
-            .ok_or_else(|| "User not found".to_string())?
-    };
+    let user = state
+        .repos
+        .users
+        .find_by_id(user_id)
+        .await
+        .map_err(|e| format!("DB error during JWT validation: {}", e))?
+        .ok_or_else(|| "User not found".to_string())?;
 
     if user.banned {
         return Err("Account suspended".to_string());

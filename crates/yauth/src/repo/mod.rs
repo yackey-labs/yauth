@@ -181,6 +181,7 @@ pub use webhooks::*;
 #[derive(Clone)]
 pub struct Repositories {
     pub users: Arc<dyn UserRepository>,
+    pub sessions: Arc<dyn SessionRepository>,
     pub audit: Arc<dyn AuditLogRepository>,
 
     #[cfg(feature = "email-password")]

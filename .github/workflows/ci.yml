@@ -20,6 +20,8 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -56,6 +58,8 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     services:
       postgres:
         image: postgres:17-alpine

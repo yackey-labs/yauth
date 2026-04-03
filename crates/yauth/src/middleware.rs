@@ -37,7 +37,8 @@ pub enum AuthMethod {
 /// Record authenticated user context on the current (SERVER) span.
 fn record_auth_user_on_span(user: &AuthUser) {
     crate::otel::set_attribute("user.id", user.id.to_string());
-    crate::otel::set_attribute("user.email", user.email.clone());
+    // user.email intentionally omitted — PII should not be sent to trace backends.
+    // Use user.id (UUID) for correlation instead.
     crate::otel::set_attribute("user.roles", user.role.clone());
     crate::otel::set_attribute(
         "yauth.auth_method",

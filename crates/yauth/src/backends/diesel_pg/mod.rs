@@ -7,12 +7,10 @@ pub mod migrations;
 mod models;
 pub mod schema;
 
-/// Re-exports of Diesel-annotated types used by the Postgres ephemeral store.
-pub(crate) mod store_types {
-    pub(crate) use super::models::{
-        DieselChallenge as Challenge, DieselNewSession as NewSession, DieselSession as Session,
-    };
-}
+mod challenge_repo;
+mod rate_limit_repo;
+mod revocation_repo;
+mod session_ops_repo;
 
 #[cfg(feature = "account-lockout")]
 mod account_lockout_repo;
@@ -117,6 +115,14 @@ impl DatabaseBackend for DieselBackend {
             users: Arc::new(user_repo::DieselUserRepo::new(self.pool.clone())),
             sessions: Arc::new(user_repo::DieselSessionRepo::new(self.pool.clone())),
             audit: Arc::new(audit_repo::DieselAuditLogRepo::new(self.pool.clone())),
+            session_ops: Arc::new(session_ops_repo::DieselSessionOpsRepo::new(
+                self.pool.clone(),
+            )),
+            challenges: Arc::new(challenge_repo::DieselChallengeRepo::new(self.pool.clone())),
+            rate_limits: Arc::new(rate_limit_repo::DieselRateLimitRepo::new(self.pool.clone())),
+            revocations: Arc::new(revocation_repo::DieselRevocationRepo::new(
+                self.pool.clone(),
+            )),
 
             #[cfg(feature = "email-password")]
             passwords: Arc::new(password_repo::DieselPasswordRepo::new(self.pool.clone())),
@@ -184,10 +190,6 @@ impl DatabaseBackend for DieselBackend {
                 self.pool.clone(),
             )),
         }
-    }
-
-    fn postgres_pool_for_stores(&self) -> Option<DbPool> {
-        Some(self.pool.clone())
     }
 }
 

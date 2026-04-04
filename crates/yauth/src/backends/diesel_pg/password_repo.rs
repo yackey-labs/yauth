@@ -5,10 +5,10 @@ use uuid::Uuid;
 
 use super::models::*;
 use super::schema::*;
+use crate::backends::diesel_common::{diesel_err, get_conn};
 use crate::domain;
 use crate::repo::{
-    EmailVerificationRepository, PasswordRepository, PasswordResetRepository, RepoError,
-    RepoFuture, sealed,
+    EmailVerificationRepository, PasswordRepository, PasswordResetRepository, RepoFuture, sealed,
 };
 use crate::state::DbPool;
 
@@ -31,29 +31,21 @@ impl sealed::Sealed for DieselPasswordRepo {}
 impl PasswordRepository for DieselPasswordRepo {
     fn find_by_user_id(&self, user_id: Uuid) -> RepoFuture<'_, Option<domain::Password>> {
         Box::pin(async move {
-            let mut conn = self
-                .pool
-                .get()
-                .await
-                .map_err(|e| RepoError::Internal(e.into()))?;
+            let mut conn = get_conn(&self.pool).await?;
             let result = yauth_passwords::table
                 .find(user_id)
                 .select(DieselPassword::as_select())
                 .first(&mut conn)
                 .await
                 .optional()
-                .map_err(|e| RepoError::Internal(e.into()))?;
+                .map_err(diesel_err)?;
             Ok(result.map(|r| r.into_domain()))
         })
     }
 
     fn upsert(&self, input: domain::NewPassword) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            let mut conn = self
-                .pool
-                .get()
-                .await
-                .map_err(|e| RepoError::Internal(e.into()))?;
+            let mut conn = get_conn(&self.pool).await?;
             let diesel_input = DieselNewPassword::from_domain(input);
             diesel::insert_into(yauth_passwords::table)
                 .values(&diesel_input)
@@ -62,7 +54,7 @@ impl PasswordRepository for DieselPasswordRepo {
                 .set(yauth_passwords::password_hash.eq(&diesel_input.password_hash))
                 .execute(&mut conn)
                 .await
-                .map_err(|e| RepoError::Internal(e.into()))?;
+                .map_err(diesel_err)?;
             Ok(())
         })
     }
@@ -91,68 +83,52 @@ impl EmailVerificationRepository for DieselEmailVerificationRepo {
     ) -> RepoFuture<'_, Option<domain::EmailVerification>> {
         let token_hash = token_hash.to_string();
         Box::pin(async move {
-            let mut conn = self
-                .pool
-                .get()
-                .await
-                .map_err(|e| RepoError::Internal(e.into()))?;
+            let mut conn = get_conn(&self.pool).await?;
             let result = yauth_email_verifications::table
                 .filter(yauth_email_verifications::token_hash.eq(&token_hash))
                 .select(DieselEmailVerification::as_select())
                 .first(&mut conn)
                 .await
                 .optional()
-                .map_err(|e| RepoError::Internal(e.into()))?;
+                .map_err(diesel_err)?;
             Ok(result.map(|r| r.into_domain()))
         })
     }
 
     fn create(&self, input: domain::NewEmailVerification) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            let mut conn = self
-                .pool
-                .get()
-                .await
-                .map_err(|e| RepoError::Internal(e.into()))?;
+            let mut conn = get_conn(&self.pool).await?;
             let diesel_input = DieselNewEmailVerification::from_domain(input);
             diesel::insert_into(yauth_email_verifications::table)
                 .values(&diesel_input)
                 .execute(&mut conn)
                 .await
-                .map_err(|e| RepoError::Internal(e.into()))?;
+                .map_err(diesel_err)?;
             Ok(())
         })
     }
 
     fn delete(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            let mut conn = self
-                .pool
-                .get()
-                .await
-                .map_err(|e| RepoError::Internal(e.into()))?;
+            let mut conn = get_conn(&self.pool).await?;
             diesel::delete(yauth_email_verifications::table.find(id))
                 .execute(&mut conn)
                 .await
-                .map_err(|e| RepoError::Internal(e.into()))?;
+                .map_err(diesel_err)?;
             Ok(())
         })
     }
 
     fn delete_all_for_user(&self, user_id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            let mut conn = self
-                .pool
-                .get()
-                .await
-                .map_err(|e| RepoError::Internal(e.into()))?;
+            let mut conn = get_conn(&self.pool).await?;
             diesel::delete(
                 yauth_email_verifications::table
                     .filter(yauth_email_verifications::user_id.eq(user_id)),
             )
             .execute(&mut conn)
             .await
-            .map_err(|e| RepoError::Internal(e.into()))?;
+            .map_err(diesel_err)?;
             Ok(())
         })
     }
@@ -181,11 +157,7 @@ impl PasswordResetRepository for DieselPasswordResetRepo {
     ) -> RepoFuture<'_, Option<domain::PasswordReset>> {
         let token_hash = token_hash.to_string();
         Box::pin(async move {
-            let mut conn = self
-                .pool
-                .get()
-                .await
-                .map_err(|e| RepoError::Internal(e.into()))?;
+            let mut conn = get_conn(&self.pool).await?;
             let result = yauth_password_resets::table
                 .filter(
                     yauth_password_resets::token_hash
@@ -196,35 +168,27 @@ impl PasswordResetRepository for DieselPasswordResetRepo {
                 .first(&mut conn)
                 .await
                 .optional()
-                .map_err(|e| RepoError::Internal(e.into()))?;
+                .map_err(diesel_err)?;
             Ok(result.map(|r| r.into_domain()))
         })
     }
 
     fn create(&self, input: domain::NewPasswordReset) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            let mut conn = self
-                .pool
-                .get()
-                .await
-                .map_err(|e| RepoError::Internal(e.into()))?;
+            let mut conn = get_conn(&self.pool).await?;
             let diesel_input = DieselNewPasswordReset::from_domain(input);
             diesel::insert_into(yauth_password_resets::table)
                 .values(&diesel_input)
                 .execute(&mut conn)
                 .await
-                .map_err(|e| RepoError::Internal(e.into()))?;
+                .map_err(diesel_err)?;
             Ok(())
         })
     }
 
     fn delete_unused_for_user(&self, user_id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            let mut conn = self
-                .pool
-                .get()
-                .await
-                .map_err(|e| RepoError::Internal(e.into()))?;
+            let mut conn = get_conn(&self.pool).await?;
             diesel::delete(
                 yauth_password_resets::table.filter(
                     yauth_password_resets::user_id
@@ -234,7 +198,7 @@ impl PasswordResetRepository for DieselPasswordResetRepo {
             )
             .execute(&mut conn)
             .await
-            .map_err(|e| RepoError::Internal(e.into()))?;
+            .map_err(diesel_err)?;
             Ok(())
         })
     }

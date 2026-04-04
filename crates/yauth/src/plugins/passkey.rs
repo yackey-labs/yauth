@@ -163,11 +163,12 @@ async fn register_begin(
 
     let challenge_key = format!("passkey_reg:{}", user.id);
     state
-        .challenge_store
-        .set(&challenge_key, reg_state_json, CHALLENGE_TTL_SECS)
+        .repos
+        .challenges
+        .set_challenge(&challenge_key, reg_state_json, CHALLENGE_TTL_SECS)
         .await
         .map_err(|e| {
-            crate::otel::record_error("passkey_challenge_store_error", &e);
+            crate::otel::record_error("passkey_challenge_repo_error", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?;
 
@@ -190,16 +191,21 @@ async fn register_finish(
 ) -> Result<impl IntoResponse, ApiError> {
     let challenge_key = format!("passkey_reg:{}", auth_user.id);
     let reg_state_json = state
-        .challenge_store
-        .get(&challenge_key)
+        .repos
+        .challenges
+        .get_challenge(&challenge_key)
         .await
         .map_err(|e| {
-            crate::otel::record_error("passkey_challenge_store_error", &e);
+            crate::otel::record_error("passkey_challenge_repo_error", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?
         .ok_or_else(|| api_err(StatusCode::BAD_REQUEST, "No pending registration"))?;
 
-    let _ = state.challenge_store.delete(&challenge_key).await;
+    let _ = state
+        .repos
+        .challenges
+        .delete_challenge(&challenge_key)
+        .await;
 
     let reg_state: PasskeyRegistration = serde_json::from_value(reg_state_json).map_err(|e| {
         crate::otel::record_error("deserialize_error", &e);
@@ -284,9 +290,12 @@ async fn login_begin(
         let email = email_raw.trim().to_lowercase();
 
         if !state
-            .rate_limiter
-            .check(&format!("passkey_login:{}", email))
+            .repos
+            .rate_limits
+            .check_rate_limit(&format!("passkey_login:{}", email), 10, 60)
             .await
+            .map(|r| r.allowed)
+            .unwrap_or(true)
         {
             crate::otel::add_event(
                 "passkey_login_rate_limited",
@@ -363,7 +372,14 @@ async fn login_begin(
 
         (rcr, data)
     } else {
-        if !state.rate_limiter.check("passkey_login:discoverable").await {
+        if !state
+            .repos
+            .rate_limits
+            .check_rate_limit("passkey_login:discoverable", 10, 60)
+            .await
+            .map(|r| r.allowed)
+            .unwrap_or(true)
+        {
             crate::otel::add_event("passkey_discoverable_login_rate_limited", vec![]);
             return Err(api_err(StatusCode::TOO_MANY_REQUESTS, "Too many requests"));
         }
@@ -388,11 +404,12 @@ async fn login_begin(
 
     let challenge_key = format!("passkey_auth:{}", challenge_id);
     state
-        .challenge_store
-        .set(&challenge_key, challenge_data, CHALLENGE_TTL_SECS)
+        .repos
+        .challenges
+        .set_challenge(&challenge_key, challenge_data, CHALLENGE_TTL_SECS)
         .await
         .map_err(|e| {
-            crate::otel::record_error("passkey_challenge_store_error", &e);
+            crate::otel::record_error("passkey_challenge_repo_error", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?;
 
@@ -417,16 +434,21 @@ async fn login_finish(
 ) -> Result<impl IntoResponse, ApiError> {
     let challenge_key = format!("passkey_auth:{}", input.challenge_id);
     let challenge_data = state
-        .challenge_store
-        .get(&challenge_key)
+        .repos
+        .challenges
+        .get_challenge(&challenge_key)
         .await
         .map_err(|e| {
-            crate::otel::record_error("passkey_challenge_store_error", &e);
+            crate::otel::record_error("passkey_challenge_repo_error", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?
         .ok_or_else(|| api_err(StatusCode::BAD_REQUEST, "No pending authentication"))?;
 
-    let _ = state.challenge_store.delete(&challenge_key).await;
+    let _ = state
+        .repos
+        .challenges
+        .delete_challenge(&challenge_key)
+        .await;
 
     let discoverable = challenge_data
         .get("discoverable")

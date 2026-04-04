@@ -51,8 +51,14 @@ impl From<String> for SessionError {
     }
 }
 
+impl From<crate::repo::RepoError> for SessionError {
+    fn from(e: crate::repo::RepoError) -> Self {
+        SessionError(e.to_string())
+    }
+}
+
 // ---------------------------------------------------------------------------
-// Session operations — delegate storage to state.session_store
+// Session operations — delegate storage to state.repos.session_ops
 // ---------------------------------------------------------------------------
 
 pub async fn create_session(
@@ -66,8 +72,9 @@ pub async fn create_session(
     let token_hash = crypto::hash_token(&token);
 
     let session_id = state
-        .session_store
-        .create(user_id, token_hash, ip_address, user_agent, ttl)
+        .repos
+        .session_ops
+        .create_session(user_id, token_hash, ip_address, user_agent, ttl)
         .await?;
 
     Ok((token, session_id))
@@ -81,7 +88,11 @@ pub async fn validate_session(
 ) -> Result<Option<SessionUser>, SessionError> {
     let token_hash = crypto::hash_token(token);
 
-    let session = state.session_store.validate(&token_hash).await?;
+    let session = state
+        .repos
+        .session_ops
+        .validate_session(&token_hash)
+        .await?;
 
     crate::otel::set_attribute("yauth.session_found", session.is_some());
 
@@ -105,7 +116,9 @@ pub async fn validate_session(
                     vec![],
                 );
                 if binding.ip_mismatch_action == BindingAction::Invalidate {
-                    state.session_store.delete(&token_hash).await?;
+                    if let Err(e) = state.repos.session_ops.delete_session(&token_hash).await {
+                        log::warn!("Failed to delete invalidated session: {e}");
+                    }
                     return Ok(None);
                 }
             }
@@ -122,7 +135,9 @@ pub async fn validate_session(
                     vec![],
                 );
                 if binding.ua_mismatch_action == BindingAction::Invalidate {
-                    state.session_store.delete(&token_hash).await?;
+                    if let Err(e) = state.repos.session_ops.delete_session(&token_hash).await {
+                        log::warn!("Failed to delete invalidated session: {e}");
+                    }
                     return Ok(None);
                 }
             }
@@ -138,14 +153,18 @@ pub async fn validate_session(
 
 pub async fn delete_session(state: &YAuthState, token: &str) -> Result<bool, SessionError> {
     let token_hash = crypto::hash_token(token);
-    Ok(state.session_store.delete(&token_hash).await?)
+    Ok(state.repos.session_ops.delete_session(&token_hash).await?)
 }
 
 pub async fn delete_all_user_sessions(
     state: &YAuthState,
     user_id: Uuid,
 ) -> Result<u64, SessionError> {
-    Ok(state.session_store.delete_all_for_user(user_id).await?)
+    Ok(state
+        .repos
+        .session_ops
+        .delete_all_sessions_for_user(user_id)
+        .await?)
 }
 
 pub async fn delete_other_user_sessions(
@@ -155,7 +174,8 @@ pub async fn delete_other_user_sessions(
 ) -> Result<u64, SessionError> {
     let keep_hash = crypto::hash_token(keep_token);
     Ok(state
-        .session_store
-        .delete_others_for_user(user_id, &keep_hash)
+        .repos
+        .session_ops
+        .delete_other_sessions_for_user(user_id, &keep_hash)
         .await?)
 }

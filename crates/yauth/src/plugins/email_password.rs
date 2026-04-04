@@ -127,7 +127,14 @@ async fn register(
         ));
     }
 
-    if !state.rate_limiter.check("register").await {
+    if !state
+        .repos
+        .rate_limits
+        .check_rate_limit("register", 10, 60)
+        .await
+        .map(|r| r.allowed)
+        .unwrap_or(true)
+    {
         crate::otel::add_event("register_rate_limited", vec![]);
         return Err(api_err(StatusCode::TOO_MANY_REQUESTS, "Too many requests"));
     }
@@ -326,7 +333,14 @@ async fn login(
     let email = input::sanitize(&input.email).to_lowercase();
     let password_input = input::sanitize_password(&input.password);
 
-    if !state.rate_limiter.check(&format!("login:{}", email)).await {
+    if !state
+        .repos
+        .rate_limits
+        .check_rate_limit(&format!("login:{}", email), 10, 60)
+        .await
+        .map(|r| r.allowed)
+        .unwrap_or(true)
+    {
         crate::otel::add_event(
             "login_rate_limited",
             #[cfg(feature = "telemetry")]
@@ -633,7 +647,14 @@ async fn resend_verification(
 ) -> Result<Json<MessageResponse>, (StatusCode, Json<serde_json::Value>)> {
     let email = input::sanitize(&input.email).to_lowercase();
 
-    if !state.rate_limiter.check(&format!("resend:{}", email)).await {
+    if !state
+        .repos
+        .rate_limits
+        .check_rate_limit(&format!("resend:{}", email), 10, 60)
+        .await
+        .map(|r| r.allowed)
+        .unwrap_or(true)
+    {
         return Err(api_err(StatusCode::TOO_MANY_REQUESTS, "Too many requests"));
     }
 
@@ -706,7 +727,14 @@ async fn forgot_password(
 ) -> Result<Json<MessageResponse>, (StatusCode, Json<serde_json::Value>)> {
     let email = input::sanitize(&input.email).to_lowercase();
 
-    if !state.rate_limiter.check(&format!("forgot:{}", email)).await {
+    if !state
+        .repos
+        .rate_limits
+        .check_rate_limit(&format!("forgot:{}", email), 10, 60)
+        .await
+        .map(|r| r.allowed)
+        .unwrap_or(true)
+    {
         return Err(api_err(StatusCode::TOO_MANY_REQUESTS, "Too many requests"));
     }
 
@@ -914,9 +942,12 @@ async fn change_password(
     Json(input): Json<ChangePasswordRequest>,
 ) -> Result<Json<MessageResponse>, (StatusCode, Json<serde_json::Value>)> {
     if !state
-        .rate_limiter
-        .check(&format!("change-pwd:{}", user.id))
+        .repos
+        .rate_limits
+        .check_rate_limit(&format!("change-pwd:{}", user.id), 10, 60)
         .await
+        .map(|r| r.allowed)
+        .unwrap_or(true)
     {
         return Err(api_err(StatusCode::TOO_MANY_REQUESTS, "Too many requests"));
     }

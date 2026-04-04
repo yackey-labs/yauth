@@ -6,8 +6,9 @@ use uuid::Uuid;
 
 use super::models::*;
 use super::schema::*;
+use crate::backends::diesel_common::{diesel_err, get_conn};
 use crate::domain;
-use crate::repo::{OauthAccountRepository, OauthStateRepository, RepoError, RepoFuture, sealed};
+use crate::repo::{OauthAccountRepository, OauthStateRepository, RepoFuture, sealed};
 use crate::state::DbPool;
 
 pub(crate) struct DieselOauthAccountRepo {
@@ -29,11 +30,7 @@ impl OauthAccountRepository for DieselOauthAccountRepo {
         let provider = provider.to_string();
         let provider_user_id = provider_user_id.to_string();
         Box::pin(async move {
-            let mut conn = self
-                .pool
-                .get()
-                .await
-                .map_err(|e| RepoError::Internal(e.into()))?;
+            let mut conn = get_conn(&self.pool).await?;
             let result = yauth_oauth_accounts::table
                 .filter(
                     yauth_oauth_accounts::provider
@@ -44,24 +41,20 @@ impl OauthAccountRepository for DieselOauthAccountRepo {
                 .first(&mut conn)
                 .await
                 .optional()
-                .map_err(|e| RepoError::Internal(e.into()))?;
+                .map_err(diesel_err)?;
             Ok(result.map(|r| r.into_domain()))
         })
     }
 
     fn find_by_user_id(&self, user_id: Uuid) -> RepoFuture<'_, Vec<domain::OauthAccount>> {
         Box::pin(async move {
-            let mut conn = self
-                .pool
-                .get()
-                .await
-                .map_err(|e| RepoError::Internal(e.into()))?;
+            let mut conn = get_conn(&self.pool).await?;
             let results: Vec<DieselOauthAccount> = yauth_oauth_accounts::table
                 .filter(yauth_oauth_accounts::user_id.eq(user_id))
                 .select(DieselOauthAccount::as_select())
                 .load(&mut conn)
                 .await
-                .map_err(|e| RepoError::Internal(e.into()))?;
+                .map_err(diesel_err)?;
             Ok(results.into_iter().map(|r| r.into_domain()).collect())
         })
     }
@@ -73,11 +66,7 @@ impl OauthAccountRepository for DieselOauthAccountRepo {
     ) -> RepoFuture<'_, Option<domain::OauthAccount>> {
         let provider = provider.to_string();
         Box::pin(async move {
-            let mut conn = self
-                .pool
-                .get()
-                .await
-                .map_err(|e| RepoError::Internal(e.into()))?;
+            let mut conn = get_conn(&self.pool).await?;
             let result = yauth_oauth_accounts::table
                 .filter(
                     yauth_oauth_accounts::user_id
@@ -88,23 +77,19 @@ impl OauthAccountRepository for DieselOauthAccountRepo {
                 .first(&mut conn)
                 .await
                 .optional()
-                .map_err(|e| RepoError::Internal(e.into()))?;
+                .map_err(diesel_err)?;
             Ok(result.map(|r| r.into_domain()))
         })
     }
 
     fn create(&self, input: domain::NewOauthAccount) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            let mut conn = self
-                .pool
-                .get()
-                .await
-                .map_err(|e| RepoError::Internal(e.into()))?;
+            let mut conn = get_conn(&self.pool).await?;
             diesel::insert_into(yauth_oauth_accounts::table)
                 .values(&DieselNewOauthAccount::from_domain(input))
                 .execute(&mut conn)
                 .await
-                .map_err(|e| RepoError::Internal(e.into()))?;
+                .map_err(diesel_err)?;
             Ok(())
         })
     }
@@ -119,11 +104,7 @@ impl OauthAccountRepository for DieselOauthAccountRepo {
         let access_token_enc = access_token_enc.map(|s| s.to_string());
         let refresh_token_enc = refresh_token_enc.map(|s| s.to_string());
         Box::pin(async move {
-            let mut conn = self
-                .pool
-                .get()
-                .await
-                .map_err(|e| RepoError::Internal(e.into()))?;
+            let mut conn = get_conn(&self.pool).await?;
             diesel::update(yauth_oauth_accounts::table.filter(yauth_oauth_accounts::id.eq(id)))
                 .set((
                     yauth_oauth_accounts::access_token_enc.eq(&access_token_enc),
@@ -133,22 +114,18 @@ impl OauthAccountRepository for DieselOauthAccountRepo {
                 ))
                 .execute(&mut conn)
                 .await
-                .map_err(|e| RepoError::Internal(e.into()))?;
+                .map_err(diesel_err)?;
             Ok(())
         })
     }
 
     fn delete(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            let mut conn = self
-                .pool
-                .get()
-                .await
-                .map_err(|e| RepoError::Internal(e.into()))?;
+            let mut conn = get_conn(&self.pool).await?;
             diesel::delete(yauth_oauth_accounts::table.filter(yauth_oauth_accounts::id.eq(id)))
                 .execute(&mut conn)
                 .await
-                .map_err(|e| RepoError::Internal(e.into()))?;
+                .map_err(diesel_err)?;
             Ok(())
         })
     }
@@ -167,16 +144,12 @@ impl sealed::Sealed for DieselOauthStateRepo {}
 impl OauthStateRepository for DieselOauthStateRepo {
     fn create(&self, input: domain::NewOauthState) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            let mut conn = self
-                .pool
-                .get()
-                .await
-                .map_err(|e| RepoError::Internal(e.into()))?;
+            let mut conn = get_conn(&self.pool).await?;
             diesel::insert_into(yauth_oauth_states::table)
                 .values(&DieselNewOauthState::from_domain(input))
                 .execute(&mut conn)
                 .await
-                .map_err(|e| RepoError::Internal(e.into()))?;
+                .map_err(diesel_err)?;
             Ok(())
         })
     }
@@ -184,25 +157,21 @@ impl OauthStateRepository for DieselOauthStateRepo {
     fn find_and_delete(&self, state: &str) -> RepoFuture<'_, Option<domain::OauthState>> {
         let state = state.to_string();
         Box::pin(async move {
-            let mut conn = self
-                .pool
-                .get()
-                .await
-                .map_err(|e| RepoError::Internal(e.into()))?;
+            let mut conn = get_conn(&self.pool).await?;
             let result = yauth_oauth_states::table
                 .filter(yauth_oauth_states::state.eq(&state))
                 .select(DieselOauthState::as_select())
                 .first(&mut conn)
                 .await
                 .optional()
-                .map_err(|e| RepoError::Internal(e.into()))?;
+                .map_err(diesel_err)?;
             if result.is_some() {
                 diesel::delete(
                     yauth_oauth_states::table.filter(yauth_oauth_states::state.eq(&state)),
                 )
                 .execute(&mut conn)
                 .await
-                .map_err(|e| RepoError::Internal(e.into()))?;
+                .map_err(diesel_err)?;
             }
             match result {
                 Some(r) => {

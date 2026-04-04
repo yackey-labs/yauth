@@ -1,5 +1,7 @@
 # Declarative Schema + Consumer-Owned Migrations
 
+> **Status: COMPLETED** -- Plugins declare tables as Rust data via `fn schema() -> Vec<TableDef>`. DDL generated per dialect (Postgres, SQLite, MySQL). Migrations run automatically inside `build().await`.
+
 Replace yauth's baked-in `include_str!()` SQL migrations with a declarative schema system. Plugins declare tables/columns as Rust data, the library merges them into a canonical schema, and backends generate dialect-specific DDL. Consumers own the migration lifecycle.
 
 **Stack:** Rust (yauth crate). No new dependencies — schema definitions are plain structs/enums. DDL targets Postgres, SQLite, and MySQL. `diesel-libsql` crate (published separately) for the libSQL/Turso backend.

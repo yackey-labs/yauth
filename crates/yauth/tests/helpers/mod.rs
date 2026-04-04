@@ -4,7 +4,7 @@ use testcontainers::ImageExt;
 use testcontainers::runners::AsyncRunner;
 use testcontainers_modules::postgres::Postgres;
 use tokio::sync::OnceCell;
-use yauth::backends::diesel::{
+use yauth::backends::diesel_pg::{
     AsyncDieselConnectionManager, AsyncPgConnection, DieselPool, RunQueryDsl,
 };
 use yauth::state::DbPool;
@@ -95,7 +95,7 @@ impl TestDb {
 
     async fn init_schema(pool: &DbPool) {
         drop_yauth_tables(pool).await;
-        yauth::backends::diesel::migrations::run_migrations(pool)
+        yauth::backends::diesel_pg::migrations::run_migrations(pool)
             .await
             .expect("failed to run migrations");
     }

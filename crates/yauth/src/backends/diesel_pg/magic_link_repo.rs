@@ -5,8 +5,9 @@ use uuid::Uuid;
 
 use super::models::*;
 use super::schema::*;
+use crate::backends::diesel_common::{diesel_err, get_conn};
 use crate::domain;
-use crate::repo::{MagicLinkRepository, RepoError, RepoFuture, sealed};
+use crate::repo::{MagicLinkRepository, RepoFuture, sealed};
 use crate::state::DbPool;
 
 pub(crate) struct DieselMagicLinkRepo {
@@ -26,11 +27,7 @@ impl MagicLinkRepository for DieselMagicLinkRepo {
     ) -> RepoFuture<'_, Option<domain::MagicLink>> {
         let token_hash = token_hash.to_string();
         Box::pin(async move {
-            let mut conn = self
-                .pool
-                .get()
-                .await
-                .map_err(|e| RepoError::Internal(e.into()))?;
+            let mut conn = get_conn(&self.pool).await?;
             let result = yauth_magic_links::table
                 .filter(
                     yauth_magic_links::token_hash
@@ -42,54 +39,42 @@ impl MagicLinkRepository for DieselMagicLinkRepo {
                 .first(&mut conn)
                 .await
                 .optional()
-                .map_err(|e| RepoError::Internal(e.into()))?;
+                .map_err(diesel_err)?;
             Ok(result.map(|r| r.into_domain()))
         })
     }
 
     fn create(&self, input: domain::NewMagicLink) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            let mut conn = self
-                .pool
-                .get()
-                .await
-                .map_err(|e| RepoError::Internal(e.into()))?;
+            let mut conn = get_conn(&self.pool).await?;
             diesel::insert_into(yauth_magic_links::table)
                 .values(&DieselNewMagicLink::from_domain(input))
                 .execute(&mut conn)
                 .await
-                .map_err(|e| RepoError::Internal(e.into()))?;
+                .map_err(diesel_err)?;
             Ok(())
         })
     }
 
     fn mark_used(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            let mut conn = self
-                .pool
-                .get()
-                .await
-                .map_err(|e| RepoError::Internal(e.into()))?;
+            let mut conn = get_conn(&self.pool).await?;
             diesel::update(yauth_magic_links::table.find(id))
                 .set(yauth_magic_links::used.eq(true))
                 .execute(&mut conn)
                 .await
-                .map_err(|e| RepoError::Internal(e.into()))?;
+                .map_err(diesel_err)?;
             Ok(())
         })
     }
 
     fn delete(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            let mut conn = self
-                .pool
-                .get()
-                .await
-                .map_err(|e| RepoError::Internal(e.into()))?;
+            let mut conn = get_conn(&self.pool).await?;
             diesel::delete(yauth_magic_links::table.find(id))
                 .execute(&mut conn)
                 .await
-                .map_err(|e| RepoError::Internal(e.into()))?;
+                .map_err(diesel_err)?;
             Ok(())
         })
     }
@@ -97,11 +82,7 @@ impl MagicLinkRepository for DieselMagicLinkRepo {
     fn delete_unused_for_email(&self, email: &str) -> RepoFuture<'_, ()> {
         let email = email.to_string();
         Box::pin(async move {
-            let mut conn = self
-                .pool
-                .get()
-                .await
-                .map_err(|e| RepoError::Internal(e.into()))?;
+            let mut conn = get_conn(&self.pool).await?;
             diesel::delete(
                 yauth_magic_links::table.filter(
                     yauth_magic_links::email
@@ -111,7 +92,7 @@ impl MagicLinkRepository for DieselMagicLinkRepo {
             )
             .execute(&mut conn)
             .await
-            .map_err(|e| RepoError::Internal(e.into()))?;
+            .map_err(diesel_err)?;
             Ok(())
         })
     }

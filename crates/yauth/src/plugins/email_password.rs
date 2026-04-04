@@ -48,6 +48,10 @@ impl YAuthPlugin for EmailPasswordPlugin {
     fn protected_routes(&self, _ctx: &PluginContext) -> Option<Router<YAuthState>> {
         Some(Router::new().route("/change-password", post(change_password)))
     }
+
+    fn schema(&self) -> Vec<crate::schema::TableDef> {
+        crate::schema::plugin_schemas::email_password_schema()
+    }
 }
 
 use crate::auth::session::session_set_cookie;

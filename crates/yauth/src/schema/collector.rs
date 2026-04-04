@@ -1,0 +1,108 @@
+//! Schema collector — merges core + plugin schemas, topologically sorted.
+
+use std::collections::{HashMap, HashSet, VecDeque};
+
+use super::types::TableDef;
+
+/// Merged schema: all tables topologically sorted by FK dependencies.
+#[derive(Debug, Clone)]
+pub struct YAuthSchema {
+    pub tables: Vec<TableDef>,
+}
+
+impl YAuthSchema {
+    /// Get a table definition by name.
+    pub fn table(&self, name: &str) -> Option<&TableDef> {
+        self.tables.iter().find(|t| t.name == name)
+    }
+}
+
+/// Collect and merge core + plugin schemas, then topologically sort by FK deps.
+///
+/// The sort preserves input order among tables with the same dependency depth,
+/// ensuring deterministic output that matches the order plugins declare tables.
+///
+/// Panics if there is a cycle in FK references (schema definition bug).
+pub fn collect_schema(table_lists: Vec<Vec<TableDef>>) -> YAuthSchema {
+    // Preserve insertion order using a Vec of names
+    let mut ordered_names: Vec<&str> = Vec::new();
+    let mut tables_by_name: HashMap<&str, TableDef> = HashMap::new();
+
+    for tables in &table_lists {
+        for table in tables {
+            if tables_by_name.contains_key(table.name) {
+                panic!(
+                    "Duplicate table definition: '{}'. Each table must be defined exactly once.",
+                    table.name
+                );
+            }
+            ordered_names.push(table.name);
+            tables_by_name.insert(table.name, table.clone());
+        }
+    }
+
+    // Topological sort (Kahn's algorithm) preserving input order for ties
+    let table_names: HashSet<&str> = tables_by_name.keys().copied().collect();
+
+    // Build in-degree count and dependents map
+    let mut in_degree: HashMap<&str, usize> = HashMap::new();
+    let mut dependents: HashMap<&str, Vec<&str>> = HashMap::new();
+
+    for name in &table_names {
+        in_degree.entry(name).or_insert(0);
+    }
+
+    for (name, table) in &tables_by_name {
+        for dep in table.dependencies() {
+            if !table_names.contains(dep) {
+                panic!(
+                    "Table '{}' references '{}' which is not in the schema. \
+                     Ensure the referenced table's plugin is enabled.",
+                    name, dep
+                );
+            }
+            *in_degree.entry(name).or_insert(0) += 1;
+            dependents.entry(dep).or_default().push(name);
+        }
+    }
+
+    // Initialize queue with zero-degree tables in input order
+    let mut queue: VecDeque<&str> = VecDeque::new();
+    for name in &ordered_names {
+        if in_degree[name] == 0 {
+            queue.push_back(name);
+        }
+    }
+
+    let mut sorted: Vec<TableDef> = Vec::new();
+    while let Some(name) = queue.pop_front() {
+        sorted.push(tables_by_name.remove(name).unwrap());
+        if let Some(deps) = dependents.get(name) {
+            // Add newly-freed tables in their original input order
+            let mut freed: Vec<&str> = Vec::new();
+            for dep in deps {
+                let d = in_degree.get_mut(dep).unwrap();
+                *d -= 1;
+                if *d == 0 {
+                    freed.push(dep);
+                }
+            }
+            // Sort freed tables by their position in ordered_names for stability
+            freed.sort_by_key(|n| ordered_names.iter().position(|on| on == n));
+            for n in freed {
+                queue.push_back(n);
+            }
+        }
+    }
+
+    if sorted.len() != table_names.len() {
+        let remaining: Vec<&str> = tables_by_name.keys().copied().collect();
+        panic!(
+            "Cycle detected in FK dependencies among tables: {:?}. \
+             This is a schema definition bug.",
+            remaining
+        );
+    }
+
+    YAuthSchema { tables: sorted }
+}

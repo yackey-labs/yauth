@@ -106,7 +106,7 @@ impl DatabaseBackend for DieselBackend {
         _features: &EnabledFeatures,
     ) -> Pin<Box<dyn Future<Output = Result<(), RepoError>> + Send + '_>> {
         Box::pin(async move {
-            migrations::run_migrations_with_schema(&self.pool, &self.schema)
+            migrations::run_declarative_migrations_with_schema(&self.pool, &self.schema)
                 .await
                 .map_err(RepoError::Internal)
         })

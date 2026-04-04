@@ -6,6 +6,7 @@ pub mod error;
 pub mod middleware;
 pub mod plugin;
 pub mod repo;
+pub mod schema;
 pub mod state;
 pub mod stores;
 
@@ -65,6 +66,26 @@ pub struct YAuth {
 }
 
 impl YAuth {
+    /// Get the merged declarative schema for all enabled plugins.
+    pub fn schema(&self) -> schema::YAuthSchema {
+        let mut table_lists = vec![schema::core_schema()];
+        for plugin in self.state.plugins.iter() {
+            let s = plugin.schema();
+            if !s.is_empty() {
+                table_lists.push(s);
+            }
+        }
+        schema::collect_schema(table_lists)
+    }
+
+    /// Generate DDL for the specified dialect.
+    pub fn generate_ddl(&self, dialect: schema::Dialect) -> String {
+        let merged = self.schema();
+        match dialect {
+            schema::Dialect::Postgres => schema::generate_postgres_ddl(&merged),
+        }
+    }
+
     pub fn router(&self) -> Router<YAuthState> {
         let ctx = plugin::PluginContext::new(&self.state);
         let mut public_router = Router::new();

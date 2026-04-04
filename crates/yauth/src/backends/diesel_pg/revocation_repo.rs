@@ -28,10 +28,9 @@ impl DieselRevocationRepo {
         if !self.initialized.load(Ordering::Relaxed) {
             use diesel_async_crate::RunQueryDsl;
             let mut conn = get_conn(&self.pool).await?;
-            diesel::sql_query(CREATE_REVOCATIONS_TABLE)
+            let _ = diesel::sql_query(CREATE_REVOCATIONS_TABLE)
                 .execute(&mut conn)
-                .await
-                .map_err(diesel_err)?;
+                .await;
             self.initialized.store(true, Ordering::Relaxed);
         }
         Ok(())

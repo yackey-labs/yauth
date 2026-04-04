@@ -30,10 +30,9 @@ impl DieselRateLimitRepo {
         if !self.initialized.load(Ordering::Relaxed) {
             use diesel_async_crate::RunQueryDsl;
             let mut conn = get_conn(&self.pool).await?;
-            diesel::sql_query(CREATE_RATE_LIMITS_TABLE)
+            let _ = diesel::sql_query(CREATE_RATE_LIMITS_TABLE)
                 .execute(&mut conn)
-                .await
-                .map_err(|e| RepoError::Internal(format!("failed to create table: {e}").into()))?;
+                .await;
             self.initialized.store(true, Ordering::Relaxed);
         }
         Ok(())

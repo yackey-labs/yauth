@@ -96,7 +96,7 @@ async fn main() {
         ..Default::default()
     };
 
-    // build() is async — runs migrations and constructs repositories
+    // build() runs migrations automatically (use .skip_migrations() to disable)
     let yauth = YAuthBuilder::new(backend, config)
         .with_email_password(EmailPasswordConfig::default())
         .build()
@@ -707,7 +707,35 @@ See [docs/migrating-to-diesel.md](docs/migrating-to-diesel.md) for a migration g
 
 ## Database Schema
 
-All tables are prefixed with `yauth_`. Migrations are feature-gated — only tables for enabled features are created. Migrations run automatically inside `build().await` via the declarative schema system (no manual migration step needed).
+All tables are prefixed with `yauth_`. Migrations are feature-gated — only tables for enabled features are created.
+
+By default, migrations run automatically inside `build().await` via the declarative schema system. To run migrations externally (CI, init container, CLI tool) instead of at startup:
+
+```rust
+// Skip automatic migrations
+let yauth = YAuthBuilder::new(backend, config)
+    .skip_migrations()
+    .with_email_password(EmailPasswordConfig::default())
+    .build()
+    .await?;
+```
+
+To run migrations separately (e.g., in a migration job):
+
+```rust
+use yauth::repo::{DatabaseBackend, EnabledFeatures};
+
+let backend = DieselPgBackend::new(&database_url)?;
+backend.migrate(&EnabledFeatures::from_compile_flags()).await?;
+```
+
+Or export the DDL for your own migration tool:
+
+```rust
+let yauth = builder.skip_migrations().build().await?;
+let ddl = yauth.generate_ddl(Dialect::Postgres)?;
+// Feed `ddl` into Flyway, Liquibase, sqlx migrate, etc.
+```
 
 ### Schema by Plugin
 

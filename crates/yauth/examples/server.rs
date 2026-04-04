@@ -68,10 +68,9 @@ async fn main() {
     let database_url = if yauth_backend == "memory" {
         None
     } else {
-        Some(
-            env::var("DATABASE_URL")
-                .expect("DATABASE_URL must be set (e.g. postgres://user:pass@host/db)"),
-        )
+        Some(env::var("DATABASE_URL").expect(
+            "DATABASE_URL must be set (e.g. postgres://user:pass@host/db or file:yauth.db)",
+        ))
     };
     let port: u16 = env::var("PORT")
         .ok()
@@ -114,16 +113,27 @@ async fn main() {
     // -----------------------------------------------------------------------
     // 3. Create the database backend
     // -----------------------------------------------------------------------
-    let backend: Box<dyn yauth::repo::DatabaseBackend> = if yauth_backend == "memory" {
-        log::info!("Using in-memory backend (no database required)");
-        Box::new(yauth::backends::memory::InMemoryBackend::new())
-    } else {
-        log::info!("Connecting to database...");
-        let url = database_url.as_ref().unwrap();
-        Box::new(
-            yauth::backends::diesel::DieselBackend::new(url)
-                .expect("Failed to create database backend"),
-        )
+    let backend: Box<dyn yauth::repo::DatabaseBackend> = match yauth_backend.as_str() {
+        "memory" => {
+            log::info!("Using in-memory backend (no database required)");
+            Box::new(yauth::backends::memory::InMemoryBackend::new())
+        }
+        "libsql" => {
+            log::info!("Using libSQL/SQLite backend");
+            let url = database_url.as_ref().unwrap();
+            Box::new(
+                yauth::backends::diesel_libsql::DieselLibsqlBackend::new(url)
+                    .expect("Failed to create libsql backend"),
+            )
+        }
+        _ => {
+            log::info!("Connecting to PostgreSQL database...");
+            let url = database_url.as_ref().unwrap();
+            Box::new(
+                yauth::backends::diesel::DieselBackend::new(url)
+                    .expect("Failed to create database backend"),
+            )
+        }
     };
 
     // -----------------------------------------------------------------------

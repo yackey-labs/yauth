@@ -4,6 +4,8 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Dialect {
     Postgres,
+    Sqlite,
+    Mysql,
 }
 
 /// Abstract column type — each dialect maps this to a concrete SQL type.

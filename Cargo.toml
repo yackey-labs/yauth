@@ -17,8 +17,8 @@ tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace", "limit"] }
 
 # Database — Diesel (postgres_backend = type system only, no libpq; diesel-async uses tokio-postgres)
-diesel = { version = "2.2", features = ["postgres_backend", "uuid", "chrono", "serde_json"] }
-diesel-async = { version = "0.5", features = ["postgres", "deadpool"] }
+diesel = { version = "2.3", features = ["postgres_backend", "uuid", "chrono", "serde_json"] }
+diesel-async = { version = "0.8", features = ["postgres", "deadpool"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

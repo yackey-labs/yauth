@@ -85,6 +85,8 @@ impl YAuth {
         let merged = self.schema()?;
         Ok(match dialect {
             schema::Dialect::Postgres => schema::generate_postgres_ddl(&merged),
+            schema::Dialect::Sqlite => schema::generate_sqlite_ddl(&merged),
+            schema::Dialect::Mysql => schema::generate_mysql_ddl(&merged),
         })
     }
 

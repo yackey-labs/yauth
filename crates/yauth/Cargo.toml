@@ -12,6 +12,7 @@ publish = true
 [features]
 default = ["email-password", "diesel-backend"]
 diesel-backend = []
+diesel-libsql-backend = ["dep:diesel-libsql"]
 memory-backend = []
 email-password = []
 passkey = ["dep:webauthn-rs"]
@@ -29,7 +30,7 @@ oidc = ["bearer", "oauth2-server"]
 telemetry = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:opentelemetry-semantic-conventions", "dep:opentelemetry-http"]
 openapi = ["dep:utoipa"]
 redis = ["dep:redis"]
-full = ["email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link", "admin", "status", "oauth2-server", "account-lockout", "webhooks", "oidc", "telemetry", "openapi", "diesel-backend", "memory-backend"]
+full = ["email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link", "admin", "status", "oauth2-server", "account-lockout", "webhooks", "oidc", "telemetry", "openapi", "diesel-backend", "diesel-libsql-backend", "memory-backend"]
 
 [dependencies]
 axum = { workspace = true }
@@ -38,7 +39,8 @@ tokio = { workspace = true }
 
 # Diesel
 diesel = { workspace = true }
-diesel-async-crate = { version = "0.5", features = ["postgres", "deadpool"], package = "diesel-async" }
+diesel-async-crate = { version = "0.8", features = ["postgres", "deadpool"], package = "diesel-async" }
+diesel-libsql = { version = "0.1.4", features = ["async", "deadpool"], optional = true }
 futures-util = "0.3"
 
 serde = { workspace = true }

@@ -521,3 +521,303 @@ fn generated_ddl_has_all_tables() {
     let create_count = ddl.matches("CREATE TABLE IF NOT EXISTS").count();
     assert_eq!(create_count, expected_tables.len());
 }
+
+// ── SQLite DDL generation tests ───────────────────────────────────────
+
+#[test]
+fn sqlite_ddl_has_pragma_foreign_keys() {
+    let schema = collect_schema(vec![core_schema()]).unwrap();
+    let ddl = generate_sqlite_ddl(&schema);
+    assert!(
+        ddl.starts_with("PRAGMA foreign_keys = ON;"),
+        "SQLite DDL must start with PRAGMA foreign_keys = ON"
+    );
+}
+
+#[test]
+fn sqlite_ddl_core_tables() {
+    let schema = collect_schema(vec![core_schema()]).unwrap();
+    let ddl = generate_sqlite_ddl(&schema);
+    assert!(ddl.contains("CREATE TABLE IF NOT EXISTS yauth_users"));
+    assert!(ddl.contains("CREATE TABLE IF NOT EXISTS yauth_sessions"));
+    assert!(ddl.contains("CREATE TABLE IF NOT EXISTS yauth_audit_log"));
+}
+
+#[test]
+fn sqlite_ddl_type_mappings() {
+    let schema = collect_schema(vec![core_schema()]).unwrap();
+    let ddl = generate_sqlite_ddl(&schema);
+    // UUID -> TEXT
+    assert!(
+        ddl.contains("id TEXT PRIMARY KEY"),
+        "UUID should map to TEXT in SQLite. DDL:\n{ddl}"
+    );
+    // BOOLEAN -> INTEGER
+    assert!(
+        ddl.contains("email_verified INTEGER"),
+        "BOOLEAN should map to INTEGER in SQLite. DDL:\n{ddl}"
+    );
+    // DateTime -> TEXT
+    assert!(
+        ddl.contains("created_at TEXT"),
+        "DateTime should map to TEXT in SQLite. DDL:\n{ddl}"
+    );
+}
+
+#[test]
+fn sqlite_ddl_no_gen_random_uuid() {
+    let schema = collect_schema(vec![core_schema()]).unwrap();
+    let ddl = generate_sqlite_ddl(&schema);
+    assert!(
+        !ddl.contains("gen_random_uuid()"),
+        "SQLite DDL should not contain gen_random_uuid()"
+    );
+}
+
+#[test]
+fn sqlite_ddl_now_becomes_current_timestamp() {
+    let schema = collect_schema(vec![core_schema()]).unwrap();
+    let ddl = generate_sqlite_ddl(&schema);
+    assert!(
+        !ddl.contains("now()"),
+        "SQLite DDL should not contain now()"
+    );
+    // The core schema uses now() as default for created_at/updated_at on users.
+    // In SQLite this becomes CURRENT_TIMESTAMP.
+    assert!(
+        ddl.contains("CURRENT_TIMESTAMP"),
+        "SQLite DDL should contain CURRENT_TIMESTAMP"
+    );
+}
+
+#[test]
+fn sqlite_ddl_has_all_tables() {
+    let schema = collect_schema(vec![
+        core_schema(),
+        plugin_schemas::email_password_schema(),
+        plugin_schemas::passkey_schema(),
+        plugin_schemas::mfa_schema(),
+        plugin_schemas::oauth_schema(),
+        plugin_schemas::bearer_schema(),
+        plugin_schemas::api_key_schema(),
+        plugin_schemas::magic_link_schema(),
+        plugin_schemas::oauth2_server_schema(),
+        plugin_schemas::account_lockout_schema(),
+        plugin_schemas::webhooks_schema(),
+        plugin_schemas::oidc_schema(),
+    ])
+    .unwrap();
+    let ddl = generate_sqlite_ddl(&schema);
+
+    let expected_tables = [
+        "yauth_users",
+        "yauth_sessions",
+        "yauth_audit_log",
+        "yauth_passwords",
+        "yauth_email_verifications",
+        "yauth_password_resets",
+        "yauth_webauthn_credentials",
+        "yauth_totp_secrets",
+        "yauth_backup_codes",
+        "yauth_oauth_accounts",
+        "yauth_oauth_states",
+        "yauth_refresh_tokens",
+        "yauth_api_keys",
+        "yauth_magic_links",
+        "yauth_oauth2_clients",
+        "yauth_authorization_codes",
+        "yauth_consents",
+        "yauth_device_codes",
+        "yauth_account_locks",
+        "yauth_unlock_tokens",
+        "yauth_webhooks",
+        "yauth_webhook_deliveries",
+        "yauth_oidc_nonces",
+    ];
+
+    for table in &expected_tables {
+        assert!(
+            ddl.contains(&format!("CREATE TABLE IF NOT EXISTS {}", table)),
+            "SQLite DDL missing table: {}",
+            table
+        );
+    }
+
+    let create_count = ddl.matches("CREATE TABLE IF NOT EXISTS").count();
+    assert_eq!(create_count, expected_tables.len());
+}
+
+#[test]
+fn sqlite_ddl_json_maps_to_text() {
+    // The audit_log table has a JSONB column (metadata). In SQLite it should be TEXT.
+    let schema = collect_schema(vec![core_schema()]).unwrap();
+    let ddl = generate_sqlite_ddl(&schema);
+    assert!(
+        !ddl.contains("JSONB"),
+        "SQLite DDL should not contain JSONB"
+    );
+    assert!(
+        !ddl.contains("JSON"),
+        "SQLite DDL should not contain JSON type (it should be TEXT)"
+    );
+}
+
+#[test]
+fn sqlite_ddl_foreign_keys() {
+    let schema = collect_schema(vec![core_schema()]).unwrap();
+    let ddl = generate_sqlite_ddl(&schema);
+    assert!(
+        ddl.contains("REFERENCES yauth_users(id) ON DELETE CASCADE"),
+        "SQLite DDL should contain FK references"
+    );
+}
+
+// ── MySQL DDL generation tests ─────────────────────────────────────────
+
+#[test]
+fn mysql_ddl_core_tables() {
+    let schema = collect_schema(vec![core_schema()]).unwrap();
+    let ddl = generate_mysql_ddl(&schema);
+    assert!(ddl.contains("CREATE TABLE IF NOT EXISTS yauth_users"));
+    assert!(ddl.contains("CREATE TABLE IF NOT EXISTS yauth_sessions"));
+    assert!(ddl.contains("CREATE TABLE IF NOT EXISTS yauth_audit_log"));
+}
+
+#[test]
+fn mysql_ddl_engine_innodb() {
+    let schema = collect_schema(vec![core_schema()]).unwrap();
+    let ddl = generate_mysql_ddl(&schema);
+    let engine_count = ddl.matches("ENGINE=InnoDB").count();
+    let table_count = ddl.matches("CREATE TABLE IF NOT EXISTS").count();
+    assert_eq!(
+        engine_count, table_count,
+        "Every CREATE TABLE should have ENGINE=InnoDB"
+    );
+}
+
+#[test]
+fn mysql_ddl_type_mappings() {
+    let schema = collect_schema(vec![core_schema()]).unwrap();
+    let ddl = generate_mysql_ddl(&schema);
+    // UUID -> CHAR(36)
+    assert!(
+        ddl.contains("id CHAR(36) PRIMARY KEY"),
+        "UUID should map to CHAR(36) in MySQL. DDL:\n{ddl}"
+    );
+    // BOOLEAN -> TINYINT(1)
+    assert!(
+        ddl.contains("email_verified TINYINT(1)"),
+        "BOOLEAN should map to TINYINT(1) in MySQL. DDL:\n{ddl}"
+    );
+    // DateTime -> DATETIME
+    assert!(
+        ddl.contains("created_at DATETIME"),
+        "DateTime should map to DATETIME in MySQL. DDL:\n{ddl}"
+    );
+}
+
+#[test]
+fn mysql_ddl_no_gen_random_uuid() {
+    let schema = collect_schema(vec![core_schema()]).unwrap();
+    let ddl = generate_mysql_ddl(&schema);
+    assert!(
+        !ddl.contains("gen_random_uuid()"),
+        "MySQL DDL should not contain gen_random_uuid()"
+    );
+}
+
+#[test]
+fn mysql_ddl_now_becomes_current_timestamp() {
+    let schema = collect_schema(vec![core_schema()]).unwrap();
+    let ddl = generate_mysql_ddl(&schema);
+    assert!(
+        !ddl.contains("now()"),
+        "MySQL DDL should not contain lowercase now()"
+    );
+    assert!(
+        ddl.contains("CURRENT_TIMESTAMP"),
+        "MySQL DDL should contain CURRENT_TIMESTAMP"
+    );
+}
+
+#[test]
+fn mysql_ddl_json_type() {
+    // The audit_log table has a JSONB column (metadata). In MySQL it should be JSON.
+    let schema = collect_schema(vec![core_schema()]).unwrap();
+    let ddl = generate_mysql_ddl(&schema);
+    assert!(!ddl.contains("JSONB"), "MySQL DDL should not contain JSONB");
+    // JSON should appear for the metadata column
+    assert!(
+        ddl.contains("metadata JSON"),
+        "MySQL DDL should use JSON type for metadata column. DDL:\n{ddl}"
+    );
+}
+
+#[test]
+fn mysql_ddl_varchar_has_length() {
+    // In MySQL, bare VARCHAR needs a length. We default to VARCHAR(255).
+    let schema = collect_schema(vec![core_schema()]).unwrap();
+    let ddl = generate_mysql_ddl(&schema);
+    // email column is Varchar type -> should become VARCHAR(255)
+    assert!(
+        ddl.contains("VARCHAR(255)"),
+        "Bare VARCHAR should map to VARCHAR(255) in MySQL. DDL:\n{ddl}"
+    );
+}
+
+#[test]
+fn mysql_ddl_has_all_tables() {
+    let schema = collect_schema(vec![
+        core_schema(),
+        plugin_schemas::email_password_schema(),
+        plugin_schemas::passkey_schema(),
+        plugin_schemas::mfa_schema(),
+        plugin_schemas::oauth_schema(),
+        plugin_schemas::bearer_schema(),
+        plugin_schemas::api_key_schema(),
+        plugin_schemas::magic_link_schema(),
+        plugin_schemas::oauth2_server_schema(),
+        plugin_schemas::account_lockout_schema(),
+        plugin_schemas::webhooks_schema(),
+        plugin_schemas::oidc_schema(),
+    ])
+    .unwrap();
+    let ddl = generate_mysql_ddl(&schema);
+
+    let expected_tables = [
+        "yauth_users",
+        "yauth_sessions",
+        "yauth_audit_log",
+        "yauth_passwords",
+        "yauth_email_verifications",
+        "yauth_password_resets",
+        "yauth_webauthn_credentials",
+        "yauth_totp_secrets",
+        "yauth_backup_codes",
+        "yauth_oauth_accounts",
+        "yauth_oauth_states",
+        "yauth_refresh_tokens",
+        "yauth_api_keys",
+        "yauth_magic_links",
+        "yauth_oauth2_clients",
+        "yauth_authorization_codes",
+        "yauth_consents",
+        "yauth_device_codes",
+        "yauth_account_locks",
+        "yauth_unlock_tokens",
+        "yauth_webhooks",
+        "yauth_webhook_deliveries",
+        "yauth_oidc_nonces",
+    ];
+
+    for table in &expected_tables {
+        assert!(
+            ddl.contains(&format!("CREATE TABLE IF NOT EXISTS {}", table)),
+            "MySQL DDL missing table: {}",
+            table
+        );
+    }
+
+    let create_count = ddl.matches("CREATE TABLE IF NOT EXISTS").count();
+    assert_eq!(create_count, expected_tables.len());
+}

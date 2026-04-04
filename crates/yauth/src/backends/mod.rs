@@ -9,3 +9,6 @@ pub mod diesel_libsql;
 
 #[cfg(feature = "memory-backend")]
 pub mod memory;
+
+#[cfg(feature = "redis")]
+pub mod redis;

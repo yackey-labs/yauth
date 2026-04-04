@@ -153,6 +153,8 @@ pub struct YAuthBuilder {
     webhook_config: Option<config::WebhookConfig>,
     #[cfg(feature = "oidc")]
     oidc_config: Option<config::OidcConfig>,
+    #[cfg(feature = "redis")]
+    redis: Option<(redis::aio::ConnectionManager, String)>,
 }
 
 impl YAuthBuilder {
@@ -181,7 +183,29 @@ impl YAuthBuilder {
             webhook_config: None,
             #[cfg(feature = "oidc")]
             oidc_config: None,
+            #[cfg(feature = "redis")]
+            redis: None,
         }
+    }
+
+    /// Enable Redis caching with the default `"yauth"` key prefix.
+    ///
+    /// Wraps the session, challenge, rate-limit, and revocation repos with
+    /// Redis caching decorators. The database remains the source of truth.
+    #[cfg(feature = "redis")]
+    pub fn with_redis(self, conn: redis::aio::ConnectionManager) -> Self {
+        self.with_redis_prefixed(conn, "yauth")
+    }
+
+    /// Enable Redis caching with a custom key prefix.
+    #[cfg(feature = "redis")]
+    pub fn with_redis_prefixed(
+        mut self,
+        conn: redis::aio::ConnectionManager,
+        prefix: impl Into<String>,
+    ) -> Self {
+        self.redis = Some((conn, prefix.into()));
+        self
     }
 
     #[cfg(feature = "email-password")]
@@ -274,7 +298,36 @@ impl YAuthBuilder {
         self.backend.migrate(&features).await?;
 
         // Build repositories from the backend — now includes all ephemeral stores
-        let repos = self.backend.repositories();
+        let mut repos = self.backend.repositories();
+
+        // Wrap repos with Redis caching decorators if configured
+        #[cfg(feature = "redis")]
+        if let Some((redis_conn, prefix)) = self.redis.take() {
+            use backends::redis::{
+                RedisCachedChallenges, RedisCachedRateLimits, RedisCachedRevocations,
+                RedisCachedSessionOps,
+            };
+            repos.session_ops = std::sync::Arc::new(RedisCachedSessionOps::new(
+                repos.session_ops,
+                redis_conn.clone(),
+                prefix.clone(),
+            ));
+            repos.challenges = std::sync::Arc::new(RedisCachedChallenges::new(
+                repos.challenges,
+                redis_conn.clone(),
+                prefix.clone(),
+            ));
+            repos.rate_limits = std::sync::Arc::new(RedisCachedRateLimits::new(
+                repos.rate_limits,
+                redis_conn.clone(),
+                prefix.clone(),
+            ));
+            repos.revocations = std::sync::Arc::new(RedisCachedRevocations::new(
+                repos.revocations,
+                redis_conn,
+                prefix,
+            ));
+        }
 
         // Build dummy hash for timing-safe login
         let dummy_hash = auth::password::hash_password_sync("dummy-password-for-timing")

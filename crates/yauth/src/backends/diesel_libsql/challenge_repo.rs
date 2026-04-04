@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::LibsqlPool;
-use super::models::{str_to_dt, str_to_json};
+use super::models::str_to_json;
 use crate::backends::diesel_common::get_conn;
 use crate::repo::{ChallengeRepository, RepoError, RepoFuture, sealed};
 
@@ -94,30 +94,33 @@ impl ChallengeRepository for LibsqlChallengeRepo {
             struct ChallengeRow {
                 #[diesel(sql_type = diesel::sql_types::Text)]
                 value: String,
-                #[diesel(sql_type = diesel::sql_types::Text)]
-                expires_at: String,
             }
 
             let result: Vec<ChallengeRow> = {
                 use diesel_async_crate::RunQueryDsl;
-                diesel::sql_query("SELECT value, expires_at FROM yauth_challenges WHERE key = ?")
-                    .bind::<diesel::sql_types::Text, _>(&key)
-                    .load(&mut *conn)
-                    .await
-                    .map_err(|e| RepoError::Internal(format!("challenge get failed: {e}").into()))?
+                diesel::sql_query(
+                    "SELECT value FROM yauth_challenges \
+                     WHERE key = ? AND expires_at > datetime('now')",
+                )
+                .bind::<diesel::sql_types::Text, _>(&key)
+                .load(&mut *conn)
+                .await
+                .map_err(|e| RepoError::Internal(format!("challenge get failed: {e}").into()))?
             };
 
             match result.into_iter().next() {
-                Some(row) => {
-                    let expires_at = str_to_dt(&row.expires_at);
-                    let now = chrono::Utc::now().naive_utc();
-                    if expires_at > now {
-                        Ok(Some(str_to_json(&row.value)))
-                    } else {
-                        Ok(None)
-                    }
+                Some(row) => Ok(Some(str_to_json(&row.value))),
+                None => {
+                    // Clean up any expired entry for this key
+                    use diesel_async_crate::RunQueryDsl;
+                    let _ = diesel::sql_query(
+                        "DELETE FROM yauth_challenges WHERE key = ? AND expires_at <= datetime('now')",
+                    )
+                    .bind::<diesel::sql_types::Text, _>(&key)
+                    .execute(&mut *conn)
+                    .await;
+                    Ok(None)
                 }
-                None => Ok(None),
             }
         })
     }

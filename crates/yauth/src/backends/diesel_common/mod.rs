@@ -72,6 +72,33 @@ pub(crate) fn diesel_conflict(e: diesel::result::Error) -> RepoError {
     }
 }
 
+/// Compute a `RateLimitResult` from a count, limit, window start, and window duration.
+///
+/// Shared by the Postgres and libSQL rate-limit repo implementations.
+pub(crate) fn rate_limit_result(
+    count: u32,
+    limit: u32,
+    window_start: chrono::DateTime<chrono::Utc>,
+    window_secs: u64,
+) -> crate::domain::RateLimitResult {
+    if count >= limit {
+        let window_end = window_start + chrono::Duration::seconds(window_secs as i64);
+        let now = chrono::Utc::now();
+        let retry_after = (window_end - now).num_seconds().max(0) as u64;
+        crate::domain::RateLimitResult {
+            allowed: false,
+            remaining: 0,
+            retry_after,
+        }
+    } else {
+        crate::domain::RateLimitResult {
+            allowed: true,
+            remaining: limit - count,
+            retry_after: 0,
+        }
+    }
+}
+
 /// Map a Diesel unique-violation error OR a SQLite "UNIQUE constraint failed"
 /// string match to `RepoError::Conflict`. Used by the libSQL backend where
 /// diesel-libsql sometimes returns a generic error with the constraint message

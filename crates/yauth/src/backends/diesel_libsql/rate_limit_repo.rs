@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::LibsqlPool;
 use super::models::str_to_dt;
-use crate::backends::diesel_common::get_conn;
+use crate::backends::diesel_common::{get_conn, rate_limit_result};
 use crate::domain;
 use crate::repo::{RateLimitRepository, RepoError, RepoFuture, sealed};
 
@@ -151,29 +151,5 @@ impl RateLimitRepository for LibsqlRateLimitRepo {
                 }
             }
         })
-    }
-}
-
-fn rate_limit_result(
-    count: u32,
-    limit: u32,
-    window_start: chrono::DateTime<chrono::Utc>,
-    window_secs: u64,
-) -> domain::RateLimitResult {
-    if count > limit {
-        let window_end = window_start + chrono::Duration::seconds(window_secs as i64);
-        let now = chrono::Utc::now();
-        let retry_after = (window_end - now).num_seconds().max(0) as u64;
-        domain::RateLimitResult {
-            allowed: false,
-            remaining: 0,
-            retry_after,
-        }
-    } else {
-        domain::RateLimitResult {
-            allowed: true,
-            remaining: limit - count,
-            retry_after: 0,
-        }
     }
 }

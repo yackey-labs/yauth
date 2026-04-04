@@ -333,9 +333,6 @@ impl YAuthBuilder {
         let dummy_hash = auth::password::hash_password_sync("dummy-password-for-timing")
             .expect("Failed to generate dummy hash");
 
-        // Build rate limiter
-        let rate_limiter = auth::rate_limit::RateLimiter::new(10, 60);
-
         // Build email service
         let email_service = self.config.smtp.as_ref().map(|smtp| {
             auth::email::EmailService::new(
@@ -371,7 +368,6 @@ impl YAuthBuilder {
             repos,
             config: std::sync::Arc::new(self.config),
             dummy_hash,
-            rate_limiter,
             email_service,
             plugins: std::sync::Arc::new(Vec::new()), // placeholder, replaced below
             #[cfg(feature = "email-password")]

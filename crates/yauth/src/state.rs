@@ -1,4 +1,4 @@
-use crate::auth::{email::EmailService, rate_limit::RateLimiter};
+use crate::auth::email::EmailService;
 use crate::config::YAuthConfig;
 use crate::plugin::{AuthEvent, EventResponse, PluginContext, YAuthPlugin};
 use crate::repo::Repositories;
@@ -14,7 +14,6 @@ pub struct YAuthState {
     pub repos: Repositories,
     pub config: Arc<YAuthConfig>,
     pub dummy_hash: String,
-    pub rate_limiter: RateLimiter,
     pub email_service: Option<EmailService>,
     pub plugins: Arc<Vec<Box<dyn YAuthPlugin>>>,
     #[cfg(feature = "email-password")]

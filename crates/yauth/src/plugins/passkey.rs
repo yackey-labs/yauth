@@ -290,9 +290,12 @@ async fn login_begin(
         let email = email_raw.trim().to_lowercase();
 
         if !state
-            .rate_limiter
-            .check(&format!("passkey_login:{}", email))
+            .repos
+            .rate_limits
+            .check_rate_limit(&format!("passkey_login:{}", email), 10, 60)
             .await
+            .map(|r| r.allowed)
+            .unwrap_or(true)
         {
             crate::otel::add_event(
                 "passkey_login_rate_limited",
@@ -369,7 +372,14 @@ async fn login_begin(
 
         (rcr, data)
     } else {
-        if !state.rate_limiter.check("passkey_login:discoverable").await {
+        if !state
+            .repos
+            .rate_limits
+            .check_rate_limit("passkey_login:discoverable", 10, 60)
+            .await
+            .map(|r| r.allowed)
+            .unwrap_or(true)
+        {
             crate::otel::add_event("passkey_discoverable_login_rate_limited", vec![]);
             return Err(api_err(StatusCode::TOO_MANY_REQUESTS, "Too many requests"));
         }

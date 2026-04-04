@@ -1,7 +1,5 @@
 use std::sync::Arc;
 
-use redis::AsyncCommands;
-
 use crate::domain;
 use crate::repo::{RateLimitRepository, RepoFuture, sealed};
 
@@ -42,6 +40,20 @@ impl RedisCachedRateLimits {
 
 impl sealed::Sealed for RedisCachedRateLimits {}
 
+/// Lua script for atomic INCR + conditional EXPIRE.
+///
+/// Guarantees that the first INCR on a new key also sets the TTL in the same
+/// atomic operation — no race window where a crash between INCR and EXPIRE
+/// could leave the key without a TTL (permanently rate-limiting that key).
+const RATE_LIMIT_SCRIPT: &str = r#"
+local count = redis.call('INCR', KEYS[1])
+if count == 1 then
+    redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+local ttl = redis.call('TTL', KEYS[1])
+return {count, ttl}
+"#;
+
 impl RateLimitRepository for RedisCachedRateLimits {
     fn check_rate_limit(
         &self,
@@ -54,20 +66,16 @@ impl RateLimitRepository for RedisCachedRateLimits {
             let mut conn = self.redis.clone();
             let rate_key = self.rate_key(&key);
 
-            // INCR the key; if it's new (returns 1), set the expiry
-            let count: Result<i64, redis::RedisError> = conn.incr(&rate_key, 1i64).await;
+            let script = redis::Script::new(RATE_LIMIT_SCRIPT);
+            let result: Result<(i64, i64), redis::RedisError> = script
+                .key(&rate_key)
+                .arg(window_secs as i64)
+                .invoke_async(&mut conn)
+                .await;
 
-            match count {
-                Ok(count) => {
-                    if count == 1 {
-                        // New key — set the window expiry
-                        let _: Result<(), redis::RedisError> =
-                            conn.expire(&rate_key, window_secs as i64).await;
-                    }
-
-                    if count as u32 > limit {
-                        // Over limit — get TTL for retry_after
-                        let ttl: i64 = conn.ttl(&rate_key).await.unwrap_or(window_secs as i64);
+            match result {
+                Ok((count, ttl)) => {
+                    if count as u32 >= limit {
                         Ok(domain::RateLimitResult {
                             allowed: false,
                             remaining: 0,

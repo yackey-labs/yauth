@@ -116,7 +116,9 @@ pub async fn validate_session(
                     vec![],
                 );
                 if binding.ip_mismatch_action == BindingAction::Invalidate {
-                    let _ = state.repos.session_ops.delete_session(&token_hash).await;
+                    if let Err(e) = state.repos.session_ops.delete_session(&token_hash).await {
+                        log::warn!("Failed to delete invalidated session: {e}");
+                    }
                     return Ok(None);
                 }
             }
@@ -133,7 +135,9 @@ pub async fn validate_session(
                     vec![],
                 );
                 if binding.ua_mismatch_action == BindingAction::Invalidate {
-                    let _ = state.repos.session_ops.delete_session(&token_hash).await;
+                    if let Err(e) = state.repos.session_ops.delete_session(&token_hash).await {
+                        log::warn!("Failed to delete invalidated session: {e}");
+                    }
                     return Ok(None);
                 }
             }

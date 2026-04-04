@@ -204,9 +204,12 @@ async fn create_token(
     let email = input.email.trim().to_lowercase();
 
     if !state
-        .rate_limiter
-        .check(&format!("bearer_login:{}", email))
+        .repos
+        .rate_limits
+        .check_rate_limit(&format!("bearer_login:{}", email), 10, 60)
         .await
+        .map(|r| r.allowed)
+        .unwrap_or(true)
     {
         crate::otel::add_event(
             "bearer_login_rate_limited",

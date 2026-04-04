@@ -12,7 +12,7 @@
 //! - Uniqueness constraints matching Postgres behavior
 
 mod challenge_repo;
-mod rate_limit_repo;
+pub(crate) mod rate_limit_repo;
 mod revocation_repo;
 mod session_ops_repo;
 

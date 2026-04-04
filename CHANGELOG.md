@@ -1,3 +1,20 @@
+## 0.4.0 (2026-04-04)
+
+### Breaking Changes
+
+- The `telemetry` feature no longer depends on `tracing`.
+Consumers using `tracing::Span::current()` to interact with yauth spans
+must switch to `opentelemetry::Context::current()`.
+
+### Features
+
+- add vue-query example with orval TanStack Query hooks (#24)
+- replace tracing with native OpenTelemetry SDK for telemetry (#25)
+
+### Fixes
+
+- address review findings from OTel migration (#26)
+
 ## 0.3.1 (2026-04-02)
 
 ### Fixes

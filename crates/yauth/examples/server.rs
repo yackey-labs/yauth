@@ -49,6 +49,7 @@ use tokio::net::TcpListener;
 
 use yauth::middleware::AuthUser;
 use yauth::prelude::*;
+use yauth::repo::{DatabaseBackend, EnabledFeatures};
 
 // ---------------------------------------------------------------------------
 // Main
@@ -135,6 +136,14 @@ async fn main() {
             )
         }
     };
+
+    // -----------------------------------------------------------------------
+    // 3b. Run migrations
+    // -----------------------------------------------------------------------
+    backend
+        .migrate(&EnabledFeatures::from_compile_flags())
+        .await
+        .expect("Failed to run migrations");
 
     // -----------------------------------------------------------------------
     // 4. Build the YAuth instance with all plugins enabled

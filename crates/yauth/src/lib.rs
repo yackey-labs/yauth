@@ -56,7 +56,7 @@ pub mod prelude {
 use axum::Router;
 use config::YAuthConfig;
 use plugin::YAuthPlugin;
-use repo::{DatabaseBackend, EnabledFeatures, RepoError};
+use repo::{DatabaseBackend, RepoError};
 use state::YAuthState;
 
 pub struct YAuth {
@@ -133,7 +133,6 @@ pub struct YAuthBuilder {
     backend: Box<dyn DatabaseBackend>,
     config: YAuthConfig,
     plugins: Vec<Box<dyn YAuthPlugin>>,
-    skip_migrations: bool,
     #[cfg(feature = "email-password")]
     email_password_config: Option<config::EmailPasswordConfig>,
     #[cfg(feature = "passkey")]
@@ -164,7 +163,6 @@ impl YAuthBuilder {
             backend: Box::new(backend),
             config,
             plugins: Vec::new(),
-            skip_migrations: false,
             #[cfg(feature = "email-password")]
             email_password_config: None,
             #[cfg(feature = "passkey")]
@@ -188,17 +186,6 @@ impl YAuthBuilder {
             #[cfg(feature = "redis")]
             redis: None,
         }
-    }
-
-    /// Skip automatic migrations during `build()`.
-    ///
-    /// Use this when migrations are run externally (CI pipeline, init container,
-    /// CLI tool) rather than at application startup. You can run migrations
-    /// separately via `YAuth::run_migrations()` or by calling
-    /// `backend.migrate()` directly before building.
-    pub fn skip_migrations(mut self) -> Self {
-        self.skip_migrations = true;
-        self
     }
 
     /// Enable Redis caching with the default `"yauth"` key prefix.
@@ -306,12 +293,6 @@ impl YAuthBuilder {
 
     #[allow(unused_mut)]
     pub async fn build(mut self) -> Result<YAuth, RepoError> {
-        // Run migrations unless explicitly skipped
-        if !self.skip_migrations {
-            let features = EnabledFeatures::from_compile_flags();
-            self.backend.migrate(&features).await?;
-        }
-
         // Build repositories from the backend — now includes all ephemeral stores
         let mut repos = self.backend.repositories();
 

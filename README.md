@@ -83,6 +83,7 @@ cargo add axum
 
 ```rust
 use yauth::prelude::*;
+use yauth::repo::{DatabaseBackend, EnabledFeatures};
 use yauth::backends::diesel_pg::DieselBackend;
 use axum::Router;
 
@@ -91,12 +92,14 @@ async fn main() {
     let backend = DieselBackend::new("postgres://user:pass@localhost/mydb")
         .expect("Failed to create backend");
 
+    // Run migrations (creates yauth_* tables)
+    backend.migrate(&EnabledFeatures::from_compile_flags()).await.unwrap();
+
     let config = YAuthConfig {
         base_url: "http://localhost:3000".into(),
         ..Default::default()
     };
 
-    // build() runs migrations automatically (use .skip_migrations() to disable)
     let yauth = YAuthBuilder::new(backend, config)
         .with_email_password(EmailPasswordConfig::default())
         .build()
@@ -709,32 +712,24 @@ See [docs/migrating-to-diesel.md](docs/migrating-to-diesel.md) for a migration g
 
 All tables are prefixed with `yauth_`. Migrations are feature-gated — only tables for enabled features are created.
 
-By default, migrations run automatically inside `build().await` via the declarative schema system. To run migrations externally (CI, init container, CLI tool) instead of at startup:
+Migrations are explicit — call `backend.migrate()` when and where you want:
 
 ```rust
-// Skip automatic migrations
-let yauth = YAuthBuilder::new(backend, config)
-    .skip_migrations()
-    .with_email_password(EmailPasswordConfig::default())
-    .build()
-    .await?;
-```
-
-To run migrations separately (e.g., in a migration job):
-
-```rust
-use yauth::repo::{DatabaseBackend, EnabledFeatures};
-
+// At app startup
 let backend = DieselPgBackend::new(&database_url)?;
 backend.migrate(&EnabledFeatures::from_compile_flags()).await?;
 ```
 
-Or export the DDL for your own migration tool:
+```rust
+// Or in CI / init container / CLI tool — same call, different context
+let backend = DieselPgBackend::new(&database_url)?;
+backend.migrate(&EnabledFeatures::from_compile_flags()).await?;
+// No need to build YAuth — just run migrations and exit
+```
 
 ```rust
-let yauth = builder.skip_migrations().build().await?;
+// Or export DDL for your own migration tool (Flyway, Liquibase, sqlx, etc.)
 let ddl = yauth.generate_ddl(Dialect::Postgres)?;
-// Feed `ddl` into Flyway, Liquibase, sqlx migrate, etc.
 ```
 
 ### Schema by Plugin

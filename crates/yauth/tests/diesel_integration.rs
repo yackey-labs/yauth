@@ -108,7 +108,13 @@ async fn diesel_session_create_validate_delete() {
 
     // Build state for session operations
     let config = YAuthConfig::default();
-    let mut builder = YAuthBuilder::new(DieselBackend::from_pool(db.pool.clone()), config);
+    let backend = DieselBackend::from_pool(db.pool.clone());
+    use yauth::repo::{DatabaseBackend, EnabledFeatures};
+    backend
+        .migrate(&EnabledFeatures::from_compile_flags())
+        .await
+        .expect("migrate");
+    let mut builder = YAuthBuilder::new(backend, config);
     #[cfg(feature = "bearer")]
     {
         builder = builder.with_bearer(yauth::config::BearerConfig {
@@ -180,7 +186,13 @@ async fn diesel_pool_sharing() {
 
     // Build YAuth with the pool
     let config = YAuthConfig::default();
-    let mut builder = YAuthBuilder::new(DieselBackend::from_pool(db.pool.clone()), config);
+    let backend = DieselBackend::from_pool(db.pool.clone());
+    use yauth::repo::{DatabaseBackend, EnabledFeatures};
+    backend
+        .migrate(&EnabledFeatures::from_compile_flags())
+        .await
+        .expect("migrate");
+    let mut builder = YAuthBuilder::new(backend, config);
     #[cfg(feature = "bearer")]
     {
         builder = builder.with_bearer(yauth::config::BearerConfig {

@@ -41,7 +41,7 @@ async fn main() {
             .execute(&mut conn)
             .await;
     }
-    // Migrations run automatically during build(), but we need a fresh schema first
+    // Migrations are called explicitly via backend.migrate() inside start_server
     let port = start_server(db.clone()).await;
     let api = format!("{}:{}/api/auth", BASE_URL, port);
     let client = reqwest::Client::builder()
@@ -1325,9 +1325,16 @@ async fn main() {
 
 async fn start_server(db: Pool) -> u16 {
     use yauth::prelude::*;
+    use yauth::repo::{DatabaseBackend, EnabledFeatures};
+
+    let backend = DieselBackend::from_pool(db);
+    backend
+        .migrate(&EnabledFeatures::from_compile_flags())
+        .await
+        .expect("Failed to run migrations");
 
     let auth = YAuthBuilder::new(
-        DieselBackend::from_pool(db),
+        backend,
         yauth::config::YAuthConfig {
             base_url: "http://127.0.0.1:0".into(),
             session_cookie_name: "session".into(),
@@ -1384,9 +1391,16 @@ async fn start_server(db: Pool) -> u16 {
 
 async fn start_server_with_audience(db: Pool, audience: &str) -> u16 {
     use yauth::prelude::*;
+    use yauth::repo::{DatabaseBackend, EnabledFeatures};
+
+    let backend = DieselBackend::from_pool(db);
+    backend
+        .migrate(&EnabledFeatures::from_compile_flags())
+        .await
+        .expect("Failed to run migrations");
 
     let auth = YAuthBuilder::new(
-        DieselBackend::from_pool(db),
+        backend,
         yauth::config::YAuthConfig {
             base_url: "http://127.0.0.1:0".into(),
             session_cookie_name: "session_aud".into(),
@@ -1450,9 +1464,16 @@ async fn start_server_with_audience(db: Pool, audience: &str) -> u16 {
 
 async fn start_server_with_oauth2(db: Pool) -> u16 {
     use yauth::prelude::*;
+    use yauth::repo::{DatabaseBackend, EnabledFeatures};
+
+    let backend = DieselBackend::from_pool(db);
+    backend
+        .migrate(&EnabledFeatures::from_compile_flags())
+        .await
+        .expect("Failed to run migrations");
 
     let auth = YAuthBuilder::new(
-        DieselBackend::from_pool(db),
+        backend,
         yauth::config::YAuthConfig {
             base_url: "http://127.0.0.1:0".into(),
             session_cookie_name: "session_oauth2".into(),

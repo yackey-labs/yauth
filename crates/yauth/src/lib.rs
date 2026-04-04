@@ -20,7 +20,7 @@ pub mod telemetry;
 
 /// Validate a PostgreSQL schema name to prevent SQL injection.
 /// PostgreSQL unquoted identifiers: `[a-z_][a-z0-9_$]*`, max 63 chars.
-#[cfg(feature = "diesel-backend")]
+#[cfg(feature = "diesel-pg-backend")]
 pub(crate) fn validate_schema_name(
     name: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {

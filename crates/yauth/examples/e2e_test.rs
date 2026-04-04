@@ -10,7 +10,7 @@ use std::time::Duration;
 use tokio::net::TcpListener;
 use totp_rs::{Algorithm, Secret, TOTP};
 
-use yauth::backends::diesel::{
+use yauth::backends::diesel_pg::{
     AsyncDieselConnectionManager, AsyncPgConnection, DieselBackend, DieselPool,
 };
 
@@ -35,7 +35,7 @@ async fn main() {
     log::info!("Running migrations (fresh)...");
     // Drop all yauth tables first for a fresh start
     {
-        use yauth::backends::diesel::RunQueryDsl;
+        use yauth::backends::diesel_pg::RunQueryDsl;
         let mut conn = db.get().await.expect("Failed to get connection");
         let _ = diesel::sql_query("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
             .execute(&mut conn)
@@ -786,7 +786,7 @@ async fn main() {
     // Promote user to admin directly in DB
     let user_uuid: uuid::Uuid = user_id.parse().unwrap();
     {
-        use yauth::backends::diesel::RunQueryDsl;
+        use yauth::backends::diesel_pg::RunQueryDsl;
         let mut conn = db.get().await.expect("Failed to get connection");
         diesel::sql_query("UPDATE yauth_users SET role = 'admin' WHERE id = $1")
             .bind::<diesel::sql_types::Uuid, _>(user_uuid)

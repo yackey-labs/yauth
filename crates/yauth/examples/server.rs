@@ -130,7 +130,7 @@ async fn main() {
             log::info!("Connecting to PostgreSQL database...");
             let url = database_url.as_ref().unwrap();
             Box::new(
-                yauth::backends::diesel::DieselBackend::new(url)
+                yauth::backends::diesel_pg::DieselBackend::new(url)
                     .expect("Failed to create database backend"),
             )
         }

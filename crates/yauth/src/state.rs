@@ -5,7 +5,7 @@ use crate::repo::Repositories;
 use std::sync::Arc;
 use uuid::Uuid;
 
-#[cfg(feature = "diesel-backend")]
+#[cfg(feature = "diesel-pg-backend")]
 pub type DbPool =
     diesel_async_crate::pooled_connection::deadpool::Pool<diesel_async_crate::AsyncPgConnection>;
 

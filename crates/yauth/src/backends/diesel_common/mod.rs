@@ -20,7 +20,7 @@ pub(crate) trait PoolAccess: Send + Sync {
 
 // ── Postgres pool impl ──
 
-#[cfg(feature = "diesel-backend")]
+#[cfg(feature = "diesel-pg-backend")]
 impl PoolAccess
     for diesel_async_crate::pooled_connection::deadpool::Pool<diesel_async_crate::AsyncPgConnection>
 {

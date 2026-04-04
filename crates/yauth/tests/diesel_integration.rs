@@ -10,7 +10,7 @@
 use std::time::Duration;
 
 use uuid::Uuid;
-use yauth::backends::diesel::{DieselBackend, RunQueryDsl};
+use yauth::backends::diesel_pg::{DieselBackend, RunQueryDsl};
 
 use yauth::config::YAuthConfig;
 use yauth::prelude::*;
@@ -39,11 +39,11 @@ async fn diesel_run_migrations_creates_tables() {
     let db = require_db!();
     drop_yauth_tables(&db.pool).await;
 
-    yauth::backends::diesel::migrations::run_migrations(&db.pool)
+    yauth::backends::diesel_pg::migrations::run_migrations(&db.pool)
         .await
         .expect("run_migrations should succeed");
 
-    let tables = yauth::backends::diesel::migrations::list_yauth_tables(&db.pool)
+    let tables = yauth::backends::diesel_pg::migrations::list_yauth_tables(&db.pool)
         .await
         .expect("list_yauth_tables should succeed");
 
@@ -71,10 +71,10 @@ async fn diesel_run_migrations_creates_tables() {
 async fn diesel_migrations_are_idempotent() {
     let db = require_db!();
 
-    yauth::backends::diesel::migrations::run_migrations(&db.pool)
+    yauth::backends::diesel_pg::migrations::run_migrations(&db.pool)
         .await
         .expect("first run should succeed");
-    yauth::backends::diesel::migrations::run_migrations(&db.pool)
+    yauth::backends::diesel_pg::migrations::run_migrations(&db.pool)
         .await
         .expect("second (idempotent) run should succeed");
 }
@@ -87,7 +87,7 @@ async fn diesel_migrations_are_idempotent() {
 async fn diesel_session_create_validate_delete() {
     let db = require_db!();
 
-    yauth::backends::diesel::migrations::run_migrations(&db.pool)
+    yauth::backends::diesel_pg::migrations::run_migrations(&db.pool)
         .await
         .expect("migrations");
 
@@ -174,7 +174,7 @@ async fn diesel_session_create_validate_delete() {
 async fn diesel_pool_sharing() {
     let db = require_db!();
 
-    yauth::backends::diesel::migrations::run_migrations(&db.pool)
+    yauth::backends::diesel_pg::migrations::run_migrations(&db.pool)
         .await
         .expect("migrations");
 

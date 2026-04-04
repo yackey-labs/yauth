@@ -2,6 +2,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::LibsqlPool;
 use super::models::str_to_dt;
+use crate::backends::diesel_common::get_conn;
 use crate::domain;
 use crate::repo::{RateLimitRepository, RepoError, RepoFuture, sealed};
 
@@ -11,10 +12,6 @@ CREATE TABLE IF NOT EXISTS yauth_rate_limits (\
     count INTEGER NOT NULL DEFAULT 1, \
     window_start TEXT NOT NULL DEFAULT (datetime('now'))\
 )";
-
-fn pool_err(e: impl std::fmt::Display) -> RepoError {
-    RepoError::Internal(format!("pool error: {e}").into())
-}
 
 pub(crate) struct LibsqlRateLimitRepo {
     pool: LibsqlPool,
@@ -32,7 +29,7 @@ impl LibsqlRateLimitRepo {
     async fn ensure_init(&self) -> Result<(), RepoError> {
         if !self.initialized.load(Ordering::Relaxed) {
             use diesel_async_crate::SimpleAsyncConnection;
-            let mut conn = self.pool.get().await.map_err(pool_err)?;
+            let mut conn = get_conn(&self.pool).await?;
             (*conn)
                 .batch_execute(CREATE_RATE_LIMITS_TABLE)
                 .await
@@ -66,7 +63,7 @@ impl RateLimitRepository for LibsqlRateLimitRepo {
 
             // SQLite-compatible upsert with window reset logic.
             // We use two statements: upsert then select.
-            let conn = self.pool.get().await;
+            let conn = get_conn(&self.pool).await;
             match conn {
                 Ok(mut conn) => {
                     use diesel_async_crate::RunQueryDsl;

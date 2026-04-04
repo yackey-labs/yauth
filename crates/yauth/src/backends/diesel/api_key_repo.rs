@@ -5,8 +5,9 @@ use uuid::Uuid;
 
 use super::models::*;
 use super::schema::*;
+use crate::backends::diesel_common::{diesel_err, get_conn};
 use crate::domain;
-use crate::repo::{ApiKeyRepository, RepoError, RepoFuture, sealed};
+use crate::repo::{ApiKeyRepository, RepoFuture, sealed};
 use crate::state::DbPool;
 
 pub(crate) struct DieselApiKeyRepo {
@@ -23,18 +24,14 @@ impl ApiKeyRepository for DieselApiKeyRepo {
     fn find_by_prefix(&self, prefix: &str) -> RepoFuture<'_, Option<domain::ApiKey>> {
         let prefix = prefix.to_string();
         Box::pin(async move {
-            let mut conn = self
-                .pool
-                .get()
-                .await
-                .map_err(|e| RepoError::Internal(e.into()))?;
+            let mut conn = get_conn(&self.pool).await?;
             let result = yauth_api_keys::table
                 .filter(yauth_api_keys::key_prefix.eq(&prefix))
                 .select(DieselApiKey::as_select())
                 .first(&mut conn)
                 .await
                 .optional()
-                .map_err(|e| RepoError::Internal(e.into()))?;
+                .map_err(diesel_err)?;
             Ok(result.map(|r| r.into_domain()))
         })
     }
@@ -45,11 +42,7 @@ impl ApiKeyRepository for DieselApiKeyRepo {
         user_id: Uuid,
     ) -> RepoFuture<'_, Option<domain::ApiKey>> {
         Box::pin(async move {
-            let mut conn = self
-                .pool
-                .get()
-                .await
-                .map_err(|e| RepoError::Internal(e.into()))?;
+            let mut conn = get_conn(&self.pool).await?;
             let result = yauth_api_keys::table
                 .filter(
                     yauth_api_keys::id
@@ -60,72 +53,56 @@ impl ApiKeyRepository for DieselApiKeyRepo {
                 .first(&mut conn)
                 .await
                 .optional()
-                .map_err(|e| RepoError::Internal(e.into()))?;
+                .map_err(diesel_err)?;
             Ok(result.map(|r| r.into_domain()))
         })
     }
 
     fn list_by_user_id(&self, user_id: Uuid) -> RepoFuture<'_, Vec<domain::ApiKey>> {
         Box::pin(async move {
-            let mut conn = self
-                .pool
-                .get()
-                .await
-                .map_err(|e| RepoError::Internal(e.into()))?;
+            let mut conn = get_conn(&self.pool).await?;
             let results: Vec<DieselApiKey> = yauth_api_keys::table
                 .filter(yauth_api_keys::user_id.eq(user_id))
                 .order(yauth_api_keys::created_at.desc())
                 .select(DieselApiKey::as_select())
                 .load(&mut conn)
                 .await
-                .map_err(|e| RepoError::Internal(e.into()))?;
+                .map_err(diesel_err)?;
             Ok(results.into_iter().map(|r| r.into_domain()).collect())
         })
     }
 
     fn create(&self, input: domain::NewApiKey) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            let mut conn = self
-                .pool
-                .get()
-                .await
-                .map_err(|e| RepoError::Internal(e.into()))?;
+            let mut conn = get_conn(&self.pool).await?;
             diesel::insert_into(yauth_api_keys::table)
                 .values(&DieselNewApiKey::from_domain(input))
                 .execute(&mut conn)
                 .await
-                .map_err(|e| RepoError::Internal(e.into()))?;
+                .map_err(diesel_err)?;
             Ok(())
         })
     }
 
     fn delete(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            let mut conn = self
-                .pool
-                .get()
-                .await
-                .map_err(|e| RepoError::Internal(e.into()))?;
+            let mut conn = get_conn(&self.pool).await?;
             diesel::delete(yauth_api_keys::table.filter(yauth_api_keys::id.eq(id)))
                 .execute(&mut conn)
                 .await
-                .map_err(|e| RepoError::Internal(e.into()))?;
+                .map_err(diesel_err)?;
             Ok(())
         })
     }
 
     fn update_last_used(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            let mut conn = self
-                .pool
-                .get()
-                .await
-                .map_err(|e| RepoError::Internal(e.into()))?;
+            let mut conn = get_conn(&self.pool).await?;
             diesel::update(yauth_api_keys::table.filter(yauth_api_keys::id.eq(id)))
                 .set(yauth_api_keys::last_used_at.eq(chrono::Utc::now().naive_utc()))
                 .execute(&mut conn)
                 .await
-                .map_err(|e| RepoError::Internal(e.into()))?;
+                .map_err(diesel_err)?;
             Ok(())
         })
     }

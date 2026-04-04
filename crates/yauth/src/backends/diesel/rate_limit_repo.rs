@@ -1,5 +1,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::backends::diesel_common::get_conn;
 use crate::domain;
 use crate::repo::{RateLimitRepository, RepoError, RepoFuture, sealed};
 use crate::state::DbPool;
@@ -28,11 +29,7 @@ impl DieselRateLimitRepo {
     async fn ensure_init(&self) -> Result<(), RepoError> {
         if !self.initialized.load(Ordering::Relaxed) {
             use diesel_async_crate::RunQueryDsl;
-            let mut conn = self
-                .pool
-                .get()
-                .await
-                .map_err(|e| RepoError::Internal(format!("pool error: {e}").into()))?;
+            let mut conn = get_conn(&self.pool).await?;
             diesel::sql_query(CREATE_RATE_LIMITS_TABLE)
                 .execute(&mut conn)
                 .await
@@ -93,7 +90,7 @@ impl RateLimitRepository for DieselRateLimitRepo {
                 window_start: chrono::NaiveDateTime,
             }
 
-            let conn = self.pool.get().await;
+            let conn = get_conn(&self.pool).await;
             match conn {
                 Ok(mut conn) => {
                     let result: Result<RateLimitRow, _> = diesel::sql_query(sql)

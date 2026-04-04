@@ -1,5 +1,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::backends::diesel_common::{diesel_err, get_conn};
 use crate::repo::{RepoError, RepoFuture, RevocationRepository, sealed};
 use crate::state::DbPool;
 
@@ -26,15 +27,11 @@ impl DieselRevocationRepo {
     async fn ensure_init(&self) -> Result<(), RepoError> {
         if !self.initialized.load(Ordering::Relaxed) {
             use diesel_async_crate::RunQueryDsl;
-            let mut conn = self
-                .pool
-                .get()
-                .await
-                .map_err(|e| RepoError::Internal(format!("pool error: {e}").into()))?;
+            let mut conn = get_conn(&self.pool).await?;
             diesel::sql_query(CREATE_REVOCATIONS_TABLE)
                 .execute(&mut conn)
                 .await
-                .map_err(|e| RepoError::Internal(format!("failed to create table: {e}").into()))?;
+                .map_err(diesel_err)?;
             self.initialized.store(true, Ordering::Relaxed);
         }
         Ok(())
@@ -57,20 +54,14 @@ impl RevocationRepository for DieselRevocationRepo {
             "#;
 
             use diesel_async_crate::RunQueryDsl;
-            let mut conn = self
-                .pool
-                .get()
-                .await
-                .map_err(|e| RepoError::Internal(format!("pool error: {e}").into()))?;
+            let mut conn = get_conn(&self.pool).await?;
 
             diesel::sql_query(sql)
                 .bind::<diesel::sql_types::Text, _>(&jti)
                 .bind::<diesel::sql_types::Float8, _>(ttl.as_secs_f64())
                 .execute(&mut conn)
                 .await
-                .map_err(|e| {
-                    RepoError::Internal(format!("revocation insert failed: {e}").into())
-                })?;
+                .map_err(diesel_err)?;
 
             Ok(())
         })
@@ -97,18 +88,14 @@ impl RevocationRepository for DieselRevocationRepo {
                 found: i32,
             }
 
-            let mut conn = self
-                .pool
-                .get()
-                .await
-                .map_err(|e| RepoError::Internal(format!("pool error: {e}").into()))?;
+            let mut conn = get_conn(&self.pool).await?;
 
             let result: Option<Found> = diesel::sql_query(sql)
                 .bind::<diesel::sql_types::Text, _>(&jti)
                 .get_result(&mut conn)
                 .await
                 .optional()
-                .map_err(|e| RepoError::Internal(format!("revocation check failed: {e}").into()))?;
+                .map_err(diesel_err)?;
 
             Ok(result.is_some())
         })

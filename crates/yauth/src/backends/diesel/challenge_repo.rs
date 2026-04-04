@@ -2,6 +2,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::models::DieselChallenge;
 use super::schema::yauth_challenges;
+use crate::backends::diesel_common::{diesel_err, get_conn};
 use crate::repo::{ChallengeRepository, RepoError, RepoFuture, sealed};
 use crate::state::DbPool;
 
@@ -29,15 +30,11 @@ impl DieselChallengeRepo {
     async fn ensure_init(&self) -> Result<(), RepoError> {
         if !self.initialized.load(Ordering::Relaxed) {
             use diesel_async_crate::RunQueryDsl;
-            let mut conn = self
-                .pool
-                .get()
-                .await
-                .map_err(|e| RepoError::Internal(format!("pool error: {e}").into()))?;
+            let mut conn = get_conn(&self.pool).await?;
             diesel::sql_query(CREATE_CHALLENGES_TABLE)
                 .execute(&mut conn)
                 .await
-                .map_err(|e| RepoError::Internal(format!("failed to create table: {e}").into()))?;
+                .map_err(diesel_err)?;
             self.initialized.store(true, Ordering::Relaxed);
         }
         Ok(())
@@ -46,17 +43,13 @@ impl DieselChallengeRepo {
     async fn cleanup_expired(&self) -> Result<(), RepoError> {
         use diesel::prelude::*;
         use diesel_async_crate::RunQueryDsl;
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| RepoError::Internal(format!("pool error: {e}").into()))?;
+        let mut conn = get_conn(&self.pool).await?;
         diesel::delete(
             yauth_challenges::table.filter(yauth_challenges::expires_at.lt(diesel::dsl::now)),
         )
         .execute(&mut conn)
         .await
-        .map_err(|e| RepoError::Internal(format!("cleanup failed: {e}").into()))?;
+        .map_err(diesel_err)?;
         Ok(())
     }
 }
@@ -84,18 +77,14 @@ impl ChallengeRepository for DieselChallengeRepo {
             "#;
 
             use diesel_async_crate::RunQueryDsl;
-            let mut conn = self
-                .pool
-                .get()
-                .await
-                .map_err(|e| RepoError::Internal(format!("pool error: {e}").into()))?;
+            let mut conn = get_conn(&self.pool).await?;
             diesel::sql_query(sql)
                 .bind::<diesel::sql_types::Text, _>(&key)
                 .bind::<diesel::sql_types::Jsonb, _>(value)
                 .bind::<diesel::sql_types::Float8, _>(ttl_secs as f64)
                 .execute(&mut conn)
                 .await
-                .map_err(|e| RepoError::Internal(format!("challenge set failed: {e}").into()))?;
+                .map_err(diesel_err)?;
             Ok(())
         })
     }
@@ -108,11 +97,7 @@ impl ChallengeRepository for DieselChallengeRepo {
             use diesel::prelude::*;
             use diesel::result::OptionalExtension;
             use diesel_async_crate::RunQueryDsl;
-            let mut conn = self
-                .pool
-                .get()
-                .await
-                .map_err(|e| RepoError::Internal(format!("pool error: {e}").into()))?;
+            let mut conn = get_conn(&self.pool).await?;
 
             let result: Option<DieselChallenge> = yauth_challenges::table
                 .filter(yauth_challenges::key.eq(&key))
@@ -121,7 +106,7 @@ impl ChallengeRepository for DieselChallengeRepo {
                 .get_result(&mut conn)
                 .await
                 .optional()
-                .map_err(|e| RepoError::Internal(format!("challenge get failed: {e}").into()))?;
+                .map_err(diesel_err)?;
             Ok(result.map(|r| r.value))
         })
     }
@@ -133,15 +118,11 @@ impl ChallengeRepository for DieselChallengeRepo {
 
             use diesel::prelude::*;
             use diesel_async_crate::RunQueryDsl;
-            let mut conn = self
-                .pool
-                .get()
-                .await
-                .map_err(|e| RepoError::Internal(format!("pool error: {e}").into()))?;
+            let mut conn = get_conn(&self.pool).await?;
             diesel::delete(yauth_challenges::table.filter(yauth_challenges::key.eq(&key)))
                 .execute(&mut conn)
                 .await
-                .map_err(|e| RepoError::Internal(format!("challenge delete failed: {e}").into()))?;
+                .map_err(diesel_err)?;
             Ok(())
         })
     }

@@ -2,6 +2,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::LibsqlPool;
 use super::models::str_to_dt;
+use crate::backends::diesel_common::get_conn;
 use crate::repo::{RepoError, RepoFuture, RevocationRepository, sealed};
 
 const CREATE_REVOCATIONS_TABLE: &str = "\
@@ -9,10 +10,6 @@ CREATE TABLE IF NOT EXISTS yauth_revocations (\
     key TEXT PRIMARY KEY, \
     expires_at TEXT NOT NULL\
 )";
-
-fn pool_err(e: impl std::fmt::Display) -> RepoError {
-    RepoError::Internal(format!("pool error: {e}").into())
-}
 
 pub(crate) struct LibsqlRevocationRepo {
     pool: LibsqlPool,
@@ -30,7 +27,7 @@ impl LibsqlRevocationRepo {
     async fn ensure_init(&self) -> Result<(), RepoError> {
         if !self.initialized.load(Ordering::Relaxed) {
             use diesel_async_crate::SimpleAsyncConnection;
-            let mut conn = self.pool.get().await.map_err(pool_err)?;
+            let mut conn = get_conn(&self.pool).await?;
             (*conn)
                 .batch_execute(CREATE_REVOCATIONS_TABLE)
                 .await
@@ -49,7 +46,7 @@ impl RevocationRepository for LibsqlRevocationRepo {
         Box::pin(async move {
             self.ensure_init().await?;
 
-            let mut conn = self.pool.get().await.map_err(pool_err)?;
+            let mut conn = get_conn(&self.pool).await?;
             {
                 use diesel_async_crate::RunQueryDsl;
                 diesel::sql_query(
@@ -76,7 +73,7 @@ impl RevocationRepository for LibsqlRevocationRepo {
         Box::pin(async move {
             self.ensure_init().await?;
 
-            let mut conn = self.pool.get().await.map_err(pool_err)?;
+            let mut conn = get_conn(&self.pool).await?;
 
             #[derive(diesel::QueryableByName)]
             struct Found {

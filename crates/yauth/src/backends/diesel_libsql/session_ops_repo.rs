@@ -7,16 +7,9 @@ use uuid::Uuid;
 use super::LibsqlPool;
 use super::models::{LibsqlSession, dt_to_str, str_to_dt, str_to_uuid, uuid_to_str};
 use super::schema::yauth_sessions;
+use crate::backends::diesel_common::{diesel_err, get_conn};
 use crate::domain;
-use crate::repo::{RepoError, RepoFuture, SessionOpsRepository, sealed};
-
-fn pool_err(e: impl std::fmt::Display) -> RepoError {
-    RepoError::Internal(format!("pool error: {e}").into())
-}
-
-fn diesel_err(e: diesel::result::Error) -> RepoError {
-    RepoError::Internal(e.into())
-}
+use crate::repo::{RepoFuture, SessionOpsRepository, sealed};
 
 pub(crate) struct LibsqlSessionOpsRepo {
     pool: LibsqlPool,
@@ -40,7 +33,7 @@ impl SessionOpsRepository for LibsqlSessionOpsRepo {
         ttl: std::time::Duration,
     ) -> RepoFuture<'_, Uuid> {
         Box::pin(async move {
-            let mut conn = self.pool.get().await.map_err(pool_err)?;
+            let mut conn = get_conn(&self.pool).await?;
 
             let session_id = Uuid::new_v4();
             let now = Utc::now();
@@ -69,7 +62,7 @@ impl SessionOpsRepository for LibsqlSessionOpsRepo {
     fn validate_session(&self, token_hash: &str) -> RepoFuture<'_, Option<domain::StoredSession>> {
         let token_hash = token_hash.to_string();
         Box::pin(async move {
-            let mut conn = self.pool.get().await.map_err(pool_err)?;
+            let mut conn = get_conn(&self.pool).await?;
 
             let session: Option<LibsqlSession> = yauth_sessions::table
                 .filter(yauth_sessions::token_hash.eq(&token_hash))
@@ -84,7 +77,7 @@ impl SessionOpsRepository for LibsqlSessionOpsRepo {
                     let expires_at = str_to_dt(&s.expires_at);
                     let now = Utc::now().naive_utc();
                     if expires_at < now {
-                        // Expired — clean up
+                        // Expired -- clean up
                         diesel::delete(yauth_sessions::table.filter(yauth_sessions::id.eq(&s.id)))
                             .execute(&mut *conn)
                             .await
@@ -109,7 +102,7 @@ impl SessionOpsRepository for LibsqlSessionOpsRepo {
     fn delete_session(&self, token_hash: &str) -> RepoFuture<'_, bool> {
         let token_hash = token_hash.to_string();
         Box::pin(async move {
-            let mut conn = self.pool.get().await.map_err(pool_err)?;
+            let mut conn = get_conn(&self.pool).await?;
 
             let rows = diesel::delete(
                 yauth_sessions::table.filter(yauth_sessions::token_hash.eq(&token_hash)),
@@ -124,7 +117,7 @@ impl SessionOpsRepository for LibsqlSessionOpsRepo {
 
     fn delete_all_sessions_for_user(&self, user_id: Uuid) -> RepoFuture<'_, u64> {
         Box::pin(async move {
-            let mut conn = self.pool.get().await.map_err(pool_err)?;
+            let mut conn = get_conn(&self.pool).await?;
             let user_id_str = uuid_to_str(user_id);
 
             let rows = diesel::delete(
@@ -145,7 +138,7 @@ impl SessionOpsRepository for LibsqlSessionOpsRepo {
     ) -> RepoFuture<'_, u64> {
         let keep_hash = keep_hash.to_string();
         Box::pin(async move {
-            let mut conn = self.pool.get().await.map_err(pool_err)?;
+            let mut conn = get_conn(&self.pool).await?;
             let user_id_str = uuid_to_str(user_id);
 
             let rows = diesel::delete(

@@ -2,6 +2,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::LibsqlPool;
 use super::models::{str_to_dt, str_to_json};
+use crate::backends::diesel_common::get_conn;
 use crate::repo::{ChallengeRepository, RepoError, RepoFuture, sealed};
 
 const CREATE_CHALLENGES_TABLE: &str = "\
@@ -10,10 +11,6 @@ CREATE TABLE IF NOT EXISTS yauth_challenges (\
     value TEXT NOT NULL, \
     expires_at TEXT NOT NULL\
 )";
-
-fn pool_err(e: impl std::fmt::Display) -> RepoError {
-    RepoError::Internal(format!("pool error: {e}").into())
-}
 
 pub(crate) struct LibsqlChallengeRepo {
     pool: LibsqlPool,
@@ -31,7 +28,7 @@ impl LibsqlChallengeRepo {
     async fn ensure_init(&self) -> Result<(), RepoError> {
         if !self.initialized.load(Ordering::Relaxed) {
             use diesel_async_crate::SimpleAsyncConnection;
-            let mut conn = self.pool.get().await.map_err(pool_err)?;
+            let mut conn = get_conn(&self.pool).await?;
             (*conn)
                 .batch_execute(CREATE_CHALLENGES_TABLE)
                 .await
@@ -56,7 +53,7 @@ impl ChallengeRepository for LibsqlChallengeRepo {
             self.ensure_init().await?;
 
             // Cleanup expired entries
-            let mut conn = self.pool.get().await.map_err(pool_err)?;
+            let mut conn = get_conn(&self.pool).await?;
             {
                 use diesel_async_crate::RunQueryDsl;
                 let _ = diesel::sql_query(
@@ -91,7 +88,7 @@ impl ChallengeRepository for LibsqlChallengeRepo {
         Box::pin(async move {
             self.ensure_init().await?;
 
-            let mut conn = self.pool.get().await.map_err(pool_err)?;
+            let mut conn = get_conn(&self.pool).await?;
 
             #[derive(diesel::QueryableByName)]
             struct ChallengeRow {
@@ -130,7 +127,7 @@ impl ChallengeRepository for LibsqlChallengeRepo {
         Box::pin(async move {
             self.ensure_init().await?;
 
-            let mut conn = self.pool.get().await.map_err(pool_err)?;
+            let mut conn = get_conn(&self.pool).await?;
             {
                 use diesel_async_crate::RunQueryDsl;
                 diesel::sql_query("DELETE FROM yauth_challenges WHERE key = ?")

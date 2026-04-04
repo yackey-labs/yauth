@@ -1,10 +1,14 @@
 use chrono::Utc;
+use diesel::prelude::*;
+use diesel::result::OptionalExtension;
+use diesel_async_crate::RunQueryDsl;
 use uuid::Uuid;
 
 use super::models::{DieselNewSession, DieselSession};
 use super::schema::yauth_sessions;
+use crate::backends::diesel_common::{diesel_err, get_conn};
 use crate::domain;
-use crate::repo::{RepoError, RepoFuture, SessionOpsRepository, sealed};
+use crate::repo::{RepoFuture, SessionOpsRepository, sealed};
 use crate::state::DbPool;
 
 pub(crate) struct DieselSessionOpsRepo {
@@ -29,8 +33,6 @@ impl SessionOpsRepository for DieselSessionOpsRepo {
         ttl: std::time::Duration,
     ) -> RepoFuture<'_, Uuid> {
         Box::pin(async move {
-            use diesel_async_crate::RunQueryDsl;
-
             let session_id = Uuid::new_v4();
             let now = Utc::now();
             let expires_at =
@@ -46,17 +48,13 @@ impl SessionOpsRepository for DieselSessionOpsRepo {
                 created_at: now.naive_utc(),
             };
 
-            let mut conn = self
-                .pool
-                .get()
-                .await
-                .map_err(|e| RepoError::Internal(format!("pool error: {e}").into()))?;
+            let mut conn = get_conn(&self.pool).await?;
 
             diesel::insert_into(yauth_sessions::table)
                 .values(&new_session)
                 .execute(&mut conn)
                 .await
-                .map_err(|e| RepoError::Internal(format!("session create failed: {e}").into()))?;
+                .map_err(diesel_err)?;
 
             Ok(session_id)
         })
@@ -65,15 +63,7 @@ impl SessionOpsRepository for DieselSessionOpsRepo {
     fn validate_session(&self, token_hash: &str) -> RepoFuture<'_, Option<domain::StoredSession>> {
         let token_hash = token_hash.to_string();
         Box::pin(async move {
-            use diesel::prelude::*;
-            use diesel::result::OptionalExtension;
-            use diesel_async_crate::RunQueryDsl;
-
-            let mut conn = self
-                .pool
-                .get()
-                .await
-                .map_err(|e| RepoError::Internal(format!("pool error: {e}").into()))?;
+            let mut conn = get_conn(&self.pool).await?;
 
             let session: Option<DieselSession> = yauth_sessions::table
                 .filter(yauth_sessions::token_hash.eq(&token_hash))
@@ -81,19 +71,17 @@ impl SessionOpsRepository for DieselSessionOpsRepo {
                 .get_result(&mut conn)
                 .await
                 .optional()
-                .map_err(|e| RepoError::Internal(format!("session validate failed: {e}").into()))?;
+                .map_err(diesel_err)?;
 
             match session {
                 Some(s) => {
                     let now = Utc::now().naive_utc();
                     if s.expires_at < now {
-                        // Expired — clean up the row
+                        // Expired -- clean up the row
                         diesel::delete(yauth_sessions::table.filter(yauth_sessions::id.eq(s.id)))
                             .execute(&mut conn)
                             .await
-                            .map_err(|e| {
-                                RepoError::Internal(format!("session cleanup failed: {e}").into())
-                            })?;
+                            .map_err(diesel_err)?;
                         return Ok(None);
                     }
 
@@ -114,21 +102,14 @@ impl SessionOpsRepository for DieselSessionOpsRepo {
     fn delete_session(&self, token_hash: &str) -> RepoFuture<'_, bool> {
         let token_hash = token_hash.to_string();
         Box::pin(async move {
-            use diesel::prelude::*;
-            use diesel_async_crate::RunQueryDsl;
-
-            let mut conn = self
-                .pool
-                .get()
-                .await
-                .map_err(|e| RepoError::Internal(format!("pool error: {e}").into()))?;
+            let mut conn = get_conn(&self.pool).await?;
 
             let rows = diesel::delete(
                 yauth_sessions::table.filter(yauth_sessions::token_hash.eq(&token_hash)),
             )
             .execute(&mut conn)
             .await
-            .map_err(|e| RepoError::Internal(format!("session delete failed: {e}").into()))?;
+            .map_err(diesel_err)?;
 
             Ok(rows > 0)
         })
@@ -136,24 +117,13 @@ impl SessionOpsRepository for DieselSessionOpsRepo {
 
     fn delete_all_sessions_for_user(&self, user_id: Uuid) -> RepoFuture<'_, u64> {
         Box::pin(async move {
-            use diesel::prelude::*;
-            use diesel_async_crate::RunQueryDsl;
-
-            let mut conn = self
-                .pool
-                .get()
-                .await
-                .map_err(|e| RepoError::Internal(format!("pool error: {e}").into()))?;
+            let mut conn = get_conn(&self.pool).await?;
 
             let rows =
                 diesel::delete(yauth_sessions::table.filter(yauth_sessions::user_id.eq(user_id)))
                     .execute(&mut conn)
                     .await
-                    .map_err(|e| {
-                        RepoError::Internal(
-                            format!("session delete_all_for_user failed: {e}").into(),
-                        )
-                    })?;
+                    .map_err(diesel_err)?;
 
             Ok(rows as u64)
         })
@@ -166,14 +136,7 @@ impl SessionOpsRepository for DieselSessionOpsRepo {
     ) -> RepoFuture<'_, u64> {
         let keep_hash = keep_hash.to_string();
         Box::pin(async move {
-            use diesel::prelude::*;
-            use diesel_async_crate::RunQueryDsl;
-
-            let mut conn = self
-                .pool
-                .get()
-                .await
-                .map_err(|e| RepoError::Internal(format!("pool error: {e}").into()))?;
+            let mut conn = get_conn(&self.pool).await?;
 
             let rows = diesel::delete(
                 yauth_sessions::table
@@ -182,9 +145,7 @@ impl SessionOpsRepository for DieselSessionOpsRepo {
             )
             .execute(&mut conn)
             .await
-            .map_err(|e| {
-                RepoError::Internal(format!("session delete_others_for_user failed: {e}").into())
-            })?;
+            .map_err(diesel_err)?;
 
             Ok(rows as u64)
         })

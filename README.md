@@ -1,6 +1,6 @@
 # yauth
 
-Modular, plugin-based authentication library for Rust (Axum) with a generated TypeScript client and SolidJS UI components.
+Modular, plugin-based authentication library for Rust (Axum) with a generated TypeScript client, Vue 3 components, and SolidJS components.
 
 Every feature is behind a **feature flag** — enable only what you need.
 

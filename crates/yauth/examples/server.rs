@@ -19,8 +19,8 @@
 //!
 //! | Variable              | Default                     | Description                         |
 //! |-----------------------|-----------------------------|-------------------------------------|
-//! | `YAUTH_BACKEND`       | `diesel`                    | Backend: `diesel` or `memory`        |
-//! | `DATABASE_URL`        | *(required for diesel)*     | PostgreSQL connection string         |
+//! | `YAUTH_BACKEND`       | `diesel`                    | Backend: `diesel` (PostgreSQL), `libsql` (SQLite/Turso), or `memory` (no DB) |
+//! | `DATABASE_URL`        | *(required for diesel/libsql)* | Connection string — Postgres URL for `diesel`, file path or Turso URL for `libsql`, not needed for `memory` |
 //! | `PORT`                | `3000`                      | Server listen port                   |
 //! | `BASE_URL`            | `http://localhost:3000`     | Public-facing base URL               |
 //! | `SESSION_COOKIE_NAME` | `session`                   | Name of the session cookie           |

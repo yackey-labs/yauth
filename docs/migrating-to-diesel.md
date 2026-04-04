@@ -20,10 +20,10 @@ yauth = { version = "0.2", features = ["email-password", "passkey", "mfa"] }
 
 # Direct deps for your own app queries
 diesel = { version = "2", features = ["postgres", "uuid", "chrono", "serde_json"] }
-diesel-async = { version = "0.5", features = ["postgres", "deadpool"] }
+diesel-async = { version = "0.8", features = ["postgres", "deadpool"] }
 ```
 
-The `full` convenience feature enables all yauth plugins:
+The `full` convenience feature enables all yauth plugins and all backends:
 
 ```toml
 yauth = { version = "0.2", features = ["full"] }
@@ -31,24 +31,20 @@ yauth = { version = "0.2", features = ["full"] }
 
 ## Step 2: Update DB Pool Initialization
 
-Replace SeaORM's `Database::connect()` with a deadpool-diesel connection pool:
+Replace SeaORM's `Database::connect()` with a `DieselBackend`:
 
 ```diff
 -use sea_orm::Database;
 -
 -let db = Database::connect(&database_url).await?;
-+use diesel_async::pooled_connection::{deadpool::Pool, AsyncDieselConnectionManager};
-+use diesel_async::AsyncPgConnection;
++use yauth::backends::diesel_pg::DieselBackend;
 +
-+let config = AsyncDieselConnectionManager::<AsyncPgConnection>::new(&database_url);
-+let pool = Pool::builder(config).build()?;
++let backend = DieselBackend::new(&database_url)?;
++// Or with a custom PostgreSQL schema:
++// let backend = DieselBackend::with_schema(&database_url, "auth")?;
 ```
 
-Or use `yauth::create_pool()` which also handles custom PostgreSQL schema configuration:
-
-```rust
-let pool = yauth::create_pool(&database_url, &yauth_config)?;
-```
+If you need direct pool access for your own queries, use `DieselBackend::from_pool()` with an existing pool.
 
 ## Step 3: Update AppState
 
@@ -58,7 +54,7 @@ If your AppState previously held a `sea_orm::DatabaseConnection`, replace it:
 
 ```diff
 -use sea_orm::DatabaseConnection;
-+use yauth::DieselPool;
++use yauth::backends::diesel_pg::DieselPool;
 
  pub struct AppState {
 -    pub db: DatabaseConnection,
@@ -67,27 +63,21 @@ If your AppState previously held a `sea_orm::DatabaseConnection`, replace it:
  }
 ```
 
-No changes are needed to `YAuthBuilder` -- it accepts `DbPool` which resolves to the diesel pool:
+The `YAuthBuilder` now accepts a `DatabaseBackend` implementation instead of a raw pool. `build()` is async and returns `Result`:
 
 ```rust
-let yauth = YAuthBuilder::new(pool.clone(), yauth_config)
+let backend = DieselBackend::new(&database_url)?;
+let yauth = YAuthBuilder::new(backend, yauth_config)
     .with_email_password(ep_config)
-    .build();
+    .build()
+    .await?;
 ```
 
 ## Step 4: Update Migrations
 
 ### yauth tables
 
-yauth ships embedded SQL migrations for all its tables. Run them at startup:
-
-```rust
-use yauth::migration::diesel_migrations;
-
-diesel_migrations::run_migrations(&pool).await?;
-```
-
-This is idempotent -- every `CREATE TABLE` uses `IF NOT EXISTS`. Only tables for your enabled features are created.
+yauth migrations run automatically inside `build().await` via the declarative schema system. No manual migration step is needed. Only tables for your enabled features are created, and the operation is idempotent.
 
 ### App tables
 
@@ -277,12 +267,13 @@ let mut conn = pool.get().await.map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
 
 ## Step 7: Pool Sharing
 
-The app and yauth share a single connection pool. Create it once, clone into both:
+If you need to share a pool between yauth and your own app queries, use `DieselBackend::from_pool()`:
 
 ```rust
 use diesel_async::pooled_connection::{deadpool::Pool, AsyncDieselConnectionManager};
 use diesel_async::AsyncPgConnection;
-use yauth::{YAuthBuilder, config::*};
+use yauth::prelude::*;
+use yauth::backends::diesel_pg::DieselBackend;
 
 // Create pool
 let config = AsyncDieselConnectionManager::<AsyncPgConnection>::new(&database_url);
@@ -290,13 +281,12 @@ let pool = Pool::builder(config)
     .max_size(16)  // tune for your workload
     .build()?;
 
-// Run yauth migrations
-yauth::migration::diesel_migrations::run_migrations(&pool).await?;
-
-// Build yauth with the same pool
-let yauth = YAuthBuilder::new(pool.clone(), yauth_config)
+// Build yauth with the shared pool (migrations run inside build())
+let backend = DieselBackend::from_pool(pool.clone());
+let yauth = YAuthBuilder::new(backend, yauth_config)
     .with_email_password(ep_config)
-    .build();
+    .build()
+    .await?;
 
 // Use the same pool for app queries
 let mut conn = pool.get().await?;

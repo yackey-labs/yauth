@@ -23,15 +23,21 @@ impl LibsqlChallengeRepo {
         }
     }
 
-    async fn ensure_init(&self) {
+    async fn ensure_init(&self) -> Result<(), RepoError> {
         self.initialized
-            .get_or_init(|| async {
+            .get_or_try_init(|| async {
                 use diesel_async_crate::SimpleAsyncConnection;
-                if let Ok(mut conn) = get_conn(&self.pool).await {
-                    let _ = (*conn).batch_execute(CREATE_CHALLENGES_TABLE).await;
-                }
+                let mut conn = get_conn(&self.pool).await?;
+                (*conn)
+                    .batch_execute(CREATE_CHALLENGES_TABLE)
+                    .await
+                    .map_err(|e| {
+                        RepoError::Internal(format!("challenge table init failed: {e}").into())
+                    })?;
+                Ok(())
             })
-            .await;
+            .await
+            .map(|_| ())
     }
 }
 
@@ -46,7 +52,7 @@ impl ChallengeRepository for LibsqlChallengeRepo {
     ) -> RepoFuture<'_, ()> {
         let key = key.to_string();
         Box::pin(async move {
-            self.ensure_init().await;
+            self.ensure_init().await?;
 
             // Cleanup expired entries
             let mut conn = get_conn(&self.pool).await?;
@@ -82,7 +88,7 @@ impl ChallengeRepository for LibsqlChallengeRepo {
     fn get_challenge(&self, key: &str) -> RepoFuture<'_, Option<serde_json::Value>> {
         let key = key.to_string();
         Box::pin(async move {
-            self.ensure_init().await;
+            self.ensure_init().await?;
 
             let mut conn = get_conn(&self.pool).await?;
 
@@ -124,7 +130,7 @@ impl ChallengeRepository for LibsqlChallengeRepo {
     fn delete_challenge(&self, key: &str) -> RepoFuture<'_, ()> {
         let key = key.to_string();
         Box::pin(async move {
-            self.ensure_init().await;
+            self.ensure_init().await?;
 
             let mut conn = get_conn(&self.pool).await?;
             {

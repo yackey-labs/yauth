@@ -22,15 +22,21 @@ impl LibsqlRevocationRepo {
         }
     }
 
-    async fn ensure_init(&self) {
+    async fn ensure_init(&self) -> Result<(), RepoError> {
         self.initialized
-            .get_or_init(|| async {
+            .get_or_try_init(|| async {
                 use diesel_async_crate::SimpleAsyncConnection;
-                if let Ok(mut conn) = get_conn(&self.pool).await {
-                    let _ = (*conn).batch_execute(CREATE_REVOCATIONS_TABLE).await;
-                }
+                let mut conn = get_conn(&self.pool).await?;
+                (*conn)
+                    .batch_execute(CREATE_REVOCATIONS_TABLE)
+                    .await
+                    .map_err(|e| {
+                        RepoError::Internal(format!("revocation table init failed: {e}").into())
+                    })?;
+                Ok(())
             })
-            .await;
+            .await
+            .map(|_| ())
     }
 }
 
@@ -40,7 +46,7 @@ impl RevocationRepository for LibsqlRevocationRepo {
     fn revoke_token(&self, jti: &str, ttl: std::time::Duration) -> RepoFuture<'_, ()> {
         let jti = jti.to_string();
         Box::pin(async move {
-            self.ensure_init().await;
+            self.ensure_init().await?;
 
             let mut conn = get_conn(&self.pool).await?;
             {
@@ -67,7 +73,7 @@ impl RevocationRepository for LibsqlRevocationRepo {
     fn is_token_revoked(&self, jti: &str) -> RepoFuture<'_, bool> {
         let jti = jti.to_string();
         Box::pin(async move {
-            self.ensure_init().await;
+            self.ensure_init().await?;
 
             let mut conn = get_conn(&self.pool).await?;
 

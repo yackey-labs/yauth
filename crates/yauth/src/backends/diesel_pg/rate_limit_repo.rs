@@ -1,6 +1,6 @@
-use crate::backends::diesel_common::{get_conn, rate_limit_result};
+use crate::backends::diesel_common::{diesel_err, get_conn, rate_limit_result};
 use crate::domain;
-use crate::repo::{RateLimitRepository, RepoFuture, sealed};
+use crate::repo::{RateLimitRepository, RepoError, RepoFuture, sealed};
 use crate::state::DbPool;
 
 const CREATE_RATE_LIMITS_TABLE: &str = r#"
@@ -24,17 +24,19 @@ impl DieselRateLimitRepo {
         }
     }
 
-    async fn ensure_init(&self) {
+    async fn ensure_init(&self) -> Result<(), RepoError> {
         self.initialized
-            .get_or_init(|| async {
+            .get_or_try_init(|| async {
                 use diesel_async_crate::RunQueryDsl;
-                if let Ok(mut conn) = get_conn(&self.pool).await {
-                    let _ = diesel::sql_query(CREATE_RATE_LIMITS_TABLE)
-                        .execute(&mut conn)
-                        .await;
-                }
+                let mut conn = get_conn(&self.pool).await?;
+                diesel::sql_query(CREATE_RATE_LIMITS_TABLE)
+                    .execute(&mut conn)
+                    .await
+                    .map_err(diesel_err)?;
+                Ok(())
             })
-            .await;
+            .await
+            .map(|_| ())
     }
 }
 
@@ -50,7 +52,7 @@ impl RateLimitRepository for DieselRateLimitRepo {
         let key = key.to_string();
         Box::pin(async move {
             // Fail-open: ensure table exists (runs once)
-            self.ensure_init().await;
+            self.ensure_init().await?;
 
             let sql = r#"
                 INSERT INTO yauth_rate_limits (key, count, window_start)

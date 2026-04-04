@@ -1,6 +1,8 @@
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::Duration;
+
+use tokio::sync::RwLock;
 
 use chrono::Utc;
 use uuid::Uuid;
@@ -30,10 +32,7 @@ impl SessionOpsRepository for InMemorySessionOpsRepo {
         ttl: Duration,
     ) -> RepoFuture<'_, Uuid> {
         Box::pin(async move {
-            let mut map = self
-                .entries
-                .write()
-                .map_err(|e| RepoError::Internal(e.to_string().into()))?;
+            let mut map = self.entries.write().await;
             // Cleanup expired entries if map is large
             if map.len() > 1000 {
                 let now = Utc::now().naive_utc();
@@ -62,10 +61,7 @@ impl SessionOpsRepository for InMemorySessionOpsRepo {
         Box::pin(async move {
             // Read lock first — most common path (valid session)
             {
-                let map = self
-                    .entries
-                    .read()
-                    .map_err(|e| RepoError::Internal(e.to_string().into()))?;
+                let map = self.entries.read().await;
                 let now = Utc::now().naive_utc();
                 match map.get(&token_hash) {
                     Some(session) if session.expires_at > now => {
@@ -78,10 +74,7 @@ impl SessionOpsRepository for InMemorySessionOpsRepo {
                 }
             }
             // Write lock only for expired session removal
-            let mut map = self
-                .entries
-                .write()
-                .map_err(|e| RepoError::Internal(e.to_string().into()))?;
+            let mut map = self.entries.write().await;
             // Re-check under write lock
             let now = Utc::now().naive_utc();
             match map.get(&token_hash) {
@@ -98,20 +91,14 @@ impl SessionOpsRepository for InMemorySessionOpsRepo {
     fn delete_session(&self, token_hash: &str) -> RepoFuture<'_, bool> {
         let token_hash = token_hash.to_string();
         Box::pin(async move {
-            let mut map = self
-                .entries
-                .write()
-                .map_err(|e| RepoError::Internal(e.to_string().into()))?;
+            let mut map = self.entries.write().await;
             Ok(map.remove(&token_hash).is_some())
         })
     }
 
     fn delete_all_sessions_for_user(&self, user_id: Uuid) -> RepoFuture<'_, u64> {
         Box::pin(async move {
-            let mut map = self
-                .entries
-                .write()
-                .map_err(|e| RepoError::Internal(e.to_string().into()))?;
+            let mut map = self.entries.write().await;
             let before = map.len();
             map.retain(|_, s| s.user_id != user_id);
             Ok((before - map.len()) as u64)
@@ -125,10 +112,7 @@ impl SessionOpsRepository for InMemorySessionOpsRepo {
     ) -> RepoFuture<'_, u64> {
         let keep_hash = keep_hash.to_string();
         Box::pin(async move {
-            let mut map = self
-                .entries
-                .write()
-                .map_err(|e| RepoError::Internal(e.to_string().into()))?;
+            let mut map = self.entries.write().await;
             let before = map.len();
             map.retain(|key, s| !(s.user_id == user_id && key != &keep_hash));
             Ok((before - map.len()) as u64)

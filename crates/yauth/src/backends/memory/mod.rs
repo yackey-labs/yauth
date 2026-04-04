@@ -89,7 +89,7 @@ pub(crate) struct Storage {
     pub(crate) audit_logs: Arc<RwLock<Vec<domain::NewAuditLog>>>,
 
     // Ephemeral stores (keyed by token_hash / string key)
-    pub(crate) session_ops: Arc<RwLock<HashMap<String, domain::StoredSession>>>,
+    pub(crate) session_ops: Arc<tokio::sync::RwLock<HashMap<String, domain::StoredSession>>>,
     pub(crate) challenges: Arc<Mutex<HashMap<String, ChallengeEntry>>>,
     pub(crate) rate_limits: Arc<Mutex<HashMap<String, RateLimitEntry>>>,
     pub(crate) revocations: Arc<Mutex<HashMap<String, RevocationEntry>>>,
@@ -150,7 +150,7 @@ impl Storage {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             audit_logs: Arc::new(RwLock::new(Vec::new())),
 
-            session_ops: Arc::new(RwLock::new(HashMap::new())),
+            session_ops: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
             challenges: Arc::new(Mutex::new(HashMap::new())),
             rate_limits: Arc::new(Mutex::new(HashMap::new())),
             revocations: Arc::new(Mutex::new(HashMap::new())),

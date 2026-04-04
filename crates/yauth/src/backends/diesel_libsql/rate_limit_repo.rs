@@ -2,7 +2,7 @@ use super::LibsqlPool;
 use super::models::str_to_dt;
 use crate::backends::diesel_common::{get_conn, rate_limit_result};
 use crate::domain;
-use crate::repo::{RateLimitRepository, RepoFuture, sealed};
+use crate::repo::{RateLimitRepository, RepoError, RepoFuture, sealed};
 
 const CREATE_RATE_LIMITS_TABLE: &str = "\
 CREATE TABLE IF NOT EXISTS yauth_rate_limits (\
@@ -24,15 +24,21 @@ impl LibsqlRateLimitRepo {
         }
     }
 
-    async fn ensure_init(&self) {
+    async fn ensure_init(&self) -> Result<(), RepoError> {
         self.initialized
-            .get_or_init(|| async {
+            .get_or_try_init(|| async {
                 use diesel_async_crate::SimpleAsyncConnection;
-                if let Ok(mut conn) = get_conn(&self.pool).await {
-                    let _ = (*conn).batch_execute(CREATE_RATE_LIMITS_TABLE).await;
-                }
+                let mut conn = get_conn(&self.pool).await?;
+                (*conn)
+                    .batch_execute(CREATE_RATE_LIMITS_TABLE)
+                    .await
+                    .map_err(|e| {
+                        RepoError::Internal(format!("rate_limit table init failed: {e}").into())
+                    })?;
+                Ok(())
             })
-            .await;
+            .await
+            .map(|_| ())
     }
 }
 
@@ -48,7 +54,7 @@ impl RateLimitRepository for LibsqlRateLimitRepo {
         let key = key.to_string();
         Box::pin(async move {
             // Fail-open: ensure table exists (runs once)
-            self.ensure_init().await;
+            self.ensure_init().await?;
 
             // SQLite-compatible upsert with window reset logic.
             // We use two statements: upsert then select.

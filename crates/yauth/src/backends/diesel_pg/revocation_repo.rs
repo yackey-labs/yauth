@@ -1,5 +1,5 @@
 use crate::backends::diesel_common::{diesel_err, get_conn};
-use crate::repo::{RepoFuture, RevocationRepository, sealed};
+use crate::repo::{RepoError, RepoFuture, RevocationRepository, sealed};
 use crate::state::DbPool;
 
 const CREATE_REVOCATIONS_TABLE: &str = r#"
@@ -22,17 +22,19 @@ impl DieselRevocationRepo {
         }
     }
 
-    async fn ensure_init(&self) {
+    async fn ensure_init(&self) -> Result<(), RepoError> {
         self.initialized
-            .get_or_init(|| async {
+            .get_or_try_init(|| async {
                 use diesel_async_crate::RunQueryDsl;
-                if let Ok(mut conn) = get_conn(&self.pool).await {
-                    let _ = diesel::sql_query(CREATE_REVOCATIONS_TABLE)
-                        .execute(&mut conn)
-                        .await;
-                }
+                let mut conn = get_conn(&self.pool).await?;
+                diesel::sql_query(CREATE_REVOCATIONS_TABLE)
+                    .execute(&mut conn)
+                    .await
+                    .map_err(diesel_err)?;
+                Ok(())
             })
-            .await;
+            .await
+            .map(|_| ())
     }
 }
 
@@ -42,7 +44,7 @@ impl RevocationRepository for DieselRevocationRepo {
     fn revoke_token(&self, jti: &str, ttl: std::time::Duration) -> RepoFuture<'_, ()> {
         let jti = jti.to_string();
         Box::pin(async move {
-            self.ensure_init().await;
+            self.ensure_init().await?;
 
             let sql = r#"
                 INSERT INTO yauth_revocations (key, expires_at)
@@ -68,7 +70,7 @@ impl RevocationRepository for DieselRevocationRepo {
     fn is_token_revoked(&self, jti: &str) -> RepoFuture<'_, bool> {
         let jti = jti.to_string();
         Box::pin(async move {
-            self.ensure_init().await;
+            self.ensure_init().await?;
 
             let sql = r#"
                 SELECT 1 AS found

@@ -1,7 +1,7 @@
 use super::models::DieselChallenge;
 use super::schema::yauth_challenges;
 use crate::backends::diesel_common::{diesel_err, get_conn};
-use crate::repo::{ChallengeRepository, RepoFuture, sealed};
+use crate::repo::{ChallengeRepository, RepoError, RepoFuture, sealed};
 use crate::state::DbPool;
 
 const CREATE_CHALLENGES_TABLE: &str = r#"
@@ -25,17 +25,19 @@ impl DieselChallengeRepo {
         }
     }
 
-    async fn ensure_init(&self) {
+    async fn ensure_init(&self) -> Result<(), RepoError> {
         self.initialized
-            .get_or_init(|| async {
+            .get_or_try_init(|| async {
                 use diesel_async_crate::RunQueryDsl;
-                if let Ok(mut conn) = get_conn(&self.pool).await {
-                    let _ = diesel::sql_query(CREATE_CHALLENGES_TABLE)
-                        .execute(&mut conn)
-                        .await;
-                }
+                let mut conn = get_conn(&self.pool).await?;
+                diesel::sql_query(CREATE_CHALLENGES_TABLE)
+                    .execute(&mut conn)
+                    .await
+                    .map_err(diesel_err)?;
+                Ok(())
             })
-            .await;
+            .await
+            .map(|_| ())
     }
 }
 
@@ -50,7 +52,7 @@ impl ChallengeRepository for DieselChallengeRepo {
     ) -> RepoFuture<'_, ()> {
         let key = key.to_string();
         Box::pin(async move {
-            self.ensure_init().await;
+            self.ensure_init().await?;
 
             let mut conn = get_conn(&self.pool).await?;
 
@@ -90,7 +92,7 @@ impl ChallengeRepository for DieselChallengeRepo {
     fn get_challenge(&self, key: &str) -> RepoFuture<'_, Option<serde_json::Value>> {
         let key = key.to_string();
         Box::pin(async move {
-            self.ensure_init().await;
+            self.ensure_init().await?;
 
             use diesel::prelude::*;
             use diesel::result::OptionalExtension;
@@ -112,7 +114,7 @@ impl ChallengeRepository for DieselChallengeRepo {
     fn delete_challenge(&self, key: &str) -> RepoFuture<'_, ()> {
         let key = key.to_string();
         Box::pin(async move {
-            self.ensure_init().await;
+            self.ensure_init().await?;
 
             use diesel::prelude::*;
             use diesel_async_crate::RunQueryDsl;

@@ -17,13 +17,26 @@ impl YAuthSchema {
     }
 }
 
+/// Error during schema collection.
+#[derive(Debug, thiserror::Error)]
+pub enum SchemaError {
+    #[error("duplicate table definition: '{0}' — each table must be defined exactly once")]
+    DuplicateTable(String),
+
+    #[error(
+        "table '{table}' references '{references}' which is not in the schema — ensure the referenced table's plugin is enabled"
+    )]
+    MissingDependency { table: String, references: String },
+
+    #[error("cycle detected in FK dependencies among tables: {0:?}")]
+    Cycle(Vec<String>),
+}
+
 /// Collect and merge core + plugin schemas, then topologically sort by FK deps.
 ///
 /// The sort preserves input order among tables with the same dependency depth,
 /// ensuring deterministic output that matches the order plugins declare tables.
-///
-/// Panics if there is a cycle in FK references (schema definition bug).
-pub fn collect_schema(table_lists: Vec<Vec<TableDef>>) -> YAuthSchema {
+pub fn collect_schema(table_lists: Vec<Vec<TableDef>>) -> Result<YAuthSchema, SchemaError> {
     // Preserve insertion order using a Vec of names
     let mut ordered_names: Vec<&str> = Vec::new();
     let mut tables_by_name: HashMap<&str, TableDef> = HashMap::new();
@@ -31,10 +44,7 @@ pub fn collect_schema(table_lists: Vec<Vec<TableDef>>) -> YAuthSchema {
     for tables in &table_lists {
         for table in tables {
             if tables_by_name.contains_key(table.name) {
-                panic!(
-                    "Duplicate table definition: '{}'. Each table must be defined exactly once.",
-                    table.name
-                );
+                return Err(SchemaError::DuplicateTable(table.name.to_string()));
             }
             ordered_names.push(table.name);
             tables_by_name.insert(table.name, table.clone());
@@ -55,11 +65,10 @@ pub fn collect_schema(table_lists: Vec<Vec<TableDef>>) -> YAuthSchema {
     for (name, table) in &tables_by_name {
         for dep in table.dependencies() {
             if !table_names.contains(dep) {
-                panic!(
-                    "Table '{}' references '{}' which is not in the schema. \
-                     Ensure the referenced table's plugin is enabled.",
-                    name, dep
-                );
+                return Err(SchemaError::MissingDependency {
+                    table: name.to_string(),
+                    references: dep.to_string(),
+                });
             }
             *in_degree.entry(name).or_insert(0) += 1;
             dependents.entry(dep).or_default().push(name);
@@ -96,13 +105,9 @@ pub fn collect_schema(table_lists: Vec<Vec<TableDef>>) -> YAuthSchema {
     }
 
     if sorted.len() != table_names.len() {
-        let remaining: Vec<&str> = tables_by_name.keys().copied().collect();
-        panic!(
-            "Cycle detected in FK dependencies among tables: {:?}. \
-             This is a schema definition bug.",
-            remaining
-        );
+        let remaining: Vec<String> = tables_by_name.keys().map(|k| k.to_string()).collect();
+        return Err(SchemaError::Cycle(remaining));
     }
 
-    YAuthSchema { tables: sorted }
+    Ok(YAuthSchema { tables: sorted })
 }

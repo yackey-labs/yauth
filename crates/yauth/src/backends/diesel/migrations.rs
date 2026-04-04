@@ -167,7 +167,8 @@ pub async fn run_declarative_migrations_with_schema(
     }
 
     let table_lists = collect_feature_gated_schemas();
-    let merged = schema::collect_schema(table_lists);
+    let merged = schema::collect_schema(table_lists)
+        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
 
     let mut conn = pool.get().await?;
 

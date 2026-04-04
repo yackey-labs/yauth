@@ -11,7 +11,7 @@ mod core;
 pub use core::core_schema;
 
 mod collector;
-pub use collector::{YAuthSchema, collect_schema};
+pub use collector::{SchemaError, YAuthSchema, collect_schema};
 
 mod postgres;
 pub use postgres::{generate_migration_diff, generate_postgres_ddl};

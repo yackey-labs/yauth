@@ -176,7 +176,7 @@ fn users_table_columns_match() {
 
 #[test]
 fn topological_sort_puts_users_first() {
-    let schema = collect_schema(vec![core_schema()]);
+    let schema = collect_schema(vec![core_schema()]).unwrap();
     assert_eq!(schema.tables[0].name, "yauth_users");
     let session_idx = schema
         .tables
@@ -196,7 +196,7 @@ fn topological_sort_preserves_input_order() {
     // Core schema declares [users, sessions, audit_log]
     // Sessions and audit_log both depend only on users.
     // The sort should preserve the input order: sessions before audit_log.
-    let schema = collect_schema(vec![core_schema()]);
+    let schema = collect_schema(vec![core_schema()]).unwrap();
     let session_idx = schema
         .tables
         .iter()
@@ -216,26 +216,31 @@ fn topological_sort_preserves_input_order() {
 }
 
 #[test]
-#[should_panic(expected = "Duplicate table")]
-fn duplicate_table_panics() {
-    collect_schema(vec![core_schema(), core_schema()]);
+fn duplicate_table_returns_error() {
+    let result = collect_schema(vec![core_schema(), core_schema()]);
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("duplicate table"),
+        "expected duplicate error, got: {err}"
+    );
 }
 
 #[test]
 fn schema_hash_is_deterministic() {
-    let schema1 = collect_schema(vec![core_schema()]);
-    let schema2 = collect_schema(vec![core_schema()]);
+    let schema1 = collect_schema(vec![core_schema()]).unwrap();
+    let schema2 = collect_schema(vec![core_schema()]).unwrap();
     assert_eq!(schema_hash(&schema1), schema_hash(&schema2));
 }
 
 #[test]
 fn schema_hash_changes_when_column_added() {
-    let schema1 = collect_schema(vec![core_schema()]);
+    let schema1 = collect_schema(vec![core_schema()]).unwrap();
     let mut modified_core = core_schema();
     modified_core[0]
         .columns
         .push(types::ColumnDef::new("extra_col", types::ColumnType::Varchar).nullable());
-    let schema2 = collect_schema(vec![modified_core]);
+    let schema2 = collect_schema(vec![modified_core]).unwrap();
     assert_ne!(schema_hash(&schema1), schema_hash(&schema2));
 }
 
@@ -243,7 +248,7 @@ fn schema_hash_changes_when_column_added() {
 
 #[test]
 fn postgres_ddl_core_tables() {
-    let schema = collect_schema(vec![core_schema()]);
+    let schema = collect_schema(vec![core_schema()]).unwrap();
     let ddl = generate_postgres_ddl(&schema);
     assert!(ddl.contains("CREATE TABLE IF NOT EXISTS yauth_users"));
     assert!(ddl.contains("CREATE TABLE IF NOT EXISTS yauth_sessions"));
@@ -260,7 +265,7 @@ fn postgres_ddl_core_tables() {
 
 #[test]
 fn generated_ddl_matches_core_migration() {
-    let schema = collect_schema(vec![core_schema()]);
+    let schema = collect_schema(vec![core_schema()]).unwrap();
     let ddl = generate_postgres_ddl(&schema);
     let expected = include_str!("../../diesel_migrations/00000000000001_core/up.sql");
     assert_tables_match(&ddl, expected, "core");
@@ -268,7 +273,8 @@ fn generated_ddl_matches_core_migration() {
 
 #[test]
 fn generated_ddl_matches_email_password_migration() {
-    let schema = collect_schema(vec![core_schema(), plugin_schemas::email_password_schema()]);
+    let schema =
+        collect_schema(vec![core_schema(), plugin_schemas::email_password_schema()]).unwrap();
     let ddl = generate_postgres_ddl(&schema);
     let expected = include_str!("../../diesel_migrations/00000000000002_email_password/up.sql");
     assert_tables_match(&ddl, expected, "email_password");
@@ -276,7 +282,7 @@ fn generated_ddl_matches_email_password_migration() {
 
 #[test]
 fn generated_ddl_matches_passkey_migration() {
-    let schema = collect_schema(vec![core_schema(), plugin_schemas::passkey_schema()]);
+    let schema = collect_schema(vec![core_schema(), plugin_schemas::passkey_schema()]).unwrap();
     let ddl = generate_postgres_ddl(&schema);
     let expected = include_str!("../../diesel_migrations/00000000000003_passkey/up.sql");
     assert_tables_match(&ddl, expected, "passkey");
@@ -284,7 +290,7 @@ fn generated_ddl_matches_passkey_migration() {
 
 #[test]
 fn generated_ddl_matches_mfa_migration() {
-    let schema = collect_schema(vec![core_schema(), plugin_schemas::mfa_schema()]);
+    let schema = collect_schema(vec![core_schema(), plugin_schemas::mfa_schema()]).unwrap();
     let ddl = generate_postgres_ddl(&schema);
     let expected = include_str!("../../diesel_migrations/00000000000004_mfa/up.sql");
     assert_tables_match(&ddl, expected, "mfa");
@@ -297,7 +303,7 @@ fn generated_ddl_matches_oauth_migration() {
     // We verify:
     // 1. yauth_oauth_states matches the base migration exactly
     // 2. yauth_oauth_accounts includes all base columns plus the merged columns
-    let schema = collect_schema(vec![core_schema(), plugin_schemas::oauth_schema()]);
+    let schema = collect_schema(vec![core_schema(), plugin_schemas::oauth_schema()]).unwrap();
     let ddl = generate_postgres_ddl(&schema);
     let expected_base = include_str!("../../diesel_migrations/00000000000005_oauth/up.sql");
 
@@ -344,7 +350,7 @@ fn generated_ddl_matches_oauth_migration() {
 
 #[test]
 fn generated_ddl_matches_bearer_migration() {
-    let schema = collect_schema(vec![core_schema(), plugin_schemas::bearer_schema()]);
+    let schema = collect_schema(vec![core_schema(), plugin_schemas::bearer_schema()]).unwrap();
     let ddl = generate_postgres_ddl(&schema);
     let expected = include_str!("../../diesel_migrations/00000000000006_bearer/up.sql");
     assert_tables_match(&ddl, expected, "bearer");
@@ -352,7 +358,7 @@ fn generated_ddl_matches_bearer_migration() {
 
 #[test]
 fn generated_ddl_matches_api_key_migration() {
-    let schema = collect_schema(vec![core_schema(), plugin_schemas::api_key_schema()]);
+    let schema = collect_schema(vec![core_schema(), plugin_schemas::api_key_schema()]).unwrap();
     let ddl = generate_postgres_ddl(&schema);
     let expected = include_str!("../../diesel_migrations/00000000000007_api_key/up.sql");
     assert_tables_match(&ddl, expected, "api_key");
@@ -360,7 +366,7 @@ fn generated_ddl_matches_api_key_migration() {
 
 #[test]
 fn generated_ddl_matches_magic_link_migration() {
-    let schema = collect_schema(vec![core_schema(), plugin_schemas::magic_link_schema()]);
+    let schema = collect_schema(vec![core_schema(), plugin_schemas::magic_link_schema()]).unwrap();
     let ddl = generate_postgres_ddl(&schema);
     let expected = include_str!("../../diesel_migrations/00000000000008_magic_link/up.sql");
     assert_tables_match(&ddl, expected, "magic_link");
@@ -368,7 +374,8 @@ fn generated_ddl_matches_magic_link_migration() {
 
 #[test]
 fn generated_ddl_matches_oauth2_server_migration() {
-    let schema = collect_schema(vec![core_schema(), plugin_schemas::oauth2_server_schema()]);
+    let schema =
+        collect_schema(vec![core_schema(), plugin_schemas::oauth2_server_schema()]).unwrap();
     let ddl = generate_postgres_ddl(&schema);
     let expected = include_str!("../../diesel_migrations/00000000000010_oauth2_server/up.sql");
     assert_tables_match(&ddl, expected, "oauth2_server");
@@ -376,7 +383,8 @@ fn generated_ddl_matches_oauth2_server_migration() {
 
 #[test]
 fn generated_ddl_matches_device_authorization_migration() {
-    let schema = collect_schema(vec![core_schema(), plugin_schemas::oauth2_server_schema()]);
+    let schema =
+        collect_schema(vec![core_schema(), plugin_schemas::oauth2_server_schema()]).unwrap();
     let ddl = generate_postgres_ddl(&schema);
     let expected =
         include_str!("../../diesel_migrations/00000000000011_device_authorization/up.sql");
@@ -388,7 +396,8 @@ fn generated_ddl_matches_account_lockout_migration() {
     let schema = collect_schema(vec![
         core_schema(),
         plugin_schemas::account_lockout_schema(),
-    ]);
+    ])
+    .unwrap();
     let ddl = generate_postgres_ddl(&schema);
     let expected = include_str!("../../diesel_migrations/00000000000012_account_lockout/up.sql");
     assert_tables_match(&ddl, expected, "account_lockout");
@@ -396,7 +405,7 @@ fn generated_ddl_matches_account_lockout_migration() {
 
 #[test]
 fn generated_ddl_matches_webhooks_migration() {
-    let schema = collect_schema(vec![core_schema(), plugin_schemas::webhooks_schema()]);
+    let schema = collect_schema(vec![core_schema(), plugin_schemas::webhooks_schema()]).unwrap();
     let ddl = generate_postgres_ddl(&schema);
     let expected = include_str!("../../diesel_migrations/00000000000014_webhooks/up.sql");
     assert_tables_match(&ddl, expected, "webhooks");
@@ -404,7 +413,7 @@ fn generated_ddl_matches_webhooks_migration() {
 
 #[test]
 fn generated_ddl_matches_oidc_migration() {
-    let schema = collect_schema(vec![core_schema(), plugin_schemas::oidc_schema()]);
+    let schema = collect_schema(vec![core_schema(), plugin_schemas::oidc_schema()]).unwrap();
     let ddl = generate_postgres_ddl(&schema);
     let expected = include_str!("../../diesel_migrations/00000000000015_oidc/up.sql");
     assert_tables_match(&ddl, expected, "oidc");
@@ -427,7 +436,8 @@ fn full_schema_topological_order() {
         plugin_schemas::account_lockout_schema(),
         plugin_schemas::webhooks_schema(),
         plugin_schemas::oidc_schema(),
-    ]);
+    ])
+    .unwrap();
 
     let positions: std::collections::HashMap<&str, usize> = schema
         .tables
@@ -470,7 +480,8 @@ fn generated_ddl_has_all_tables() {
         plugin_schemas::account_lockout_schema(),
         plugin_schemas::webhooks_schema(),
         plugin_schemas::oidc_schema(),
-    ]);
+    ])
+    .unwrap();
     let ddl = generate_postgres_ddl(&schema);
 
     let expected_tables = [

@@ -3,28 +3,20 @@
 use super::collector::YAuthSchema;
 use super::types::*;
 
+use std::borrow::Cow;
+
 /// Map abstract column type to Postgres type string.
-fn pg_type(col_type: &ColumnType) -> &'static str {
+fn pg_type(col_type: &ColumnType) -> Cow<'static, str> {
     match col_type {
-        ColumnType::Uuid => "UUID",
-        ColumnType::Varchar => "VARCHAR",
-        ColumnType::VarcharN(n) => {
-            // Return static strings for known sizes
-            match n {
-                12 => return "VARCHAR(12)",
-                64 => return "VARCHAR(64)",
-                _ => {}
-            }
-            // This is a workaround — we leak a string for uncommon sizes.
-            // In practice, yauth only uses VARCHAR, VARCHAR(12), VARCHAR(64).
-            Box::leak(format!("VARCHAR({n})").into_boxed_str())
-        }
-        ColumnType::Boolean => "BOOLEAN",
-        ColumnType::DateTime => "TIMESTAMPTZ",
-        ColumnType::Json => "JSONB",
-        ColumnType::Int => "INT",
-        ColumnType::SmallInt => "SMALLINT",
-        ColumnType::Text => "TEXT",
+        ColumnType::Uuid => Cow::Borrowed("UUID"),
+        ColumnType::Varchar => Cow::Borrowed("VARCHAR"),
+        ColumnType::VarcharN(n) => Cow::Owned(format!("VARCHAR({n})")),
+        ColumnType::Boolean => Cow::Borrowed("BOOLEAN"),
+        ColumnType::DateTime => Cow::Borrowed("TIMESTAMPTZ"),
+        ColumnType::Json => Cow::Borrowed("JSONB"),
+        ColumnType::Int => Cow::Borrowed("INT"),
+        ColumnType::SmallInt => Cow::Borrowed("SMALLINT"),
+        ColumnType::Text => Cow::Borrowed("TEXT"),
     }
 }
 
@@ -47,7 +39,7 @@ fn generate_create_table(table: &TableDef) -> String {
         sql.push_str("    ");
         sql.push_str(col.name);
         sql.push(' ');
-        sql.push_str(pg_type(&col.col_type));
+        sql.push_str(&pg_type(&col.col_type));
 
         if col.primary_key {
             sql.push_str(" PRIMARY KEY");
@@ -185,7 +177,7 @@ pub async fn generate_migration_diff(
                     "ALTER TABLE {} ADD COLUMN IF NOT EXISTS {} {}",
                     table.name,
                     col.name,
-                    pg_type(&col.col_type),
+                    &pg_type(&col.col_type),
                 );
 
                 if !col.nullable && col.default.is_none() {

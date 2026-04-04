@@ -67,7 +67,9 @@ pub struct YAuth {
 
 impl YAuth {
     /// Get the merged declarative schema for all enabled plugins.
-    pub fn schema(&self) -> schema::YAuthSchema {
+    ///
+    /// Returns an error if there are duplicate table definitions or missing FK dependencies.
+    pub fn schema(&self) -> Result<schema::YAuthSchema, schema::SchemaError> {
         let mut table_lists = vec![schema::core_schema()];
         for plugin in self.state.plugins.iter() {
             let s = plugin.schema();
@@ -79,11 +81,11 @@ impl YAuth {
     }
 
     /// Generate DDL for the specified dialect.
-    pub fn generate_ddl(&self, dialect: schema::Dialect) -> String {
-        let merged = self.schema();
-        match dialect {
+    pub fn generate_ddl(&self, dialect: schema::Dialect) -> Result<String, schema::SchemaError> {
+        let merged = self.schema()?;
+        Ok(match dialect {
             schema::Dialect::Postgres => schema::generate_postgres_ddl(&merged),
-        }
+        })
     }
 
     pub fn router(&self) -> Router<YAuthState> {

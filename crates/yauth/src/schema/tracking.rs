@@ -6,6 +6,33 @@ use super::collector::YAuthSchema;
 ///
 /// The hash is based on a canonical text representation of all tables,
 /// columns, types, constraints, and foreign keys — sorted deterministically.
+/// Stable canonical string for a ColumnType — does NOT use derive(Debug) which
+/// can change across compiler versions.
+fn canonical_col_type(ct: &super::types::ColumnType) -> String {
+    use super::types::ColumnType;
+    match ct {
+        ColumnType::Uuid => "Uuid".to_string(),
+        ColumnType::Varchar => "Varchar".to_string(),
+        ColumnType::VarcharN(n) => format!("VarcharN({n})"),
+        ColumnType::Boolean => "Boolean".to_string(),
+        ColumnType::DateTime => "DateTime".to_string(),
+        ColumnType::Json => "Json".to_string(),
+        ColumnType::Int => "Int".to_string(),
+        ColumnType::SmallInt => "SmallInt".to_string(),
+        ColumnType::Text => "Text".to_string(),
+    }
+}
+
+fn canonical_on_delete(od: &super::types::OnDelete) -> &'static str {
+    use super::types::OnDelete;
+    match od {
+        OnDelete::Cascade => "Cascade",
+        OnDelete::SetNull => "SetNull",
+        OnDelete::Restrict => "Restrict",
+        OnDelete::NoAction => "NoAction",
+    }
+}
+
 pub fn schema_hash(schema: &YAuthSchema) -> String {
     use sha2::{Digest, Sha256};
 
@@ -20,7 +47,7 @@ pub fn schema_hash(schema: &YAuthSchema) -> String {
             hasher.update(b"  COL:");
             hasher.update(col.name.as_bytes());
             hasher.update(b":");
-            hasher.update(format!("{:?}", col.col_type).as_bytes());
+            hasher.update(canonical_col_type(&col.col_type).as_bytes());
             hasher.update(b":");
             hasher.update(if col.nullable {
                 b"NULL" as &[u8]
@@ -43,8 +70,21 @@ pub fn schema_hash(schema: &YAuthSchema) -> String {
                 hasher.update(b".");
                 hasher.update(fk.references_column.as_bytes());
                 hasher.update(b":");
-                hasher.update(format!("{:?}", fk.on_delete).as_bytes());
+                hasher.update(canonical_on_delete(&fk.on_delete).as_bytes());
             }
+            hasher.update(b"\n");
+        }
+
+        // Include indices in hash so adding an index triggers re-migration
+        for idx in &table.indices {
+            hasher.update(b"  IDX:");
+            hasher.update(idx.name.as_bytes());
+            hasher.update(b":");
+            for col_name in &idx.columns {
+                hasher.update(col_name.as_bytes());
+                hasher.update(b",");
+            }
+            hasher.update(if idx.unique { b"UQ" as &[u8] } else { b"" });
             hasher.update(b"\n");
         }
     }

@@ -541,7 +541,7 @@ async fn revoke_token(
     // header that was used to authenticate this request.
     if let Some(jti) = extract_jti_from_auth_header(&headers, &state) {
         let ttl = state.bearer_config.access_token_ttl;
-        if let Err(e) = state.revocation_store.revoke(&jti, ttl).await {
+        if let Err(e) = state.repos.revocations.revoke_token(&jti, ttl).await {
             crate::otel::record_error("bearer_jti_revoke_failed", &e);
         }
     }
@@ -621,8 +621,9 @@ pub async fn validate_jwt(token: &str, state: &YAuthState) -> Result<AuthUser, S
 
     // Check JTI revocation before accepting the token
     if state
-        .revocation_store
-        .is_revoked(&claims.jti)
+        .repos
+        .revocations
+        .is_token_revoked(&claims.jti)
         .await
         .unwrap_or(false)
     {

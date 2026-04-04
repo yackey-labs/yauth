@@ -1346,7 +1346,7 @@ impl DieselNewWebhookDelivery {
 }
 
 // ──────────────────────────────────────────────
-// Store models (challenge) — still used by stores/postgres.rs
+// Store models (challenge) — used by challenge_repo.rs
 // ──────────────────────────────────────────────
 
 #[derive(Debug, Clone, Queryable, Selectable, Serialize, Deserialize)]

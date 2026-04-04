@@ -15,6 +15,11 @@
 mod models;
 pub(crate) mod schema;
 
+mod challenge_repo;
+mod rate_limit_repo;
+mod revocation_repo;
+mod session_ops_repo;
+
 mod audit_repo;
 mod user_repo;
 
@@ -114,6 +119,14 @@ impl DatabaseBackend for DieselLibsqlBackend {
             users: Arc::new(user_repo::LibsqlUserRepo::new(self.pool.clone())),
             sessions: Arc::new(user_repo::LibsqlSessionRepo::new(self.pool.clone())),
             audit: Arc::new(audit_repo::LibsqlAuditLogRepo::new(self.pool.clone())),
+            session_ops: Arc::new(session_ops_repo::LibsqlSessionOpsRepo::new(
+                self.pool.clone(),
+            )),
+            challenges: Arc::new(challenge_repo::LibsqlChallengeRepo::new(self.pool.clone())),
+            rate_limits: Arc::new(rate_limit_repo::LibsqlRateLimitRepo::new(self.pool.clone())),
+            revocations: Arc::new(revocation_repo::LibsqlRevocationRepo::new(
+                self.pool.clone(),
+            )),
 
             #[cfg(feature = "email-password")]
             passwords: Arc::new(password_repo::LibsqlPasswordRepo::new(self.pool.clone())),
@@ -181,11 +194,6 @@ impl DatabaseBackend for DieselLibsqlBackend {
                 self.pool.clone(),
             )),
         }
-    }
-
-    #[cfg(feature = "diesel-backend")]
-    fn postgres_pool_for_stores(&self) -> Option<crate::state::DbPool> {
-        None
     }
 }
 

@@ -11,6 +11,11 @@
 //! - Cascade delete when a user is removed
 //! - Uniqueness constraints matching Postgres behavior
 
+mod challenge_repo;
+mod rate_limit_repo;
+mod revocation_repo;
+mod session_ops_repo;
+
 mod user_repo;
 
 #[cfg(feature = "email-password")]
@@ -47,7 +52,9 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
+use std::time::Instant;
 
+use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::domain;
@@ -58,11 +65,33 @@ use crate::repo::{DatabaseBackend, EnabledFeatures, RepoError, Repositories};
 /// Each entity type gets its own `RwLock<HashMap>`. All repo structs hold
 /// `Arc` references to the same storage instance, enabling cascade deletes
 /// from the user repo to clean up related entities.
+/// Entry for the ephemeral challenge store (key → value + expiry).
+pub(crate) struct ChallengeEntry {
+    pub(crate) value: serde_json::Value,
+    pub(crate) expires_at: Instant,
+}
+
+/// Entry for the ephemeral revocation store (jti → expiry).
+pub(crate) struct RevocationEntry {
+    pub(crate) expires_at: Instant,
+}
+
+/// Entry for the ephemeral rate limit store (key → timestamps).
+pub(crate) struct RateLimitEntry {
+    pub(crate) timestamps: Vec<Instant>,
+}
+
 #[derive(Clone)]
 pub(crate) struct Storage {
     pub(crate) users: Arc<RwLock<HashMap<Uuid, domain::User>>>,
     pub(crate) sessions: Arc<RwLock<HashMap<Uuid, domain::Session>>>,
     pub(crate) audit_logs: Arc<RwLock<Vec<domain::NewAuditLog>>>,
+
+    // Ephemeral stores (keyed by token_hash / string key)
+    pub(crate) session_ops: Arc<Mutex<HashMap<String, domain::StoredSession>>>,
+    pub(crate) challenges: Arc<Mutex<HashMap<String, ChallengeEntry>>>,
+    pub(crate) rate_limits: Arc<Mutex<HashMap<String, RateLimitEntry>>>,
+    pub(crate) revocations: Arc<Mutex<HashMap<String, RevocationEntry>>>,
 
     #[cfg(feature = "email-password")]
     pub(crate) passwords: Arc<RwLock<HashMap<Uuid, domain::Password>>>,
@@ -119,6 +148,11 @@ impl Storage {
             users: Arc::new(RwLock::new(HashMap::new())),
             sessions: Arc::new(RwLock::new(HashMap::new())),
             audit_logs: Arc::new(RwLock::new(Vec::new())),
+
+            session_ops: Arc::new(Mutex::new(HashMap::new())),
+            challenges: Arc::new(Mutex::new(HashMap::new())),
+            rate_limits: Arc::new(Mutex::new(HashMap::new())),
+            revocations: Arc::new(Mutex::new(HashMap::new())),
 
             #[cfg(feature = "email-password")]
             passwords: Arc::new(RwLock::new(HashMap::new())),
@@ -224,6 +258,18 @@ impl DatabaseBackend for InMemoryBackend {
             audit: Arc::new(user_repo::InMemoryAuditLogRepo::new(
                 self.storage.audit_logs.clone(),
             )),
+            session_ops: Arc::new(session_ops_repo::InMemorySessionOpsRepo::new(
+                self.storage.session_ops.clone(),
+            )),
+            challenges: Arc::new(challenge_repo::InMemoryChallengeRepo::new(
+                self.storage.challenges.clone(),
+            )),
+            rate_limits: Arc::new(rate_limit_repo::InMemoryRateLimitRepo::new(
+                self.storage.rate_limits.clone(),
+            )),
+            revocations: Arc::new(revocation_repo::InMemoryRevocationRepo::new(
+                self.storage.revocations.clone(),
+            )),
 
             #[cfg(feature = "email-password")]
             passwords: Arc::new(password_repo::InMemoryPasswordRepo::new(
@@ -312,7 +358,4 @@ impl DatabaseBackend for InMemoryBackend {
             )),
         }
     }
-
-    // No Postgres pool available — returns None.
-    // Builder will auto-detect to memory-based ephemeral stores.
 }

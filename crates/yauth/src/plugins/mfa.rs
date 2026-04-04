@@ -57,7 +57,6 @@ impl YAuthPlugin for MfaPlugin {
             AuthEvent::LoginSucceeded { user_id, .. } => {
                 let user_id = *user_id;
                 let repos = ctx.state.repos.clone();
-                let challenge_store = ctx.state.challenge_store.clone();
 
                 // Run the async DB lookup synchronously within the current runtime.
                 // `on_event` is called from an async context, so Handle::current() is
@@ -80,7 +79,7 @@ impl YAuthPlugin for MfaPlugin {
                             let key = format!("mfa_pending:{}", pending_id);
                             let value = serde_json::json!({ "user_id": user_id.to_string() });
 
-                            if let Err(e) = challenge_store.set(&key, value, 300).await {
+                            if let Err(e) = repos.challenges.set_challenge(&key, value, 300).await {
                                 crate::otel::record_error("mfa_pending_session_store_failed", &e);
                                 return EventResponse::Block {
                                     status: 500,
@@ -523,14 +522,15 @@ async fn verify_mfa(
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let err = |status: StatusCode, msg: &str| (status, Json(serde_json::json!({ "error": msg })));
 
-    // Look up the pending MFA session from the challenge store
+    // Look up the pending MFA session from the challenge repo
     let key = format!("mfa_pending:{}", input.pending_session_id);
     let pending = state
-        .challenge_store
-        .get(&key)
+        .repos
+        .challenges
+        .get_challenge(&key)
         .await
         .map_err(|e| {
-            crate::otel::record_error("mfa_challenge_store_error", &e);
+            crate::otel::record_error("mfa_challenge_repo_error", &e);
             err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?
         .ok_or_else(|| {
@@ -657,7 +657,7 @@ async fn verify_mfa(
     }
 
     // MFA passed — delete the pending session and create a real session
-    state.challenge_store.delete(&key).await.ok();
+    let _ = state.repos.challenges.delete_challenge(&key).await;
 
     let (token, _session_id) =
         session::create_session(&state, user_id, None, None, state.config.session_ttl)

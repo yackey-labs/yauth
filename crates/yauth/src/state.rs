@@ -2,7 +2,6 @@ use crate::auth::{email::EmailService, rate_limit::RateLimiter};
 use crate::config::YAuthConfig;
 use crate::plugin::{AuthEvent, EventResponse, PluginContext, YAuthPlugin};
 use crate::repo::Repositories;
-use crate::stores::{ChallengeStore, RateLimitStore, RevocationStore, SessionStore};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -16,10 +15,6 @@ pub struct YAuthState {
     pub config: Arc<YAuthConfig>,
     pub dummy_hash: String,
     pub rate_limiter: RateLimiter,
-    pub challenge_store: Arc<dyn ChallengeStore>,
-    pub rate_limit_store: Arc<dyn RateLimitStore>,
-    pub session_store: Arc<dyn SessionStore>,
-    pub revocation_store: Arc<dyn RevocationStore>,
     pub email_service: Option<EmailService>,
     pub plugins: Arc<Vec<Box<dyn YAuthPlugin>>>,
     #[cfg(feature = "email-password")]

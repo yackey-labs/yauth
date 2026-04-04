@@ -8,7 +8,6 @@ pub mod plugin;
 pub mod repo;
 pub mod schema;
 pub mod state;
-pub mod stores;
 
 pub(crate) mod otel;
 
@@ -59,7 +58,6 @@ use config::YAuthConfig;
 use plugin::YAuthPlugin;
 use repo::{DatabaseBackend, EnabledFeatures, RepoError};
 use state::YAuthState;
-use stores::StoreBackend;
 
 pub struct YAuth {
     state: YAuthState,
@@ -135,7 +133,6 @@ pub struct YAuthBuilder {
     backend: Box<dyn DatabaseBackend>,
     config: YAuthConfig,
     plugins: Vec<Box<dyn YAuthPlugin>>,
-    store_backend: Option<StoreBackend>,
     #[cfg(feature = "email-password")]
     email_password_config: Option<config::EmailPasswordConfig>,
     #[cfg(feature = "passkey")]
@@ -164,7 +161,6 @@ impl YAuthBuilder {
             backend: Box::new(backend),
             config,
             plugins: Vec::new(),
-            store_backend: None,
             #[cfg(feature = "email-password")]
             email_password_config: None,
             #[cfg(feature = "passkey")]
@@ -266,32 +262,6 @@ impl YAuthBuilder {
         self
     }
 
-    pub fn with_store_backend(mut self, backend: StoreBackend) -> Self {
-        self.store_backend = Some(backend);
-        self
-    }
-
-    /// Use Redis for all ephemeral stores (sessions, rate limits, challenges, revocation).
-    /// Keys are prefixed with `yauth:`. Postgres remains the source of truth for
-    /// durable data (users, passwords, etc.).
-    #[cfg(feature = "redis")]
-    pub fn with_redis(mut self, conn: ::redis::aio::ConnectionManager) -> Self {
-        self.store_backend = StoreBackend::Redis(Box::new(conn), "yauth".into());
-        self
-    }
-
-    /// Use Redis with a custom key prefix. Useful when multiple apps share a Redis instance.
-    /// Example: `.with_redis_prefixed(conn, "freshstrings")` → keys like `freshstrings:session:{hash}`
-    #[cfg(feature = "redis")]
-    pub fn with_redis_prefixed(
-        mut self,
-        conn: ::redis::aio::ConnectionManager,
-        prefix: impl Into<String>,
-    ) -> Self {
-        self.store_backend = StoreBackend::Redis(Box::new(conn), prefix.into());
-        self
-    }
-
     pub fn with_plugin(mut self, plugin: Box<dyn YAuthPlugin>) -> Self {
         self.plugins.push(plugin);
         self
@@ -303,26 +273,8 @@ impl YAuthBuilder {
         let features = EnabledFeatures::from_compile_flags();
         self.backend.migrate(&features).await?;
 
-        // Build repositories from the backend
+        // Build repositories from the backend — now includes all ephemeral stores
         let repos = self.backend.repositories();
-
-        // Resolve store backend:
-        // 1. If user explicitly set store_backend, use that
-        // 2. Else if backend provides a Postgres pool, use Postgres ephemeral stores
-        // 3. Else fall back to memory stores
-        let effective_store_backend = match self.store_backend {
-            Some(sb) => sb,
-            None => {
-                #[cfg(feature = "diesel-backend")]
-                if self.backend.postgres_pool_for_stores().is_some() {
-                    StoreBackend::Postgres
-                } else {
-                    StoreBackend::Memory
-                }
-                #[cfg(not(feature = "diesel-backend"))]
-                StoreBackend::Memory
-            }
-        };
 
         // Build dummy hash for timing-safe login
         let dummy_hash = auth::password::hash_password_sync("dummy-password-for-timing")
@@ -330,86 +282,6 @@ impl YAuthBuilder {
 
         // Build rate limiter
         let rate_limiter = auth::rate_limit::RateLimiter::new(10, 60);
-
-        // Helper: get pool for Postgres stores (if applicable)
-        #[cfg(feature = "diesel-backend")]
-        let pool_for_stores = self.backend.postgres_pool_for_stores();
-
-        // Build challenge store
-        let challenge_store: std::sync::Arc<dyn stores::ChallengeStore> =
-            match &effective_store_backend {
-                StoreBackend::Memory => {
-                    std::sync::Arc::new(stores::memory::MemoryChallengeStore::new())
-                }
-                #[cfg(feature = "diesel-backend")]
-                StoreBackend::Postgres => {
-                    let pool = pool_for_stores.clone().expect(
-                        "Postgres store backend requires a Postgres pool from the database backend",
-                    );
-                    std::sync::Arc::new(stores::postgres::PostgresChallengeStore::new(pool))
-                }
-                #[cfg(feature = "redis")]
-                StoreBackend::Redis(conn, prefix) => std::sync::Arc::new(
-                    stores::redis::RedisChallengeStore::new(*conn.clone())
-                        .with_prefix(prefix.clone()),
-                ),
-            };
-
-        // Build rate limit store
-        let rate_limit_store: std::sync::Arc<dyn stores::RateLimitStore> =
-            match &effective_store_backend {
-                StoreBackend::Memory => {
-                    std::sync::Arc::new(stores::memory::MemoryRateLimitStore::new(10, 60))
-                }
-                #[cfg(feature = "diesel-backend")]
-                StoreBackend::Postgres => {
-                    let pool = pool_for_stores
-                        .clone()
-                        .expect("Postgres store backend requires a Postgres pool");
-                    std::sync::Arc::new(stores::postgres::PostgresRateLimitStore::new(pool))
-                }
-                #[cfg(feature = "redis")]
-                StoreBackend::Redis(conn, prefix) => std::sync::Arc::new(
-                    stores::redis::RedisRateLimitStore::new(*conn.clone())
-                        .with_prefix(prefix.clone()),
-                ),
-            };
-
-        // Build session store
-        let session_store: std::sync::Arc<dyn stores::SessionStore> = match &effective_store_backend
-        {
-            StoreBackend::Memory => std::sync::Arc::new(stores::memory::MemorySessionStore::new()),
-            #[cfg(feature = "diesel-backend")]
-            StoreBackend::Postgres => {
-                let pool = pool_for_stores
-                    .clone()
-                    .expect("Postgres store backend requires a Postgres pool");
-                std::sync::Arc::new(stores::postgres::PostgresSessionStore::new(pool))
-            }
-            #[cfg(feature = "redis")]
-            StoreBackend::Redis(conn, prefix) => std::sync::Arc::new(
-                stores::redis::RedisSessionStore::new(*conn.clone()).with_prefix(prefix.clone()),
-            ),
-        };
-
-        // Build revocation store
-        let revocation_store: std::sync::Arc<dyn stores::RevocationStore> =
-            match &effective_store_backend {
-                StoreBackend::Memory => {
-                    std::sync::Arc::new(stores::memory::MemoryRevocationStore::new())
-                }
-                #[cfg(feature = "diesel-backend")]
-                StoreBackend::Postgres => {
-                    let pool =
-                        pool_for_stores.expect("Postgres store backend requires a Postgres pool");
-                    std::sync::Arc::new(stores::postgres::PostgresRevocationStore::new(pool))
-                }
-                #[cfg(feature = "redis")]
-                StoreBackend::Redis(conn, prefix) => std::sync::Arc::new(
-                    stores::redis::RedisRevocationStore::new(*conn.clone())
-                        .with_prefix(prefix.clone()),
-                ),
-            };
 
         // Build email service
         let email_service = self.config.smtp.as_ref().map(|smtp| {
@@ -447,10 +319,6 @@ impl YAuthBuilder {
             config: std::sync::Arc::new(self.config),
             dummy_hash,
             rate_limiter,
-            challenge_store,
-            rate_limit_store,
-            session_store,
-            revocation_store,
             email_service,
             plugins: std::sync::Arc::new(Vec::new()), // placeholder, replaced below
             #[cfg(feature = "email-password")]

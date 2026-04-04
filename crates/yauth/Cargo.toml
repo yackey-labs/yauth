@@ -11,8 +11,8 @@ publish = true
 
 [features]
 default = ["email-password", "diesel-pg-backend"]
-diesel-pg-backend = []
-diesel-libsql-backend = ["dep:diesel-libsql"]
+diesel-pg-backend = ["dep:diesel", "dep:diesel-async-crate", "dep:futures-util"]
+diesel-libsql-backend = ["dep:diesel", "dep:diesel-libsql", "dep:futures-util"]
 memory-backend = []
 email-password = []
 passkey = ["dep:webauthn-rs"]
@@ -37,11 +37,11 @@ axum = { workspace = true }
 axum-extra = { workspace = true }
 tokio = { workspace = true }
 
-# Diesel
-diesel = { workspace = true }
-diesel-async-crate = { version = "0.8", features = ["postgres", "deadpool"], package = "diesel-async" }
+# Diesel (optional — pulled in by diesel-pg-backend or diesel-libsql-backend)
+diesel = { workspace = true, optional = true }
+diesel-async-crate = { version = "0.8", features = ["postgres", "deadpool"], package = "diesel-async", optional = true }
 diesel-libsql = { version = "0.1.4", features = ["async", "deadpool"], optional = true }
-futures-util = "0.3"
+futures-util = { version = "0.3", optional = true }
 
 serde = { workspace = true }
 serde_json = { workspace = true }

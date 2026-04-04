@@ -1,8 +1,9 @@
 use super::LibsqlPool;
 use super::models::*;
 use super::schema::*;
+use crate::backends::diesel_common::{diesel_err, get_conn};
 use crate::domain;
-use crate::repo::{RefreshTokenRepository, RepoError, RepoFuture, sealed};
+use crate::repo::{RefreshTokenRepository, RepoFuture, sealed};
 use diesel::prelude::*;
 use diesel::result::OptionalExtension;
 use diesel_async_crate::RunQueryDsl;
@@ -32,12 +33,6 @@ impl LR {
         }
     }
 }
-fn pe(e: impl std::fmt::Display) -> RepoError {
-    RepoError::Internal(format!("{e}").into())
-}
-fn de(e: diesel::result::Error) -> RepoError {
-    RepoError::Internal(e.into())
-}
 pub(crate) struct LibsqlRefreshTokenRepo {
     pool: LibsqlPool,
 }
@@ -51,20 +46,20 @@ impl RefreshTokenRepository for LibsqlRefreshTokenRepo {
     fn find_by_token_hash(&self, th: &str) -> RepoFuture<'_, Option<domain::RefreshToken>> {
         let th = th.to_string();
         Box::pin(async move {
-            let mut c = self.pool.get().await.map_err(pe)?;
+            let mut c = get_conn(&self.pool).await?;
             let r = yauth_refresh_tokens::table
                 .filter(yauth_refresh_tokens::token_hash.eq(&th))
                 .select(LR::as_select())
                 .first(&mut *c)
                 .await
                 .optional()
-                .map_err(de)?;
+                .map_err(diesel_err)?;
             Ok(r.map(|r| r.d()))
         })
     }
     fn create(&self, input: domain::NewRefreshToken) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            let mut c = self.pool.get().await.map_err(pe)?;
+            let mut c = get_conn(&self.pool).await?;
             let (id, uid, th, fid, ea, rev, ca) = (
                 uuid_to_str(input.id),
                 uuid_to_str(input.user_id),
@@ -76,25 +71,25 @@ impl RefreshTokenRepository for LibsqlRefreshTokenRepo {
             );
             diesel::sql_query("INSERT INTO yauth_refresh_tokens (id, user_id, token_hash, family_id, expires_at, revoked, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
             .bind::<diesel::sql_types::Text, _>(&id).bind::<diesel::sql_types::Text, _>(&uid).bind::<diesel::sql_types::Text, _>(&th).bind::<diesel::sql_types::Text, _>(&fid).bind::<diesel::sql_types::Text, _>(&ea).bind::<diesel::sql_types::Bool, _>(rev).bind::<diesel::sql_types::Text, _>(&ca)
-            .execute(&mut *c).await.map_err(de)?;
+            .execute(&mut *c).await.map_err(diesel_err)?;
             Ok(())
         })
     }
     fn revoke(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            let mut c = self.pool.get().await.map_err(pe)?;
+            let mut c = get_conn(&self.pool).await?;
             let ids = uuid_to_str(id);
             diesel::update(yauth_refresh_tokens::table.filter(yauth_refresh_tokens::id.eq(&ids)))
                 .set(yauth_refresh_tokens::revoked.eq(true))
                 .execute(&mut *c)
                 .await
-                .map_err(de)?;
+                .map_err(diesel_err)?;
             Ok(())
         })
     }
     fn revoke_family(&self, fid: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            let mut c = self.pool.get().await.map_err(pe)?;
+            let mut c = get_conn(&self.pool).await?;
             let f = uuid_to_str(fid);
             diesel::update(
                 yauth_refresh_tokens::table.filter(yauth_refresh_tokens::family_id.eq(&f)),
@@ -102,7 +97,7 @@ impl RefreshTokenRepository for LibsqlRefreshTokenRepo {
             .set(yauth_refresh_tokens::revoked.eq(true))
             .execute(&mut *c)
             .await
-            .map_err(de)?;
+            .map_err(diesel_err)?;
             Ok(())
         })
     }
@@ -110,7 +105,7 @@ impl RefreshTokenRepository for LibsqlRefreshTokenRepo {
         Box::pin(async move {
             #[cfg(feature = "email-password")]
             {
-                let mut c = self.pool.get().await.map_err(pe)?;
+                let mut c = get_conn(&self.pool).await?;
                 let uid = uuid_to_str(user_id);
                 use super::schema::yauth_passwords;
                 let r = yauth_passwords::table
@@ -119,7 +114,7 @@ impl RefreshTokenRepository for LibsqlRefreshTokenRepo {
                     .first::<String>(&mut *c)
                     .await
                     .optional()
-                    .map_err(de)?;
+                    .map_err(diesel_err)?;
                 Ok(r)
             }
             #[cfg(not(feature = "email-password"))]

@@ -78,9 +78,12 @@ async fn send_magic_link(
     let email = input.email.trim().to_lowercase();
 
     if !state
-        .rate_limiter
-        .check(&format!("magic-link:{}", email))
+        .repos
+        .rate_limits
+        .check_rate_limit(&format!("magic-link:{}", email), 10, 60)
         .await
+        .map(|r| r.allowed)
+        .unwrap_or(true)
     {
         crate::otel::add_event(
             "magic_link_rate_limited",

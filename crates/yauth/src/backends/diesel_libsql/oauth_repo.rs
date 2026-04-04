@@ -1,8 +1,9 @@
 use super::LibsqlPool;
 use super::models::*;
 use super::schema::*;
+use crate::backends::diesel_common::{diesel_err, get_conn};
 use crate::domain;
-use crate::repo::{OauthAccountRepository, OauthStateRepository, RepoError, RepoFuture, sealed};
+use crate::repo::{OauthAccountRepository, OauthStateRepository, RepoFuture, sealed};
 use diesel::prelude::*;
 use diesel::result::OptionalExtension;
 use diesel_async_crate::RunQueryDsl;
@@ -59,13 +60,6 @@ impl LS {
     }
 }
 
-fn pe(e: impl std::fmt::Display) -> RepoError {
-    RepoError::Internal(format!("{e}").into())
-}
-fn de(e: diesel::result::Error) -> RepoError {
-    RepoError::Internal(e.into())
-}
-
 pub(crate) struct LibsqlOauthAccountRepo {
     pool: LibsqlPool,
 }
@@ -83,7 +77,7 @@ impl OauthAccountRepository for LibsqlOauthAccountRepo {
     ) -> RepoFuture<'_, Option<domain::OauthAccount>> {
         let (p, pu) = (provider.to_string(), puid.to_string());
         Box::pin(async move {
-            let mut c = self.pool.get().await.map_err(pe)?;
+            let mut c = get_conn(&self.pool).await?;
             let r = yauth_oauth_accounts::table
                 .filter(
                     yauth_oauth_accounts::provider
@@ -94,20 +88,20 @@ impl OauthAccountRepository for LibsqlOauthAccountRepo {
                 .first(&mut *c)
                 .await
                 .optional()
-                .map_err(de)?;
+                .map_err(diesel_err)?;
             Ok(r.map(|r| r.d()))
         })
     }
     fn find_by_user_id(&self, user_id: Uuid) -> RepoFuture<'_, Vec<domain::OauthAccount>> {
         Box::pin(async move {
-            let mut c = self.pool.get().await.map_err(pe)?;
+            let mut c = get_conn(&self.pool).await?;
             let uid = uuid_to_str(user_id);
             let r: Vec<L> = yauth_oauth_accounts::table
                 .filter(yauth_oauth_accounts::user_id.eq(&uid))
                 .select(L::as_select())
                 .load(&mut *c)
                 .await
-                .map_err(de)?;
+                .map_err(diesel_err)?;
             Ok(r.into_iter().map(|r| r.d()).collect())
         })
     }
@@ -118,7 +112,7 @@ impl OauthAccountRepository for LibsqlOauthAccountRepo {
     ) -> RepoFuture<'_, Option<domain::OauthAccount>> {
         let p = provider.to_string();
         Box::pin(async move {
-            let mut c = self.pool.get().await.map_err(pe)?;
+            let mut c = get_conn(&self.pool).await?;
             let uid = uuid_to_str(user_id);
             let r = yauth_oauth_accounts::table
                 .filter(
@@ -130,13 +124,13 @@ impl OauthAccountRepository for LibsqlOauthAccountRepo {
                 .first(&mut *c)
                 .await
                 .optional()
-                .map_err(de)?;
+                .map_err(diesel_err)?;
             Ok(r.map(|r| r.d()))
         })
     }
     fn create(&self, input: domain::NewOauthAccount) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            let mut c = self.pool.get().await.map_err(pe)?;
+            let mut c = get_conn(&self.pool).await?;
             let (id, uid, p, pu, at, rt, ca, ea, ua) = (
                 uuid_to_str(input.id),
                 uuid_to_str(input.user_id),
@@ -152,7 +146,7 @@ impl OauthAccountRepository for LibsqlOauthAccountRepo {
             .bind::<diesel::sql_types::Text, _>(&id).bind::<diesel::sql_types::Text, _>(&uid).bind::<diesel::sql_types::Text, _>(&p).bind::<diesel::sql_types::Text, _>(&pu)
             .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(&at).bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(&rt)
             .bind::<diesel::sql_types::Text, _>(&ca).bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(&ea).bind::<diesel::sql_types::Text, _>(&ua)
-            .execute(&mut *c).await.map_err(de)?;
+            .execute(&mut *c).await.map_err(diesel_err)?;
             Ok(())
         })
     }
@@ -165,7 +159,7 @@ impl OauthAccountRepository for LibsqlOauthAccountRepo {
     ) -> RepoFuture<'_, ()> {
         let (at, rt) = (at.map(|s| s.to_string()), rt.map(|s| s.to_string()));
         Box::pin(async move {
-            let mut c = self.pool.get().await.map_err(pe)?;
+            let mut c = get_conn(&self.pool).await?;
             let ids = uuid_to_str(id);
             let now = dt_to_str(chrono::Utc::now().naive_utc());
             diesel::update(yauth_oauth_accounts::table.filter(yauth_oauth_accounts::id.eq(&ids)))
@@ -177,18 +171,18 @@ impl OauthAccountRepository for LibsqlOauthAccountRepo {
                 ))
                 .execute(&mut *c)
                 .await
-                .map_err(de)?;
+                .map_err(diesel_err)?;
             Ok(())
         })
     }
     fn delete(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            let mut c = self.pool.get().await.map_err(pe)?;
+            let mut c = get_conn(&self.pool).await?;
             let ids = uuid_to_str(id);
             diesel::delete(yauth_oauth_accounts::table.filter(yauth_oauth_accounts::id.eq(&ids)))
                 .execute(&mut *c)
                 .await
-                .map_err(de)?;
+                .map_err(diesel_err)?;
             Ok(())
         })
     }
@@ -206,7 +200,7 @@ impl sealed::Sealed for LibsqlOauthStateRepo {}
 impl OauthStateRepository for LibsqlOauthStateRepo {
     fn create(&self, input: domain::NewOauthState) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            let mut c = self.pool.get().await.map_err(pe)?;
+            let mut c = get_conn(&self.pool).await?;
             let (st, p, ru, ea, ca) = (
                 input.state,
                 input.provider,
@@ -216,21 +210,21 @@ impl OauthStateRepository for LibsqlOauthStateRepo {
             );
             diesel::sql_query("INSERT INTO yauth_oauth_states (state, provider, redirect_url, expires_at, created_at) VALUES (?, ?, ?, ?, ?)")
             .bind::<diesel::sql_types::Text, _>(&st).bind::<diesel::sql_types::Text, _>(&p).bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(&ru).bind::<diesel::sql_types::Text, _>(&ea).bind::<diesel::sql_types::Text, _>(&ca)
-            .execute(&mut *c).await.map_err(de)?;
+            .execute(&mut *c).await.map_err(diesel_err)?;
             Ok(())
         })
     }
     fn find_and_delete(&self, state: &str) -> RepoFuture<'_, Option<domain::OauthState>> {
         let st = state.to_string();
         Box::pin(async move {
-            let mut c = self.pool.get().await.map_err(pe)?;
+            let mut c = get_conn(&self.pool).await?;
             let now = chrono::Utc::now().naive_utc();
             let now_str = super::models::dt_to_str(now);
 
             // Atomic SELECT + DELETE in a transaction to prevent TOCTOU race.
             // Only consume non-expired states (expires_at > now).
             use diesel_async_crate::SimpleAsyncConnection;
-            (*c).batch_execute("BEGIN").await.map_err(de)?;
+            (*c).batch_execute("BEGIN").await.map_err(diesel_err)?;
 
             let r = yauth_oauth_states::table
                 .filter(
@@ -242,16 +236,16 @@ impl OauthStateRepository for LibsqlOauthStateRepo {
                 .first(&mut *c)
                 .await
                 .optional()
-                .map_err(de)?;
+                .map_err(diesel_err)?;
 
             if r.is_some() {
                 diesel::delete(yauth_oauth_states::table.filter(yauth_oauth_states::state.eq(&st)))
                     .execute(&mut *c)
                     .await
-                    .map_err(de)?;
+                    .map_err(diesel_err)?;
             }
 
-            (*c).batch_execute("COMMIT").await.map_err(de)?;
+            (*c).batch_execute("COMMIT").await.map_err(diesel_err)?;
 
             Ok(r.map(|r| r.d()))
         })

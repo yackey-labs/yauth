@@ -1,8 +1,9 @@
 use super::LibsqlPool;
 use super::models::*;
 use super::schema::*;
+use crate::backends::diesel_common::{diesel_err, get_conn};
 use crate::domain;
-use crate::repo::{RepoError, RepoFuture, WebhookDeliveryRepository, WebhookRepository, sealed};
+use crate::repo::{RepoFuture, WebhookDeliveryRepository, WebhookRepository, sealed};
 use diesel::prelude::*;
 use diesel::result::OptionalExtension;
 use diesel_async_crate::RunQueryDsl;
@@ -83,13 +84,6 @@ impl Lwd {
     }
 }
 
-fn pe(e: impl std::fmt::Display) -> RepoError {
-    RepoError::Internal(format!("{e}").into())
-}
-fn de(e: diesel::result::Error) -> RepoError {
-    RepoError::Internal(e.into())
-}
-
 pub(crate) struct LibsqlWebhookRepo {
     pool: LibsqlPool,
 }
@@ -102,7 +96,7 @@ impl sealed::Sealed for LibsqlWebhookRepo {}
 impl WebhookRepository for LibsqlWebhookRepo {
     fn find_by_id(&self, id: Uuid) -> RepoFuture<'_, Option<domain::Webhook>> {
         Box::pin(async move {
-            let mut c = self.pool.get().await.map_err(pe)?;
+            let mut c = get_conn(&self.pool).await?;
             let ids = uuid_to_str(id);
             let r = yauth_webhooks::table
                 .find(&ids)
@@ -110,36 +104,36 @@ impl WebhookRepository for LibsqlWebhookRepo {
                 .first(&mut *c)
                 .await
                 .optional()
-                .map_err(de)?;
+                .map_err(diesel_err)?;
             Ok(r.map(|r| r.d()))
         })
     }
     fn find_active(&self) -> RepoFuture<'_, Vec<domain::Webhook>> {
         Box::pin(async move {
-            let mut c = self.pool.get().await.map_err(pe)?;
+            let mut c = get_conn(&self.pool).await?;
             let r: Vec<LW> = yauth_webhooks::table
                 .filter(yauth_webhooks::active.eq(true))
                 .select(LW::as_select())
                 .load(&mut *c)
                 .await
-                .map_err(de)?;
+                .map_err(diesel_err)?;
             Ok(r.into_iter().map(|r| r.d()).collect())
         })
     }
     fn find_all(&self) -> RepoFuture<'_, Vec<domain::Webhook>> {
         Box::pin(async move {
-            let mut c = self.pool.get().await.map_err(pe)?;
+            let mut c = get_conn(&self.pool).await?;
             let r: Vec<LW> = yauth_webhooks::table
                 .select(LW::as_select())
                 .load(&mut *c)
                 .await
-                .map_err(de)?;
+                .map_err(diesel_err)?;
             Ok(r.into_iter().map(|r| r.d()).collect())
         })
     }
     fn create(&self, i: domain::NewWebhook) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            let mut c = self.pool.get().await.map_err(pe)?;
+            let mut c = get_conn(&self.pool).await?;
             let (id, url, sec, ev, act, ca, ua) = (
                 uuid_to_str(i.id),
                 i.url,
@@ -151,37 +145,37 @@ impl WebhookRepository for LibsqlWebhookRepo {
             );
             diesel::sql_query("INSERT INTO yauth_webhooks (id, url, secret, events, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
             .bind::<diesel::sql_types::Text, _>(&id).bind::<diesel::sql_types::Text, _>(&url).bind::<diesel::sql_types::Text, _>(&sec).bind::<diesel::sql_types::Text, _>(&ev).bind::<diesel::sql_types::Bool, _>(act).bind::<diesel::sql_types::Text, _>(&ca).bind::<diesel::sql_types::Text, _>(&ua)
-            .execute(&mut *c).await.map_err(de)?;
+            .execute(&mut *c).await.map_err(diesel_err)?;
             Ok(())
         })
     }
     fn update(&self, id: Uuid, changes: domain::UpdateWebhook) -> RepoFuture<'_, domain::Webhook> {
         Box::pin(async move {
-            let mut c = self.pool.get().await.map_err(pe)?;
+            let mut c = get_conn(&self.pool).await?;
             let ids = uuid_to_str(id);
             // Update + re-select (AsChangeset works fine, but returning doesn't with AsChangeset)
             diesel::update(yauth_webhooks::table.find(&ids))
                 .set(&Lwu::from_domain(changes))
                 .execute(&mut *c)
                 .await
-                .map_err(de)?;
+                .map_err(diesel_err)?;
             let r = yauth_webhooks::table
                 .find(&ids)
                 .select(LW::as_select())
                 .first(&mut *c)
                 .await
-                .map_err(de)?;
+                .map_err(diesel_err)?;
             Ok(r.d())
         })
     }
     fn delete(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            let mut c = self.pool.get().await.map_err(pe)?;
+            let mut c = get_conn(&self.pool).await?;
             let ids = uuid_to_str(id);
             diesel::delete(yauth_webhooks::table.find(&ids))
                 .execute(&mut *c)
                 .await
-                .map_err(de)?;
+                .map_err(diesel_err)?;
             Ok(())
         })
     }
@@ -203,7 +197,7 @@ impl WebhookDeliveryRepository for LibsqlWebhookDeliveryRepo {
         limit: i64,
     ) -> RepoFuture<'_, Vec<domain::WebhookDelivery>> {
         Box::pin(async move {
-            let mut c = self.pool.get().await.map_err(pe)?;
+            let mut c = get_conn(&self.pool).await?;
             let w = uuid_to_str(wid);
             let r: Vec<Lwd> = yauth_webhook_deliveries::table
                 .filter(yauth_webhook_deliveries::webhook_id.eq(&w))
@@ -212,13 +206,13 @@ impl WebhookDeliveryRepository for LibsqlWebhookDeliveryRepo {
                 .select(Lwd::as_select())
                 .load(&mut *c)
                 .await
-                .map_err(de)?;
+                .map_err(diesel_err)?;
             Ok(r.into_iter().map(|r| r.d()).collect())
         })
     }
     fn create(&self, i: domain::NewWebhookDelivery) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            let mut c = self.pool.get().await.map_err(pe)?;
+            let mut c = get_conn(&self.pool).await?;
             let (id, wid, et, pl, sc, rb, su, at, ca) = (
                 uuid_to_str(i.id),
                 uuid_to_str(i.webhook_id),
@@ -233,7 +227,7 @@ impl WebhookDeliveryRepository for LibsqlWebhookDeliveryRepo {
             diesel::sql_query("INSERT INTO yauth_webhook_deliveries (id, webhook_id, event_type, payload, status_code, response_body, success, attempt, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
             .bind::<diesel::sql_types::Text, _>(&id).bind::<diesel::sql_types::Text, _>(&wid).bind::<diesel::sql_types::Text, _>(&et).bind::<diesel::sql_types::Text, _>(&pl)
             .bind::<diesel::sql_types::Nullable<diesel::sql_types::SmallInt>, _>(sc).bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(&rb).bind::<diesel::sql_types::Bool, _>(su).bind::<diesel::sql_types::Integer, _>(at).bind::<diesel::sql_types::Text, _>(&ca)
-            .execute(&mut *c).await.map_err(de)?;
+            .execute(&mut *c).await.map_err(diesel_err)?;
             Ok(())
         })
     }

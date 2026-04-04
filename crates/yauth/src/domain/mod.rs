@@ -4,6 +4,12 @@
 //! dependencies. Each backend converts between its internal ORM-annotated models
 //! and these types via private conversion methods.
 
+mod session_ops;
+pub use session_ops::*;
+
+mod rate_limit;
+pub use rate_limit::*;
+
 mod user;
 pub use user::*;
 

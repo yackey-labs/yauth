@@ -115,6 +115,18 @@ impl EnabledFeatures {
 // Repository trait modules
 // ──────────────────────────────────────────────
 
+mod session_ops;
+pub use session_ops::*;
+
+mod challenge;
+pub use challenge::*;
+
+mod rate_limit;
+pub use rate_limit::*;
+
+mod revocation;
+pub use revocation::*;
+
 mod user;
 pub use user::*;
 
@@ -183,6 +195,10 @@ pub struct Repositories {
     pub users: Arc<dyn UserRepository>,
     pub sessions: Arc<dyn SessionRepository>,
     pub audit: Arc<dyn AuditLogRepository>,
+    pub session_ops: Arc<dyn SessionOpsRepository>,
+    pub challenges: Arc<dyn ChallengeRepository>,
+    pub rate_limits: Arc<dyn RateLimitRepository>,
+    pub revocations: Arc<dyn RevocationRepository>,
 
     #[cfg(feature = "email-password")]
     pub passwords: Arc<dyn PasswordRepository>,
@@ -254,15 +270,6 @@ pub trait DatabaseBackend: Send + Sync {
 
     /// Construct the full `Repositories` struct. Called once during `build()`.
     fn repositories(&self) -> Repositories;
-
-    /// Optional: expose a Postgres connection pool for ephemeral stores.
-    ///
-    /// Returns `None` for non-Postgres backends. When `None`, the builder
-    /// uses memory-based ephemeral stores unless Redis is explicitly configured.
-    #[cfg(feature = "diesel-backend")]
-    fn postgres_pool_for_stores(&self) -> Option<crate::state::DbPool> {
-        None
-    }
 }
 
 /// Blanket impl so `Box<dyn DatabaseBackend>` can be passed directly to `YAuthBuilder::new`.
@@ -276,10 +283,5 @@ impl DatabaseBackend for Box<dyn DatabaseBackend> {
 
     fn repositories(&self) -> Repositories {
         (**self).repositories()
-    }
-
-    #[cfg(feature = "diesel-backend")]
-    fn postgres_pool_for_stores(&self) -> Option<crate::state::DbPool> {
-        (**self).postgres_pool_for_stores()
     }
 }

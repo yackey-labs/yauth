@@ -120,7 +120,7 @@ pub fn generate_postgres_ddl(schema: &YAuthSchema) -> String {
 /// statements for new columns (additive only).
 ///
 /// Returns a list of SQL statements to execute.
-#[cfg(feature = "diesel-backend")]
+#[cfg(feature = "diesel-pg-backend")]
 pub async fn generate_migration_diff(
     conn: &mut diesel_async_crate::AsyncPgConnection,
     schema_name: &str,

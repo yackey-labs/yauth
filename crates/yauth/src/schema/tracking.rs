@@ -94,7 +94,7 @@ pub fn schema_hash(schema: &YAuthSchema) -> String {
 }
 
 /// Ensure the `yauth_schema_migrations` tracking table exists.
-#[cfg(feature = "diesel-backend")]
+#[cfg(feature = "diesel-pg-backend")]
 pub async fn ensure_tracking_table(
     conn: &mut diesel_async_crate::AsyncPgConnection,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -115,7 +115,7 @@ pub async fn ensure_tracking_table(
 }
 
 /// Check if the given schema hash has already been applied.
-#[cfg(feature = "diesel-backend")]
+#[cfg(feature = "diesel-pg-backend")]
 pub async fn is_schema_applied(
     conn: &mut diesel_async_crate::AsyncPgConnection,
     hash: &str,
@@ -146,7 +146,7 @@ pub async fn is_schema_applied(
 }
 
 /// Record that a schema hash has been applied.
-#[cfg(feature = "diesel-backend")]
+#[cfg(feature = "diesel-pg-backend")]
 pub async fn record_schema_applied(
     conn: &mut diesel_async_crate::AsyncPgConnection,
     hash: &str,

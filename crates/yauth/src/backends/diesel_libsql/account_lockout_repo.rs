@@ -1,8 +1,9 @@
 use super::LibsqlPool;
 use super::models::*;
 use super::schema::*;
+use crate::backends::diesel_common::{diesel_err, get_conn};
 use crate::domain;
-use crate::repo::{AccountLockRepository, RepoError, RepoFuture, UnlockTokenRepository, sealed};
+use crate::repo::{AccountLockRepository, RepoFuture, UnlockTokenRepository, sealed};
 use chrono::NaiveDateTime;
 use diesel::prelude::*;
 use diesel::result::OptionalExtension;
@@ -91,13 +92,6 @@ impl Lut {
     }
 }
 
-fn pe(e: impl std::fmt::Display) -> RepoError {
-    RepoError::Internal(format!("{e}").into())
-}
-fn de(e: diesel::result::Error) -> RepoError {
-    RepoError::Internal(e.into())
-}
-
 pub(crate) struct LibsqlAccountLockRepo {
     pool: LibsqlPool,
 }
@@ -110,7 +104,7 @@ impl sealed::Sealed for LibsqlAccountLockRepo {}
 impl AccountLockRepository for LibsqlAccountLockRepo {
     fn find_by_user_id(&self, uid: Uuid) -> RepoFuture<'_, Option<domain::AccountLock>> {
         Box::pin(async move {
-            let mut c = self.pool.get().await.map_err(pe)?;
+            let mut c = get_conn(&self.pool).await?;
             let u = uuid_to_str(uid);
             let r = yauth_account_locks::table
                 .filter(yauth_account_locks::user_id.eq(&u))
@@ -118,13 +112,13 @@ impl AccountLockRepository for LibsqlAccountLockRepo {
                 .first(&mut *c)
                 .await
                 .optional()
-                .map_err(de)?;
+                .map_err(diesel_err)?;
             Ok(r.map(|r| r.d()))
         })
     }
     fn create(&self, i: domain::NewAccountLock) -> RepoFuture<'_, domain::AccountLock> {
         Box::pin(async move {
-            let mut c = self.pool.get().await.map_err(pe)?;
+            let mut c = get_conn(&self.pool).await?;
             let (id, uid, fc, lu, lc, lr, ca, ua) = (
                 uuid_to_str(i.id),
                 uuid_to_str(i.user_id),
@@ -139,13 +133,13 @@ impl AccountLockRepository for LibsqlAccountLockRepo {
             .bind::<diesel::sql_types::Text, _>(&id).bind::<diesel::sql_types::Text, _>(&uid).bind::<diesel::sql_types::Integer, _>(fc)
             .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(&lu).bind::<diesel::sql_types::Integer, _>(lc).bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(&lr)
             .bind::<diesel::sql_types::Text, _>(&ca).bind::<diesel::sql_types::Text, _>(&ua)
-            .get_result(&mut *c).await.map_err(de)?;
+            .get_result(&mut *c).await.map_err(diesel_err)?;
             Ok(r.d())
         })
     }
     fn increment_failed_count(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            let mut c = self.pool.get().await.map_err(pe)?;
+            let mut c = get_conn(&self.pool).await?;
             let ids = uuid_to_str(id);
             let now = dt_to_str(chrono::Utc::now().naive_utc());
             diesel::update(yauth_account_locks::table.filter(yauth_account_locks::id.eq(&ids)))
@@ -155,7 +149,7 @@ impl AccountLockRepository for LibsqlAccountLockRepo {
                 ))
                 .execute(&mut *c)
                 .await
-                .map_err(de)?;
+                .map_err(diesel_err)?;
             Ok(())
         })
     }
@@ -168,7 +162,7 @@ impl AccountLockRepository for LibsqlAccountLockRepo {
     ) -> RepoFuture<'_, ()> {
         let lr = lr.map(|s| s.to_string());
         Box::pin(async move {
-            let mut c = self.pool.get().await.map_err(pe)?;
+            let mut c = get_conn(&self.pool).await?;
             let ids = uuid_to_str(id);
             let now = dt_to_str(chrono::Utc::now().naive_utc());
             diesel::update(yauth_account_locks::table.filter(yauth_account_locks::id.eq(&ids)))
@@ -180,13 +174,13 @@ impl AccountLockRepository for LibsqlAccountLockRepo {
                 ))
                 .execute(&mut *c)
                 .await
-                .map_err(de)?;
+                .map_err(diesel_err)?;
             Ok(())
         })
     }
     fn reset_failed_count(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            let mut c = self.pool.get().await.map_err(pe)?;
+            let mut c = get_conn(&self.pool).await?;
             let ids = uuid_to_str(id);
             let now = dt_to_str(chrono::Utc::now().naive_utc());
             diesel::update(yauth_account_locks::table.filter(yauth_account_locks::id.eq(&ids)))
@@ -196,13 +190,13 @@ impl AccountLockRepository for LibsqlAccountLockRepo {
                 ))
                 .execute(&mut *c)
                 .await
-                .map_err(de)?;
+                .map_err(diesel_err)?;
             Ok(())
         })
     }
     fn auto_unlock(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            let mut c = self.pool.get().await.map_err(pe)?;
+            let mut c = get_conn(&self.pool).await?;
             let ids = uuid_to_str(id);
             let now = dt_to_str(chrono::Utc::now().naive_utc());
             diesel::update(yauth_account_locks::table.filter(yauth_account_locks::id.eq(&ids)))
@@ -214,7 +208,7 @@ impl AccountLockRepository for LibsqlAccountLockRepo {
                 ))
                 .execute(&mut *c)
                 .await
-                .map_err(de)?;
+                .map_err(diesel_err)?;
             Ok(())
         })
     }
@@ -233,7 +227,7 @@ impl UnlockTokenRepository for LibsqlUnlockTokenRepo {
     fn find_by_token_hash(&self, th: &str) -> RepoFuture<'_, Option<domain::UnlockToken>> {
         let th = th.to_string();
         Box::pin(async move {
-            let mut c = self.pool.get().await.map_err(pe)?;
+            let mut c = get_conn(&self.pool).await?;
             let now = dt_to_str(chrono::Utc::now().naive_utc());
             let r = yauth_unlock_tokens::table
                 .filter(
@@ -245,13 +239,13 @@ impl UnlockTokenRepository for LibsqlUnlockTokenRepo {
                 .first(&mut *c)
                 .await
                 .optional()
-                .map_err(de)?;
+                .map_err(diesel_err)?;
             Ok(r.map(|r| r.d()))
         })
     }
     fn create(&self, i: domain::NewUnlockToken) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            let mut c = self.pool.get().await.map_err(pe)?;
+            let mut c = get_conn(&self.pool).await?;
             let (id, uid, th, ea, ca) = (
                 uuid_to_str(i.id),
                 uuid_to_str(i.user_id),
@@ -261,29 +255,29 @@ impl UnlockTokenRepository for LibsqlUnlockTokenRepo {
             );
             diesel::sql_query("INSERT INTO yauth_unlock_tokens (id, user_id, token_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?)")
             .bind::<diesel::sql_types::Text, _>(&id).bind::<diesel::sql_types::Text, _>(&uid).bind::<diesel::sql_types::Text, _>(&th).bind::<diesel::sql_types::Text, _>(&ea).bind::<diesel::sql_types::Text, _>(&ca)
-            .execute(&mut *c).await.map_err(de)?;
+            .execute(&mut *c).await.map_err(diesel_err)?;
             Ok(())
         })
     }
     fn delete(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            let mut c = self.pool.get().await.map_err(pe)?;
+            let mut c = get_conn(&self.pool).await?;
             let ids = uuid_to_str(id);
             diesel::delete(yauth_unlock_tokens::table.find(&ids))
                 .execute(&mut *c)
                 .await
-                .map_err(de)?;
+                .map_err(diesel_err)?;
             Ok(())
         })
     }
     fn delete_all_for_user(&self, uid: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            let mut c = self.pool.get().await.map_err(pe)?;
+            let mut c = get_conn(&self.pool).await?;
             let u = uuid_to_str(uid);
             diesel::delete(yauth_unlock_tokens::table.filter(yauth_unlock_tokens::user_id.eq(&u)))
                 .execute(&mut *c)
                 .await
-                .map_err(de)?;
+                .map_err(diesel_err)?;
             Ok(())
         })
     }

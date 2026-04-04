@@ -1,5 +1,7 @@
 # Architecture
 
+> **Status: COMPLETED** -- Native OpenTelemetry SDK migration is complete. `tracing` crate replaced with raw OTel SDK. `crate::otel` helper module provides feature-gated helpers.
+
 ## What's Changing
 
 The `telemetry` feature currently uses `tracing` for both structured logging and span creation, with `tracing-opentelemetry` bridging spans to the OTel SDK. This migration removes `tracing` entirely and uses the OpenTelemetry SDK directly for spans, span events, and context propagation.

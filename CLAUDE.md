@@ -12,9 +12,16 @@
 
 | Crate | Purpose |
 |---|---|
-| `yauth` | Main library — plugins, middleware, builder, auth logic |
-| `yauth-entity` | Diesel entities (all tables prefixed `yauth_`) |
-| `yauth-migration` | Diesel migrations (feature-gated per plugin) |
+| `yauth` | Main library — plugins, middleware, builder, auth logic, backends, repository traits, declarative schema |
+
+Key internal modules in `yauth`:
+- `backends/diesel_pg/` — PostgreSQL backend (`DieselBackend`)
+- `backends/diesel_libsql/` — SQLite/Turso backend (`DieselLibsqlBackend`)
+- `backends/memory/` — In-memory backend (`InMemoryBackend`)
+- `backends/redis/` — Redis caching decorators
+- `repo/` — `DatabaseBackend` trait, repository traits, `Repositories` struct, `RepoError`
+- `domain/` — ORM-agnostic domain types (always compiled, no backend deps)
+- `schema/` — Declarative schema definitions, DDL generation per dialect (Postgres, SQLite, MySQL)
 
 ### TypeScript Packages (`packages/`)
 
@@ -57,6 +64,16 @@ bash pentest/pentest-yauth.sh        # Run full pentest suite (255+ cases, 0 FAI
 
 ## Feature Flags
 
+### Backend Features
+
+| Feature | What It Enables | Default |
+|---|---|---|
+| `diesel-pg-backend` | PostgreSQL backend via diesel-async + deadpool | Yes |
+| `diesel-libsql-backend` | SQLite/Turso backend via `diesel-libsql` crate | No |
+| `memory-backend` | Fully in-memory backend (no database required) | No |
+
+### Plugin Features
+
 | Feature | What It Enables | Default |
 |---|---|---|
 | `email-password` | Registration, login, verification, forgot/reset/change password | Yes |
@@ -68,10 +85,10 @@ bash pentest/pentest-yauth.sh        # Run full pentest suite (255+ cases, 0 FAI
 | `admin` | User management, ban/unban, impersonation | No |
 | `telemetry` | Native OpenTelemetry SDK instrumentation (spans, span events, context propagation) | No |
 | `openapi` | utoipa OpenAPI spec generation (for client codegen) | No |
-| `redis` | Redis store backend (sessions, rate limits, challenges, revocation) | No |
-| `full` | All of the above | No |
+| `redis` | Redis caching decorator — wraps repository traits for sub-ms session/rate-limit lookups | No |
+| `full` | All of the above (all backends + all plugins) | No |
 
-Feature flags gate code in all three Rust crates (entity, migration, yauth) simultaneously.
+Feature flags gate code across all Rust crates in the workspace.
 
 ## Architecture
 
@@ -82,18 +99,39 @@ Plugins implement the `YAuthPlugin` trait:
 - `protected_routes()` — routes behind auth middleware (change password, passkey management, etc.)
 - `on_event()` — react to auth events (MFA intercepts login, etc.)
 
+### Database Backends
+
+yauth uses a `DatabaseBackend` trait with three implementations:
+
+| Backend | Type | Use case |
+|---|---|---|
+| `DieselBackend` | `backends::diesel_pg` | Production PostgreSQL (default) |
+| `DieselLibsqlBackend` | `backends::diesel_libsql` | Local SQLite files or remote Turso databases |
+| `InMemoryBackend` | `backends::memory` | Tests, prototyping, CI — no database required |
+
+Redis (`with_redis()`) is a **caching decorator** that wraps repository traits for sub-millisecond session/rate-limit lookups. The database remains the source of truth. Redis is not a separate store backend.
+
 ### Builder Pattern
 
+`build()` is **async** and returns `Result<YAuth, RepoError>`. Migrations are explicit — call `backend.migrate()` before building.
+
 ```rust
-let yauth = YAuthBuilder::new(pool, config)
+use yauth::backends::diesel_pg::DieselBackend;
+use yauth::repo::{DatabaseBackend, EnabledFeatures};
+
+let backend = DieselBackend::new("postgres://user:pass@localhost/mydb")?;
+backend.migrate(&EnabledFeatures::from_compile_flags()).await?;
+
+let yauth = YAuthBuilder::new(backend, config)
     .with_email_password(ep_config)
     .with_passkey(pk_config)
     .with_bearer(bearer_config)
     .with_mfa(mfa_config)
-    .build();
+    .build()
+    .await?;
 
 let router = yauth.router();        // Axum Router<YAuthState>
-let state = yauth.into_state();     // For app-level state sharing
+let state = yauth.state().clone();   // For app-level state sharing
 ```
 
 ### Tri-Mode Auth Middleware
@@ -166,7 +204,7 @@ If CI publishes to crates.io/npm but fails before pushing the version commit and
 - **Biome** for TypeScript linting/formatting (not ESLint)
 - **`cargo fmt` + `cargo clippy`** for Rust
 - **`yauth_` table prefix** on all database tables
-- **Configurable PG schema** — `db_schema` in `YAuthConfig` (default `"public"`). Set to e.g. `"auth"` to isolate yauth tables in a separate PostgreSQL schema. Use `yauth::create_pool()` to get a pool with the search_path configured.
+- **Configurable PG schema** — use `DieselBackend::with_schema(url, "auth")` to isolate yauth tables in a separate PostgreSQL schema (default `"public"`).
 - **Timing-safe patterns** — dummy password hash on failed lookups to prevent timing attacks
 - **HIBP k-anonymity** — password breach checking via HaveIBeenPwned API (configurable)
 - **Rate limiting** — per-operation rate limits (login, register, forgot-password, etc.)

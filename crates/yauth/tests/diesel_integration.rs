@@ -10,7 +10,7 @@
 use std::time::Duration;
 
 use uuid::Uuid;
-use yauth::RunQueryDsl;
+use yauth::backends::diesel::{DieselBackend, RunQueryDsl};
 
 use yauth::config::YAuthConfig;
 use yauth::prelude::*;
@@ -39,11 +39,11 @@ async fn diesel_run_migrations_creates_tables() {
     let db = require_db!();
     drop_yauth_tables(&db.pool).await;
 
-    yauth::migration::diesel_migrations::run_migrations(&db.pool)
+    yauth::backends::diesel::migrations::run_migrations(&db.pool)
         .await
         .expect("run_migrations should succeed");
 
-    let tables = yauth::migration::diesel_migrations::list_yauth_tables(&db.pool)
+    let tables = yauth::backends::diesel::migrations::list_yauth_tables(&db.pool)
         .await
         .expect("list_yauth_tables should succeed");
 
@@ -71,10 +71,10 @@ async fn diesel_run_migrations_creates_tables() {
 async fn diesel_migrations_are_idempotent() {
     let db = require_db!();
 
-    yauth::migration::diesel_migrations::run_migrations(&db.pool)
+    yauth::backends::diesel::migrations::run_migrations(&db.pool)
         .await
         .expect("first run should succeed");
-    yauth::migration::diesel_migrations::run_migrations(&db.pool)
+    yauth::backends::diesel::migrations::run_migrations(&db.pool)
         .await
         .expect("second (idempotent) run should succeed");
 }
@@ -87,7 +87,7 @@ async fn diesel_migrations_are_idempotent() {
 async fn diesel_session_create_validate_delete() {
     let db = require_db!();
 
-    yauth::migration::diesel_migrations::run_migrations(&db.pool)
+    yauth::backends::diesel::migrations::run_migrations(&db.pool)
         .await
         .expect("migrations");
 
@@ -108,7 +108,7 @@ async fn diesel_session_create_validate_delete() {
 
     // Build state for session operations
     let config = YAuthConfig::default();
-    let mut builder = YAuthBuilder::new(db.pool.clone(), config);
+    let mut builder = YAuthBuilder::new(DieselBackend::from_pool(db.pool.clone()), config);
     #[cfg(feature = "bearer")]
     {
         builder = builder.with_bearer(yauth::config::BearerConfig {
@@ -118,7 +118,7 @@ async fn diesel_session_create_validate_delete() {
             audience: None,
         });
     }
-    let state = builder.build().into_state();
+    let state = builder.build().await.expect("build YAuth").into_state();
 
     // --- Create session ---
     let (token, session_id) = yauth::auth::session::create_session(
@@ -174,13 +174,13 @@ async fn diesel_session_create_validate_delete() {
 async fn diesel_pool_sharing() {
     let db = require_db!();
 
-    yauth::migration::diesel_migrations::run_migrations(&db.pool)
+    yauth::backends::diesel::migrations::run_migrations(&db.pool)
         .await
         .expect("migrations");
 
     // Build YAuth with the pool
     let config = YAuthConfig::default();
-    let mut builder = YAuthBuilder::new(db.pool.clone(), config);
+    let mut builder = YAuthBuilder::new(DieselBackend::from_pool(db.pool.clone()), config);
     #[cfg(feature = "bearer")]
     {
         builder = builder.with_bearer(yauth::config::BearerConfig {
@@ -190,7 +190,7 @@ async fn diesel_pool_sharing() {
             audience: None,
         });
     }
-    let state = builder.build().into_state();
+    let state = builder.build().await.expect("build YAuth").into_state();
 
     // Use the pool directly for a raw query
     {
@@ -205,24 +205,15 @@ async fn diesel_pool_sharing() {
         .expect("direct insert via shared pool");
     }
 
-    // Use the pool through YAuth state to verify sharing works
+    // Verify the user is visible through the repos (pool sharing)
     {
-        let mut conn = state.db.get().await.expect("state pool connection");
-
-        #[derive(diesel::QueryableByName)]
-        struct CountRow {
-            #[diesel(sql_type = diesel::sql_types::BigInt)]
-            cnt: i64,
-        }
-
-        let row: CountRow = diesel::sql_query("SELECT COUNT(*) AS cnt FROM yauth_users")
-            .get_result(&mut conn)
+        let (users, total) = state
+            .repos
+            .users
+            .list(None, 10, 0)
             .await
-            .expect("count via state pool");
-
-        assert_eq!(
-            row.cnt, 1,
-            "should see the user inserted via the shared pool"
-        );
+            .expect("list users");
+        assert_eq!(total, 1, "should see the user inserted via the shared pool");
+        assert_eq!(users.len(), 1);
     }
 }

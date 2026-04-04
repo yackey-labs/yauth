@@ -13,209 +13,15 @@ use oauth2::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use diesel::prelude::*;
-use diesel::result::OptionalExtension;
-use diesel_async_crate::RunQueryDsl;
-
 use crate::auth::session::session_set_cookie;
 use crate::auth::{crypto, session};
 use crate::config::OAuthProviderConfig;
-use crate::db::models::{NewOauthAccount, NewOauthState, NewUser, OauthAccount, OauthState};
-use crate::db::schema::{yauth_oauth_accounts, yauth_oauth_states, yauth_users};
 use crate::error::{ApiError, api_err};
 use crate::middleware::AuthUser;
 use crate::plugin::{PluginContext, YAuthPlugin};
 use crate::state::YAuthState;
 
 const STATE_EXPIRY_MINUTES: i64 = 10;
-
-// ---------------------------------------------------------------------------
-// Database helpers
-// ---------------------------------------------------------------------------
-
-type Conn = diesel_async_crate::AsyncPgConnection;
-type DbResult<T> = Result<T, String>;
-
-use crate::db::{find_user_by_email, find_user_by_id};
-
-async fn db_insert_user(
-    conn: &mut Conn,
-    id: Uuid,
-    email: &str,
-    display_name: Option<&str>,
-) -> DbResult<()> {
-    let now = chrono::Utc::now().naive_utc();
-    let new_user = NewUser {
-        id,
-        email: email.to_string(),
-        display_name: display_name.map(|s| s.to_string()),
-        email_verified: true,
-        role: "user".to_string(),
-        banned: false,
-        banned_reason: None,
-        banned_until: None,
-        created_at: now,
-        updated_at: now,
-    };
-    diesel::insert_into(yauth_users::table)
-        .values(&new_user)
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-async fn db_find_oauth_account_by_provider(
-    conn: &mut Conn,
-    provider: &str,
-    provider_user_id: &str,
-) -> DbResult<Option<OauthAccount>> {
-    yauth_oauth_accounts::table
-        .filter(
-            yauth_oauth_accounts::provider
-                .eq(provider)
-                .and(yauth_oauth_accounts::provider_user_id.eq(provider_user_id)),
-        )
-        .select(OauthAccount::as_select())
-        .first(conn)
-        .await
-        .optional()
-        .map_err(|e| e.to_string())
-}
-
-async fn db_find_oauth_accounts_by_user(
-    conn: &mut Conn,
-    user_id: Uuid,
-) -> DbResult<Vec<OauthAccount>> {
-    yauth_oauth_accounts::table
-        .filter(yauth_oauth_accounts::user_id.eq(user_id))
-        .select(OauthAccount::as_select())
-        .load(conn)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-async fn db_find_oauth_account_by_user_and_provider(
-    conn: &mut Conn,
-    user_id: Uuid,
-    provider: &str,
-) -> DbResult<Option<OauthAccount>> {
-    yauth_oauth_accounts::table
-        .filter(
-            yauth_oauth_accounts::user_id
-                .eq(user_id)
-                .and(yauth_oauth_accounts::provider.eq(provider)),
-        )
-        .select(OauthAccount::as_select())
-        .first(conn)
-        .await
-        .optional()
-        .map_err(|e| e.to_string())
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn db_insert_oauth_account(
-    conn: &mut Conn,
-    id: Uuid,
-    user_id: Uuid,
-    provider: &str,
-    provider_user_id: &str,
-    access_token_enc: Option<&str>,
-    refresh_token_enc: Option<&str>,
-    expires_at: Option<chrono::DateTime<chrono::FixedOffset>>,
-) -> DbResult<()> {
-    let now = chrono::Utc::now().naive_utc();
-    let new_account = NewOauthAccount {
-        id,
-        user_id,
-        provider: provider.to_string(),
-        provider_user_id: provider_user_id.to_string(),
-        access_token_enc: access_token_enc.map(|s| s.to_string()),
-        refresh_token_enc: refresh_token_enc.map(|s| s.to_string()),
-        created_at: now,
-        expires_at: expires_at.map(|dt| dt.naive_utc()),
-        updated_at: now,
-    };
-    diesel::insert_into(yauth_oauth_accounts::table)
-        .values(&new_account)
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-async fn db_update_oauth_account_tokens(
-    conn: &mut Conn,
-    id: Uuid,
-    access_token_enc: Option<&str>,
-    refresh_token_enc: Option<&str>,
-    expires_at: Option<chrono::DateTime<chrono::FixedOffset>>,
-) -> DbResult<()> {
-    let now = chrono::Utc::now().naive_utc();
-    diesel::update(yauth_oauth_accounts::table.find(id))
-        .set((
-            yauth_oauth_accounts::access_token_enc.eq(access_token_enc),
-            yauth_oauth_accounts::refresh_token_enc.eq(refresh_token_enc),
-            yauth_oauth_accounts::expires_at.eq(expires_at.map(|dt| dt.naive_utc())),
-            yauth_oauth_accounts::updated_at.eq(now),
-        ))
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-async fn db_delete_oauth_account(conn: &mut Conn, id: Uuid) -> DbResult<()> {
-    diesel::delete(yauth_oauth_accounts::table.find(id))
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-async fn db_insert_oauth_state(
-    conn: &mut Conn,
-    state_token: &str,
-    provider: &str,
-    redirect_url: Option<&str>,
-    expires_at: chrono::DateTime<chrono::FixedOffset>,
-) -> DbResult<()> {
-    let now = chrono::Utc::now().naive_utc();
-    let new_state = NewOauthState {
-        state: state_token.to_string(),
-        provider: provider.to_string(),
-        redirect_url: redirect_url.map(|s| s.to_string()),
-        expires_at: expires_at.naive_utc(),
-        created_at: now,
-    };
-    diesel::insert_into(yauth_oauth_states::table)
-        .values(&new_state)
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-async fn db_find_and_delete_oauth_state(
-    conn: &mut Conn,
-    state_token: &str,
-) -> DbResult<Option<OauthState>> {
-    let row: Option<OauthState> = yauth_oauth_states::table
-        .find(state_token)
-        .select(OauthState::as_select())
-        .first(conn)
-        .await
-        .optional()
-        .map_err(|e| e.to_string())?;
-
-    if row.is_some() {
-        let _ = diesel::delete(yauth_oauth_states::table.find(state_token))
-            .execute(conn)
-            .await;
-    }
-
-    Ok(row)
-}
 
 pub struct OAuthPlugin;
 
@@ -240,6 +46,10 @@ impl YAuthPlugin for OAuthPlugin {
                 .route("/oauth/{provider}", delete(unlink_provider))
                 .route("/oauth/{provider}/link", post(start_link)),
         )
+    }
+
+    fn schema(&self) -> Vec<crate::schema::TableDef> {
+        crate::schema::plugin_schemas::oauth_schema()
     }
 }
 
@@ -355,22 +165,25 @@ async fn store_state(
     provider: &str,
     redirect_url: Option<&str>,
 ) -> Result<(), ApiError> {
-    let expires_at =
-        (chrono::Utc::now() + chrono::Duration::minutes(STATE_EXPIRY_MINUTES)).fixed_offset();
+    let expires_at = chrono::Utc::now() + chrono::Duration::minutes(STATE_EXPIRY_MINUTES);
 
-    {
-        let mut conn = state
-            .db
-            .get()
-            .await
-            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-        db_insert_oauth_state(&mut conn, state_token, provider, redirect_url, expires_at)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("oauth_state_store_failed", &e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
-    }
+    let new_state = crate::domain::NewOauthState {
+        state: state_token.to_string(),
+        provider: provider.to_string(),
+        redirect_url: redirect_url.map(|s| s.to_string()),
+        expires_at: expires_at.naive_utc(),
+        created_at: chrono::Utc::now().naive_utc(),
+    };
+
+    state
+        .repos
+        .oauth_states
+        .create(new_state)
+        .await
+        .map_err(|e| {
+            crate::otel::record_error("oauth_state_store_failed", &e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
 
     Ok(())
 }
@@ -389,32 +202,28 @@ async fn consume_state(
     state_token: &str,
     expected_provider: &str,
 ) -> Result<ConsumedState, ApiError> {
-    let stored = {
-        let mut conn = state
-            .db
-            .get()
-            .await
-            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-        let s = db_find_and_delete_oauth_state(&mut conn, state_token)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("oauth_state_lookup_error", &e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?
-            .ok_or_else(|| {
-                crate::otel::add_event("oauth_state_invalid", vec![]);
-                api_err(
-                    StatusCode::BAD_REQUEST,
-                    "Invalid or expired state parameter",
-                )
-            })?;
+    let s = state
+        .repos
+        .oauth_states
+        .find_and_delete(state_token)
+        .await
+        .map_err(|e| {
+            crate::otel::record_error("oauth_state_lookup_error", &e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?
+        .ok_or_else(|| {
+            crate::otel::add_event("oauth_state_invalid", vec![]);
+            api_err(
+                StatusCode::BAD_REQUEST,
+                "Invalid or expired state parameter",
+            )
+        })?;
 
-        use chrono::TimeZone;
-        ConsumedState {
-            provider: s.provider,
-            redirect_url: s.redirect_url,
-            expires_at: chrono::Utc.from_utc_datetime(&s.expires_at).fixed_offset(),
-        }
+    use chrono::TimeZone;
+    let stored = ConsumedState {
+        provider: s.provider,
+        redirect_url: s.redirect_url,
+        expires_at: chrono::Utc.from_utc_datetime(&s.expires_at).fixed_offset(),
     };
 
     // Check expiry
@@ -629,9 +438,9 @@ async fn handle_callback(
 
     let access_token = token_result.access_token().secret().clone();
     let refresh_token = token_result.refresh_token().map(|t| t.secret().clone());
-    let expires_at = token_result.expires_in().map(|d| {
-        (chrono::Utc::now() + chrono::Duration::seconds(d.as_secs() as i64)).fixed_offset()
-    });
+    let expires_at = token_result
+        .expires_in()
+        .map(|d| chrono::Utc::now() + chrono::Duration::seconds(d.as_secs() as i64));
 
     // 5. Fetch user info from provider
     let userinfo_json = fetch_userinfo(provider_config, &access_token).await?;
@@ -642,12 +451,6 @@ async fn handle_callback(
         userinfo.email = fetch_primary_email(emails_url, &access_token).await.ok();
     }
 
-    let mut conn = state
-        .db
-        .get()
-        .await
-        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-
     // 6. Check if this is an account-linking callback
     let link_to_user_id = stored_state
         .redirect_url
@@ -657,14 +460,15 @@ async fn handle_callback(
 
     if let Some(link_user_id) = link_to_user_id {
         // Account linking flow
-        let existing_link = {
-            db_find_oauth_account_by_provider(&mut conn, provider, &userinfo.id)
-                .await
-                .map_err(|e| {
-                    crate::otel::record_error("db_error", &e);
-                    api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-                })?
-        };
+        let existing_link = state
+            .repos
+            .oauth_accounts
+            .find_by_provider_and_provider_user_id(provider, &userinfo.id)
+            .await
+            .map_err(|e| {
+                crate::otel::record_error("db_error", &e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?;
 
         if existing_link.is_some() {
             return Err(api_err(
@@ -673,46 +477,39 @@ async fn handle_callback(
             ));
         }
 
-        {
-            db_insert_oauth_account(
-                &mut conn,
-                Uuid::new_v4(),
-                link_user_id,
-                provider,
-                &userinfo.id,
-                Some(&access_token),
-                refresh_token.as_deref(),
-                expires_at,
-            )
+        let now = chrono::Utc::now().naive_utc();
+        let new_account = crate::domain::NewOauthAccount {
+            id: Uuid::new_v4(),
+            user_id: link_user_id,
+            provider: provider.to_string(),
+            provider_user_id: userinfo.id.clone(),
+            access_token_enc: Some(access_token.clone()),
+            refresh_token_enc: refresh_token.clone(),
+            created_at: now,
+            expires_at: expires_at.map(|dt| dt.naive_utc()),
+            updated_at: now,
+        };
+
+        state
+            .repos
+            .oauth_accounts
+            .create(new_account)
             .await
             .map_err(|e| {
                 crate::otel::record_error("oauth_account_link_failed", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
-        }
 
-        struct LinkUserInfo {
-            id: Uuid,
-            email: String,
-            display_name: Option<String>,
-            email_verified: bool,
-        }
-
-        let user = {
-            let u = find_user_by_id(&mut conn, link_user_id)
-                .await
-                .map_err(|e| {
-                    crate::otel::record_error("db_error", &e);
-                    api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-                })?
-                .ok_or_else(|| api_err(StatusCode::INTERNAL_SERVER_ERROR, "User not found"))?;
-            LinkUserInfo {
-                id: u.id,
-                email: u.email,
-                display_name: u.display_name,
-                email_verified: u.email_verified,
-            }
-        };
+        let user = state
+            .repos
+            .users
+            .find_by_id(link_user_id)
+            .await
+            .map_err(|e| {
+                crate::otel::record_error("db_error", &e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?
+            .ok_or_else(|| api_err(StatusCode::INTERNAL_SERVER_ERROR, "User not found"))?;
 
         let (token, _session_id) =
             session::create_session(state, user.id, None, None, state.config.session_ttl)
@@ -752,14 +549,15 @@ async fn handle_callback(
     }
 
     // 7. Look up existing OAuth account
-    let existing_account = {
-        db_find_oauth_account_by_provider(&mut conn, provider, &userinfo.id)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("db_error", &e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?
-    };
+    let existing_account = state
+        .repos
+        .oauth_accounts
+        .find_by_provider_and_provider_user_id(provider, &userinfo.id)
+        .await
+        .map_err(|e| {
+            crate::otel::record_error("db_error", &e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
 
     struct CallbackUserInfo {
         id: Uuid,
@@ -770,49 +568,45 @@ async fn handle_callback(
 
     let user_info = if let Some(account) = existing_account {
         // Existing OAuth account — update tokens
-        {
-            db_update_oauth_account_tokens(
-                &mut conn,
+        state
+            .repos
+            .oauth_accounts
+            .update_tokens(
                 account.id,
                 Some(&access_token),
                 refresh_token.as_deref(),
-                expires_at,
+                expires_at.map(|dt| dt.naive_utc()),
             )
             .await
             .map_err(|e| {
                 crate::otel::record_error("oauth_tokens_update_failed", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
-        }
 
-        let user = {
-            let u = find_user_by_id(&mut conn, account.user_id)
-                .await
-                .map_err(|e| {
-                    crate::otel::record_error("db_error", &e);
-                    api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-                })?
-                .ok_or_else(|| api_err(StatusCode::INTERNAL_SERVER_ERROR, "User not found"))?;
-            if u.banned {
-                crate::otel::add_event(
-                    "oauth_login_banned_user",
-                    #[cfg(feature = "telemetry")]
-                    vec![
-                        opentelemetry::KeyValue::new("oauth.provider", provider.to_string()),
-                        opentelemetry::KeyValue::new("user.id", u.id.to_string()),
-                    ],
-                    #[cfg(not(feature = "telemetry"))]
-                    vec![],
-                );
-                return Err(api_err(StatusCode::FORBIDDEN, "Account suspended"));
-            }
-            CallbackUserInfo {
-                id: u.id,
-                email: u.email,
-                display_name: u.display_name,
-                email_verified: u.email_verified,
-            }
-        };
+        let user = state
+            .repos
+            .users
+            .find_by_id(account.user_id)
+            .await
+            .map_err(|e| {
+                crate::otel::record_error("db_error", &e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?
+            .ok_or_else(|| api_err(StatusCode::INTERNAL_SERVER_ERROR, "User not found"))?;
+
+        if user.banned {
+            crate::otel::add_event(
+                "oauth_login_banned_user",
+                #[cfg(feature = "telemetry")]
+                vec![
+                    opentelemetry::KeyValue::new("oauth.provider", provider.to_string()),
+                    opentelemetry::KeyValue::new("user.id", user.id.to_string()),
+                ],
+                #[cfg(not(feature = "telemetry"))]
+                vec![],
+            );
+            return Err(api_err(StatusCode::FORBIDDEN, "Account suspended"));
+        }
 
         crate::otel::add_event(
             "oauth_login_succeeded",
@@ -833,7 +627,12 @@ async fn handle_callback(
             )
             .await;
 
-        user
+        CallbackUserInfo {
+            id: user.id,
+            email: user.email,
+            display_name: user.display_name,
+            email_verified: user.email_verified,
+        }
     } else {
         // New user — create user and OAuth account
         let email = userinfo.email.ok_or_else(|| {
@@ -848,12 +647,10 @@ async fn handle_callback(
         })?;
         let email = email.trim().to_lowercase();
 
-        let existing_user = {
-            find_user_by_email(&mut conn, &email).await.map_err(|e| {
-                crate::otel::record_error("db_error", &e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?
-        };
+        let existing_user = state.repos.users.find_by_email(&email).await.map_err(|e| {
+            crate::otel::record_error("db_error", &e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
 
         let (uid, display_name, email_verified) = if let Some(existing) = existing_user {
             (existing.id, existing.display_name, existing.email_verified)
@@ -872,34 +669,48 @@ async fn handle_callback(
                 ));
             }
             let user_id = Uuid::new_v4();
-            {
-                db_insert_user(&mut conn, user_id, &email, userinfo.name.as_deref())
-                    .await
-                    .map_err(|e| {
-                        crate::otel::record_error("user_create_failed", &e);
-                        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-                    })?;
-            }
+            let now = chrono::Utc::now().naive_utc();
+            let new_user = crate::domain::NewUser {
+                id: user_id,
+                email: email.clone(),
+                display_name: userinfo.name.clone(),
+                email_verified: true,
+                role: "user".to_string(),
+                banned: false,
+                banned_reason: None,
+                banned_until: None,
+                created_at: now,
+                updated_at: now,
+            };
+            state.repos.users.create(new_user).await.map_err(|e| {
+                crate::otel::record_error("user_create_failed", &e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?;
             (user_id, userinfo.name.clone(), true)
         };
 
-        {
-            db_insert_oauth_account(
-                &mut conn,
-                Uuid::new_v4(),
-                uid,
-                provider,
-                &userinfo.id,
-                Some(&access_token),
-                refresh_token.as_deref(),
-                expires_at,
-            )
+        let now = chrono::Utc::now().naive_utc();
+        let new_account = crate::domain::NewOauthAccount {
+            id: Uuid::new_v4(),
+            user_id: uid,
+            provider: provider.to_string(),
+            provider_user_id: userinfo.id.clone(),
+            access_token_enc: Some(access_token.clone()),
+            refresh_token_enc: refresh_token.clone(),
+            created_at: now,
+            expires_at: expires_at.map(|dt| dt.naive_utc()),
+            updated_at: now,
+        };
+
+        state
+            .repos
+            .oauth_accounts
+            .create(new_account)
             .await
             .map_err(|e| {
                 crate::otel::record_error("oauth_account_create_failed", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
             })?;
-        }
 
         crate::otel::add_event(
             "oauth_user_registered",
@@ -1109,29 +920,26 @@ async fn list_accounts(
     State(state): State<YAuthState>,
     Extension(user): Extension<AuthUser>,
 ) -> Result<Json<Vec<OAuthAccountResponse>>, ApiError> {
-    let response = {
-        let mut conn = state
-            .db
-            .get()
-            .await
-            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-        let accounts = db_find_oauth_accounts_by_user(&mut conn, user.id)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("oauth_accounts_list_failed", &e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
-        use chrono::TimeZone;
-        accounts
-            .into_iter()
-            .map(|a| OAuthAccountResponse {
-                id: a.id.to_string(),
-                provider: a.provider,
-                provider_user_id: a.provider_user_id,
-                created_at: chrono::Utc.from_utc_datetime(&a.created_at).to_rfc3339(),
-            })
-            .collect::<Vec<_>>()
-    };
+    let accounts = state
+        .repos
+        .oauth_accounts
+        .find_by_user_id(user.id)
+        .await
+        .map_err(|e| {
+            crate::otel::record_error("oauth_accounts_list_failed", &e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
+
+    use chrono::TimeZone;
+    let response = accounts
+        .into_iter()
+        .map(|a| OAuthAccountResponse {
+            id: a.id.to_string(),
+            provider: a.provider,
+            provider_user_id: a.provider_user_id,
+            created_at: chrono::Utc.from_utc_datetime(&a.created_at).to_rfc3339(),
+        })
+        .collect::<Vec<_>>();
 
     Ok(Json(response))
 }
@@ -1141,31 +949,31 @@ async fn unlink_provider(
     Extension(user): Extension<AuthUser>,
     Path(provider): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    {
-        let mut conn = state
-            .db
-            .get()
-            .await
-            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-        let account = db_find_oauth_account_by_user_and_provider(&mut conn, user.id, &provider)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("oauth_account_find_failed", &e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?
-            .ok_or_else(|| {
-                api_err(
-                    StatusCode::NOT_FOUND,
-                    "OAuth provider not linked to your account",
-                )
-            })?;
-        db_delete_oauth_account(&mut conn, account.id)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("oauth_account_unlink_failed", &e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
-    }
+    let account = state
+        .repos
+        .oauth_accounts
+        .find_by_user_and_provider(user.id, &provider)
+        .await
+        .map_err(|e| {
+            crate::otel::record_error("oauth_account_find_failed", &e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?
+        .ok_or_else(|| {
+            api_err(
+                StatusCode::NOT_FOUND,
+                "OAuth provider not linked to your account",
+            )
+        })?;
+
+    state
+        .repos
+        .oauth_accounts
+        .delete(account.id)
+        .await
+        .map_err(|e| {
+            crate::otel::record_error("oauth_account_unlink_failed", &e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
 
     crate::otel::add_event(
         "oauth_account_unlinked",
@@ -1196,19 +1004,15 @@ async fn start_link(
 ) -> Result<Json<AuthorizeResponse>, ApiError> {
     let provider_config = find_provider_config(&state, &provider)?;
 
-    let existing = {
-        let mut conn = state
-            .db
-            .get()
-            .await
-            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-        db_find_oauth_account_by_user_and_provider(&mut conn, user.id, &provider)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("db_error", &e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?
-    };
+    let existing = state
+        .repos
+        .oauth_accounts
+        .find_by_user_and_provider(user.id, &provider)
+        .await
+        .map_err(|e| {
+            crate::otel::record_error("db_error", &e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
 
     if existing.is_some() {
         return Err(api_err(

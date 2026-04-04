@@ -150,9 +150,12 @@ async fn lookup_user(
     user_id: Uuid,
     method: AuthMethod,
 ) -> Result<AuthUser, String> {
-    let mut conn = state.db.get().await.map_err(|e| e.to_string())?;
-    let user = crate::db::find_user_by_id(&mut conn, user_id)
-        .await?
+    let user = state
+        .repos
+        .users
+        .find_by_id(user_id)
+        .await
+        .map_err(|e| e.to_string())?
         .ok_or_else(|| "User not found".to_string())?;
 
     Ok(AuthUser {

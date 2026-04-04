@@ -5,17 +5,12 @@ use axum::{
     response::IntoResponse,
     routing::post,
 };
-use diesel::prelude::*;
-use diesel::result::OptionalExtension;
-use diesel_async_crate::RunQueryDsl;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::auth::session::session_set_cookie;
 use crate::auth::{crypto, session};
 use crate::config::MagicLinkConfig;
-use crate::db::models::{MagicLink, NewMagicLink, NewUser, User};
-use crate::db::schema::{yauth_magic_links, yauth_users};
 use crate::error::{ApiError, api_err};
 use crate::plugin::{AuthEvent, PluginContext, YAuthPlugin};
 use crate::state::YAuthState;
@@ -44,119 +39,10 @@ impl YAuthPlugin for MagicLinkPlugin {
     fn protected_routes(&self, _ctx: &PluginContext) -> Option<Router<YAuthState>> {
         None
     }
-}
 
-// ---------------------------------------------------------------------------
-// Database helpers
-// ---------------------------------------------------------------------------
-
-type Conn = diesel_async_crate::AsyncPgConnection;
-type DbResult<T> = Result<T, String>;
-
-use crate::db::find_user_by_email;
-
-async fn db_delete_unused_magic_links_for_email(conn: &mut Conn, email: &str) -> DbResult<()> {
-    diesel::delete(
-        yauth_magic_links::table.filter(
-            yauth_magic_links::email
-                .eq(email)
-                .and(yauth_magic_links::used.eq(false)),
-        ),
-    )
-    .execute(conn)
-    .await
-    .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-async fn db_insert_magic_link(
-    conn: &mut Conn,
-    id: Uuid,
-    email: &str,
-    token_hash: &str,
-    expires_at: chrono::DateTime<chrono::FixedOffset>,
-) -> DbResult<()> {
-    let new_link = NewMagicLink {
-        id,
-        email: email.to_string(),
-        token_hash: token_hash.to_string(),
-        expires_at: expires_at.naive_utc(),
-        created_at: chrono::Utc::now().naive_utc(),
-    };
-    diesel::insert_into(yauth_magic_links::table)
-        .values(&new_link)
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-async fn db_find_unused_magic_link_by_token(
-    conn: &mut Conn,
-    token_hash: &str,
-) -> DbResult<Option<MagicLink>> {
-    yauth_magic_links::table
-        .filter(
-            yauth_magic_links::token_hash
-                .eq(token_hash)
-                .and(yauth_magic_links::used.eq(false)),
-        )
-        .select(MagicLink::as_select())
-        .first(conn)
-        .await
-        .optional()
-        .map_err(|e| e.to_string())
-}
-
-async fn db_delete_magic_link(conn: &mut Conn, id: Uuid) -> DbResult<()> {
-    diesel::delete(yauth_magic_links::table.filter(yauth_magic_links::id.eq(id)))
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-async fn db_mark_magic_link_used(conn: &mut Conn, id: Uuid) -> DbResult<()> {
-    diesel::update(yauth_magic_links::table.filter(yauth_magic_links::id.eq(id)))
-        .set(yauth_magic_links::used.eq(true))
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-async fn db_insert_user(conn: &mut Conn, id: Uuid, email: &str, role: &str) -> DbResult<()> {
-    let now = chrono::Utc::now().naive_utc();
-    let new_user = NewUser {
-        id,
-        email: email.to_string(),
-        display_name: None,
-        email_verified: true,
-        role: role.to_string(),
-        banned: false,
-        banned_reason: None,
-        banned_until: None,
-        created_at: now,
-        updated_at: now,
-    };
-    diesel::insert_into(yauth_users::table)
-        .values(&new_user)
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-async fn db_set_user_email_verified(conn: &mut Conn, user_id: Uuid) -> DbResult<()> {
-    diesel::update(yauth_users::table.filter(yauth_users::id.eq(user_id)))
-        .set((
-            yauth_users::email_verified.eq(true),
-            yauth_users::updated_at.eq(chrono::Utc::now().naive_utc()),
-        ))
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
+    fn schema(&self) -> Vec<crate::schema::TableDef> {
+        crate::schema::plugin_schemas::magic_link_schema()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -216,18 +102,10 @@ async fn send_magic_link(
 
     let ml_config = &state.magic_link_config;
 
-    let mut conn = state
-        .db
-        .get()
-        .await
-        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-
-    let user_opt = {
-        find_user_by_email(&mut conn, &email).await.map_err(|e| {
-            crate::otel::record_error("db_error", &e);
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?
-    };
+    let user_opt = state.repos.users.find_by_email(&email).await.map_err(|e| {
+        crate::otel::record_error("db_error", &e);
+        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+    })?;
 
     if user_opt.is_none() && (!ml_config.allow_signup || !state.config.allow_signups) {
         crate::otel::add_event(
@@ -254,26 +132,35 @@ async fn send_magic_link(
     }
 
     // Delete old unused magic links
-    {
-        db_delete_unused_magic_links_for_email(&mut conn, &email)
-            .await
-            .ok();
-    }
+    let _ = state
+        .repos
+        .magic_links
+        .delete_unused_for_email(&email)
+        .await;
 
     let token = crypto::generate_token();
     let token_hash = crypto::hash_token(&token);
     let expires_at = (chrono::Utc::now()
         + chrono::Duration::seconds(ml_config.link_ttl.as_secs() as i64))
-    .fixed_offset();
+    .naive_utc();
 
-    {
-        db_insert_magic_link(&mut conn, Uuid::new_v4(), &email, &token_hash, expires_at)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("magic_link_create_failed", &e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
-    }
+    let new_link = crate::domain::NewMagicLink {
+        id: Uuid::new_v4(),
+        email: email.clone(),
+        token_hash,
+        expires_at,
+        created_at: chrono::Utc::now().naive_utc(),
+    };
+
+    state
+        .repos
+        .magic_links
+        .create(new_link)
+        .await
+        .map_err(|e| {
+            crate::otel::record_error("magic_link_create_failed", &e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
 
     if let Some(ref email_service) = state.email_service
         && let Err(e) = email_service.send_magic_link_email(&email, &token)
@@ -310,27 +197,20 @@ async fn verify_magic_link(
 
     let token_hash = crypto::hash_token(token);
 
-    let mut conn = state
-        .db
-        .get()
+    let ml = state
+        .repos
+        .magic_links
+        .find_unused_by_token_hash(&token_hash)
         .await
-        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-
-    let ml = {
-        db_find_unused_magic_link_by_token(&mut conn, &token_hash)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("db_error", &e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?
-            .ok_or_else(|| api_err(StatusCode::BAD_REQUEST, "Invalid or expired magic link"))?
-    };
+        .map_err(|e| {
+            crate::otel::record_error("db_error", &e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?
+        .ok_or_else(|| api_err(StatusCode::BAD_REQUEST, "Invalid or expired magic link"))?;
 
     let now_naive = chrono::Utc::now().naive_utc();
     if ml.expires_at < now_naive {
-        {
-            db_delete_magic_link(&mut conn, ml.id).await.ok();
-        }
+        let _ = state.repos.magic_links.delete(ml.id).await;
         return Err(api_err(
             StatusCode::BAD_REQUEST,
             "Magic link has expired. Please request a new one.",
@@ -339,24 +219,23 @@ async fn verify_magic_link(
 
     // Mark as used
     let ml_id = ml.id;
-    {
-        db_mark_magic_link_used(&mut conn, ml_id)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("magic_link_mark_used_failed", &e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
-    }
+    state
+        .repos
+        .magic_links
+        .mark_used(ml_id)
+        .await
+        .map_err(|e| {
+            crate::otel::record_error("magic_link_mark_used_failed", &e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
 
     let email = &ml.email;
     let ml_config = &state.magic_link_config;
 
-    let user_opt = {
-        find_user_by_email(&mut conn, email).await.map_err(|e| {
-            crate::otel::record_error("db_error", &e);
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?
-    };
+    let user_opt = state.repos.users.find_by_email(email).await.map_err(|e| {
+        crate::otel::record_error("db_error", &e);
+        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+    })?;
 
     let (user_model, is_new_user) = match user_opt {
         Some(u) => {
@@ -404,14 +283,24 @@ async fn verify_magic_link(
                     .to_string()
             };
 
-            {
-                db_insert_user(&mut conn, user_id, email, &role)
-                    .await
-                    .map_err(|e| {
-                        crate::otel::record_error("magic_link_user_create_failed", &e);
-                        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-                    })?;
-            }
+            let now = chrono::Utc::now().naive_utc();
+            let new_user = crate::domain::NewUser {
+                id: user_id,
+                email: email.clone(),
+                display_name: None,
+                email_verified: true,
+                role: role.clone(),
+                banned: false,
+                banned_reason: None,
+                banned_until: None,
+                created_at: now,
+                updated_at: now,
+            };
+
+            let created_user = state.repos.users.create(new_user).await.map_err(|e| {
+                crate::otel::record_error("magic_link_user_create_failed", &e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?;
 
             crate::otel::add_event(
                 "magic_link_user_created",
@@ -428,34 +317,25 @@ async fn verify_magic_link(
                 email: email.clone(),
             });
 
-            let now = chrono::Utc::now().naive_utc();
-            (
-                User {
-                    id: user_id,
-                    email: email.clone(),
-                    display_name: None,
-                    email_verified: true,
-                    role,
-                    banned: false,
-                    banned_reason: None,
-                    banned_until: None,
-                    created_at: now,
-                    updated_at: now,
-                },
-                true,
-            )
+            (created_user, true)
         }
     };
 
     if !user_model.email_verified {
-        {
-            db_set_user_email_verified(&mut conn, user_model.id)
-                .await
-                .map_err(|e| {
-                    crate::otel::record_error("user_email_verified_update_failed", &e);
-                    api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-                })?;
-        }
+        let changeset = crate::domain::UpdateUser {
+            email_verified: Some(true),
+            updated_at: Some(chrono::Utc::now().naive_utc()),
+            ..Default::default()
+        };
+        state
+            .repos
+            .users
+            .update(user_model.id, changeset)
+            .await
+            .map_err(|e| {
+                crate::otel::record_error("user_email_verified_update_failed", &e);
+                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            })?;
     }
 
     let (session_token, _session_id) =

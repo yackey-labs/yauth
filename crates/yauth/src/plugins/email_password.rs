@@ -10,22 +10,12 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::auth::{crypto, hibp, input, password, password_policy, session};
-use crate::db::models::{
-    EmailVerification, NewEmailVerification, NewPassword, NewPasswordReset, NewUser, Password,
-    PasswordReset, UpdateUser, User,
-};
-use crate::db::schema::{
-    yauth_email_verifications, yauth_password_resets, yauth_passwords, yauth_users,
-};
 use crate::error::api_err;
 use crate::middleware::AuthUser;
 use crate::plugin::{AuthEvent, EventResponse, PluginContext, YAuthPlugin};
 use crate::state::YAuthState;
 
 use crate::config::EmailPasswordConfig;
-use diesel::prelude::*;
-use diesel::result::{DatabaseErrorKind, Error as DieselError, OptionalExtension};
-use diesel_async_crate::RunQueryDsl;
 
 const VERIFICATION_TOKEN_EXPIRY_HOURS: i64 = 24;
 const RESET_TOKEN_EXPIRY_HOURS: i64 = 1;
@@ -57,6 +47,10 @@ impl YAuthPlugin for EmailPasswordPlugin {
 
     fn protected_routes(&self, _ctx: &PluginContext) -> Option<Router<YAuthState>> {
         Some(Router::new().route("/change-password", post(change_password)))
+    }
+
+    fn schema(&self) -> Vec<crate::schema::TableDef> {
+        crate::schema::plugin_schemas::email_password_schema()
     }
 }
 
@@ -180,24 +174,12 @@ async fn register(
         return Err(api_err(StatusCode::BAD_REQUEST, &breach_msg));
     }
 
-    // Check if user exists (scoped DB connection)
+    // Check if user exists
     {
-        let mut conn = state
-            .db
-            .get()
-            .await
-            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-
-        let existing: Option<User> = yauth_users::table
-            .filter(yauth_users::email.eq(&email))
-            .select(User::as_select())
-            .first(&mut conn)
-            .await
-            .optional()
-            .map_err(|e| {
-                crate::otel::record_error("db_error", &e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
+        let existing = state.repos.users.find_by_email(&email).await.map_err(|e| {
+            crate::otel::record_error("db_error", &e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
 
         if existing.is_some() {
             crate::otel::add_event(
@@ -210,7 +192,7 @@ async fn register(
             return Err(api_err(StatusCode::CONFLICT, "Registration failed"));
         }
     }
-    // conn dropped here — hash runs on blocking thread without holding a DB connection
+
     let password_hash = password::hash_password(&pwd).await.map_err(|e| {
         crate::otel::record_error("password_hash_error", &e);
         api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
@@ -232,7 +214,7 @@ async fn register(
     };
 
     let now = chrono::Utc::now().naive_utc();
-    let new_user = NewUser {
+    let new_user = crate::domain::NewUser {
         id: user_id,
         email: email.clone(),
         display_name: input.display_name.as_ref().map(|n| input::sanitize(n)),
@@ -245,20 +227,9 @@ async fn register(
         updated_at: now,
     };
 
-    // Re-acquire connection for insert operations
-    let mut conn = state
-        .db
-        .get()
-        .await
-        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-
-    match diesel::insert_into(yauth_users::table)
-        .values(&new_user)
-        .execute(&mut conn)
-        .await
-    {
+    match state.repos.users.create(new_user).await {
         Ok(_) => {}
-        Err(DieselError::DatabaseError(DatabaseErrorKind::UniqueViolation, _)) => {
+        Err(crate::repo::RepoError::Conflict(_)) => {
             return Err(api_err(
                 StatusCode::CONFLICT,
                 "An account with this email already exists",
@@ -270,14 +241,15 @@ async fn register(
         }
     }
 
-    let new_password = NewPassword {
+    let new_password = crate::domain::NewPassword {
         user_id,
         password_hash: password_hash.clone(),
     };
 
-    diesel::insert_into(yauth_passwords::table)
-        .values(&new_password)
-        .execute(&mut conn)
+    state
+        .repos
+        .passwords
+        .upsert(new_password)
         .await
         .map_err(|e| {
             crate::otel::record_error("password_store_failed", &e);
@@ -290,7 +262,7 @@ async fn register(
         let expires_at =
             chrono::Utc::now() + chrono::Duration::hours(VERIFICATION_TOKEN_EXPIRY_HOURS);
 
-        let new_verification = NewEmailVerification {
+        let new_verification = crate::domain::NewEmailVerification {
             id: Uuid::new_v4(),
             user_id,
             token_hash,
@@ -298,9 +270,10 @@ async fn register(
             created_at: chrono::Utc::now().naive_utc(),
         };
 
-        diesel::insert_into(yauth_email_verifications::table)
-            .values(&new_verification)
-            .execute(&mut conn)
+        state
+            .repos
+            .email_verifications
+            .create(new_verification)
             .await
             .map_err(|e| {
                 crate::otel::record_error("email_verification_create_failed", &e);
@@ -364,13 +337,6 @@ async fn login(
         return Err(api_err(StatusCode::TOO_MANY_REQUESTS, "Too many requests"));
     }
 
-    let mut conn = state
-        .db
-        .get()
-        .await
-        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-
-    // Shared struct for user data
     struct LoginUser {
         id: Uuid,
         email: String,
@@ -380,25 +346,18 @@ async fn login(
     }
 
     let (user_opt, hash) = {
-        let user: Option<User> = yauth_users::table
-            .filter(yauth_users::email.eq(&email))
-            .select(User::as_select())
-            .first(&mut conn)
-            .await
-            .optional()
-            .map_err(|e| {
-                crate::otel::record_error("db_error", &e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
+        let user = state.repos.users.find_by_email(&email).await.map_err(|e| {
+            crate::otel::record_error("db_error", &e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
 
         match user {
             Some(u) => {
-                let pwd: Option<Password> = yauth_passwords::table
-                    .find(u.id)
-                    .select(Password::as_select())
-                    .first(&mut conn)
+                let pwd = state
+                    .repos
+                    .passwords
+                    .find_by_user_id(u.id)
                     .await
-                    .optional()
                     .map_err(|e| {
                         crate::otel::record_error("db_error", &e);
                         api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
@@ -594,84 +553,70 @@ async fn verify_email(
 
     let token_hash = crypto::hash_token(&token);
 
-    let mut conn = state
-        .db
-        .get()
+    let verification = state
+        .repos
+        .email_verifications
+        .find_by_token_hash(&token_hash)
         .await
-        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-
-    {
-        let verification: EmailVerification = yauth_email_verifications::table
-            .filter(yauth_email_verifications::token_hash.eq(&token_hash))
-            .select(EmailVerification::as_select())
-            .first(&mut conn)
-            .await
-            .optional()
-            .map_err(|e| {
-                crate::otel::record_error("db_error", &e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?
-            .ok_or_else(|| {
-                api_err(
-                    StatusCode::BAD_REQUEST,
-                    "Invalid or expired verification link",
-                )
-            })?;
-
-        let now = chrono::Utc::now().naive_utc();
-        if verification.expires_at < now {
-            diesel::delete(yauth_email_verifications::table.find(verification.id))
-                .execute(&mut conn)
-                .await
-                .ok();
-            return Err(api_err(
+        .map_err(|e| {
+            crate::otel::record_error("db_error", &e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?
+        .ok_or_else(|| {
+            api_err(
                 StatusCode::BAD_REQUEST,
-                "Verification link has expired. Please request a new one.",
-            ));
-        }
+                "Invalid or expired verification link",
+            )
+        })?;
 
-        let changeset = UpdateUser {
-            email: None,
-            display_name: None,
-            email_verified: Some(true),
-            role: None,
-            banned: None,
-            banned_reason: None,
-            banned_until: None,
-            updated_at: Some(chrono::Utc::now().naive_utc()),
-        };
-
-        diesel::update(yauth_users::table.find(verification.user_id))
-            .set(&changeset)
-            .execute(&mut conn)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("user_update_failed", &e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
-
-        diesel::delete(
-            yauth_email_verifications::table
-                .filter(yauth_email_verifications::user_id.eq(verification.user_id)),
-        )
-        .execute(&mut conn)
-        .await
-        .ok();
-
-        crate::otel::add_event(
-            "email_verified",
-            #[cfg(feature = "telemetry")]
-            vec![opentelemetry::KeyValue::new(
-                "user.id",
-                verification.user_id.to_string(),
-            )],
-            #[cfg(not(feature = "telemetry"))]
-            vec![],
-        );
-        state
-            .write_audit_log(Some(verification.user_id), "email_verified", None, None)
+    let now = chrono::Utc::now().naive_utc();
+    if verification.expires_at < now {
+        let _ = state
+            .repos
+            .email_verifications
+            .delete(verification.id)
             .await;
+        return Err(api_err(
+            StatusCode::BAD_REQUEST,
+            "Verification link has expired. Please request a new one.",
+        ));
     }
+
+    let changeset = crate::domain::UpdateUser {
+        email_verified: Some(true),
+        updated_at: Some(chrono::Utc::now().naive_utc()),
+        ..Default::default()
+    };
+
+    state
+        .repos
+        .users
+        .update(verification.user_id, changeset)
+        .await
+        .map_err(|e| {
+            crate::otel::record_error("user_update_failed", &e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
+
+    let _ = state
+        .repos
+        .email_verifications
+        .delete_all_for_user(verification.user_id)
+        .await;
+
+    crate::otel::add_event(
+        "email_verified",
+        #[cfg(feature = "telemetry")]
+        vec![opentelemetry::KeyValue::new(
+            "user.id",
+            verification.user_id.to_string(),
+        )],
+        #[cfg(not(feature = "telemetry"))]
+        vec![],
+    );
+    state
+        .write_audit_log(Some(verification.user_id), "email_verified", None, None)
+        .await;
 
     Ok(Json(MessageResponse {
         message: "Email verified successfully. You can now sign in.".to_string(),
@@ -697,40 +642,27 @@ async fn resend_verification(
             .to_string(),
     });
 
-    let mut conn = state
-        .db
-        .get()
-        .await
-        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-
-    let user_opt: Option<User> = yauth_users::table
-        .filter(yauth_users::email.eq(&email))
-        .select(User::as_select())
-        .first(&mut conn)
-        .await
-        .optional()
-        .map_err(|e| {
-            crate::otel::record_error("db_error", &e);
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
+    let user_opt = state.repos.users.find_by_email(&email).await.map_err(|e| {
+        crate::otel::record_error("db_error", &e);
+        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+    })?;
 
     let user_id = match user_opt {
         Some(ref u) if !u.email_verified => u.id,
         _ => return Ok(success_msg),
     };
 
-    diesel::delete(
-        yauth_email_verifications::table.filter(yauth_email_verifications::user_id.eq(user_id)),
-    )
-    .execute(&mut conn)
-    .await
-    .ok();
+    let _ = state
+        .repos
+        .email_verifications
+        .delete_all_for_user(user_id)
+        .await;
 
     let token = crypto::generate_token();
     let token_hash = crypto::hash_token(&token);
     let expires_at = chrono::Utc::now() + chrono::Duration::hours(VERIFICATION_TOKEN_EXPIRY_HOURS);
 
-    let new_verification = NewEmailVerification {
+    let new_verification = crate::domain::NewEmailVerification {
         id: Uuid::new_v4(),
         user_id,
         token_hash,
@@ -738,9 +670,10 @@ async fn resend_verification(
         created_at: chrono::Utc::now().naive_utc(),
     };
 
-    diesel::insert_into(yauth_email_verifications::table)
-        .values(&new_verification)
-        .execute(&mut conn)
+    state
+        .repos
+        .email_verifications
+        .create(new_verification)
         .await
         .map_err(|e| {
             crate::otel::record_error("verification_create_failed", &e);
@@ -782,22 +715,10 @@ async fn forgot_password(
             .to_string(),
     });
 
-    let mut conn = state
-        .db
-        .get()
-        .await
-        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-
-    let user_opt: Option<User> = yauth_users::table
-        .filter(yauth_users::email.eq(&email))
-        .select(User::as_select())
-        .first(&mut conn)
-        .await
-        .optional()
-        .map_err(|e| {
-            crate::otel::record_error("db_error", &e);
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
+    let user_opt = state.repos.users.find_by_email(&email).await.map_err(|e| {
+        crate::otel::record_error("db_error", &e);
+        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+    })?;
 
     let (user_id, user_email) = match user_opt {
         Some(u) => (u.id, u.email.clone()),
@@ -805,22 +726,17 @@ async fn forgot_password(
     };
 
     // Delete old unused reset tokens
-    diesel::delete(
-        yauth_password_resets::table.filter(
-            yauth_password_resets::user_id
-                .eq(user_id)
-                .and(yauth_password_resets::used_at.is_null()),
-        ),
-    )
-    .execute(&mut conn)
-    .await
-    .ok();
+    let _ = state
+        .repos
+        .password_resets
+        .delete_unused_for_user(user_id)
+        .await;
 
     let token = crypto::generate_token();
     let token_hash = crypto::hash_token(&token);
     let expires_at = chrono::Utc::now() + chrono::Duration::hours(RESET_TOKEN_EXPIRY_HOURS);
 
-    let new_reset = NewPasswordReset {
+    let new_reset = crate::domain::NewPasswordReset {
         id: Uuid::new_v4(),
         user_id,
         token_hash,
@@ -828,9 +744,10 @@ async fn forgot_password(
         created_at: chrono::Utc::now().naive_utc(),
     };
 
-    diesel::insert_into(yauth_password_resets::table)
-        .values(&new_reset)
-        .execute(&mut conn)
+    state
+        .repos
+        .password_resets
+        .create(new_reset)
         .await
         .map_err(|e| {
             crate::otel::record_error("password_reset_create_failed", &e);
@@ -895,49 +812,19 @@ async fn reset_password(
 
     let token_hash = crypto::hash_token(&token);
 
-    let mut conn = state
-        .db
-        .get()
+    let reset = state
+        .repos
+        .password_resets
+        .find_by_token_hash(&token_hash)
         .await
-        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
+        .map_err(|e| {
+            crate::otel::record_error("db_error", &e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?
+        .ok_or_else(|| api_err(StatusCode::BAD_REQUEST, "Invalid or expired reset link"))?;
 
-    // Find reset token and get user_id + expiry
-    struct ResetInfo {
-        id: Uuid,
-        user_id: Uuid,
-        expired: bool,
-    }
-
-    let reset_info = {
-        let reset: PasswordReset = yauth_password_resets::table
-            .filter(
-                yauth_password_resets::token_hash
-                    .eq(&token_hash)
-                    .and(yauth_password_resets::used_at.is_null()),
-            )
-            .select(PasswordReset::as_select())
-            .first(&mut conn)
-            .await
-            .optional()
-            .map_err(|e| {
-                crate::otel::record_error("db_error", &e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?
-            .ok_or_else(|| api_err(StatusCode::BAD_REQUEST, "Invalid or expired reset link"))?;
-
-        let now = chrono::Utc::now().naive_utc();
-        ResetInfo {
-            id: reset.id,
-            user_id: reset.user_id,
-            expired: reset.expires_at < now,
-        }
-    };
-
-    if reset_info.expired {
-        diesel::delete(yauth_password_resets::table.find(reset_info.id))
-            .execute(&mut conn)
-            .await
-            .ok();
+    let now = chrono::Utc::now().naive_utc();
+    if reset.expires_at < now {
         return Err(api_err(
             StatusCode::BAD_REQUEST,
             "Reset link has expired. Please request a new one.",
@@ -951,51 +838,48 @@ async fn reset_password(
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?;
 
-    // Update password (upsert)
-    let upsert_password = NewPassword {
-        user_id: reset_info.user_id,
-        password_hash: new_hash.clone(),
+    // Upsert password
+    let upsert_password = crate::domain::NewPassword {
+        user_id: reset.user_id,
+        password_hash: new_hash,
     };
-
-    diesel::insert_into(yauth_passwords::table)
-        .values(&upsert_password)
-        .on_conflict(yauth_passwords::user_id)
-        .do_update()
-        .set(yauth_passwords::password_hash.eq(&new_hash))
-        .execute(&mut conn)
+    state
+        .repos
+        .passwords
+        .upsert(upsert_password)
         .await
         .map_err(|e| {
             crate::otel::record_error("password_update_failed", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?;
 
-    let changeset = UpdateUser {
-        email: None,
-        display_name: None,
+    // Mark email verified and update timestamp
+    let changeset = crate::domain::UpdateUser {
         email_verified: Some(true),
-        role: None,
-        banned: None,
-        banned_reason: None,
-        banned_until: None,
         updated_at: Some(chrono::Utc::now().naive_utc()),
+        ..Default::default()
     };
-
-    diesel::update(yauth_users::table.find(reset_info.user_id))
-        .set(&changeset)
-        .execute(&mut conn)
+    state
+        .repos
+        .users
+        .update(reset.user_id, changeset)
         .await
         .map_err(|e| {
             crate::otel::record_error("user_update_failed", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?;
 
-    diesel::update(yauth_password_resets::table.find(reset_info.id))
-        .set(yauth_password_resets::used_at.eq(Some(chrono::Utc::now().naive_utc())))
-        .execute(&mut conn)
-        .await
-        .ok();
+    // Mark reset token as used — we need to update the reset record.
+    // The repo trait doesn't have a mark_used method, so we use the DB for now.
+    // This is handled by the fact that find_by_token_hash filters by used_at IS NULL.
+    // We delete unused tokens for the user instead (same effect for security).
+    let _ = state
+        .repos
+        .password_resets
+        .delete_unused_for_user(reset.user_id)
+        .await;
 
-    session::delete_all_user_sessions(&state, reset_info.user_id)
+    session::delete_all_user_sessions(&state, reset.user_id)
         .await
         .ok();
 
@@ -1004,13 +888,13 @@ async fn reset_password(
         #[cfg(feature = "telemetry")]
         vec![opentelemetry::KeyValue::new(
             "user.id",
-            reset_info.user_id.to_string(),
+            reset.user_id.to_string(),
         )],
         #[cfg(not(feature = "telemetry"))]
         vec![],
     );
     state
-        .write_audit_log(Some(reset_info.user_id), "password_reset", None, None)
+        .write_audit_log(Some(reset.user_id), "password_reset", None, None)
         .await;
 
     Ok(Json(MessageResponse {
@@ -1056,20 +940,13 @@ async fn change_password(
         return Err(api_err(StatusCode::BAD_REQUEST, &violations.join("; ")));
     }
 
-    // Fetch current password hash (scoped DB connection)
+    // Fetch current password hash
     let (current_hash, has_record) = {
-        let mut conn = state
-            .db
-            .get()
+        let pwd_record = state
+            .repos
+            .passwords
+            .find_by_user_id(user.id)
             .await
-            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-
-        let pwd_record: Option<Password> = yauth_passwords::table
-            .find(user.id)
-            .select(Password::as_select())
-            .first(&mut conn)
-            .await
-            .optional()
             .map_err(|e| {
                 crate::otel::record_error("db_error", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
@@ -1081,7 +958,6 @@ async fn change_password(
             .unwrap_or_else(|| state.dummy_hash.clone());
         (hash, pwd_record.is_some())
     };
-    // conn dropped here — verify runs on blocking thread without holding a DB connection
 
     let valid = password::verify_password(&current_password, &current_hash)
         .await
@@ -1106,27 +982,19 @@ async fn change_password(
         return Err(api_err(StatusCode::BAD_REQUEST, &breach_msg));
     }
 
-    // Hash runs on blocking thread without holding a DB connection
     let new_hash = password::hash_password(&new_password).await.map_err(|e| {
         crate::otel::record_error("password_hash_error", &e);
         api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
     })?;
 
-    // Re-acquire connection for the update
-    let mut conn = state
-        .db
-        .get()
-        .await
-        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-
-    diesel::update(yauth_passwords::table.find(user.id))
-        .set(yauth_passwords::password_hash.eq(&new_hash))
-        .execute(&mut conn)
-        .await
-        .map_err(|e| {
-            crate::otel::record_error("password_update_failed", &e);
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
+    let upsert = crate::domain::NewPassword {
+        user_id: user.id,
+        password_hash: new_hash,
+    };
+    state.repos.passwords.upsert(upsert).await.map_err(|e| {
+        crate::otel::record_error("password_update_failed", &e);
+        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+    })?;
 
     if let Some(cookie) = jar.get(&state.config.session_cookie_name) {
         session::delete_other_user_sessions(&state, user.id, cookie.value())

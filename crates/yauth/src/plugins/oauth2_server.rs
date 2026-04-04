@@ -6,9 +6,6 @@ use axum::{
     routing::{get, post},
 };
 use chrono::Utc;
-use diesel::prelude::*;
-use diesel::result::OptionalExtension;
-use diesel_async_crate::RunQueryDsl;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -16,358 +13,10 @@ use uuid::Uuid;
 
 use crate::auth::crypto;
 use crate::config::OAuth2ServerConfig;
-use crate::db::models::{
-    AuthorizationCode, Consent, DeviceCode, NewAuthorizationCode, NewConsent, NewDeviceCode,
-    NewOauth2Client, NewRefreshToken, Oauth2Client, RefreshToken,
-};
-use crate::db::schema::{
-    yauth_authorization_codes, yauth_consents, yauth_device_codes, yauth_oauth2_clients,
-    yauth_refresh_tokens,
-};
 use crate::error::{ApiError, api_err};
 use crate::middleware::AuthUser;
 use crate::plugin::{PluginContext, YAuthPlugin};
 use crate::state::YAuthState;
-
-// ---------------------------------------------------------------------------
-// Database helpers
-// ---------------------------------------------------------------------------
-
-type Conn = diesel_async_crate::AsyncPgConnection;
-type DbResult<T> = Result<T, String>;
-
-// -- Client operations --
-
-async fn db_find_client_by_client_id(conn: &mut Conn, cid: &str) -> DbResult<Option<Oauth2Client>> {
-    yauth_oauth2_clients::table
-        .filter(yauth_oauth2_clients::client_id.eq(cid))
-        .select(Oauth2Client::as_select())
-        .first(conn)
-        .await
-        .optional()
-        .map_err(|e| e.to_string())
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn db_insert_client(
-    conn: &mut Conn,
-    id: Uuid,
-    client_id: &str,
-    client_secret_hash: Option<&str>,
-    redirect_uris: &serde_json::Value,
-    client_name: Option<&str>,
-    grant_types: &serde_json::Value,
-    scopes: Option<&serde_json::Value>,
-    is_public: bool,
-    created_at: chrono::DateTime<chrono::FixedOffset>,
-) -> DbResult<()> {
-    let new_client = NewOauth2Client {
-        id,
-        client_id: client_id.to_string(),
-        client_secret_hash: client_secret_hash.map(String::from),
-        redirect_uris: redirect_uris.clone(),
-        client_name: client_name.map(String::from),
-        grant_types: grant_types.clone(),
-        scopes: scopes.cloned(),
-        is_public,
-        created_at: created_at.naive_utc(),
-    };
-    diesel::insert_into(yauth_oauth2_clients::table)
-        .values(&new_client)
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-// -- Authorization code operations --
-
-async fn db_find_auth_code_by_hash(
-    conn: &mut Conn,
-    hash: &str,
-) -> DbResult<Option<AuthorizationCode>> {
-    yauth_authorization_codes::table
-        .filter(yauth_authorization_codes::code_hash.eq(hash))
-        .select(AuthorizationCode::as_select())
-        .first(conn)
-        .await
-        .optional()
-        .map_err(|e| e.to_string())
-}
-
-async fn db_mark_auth_code_used(conn: &mut Conn, id: Uuid) -> DbResult<()> {
-    diesel::update(yauth_authorization_codes::table.filter(yauth_authorization_codes::id.eq(id)))
-        .set(yauth_authorization_codes::used.eq(true))
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn db_insert_auth_code(
-    conn: &mut Conn,
-    id: Uuid,
-    code_hash: &str,
-    client_id: &str,
-    user_id: Uuid,
-    scopes: Option<&serde_json::Value>,
-    redirect_uri: &str,
-    code_challenge: &str,
-    code_challenge_method: &str,
-    expires_at: chrono::DateTime<chrono::FixedOffset>,
-    created_at: chrono::DateTime<chrono::FixedOffset>,
-) -> DbResult<()> {
-    let new_code = NewAuthorizationCode {
-        id,
-        code_hash: code_hash.to_string(),
-        client_id: client_id.to_string(),
-        user_id,
-        scopes: scopes.cloned(),
-        redirect_uri: redirect_uri.to_string(),
-        code_challenge: code_challenge.to_string(),
-        code_challenge_method: code_challenge_method.to_string(),
-        expires_at: expires_at.naive_utc(),
-        used: false,
-        nonce: None,
-        created_at: created_at.naive_utc(),
-    };
-    diesel::insert_into(yauth_authorization_codes::table)
-        .values(&new_code)
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-// -- Consent operations --
-
-async fn db_find_consent(conn: &mut Conn, uid: Uuid, cid: &str) -> DbResult<Option<Consent>> {
-    yauth_consents::table
-        .filter(
-            yauth_consents::user_id
-                .eq(uid)
-                .and(yauth_consents::client_id.eq(cid)),
-        )
-        .select(Consent::as_select())
-        .first(conn)
-        .await
-        .optional()
-        .map_err(|e| e.to_string())
-}
-
-async fn db_update_consent(
-    conn: &mut Conn,
-    id: Uuid,
-    scopes: Option<&serde_json::Value>,
-    created_at: chrono::DateTime<chrono::FixedOffset>,
-) -> DbResult<()> {
-    diesel::update(yauth_consents::table.filter(yauth_consents::id.eq(id)))
-        .set((
-            yauth_consents::scopes.eq(scopes),
-            yauth_consents::created_at.eq(created_at.naive_utc()),
-        ))
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-async fn db_insert_consent(
-    conn: &mut Conn,
-    id: Uuid,
-    user_id: Uuid,
-    client_id: &str,
-    scopes: Option<&serde_json::Value>,
-    created_at: chrono::DateTime<chrono::FixedOffset>,
-) -> DbResult<()> {
-    let new_consent = NewConsent {
-        id,
-        user_id,
-        client_id: client_id.to_string(),
-        scopes: scopes.cloned(),
-        created_at: created_at.naive_utc(),
-    };
-    diesel::insert_into(yauth_consents::table)
-        .values(&new_consent)
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-// -- Device code operations --
-
-async fn db_find_device_code_by_user_code_pending(
-    conn: &mut Conn,
-    user_code: &str,
-) -> DbResult<Option<DeviceCode>> {
-    yauth_device_codes::table
-        .filter(
-            yauth_device_codes::user_code
-                .eq(user_code)
-                .and(yauth_device_codes::status.eq("pending")),
-        )
-        .select(DeviceCode::as_select())
-        .first(conn)
-        .await
-        .optional()
-        .map_err(|e| e.to_string())
-}
-
-async fn db_find_device_code_by_hash(conn: &mut Conn, hash: &str) -> DbResult<Option<DeviceCode>> {
-    yauth_device_codes::table
-        .filter(yauth_device_codes::device_code_hash.eq(hash))
-        .select(DeviceCode::as_select())
-        .first(conn)
-        .await
-        .optional()
-        .map_err(|e| e.to_string())
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn db_insert_device_code(
-    conn: &mut Conn,
-    id: Uuid,
-    device_code_hash: &str,
-    user_code: &str,
-    client_id: &str,
-    scopes: Option<&serde_json::Value>,
-    interval: i32,
-    expires_at: chrono::DateTime<chrono::FixedOffset>,
-    created_at: chrono::DateTime<chrono::FixedOffset>,
-) -> DbResult<()> {
-    let new_dc = NewDeviceCode {
-        id,
-        device_code_hash: device_code_hash.to_string(),
-        user_code: user_code.to_string(),
-        client_id: client_id.to_string(),
-        scopes: scopes.cloned(),
-        user_id: None,
-        status: "pending".to_string(),
-        interval,
-        expires_at: expires_at.naive_utc(),
-        created_at: created_at.naive_utc(),
-    };
-    diesel::insert_into(yauth_device_codes::table)
-        .values(&new_dc)
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-async fn db_update_device_code_status(
-    conn: &mut Conn,
-    id: Uuid,
-    status: &str,
-    user_id: Option<Uuid>,
-) -> DbResult<()> {
-    diesel::update(yauth_device_codes::table.filter(yauth_device_codes::id.eq(id)))
-        .set((
-            yauth_device_codes::status.eq(status),
-            yauth_device_codes::user_id.eq(user_id),
-        ))
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-async fn db_update_device_code_polled(
-    conn: &mut Conn,
-    id: Uuid,
-    last_polled_at: chrono::DateTime<chrono::FixedOffset>,
-) -> DbResult<()> {
-    diesel::update(yauth_device_codes::table.filter(yauth_device_codes::id.eq(id)))
-        .set(yauth_device_codes::last_polled_at.eq(Some(last_polled_at.naive_utc())))
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-async fn db_update_device_code_slow_down(
-    conn: &mut Conn,
-    id: Uuid,
-    new_interval: i32,
-    last_polled_at: chrono::DateTime<chrono::FixedOffset>,
-) -> DbResult<()> {
-    diesel::update(yauth_device_codes::table.filter(yauth_device_codes::id.eq(id)))
-        .set((
-            yauth_device_codes::interval.eq(new_interval),
-            yauth_device_codes::last_polled_at.eq(Some(last_polled_at.naive_utc())),
-        ))
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-// -- User operations --
-
-use crate::db::find_user_by_id;
-
-// -- Refresh token operations --
-
-async fn db_find_refresh_token_by_hash(
-    conn: &mut Conn,
-    hash: &str,
-) -> DbResult<Option<RefreshToken>> {
-    yauth_refresh_tokens::table
-        .filter(yauth_refresh_tokens::token_hash.eq(hash))
-        .select(RefreshToken::as_select())
-        .first(conn)
-        .await
-        .optional()
-        .map_err(|e| e.to_string())
-}
-
-async fn db_insert_refresh_token(
-    conn: &mut Conn,
-    id: Uuid,
-    user_id: Uuid,
-    token_hash: &str,
-    family_id: Uuid,
-    expires_at: chrono::DateTime<chrono::FixedOffset>,
-    created_at: chrono::DateTime<chrono::FixedOffset>,
-) -> DbResult<()> {
-    let new_token = NewRefreshToken {
-        id,
-        user_id,
-        token_hash: token_hash.to_string(),
-        family_id,
-        expires_at: expires_at.naive_utc(),
-        revoked: false,
-        created_at: created_at.naive_utc(),
-    };
-    diesel::insert_into(yauth_refresh_tokens::table)
-        .values(&new_token)
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-async fn db_revoke_refresh_token(conn: &mut Conn, id: Uuid) -> DbResult<()> {
-    diesel::update(yauth_refresh_tokens::table.filter(yauth_refresh_tokens::id.eq(id)))
-        .set(yauth_refresh_tokens::revoked.eq(true))
-        .execute(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-async fn db_revoke_family(conn: &mut Conn, family_id: Uuid) -> DbResult<()> {
-    diesel::update(
-        yauth_refresh_tokens::table.filter(yauth_refresh_tokens::family_id.eq(family_id)),
-    )
-    .set(yauth_refresh_tokens::revoked.eq(true))
-    .execute(conn)
-    .await
-    .map_err(|e| e.to_string())?;
-    Ok(())
-}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -442,6 +91,10 @@ impl YAuthPlugin for OAuth2ServerPlugin {
 
     fn protected_routes(&self, _ctx: &PluginContext) -> Option<Router<YAuthState>> {
         None
+    }
+
+    fn schema(&self) -> Vec<crate::schema::TableDef> {
+        crate::schema::plugin_schemas::oauth2_server_schema()
     }
 }
 
@@ -521,10 +174,6 @@ pub struct AuthorizeParams {
 }
 
 /// GET /oauth/authorize — returns JSON describing what the user needs to consent to.
-/// In a real browser flow, this would render a consent page. For MCP clients,
-/// the response tells the client what to display. If the user is already
-/// authenticated (session cookie) and has already consented, we redirect
-/// immediately with the authorization code.
 async fn authorize_get(
     State(state): State<YAuthState>,
     headers: axum::http::HeaderMap,
@@ -541,14 +190,13 @@ async fn authorize_get(
         Err(e) => return e.into_response(),
     };
 
-    // Resolve redirect_uri: use provided value, or default to client's single registered URI
+    // Resolve redirect_uri
     let redirect_uri = match resolve_redirect_uri(&client, params.redirect_uri.as_deref()) {
         Ok(uri) => uri,
         Err(e) => return e.into_response(),
     };
 
-    // If a consent UI URL is configured and the request is from a browser
-    // (not an API client requesting JSON), redirect to the consent UI.
+    // If a consent UI URL is configured and the request is from a browser, redirect
     let wants_json = headers
         .get(axum::http::header::ACCEPT)
         .and_then(|v| v.to_str().ok())
@@ -572,9 +220,6 @@ async fn authorize_get(
         return Redirect::to(url.as_str()).into_response();
     }
 
-    // Return a JSON response describing the authorization request.
-    // The consent UI (or MCP client browser popup) uses this to display
-    // the consent screen.
     Json(serde_json::json!({
         "type": "authorization_request",
         "client_id": client.client_id,
@@ -590,10 +235,7 @@ async fn authorize_get(
     .into_response()
 }
 
-/// POST /oauth/authorize — user submits consent decision. Requires authentication.
-/// If approved, generates an authorization code and redirects to the client's
-/// redirect_uri with the code. Accepts both JSON and form-urlencoded bodies
-/// (form submission from consent UI avoids CORS issues with cross-origin redirects).
+/// POST /oauth/authorize — user submits consent decision.
 async fn authorize_post(
     State(state): State<YAuthState>,
     jar: axum_extra::extract::cookie::CookieJar,
@@ -660,38 +302,29 @@ async fn authorize_post(
     // Generate authorization code
     let raw_code = crypto::generate_token();
     let code_hash = crypto::hash_token(&raw_code);
-    let now = Utc::now().fixed_offset();
-    let expires_at = (Utc::now()
+    let now = Utc::now();
+    let expires_at = now
         + chrono::Duration::from_std(state.oauth2_server_config.authorization_code_ttl)
-            .unwrap_or(chrono::Duration::seconds(60)))
-    .fixed_offset();
+            .unwrap_or(chrono::Duration::seconds(60));
 
-    {
-        let mut conn = match state.db.get().await {
-            Ok(c) => c,
-            Err(_) => {
-                return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-                    .into_response();
-            }
-        };
-        if let Err(e) = db_insert_auth_code(
-            &mut conn,
-            Uuid::new_v4(),
-            &code_hash,
-            &input.client_id,
-            auth_user.id,
-            scopes_json.as_ref(),
-            &input.redirect_uri,
-            &input.code_challenge,
-            &input.code_challenge_method,
-            expires_at,
-            now,
-        )
-        .await
-        {
-            crate::otel::record_error("oauth2_auth_code_store_failed", &e);
-            return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
-        }
+    let new_code = crate::domain::NewAuthorizationCode {
+        id: Uuid::new_v4(),
+        code_hash,
+        client_id: input.client_id.clone(),
+        user_id: auth_user.id,
+        scopes: scopes_json,
+        redirect_uri: input.redirect_uri.clone(),
+        code_challenge: input.code_challenge.clone(),
+        code_challenge_method: input.code_challenge_method.clone(),
+        expires_at: expires_at.naive_utc(),
+        used: false,
+        nonce: None,
+        created_at: now.naive_utc(),
+    };
+
+    if let Err(e) = state.repos.authorization_codes.create(new_code).await {
+        crate::otel::record_error("oauth2_auth_code_store_failed", &e);
+        return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
     }
 
     crate::otel::add_event(
@@ -772,20 +405,17 @@ pub struct AuthorizeConsentRequest {
     pub scope: Option<String>,
     #[serde(default)]
     pub state: Option<String>,
-    /// Whether the user approved the authorization request.
-    /// Accepts both native bool (JSON) and string "true"/"false" (form data).
     #[serde(deserialize_with = "deserialize_bool_or_string")]
     pub approved: bool,
 }
 
 // ---------------------------------------------------------------------------
-// Token Endpoint — authorization_code grant (POST /oauth/token)
+// Token Endpoint (POST /oauth/token)
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
 pub struct TokenCodeRequest {
     pub grant_type: String,
-    // authorization_code fields
     #[serde(default)]
     pub code: Option<String>,
     #[serde(default)]
@@ -794,13 +424,10 @@ pub struct TokenCodeRequest {
     pub client_id: Option<String>,
     #[serde(default)]
     pub code_verifier: Option<String>,
-    // refresh_token fields
     #[serde(default)]
     pub refresh_token: Option<String>,
-    // device_code fields
     #[serde(default)]
     pub device_code: Option<String>,
-    // client_credentials fields
     #[serde(default)]
     pub client_secret: Option<String>,
     #[serde(default)]
@@ -968,33 +595,27 @@ async fn handle_authorization_code_grant(
     // Find authorization code
     let code_hash = crypto::hash_token(code);
 
-    let stored_code = {
-        let mut conn = state.db.get().await.map_err(|_| {
+    let stored_code = state
+        .repos
+        .authorization_codes
+        .find_by_code_hash(&code_hash)
+        .await
+        .map_err(|e| {
+            crate::otel::record_error("db_error", &e);
             oauth2_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "server_error",
                 "Internal error",
             )
+        })?
+        .ok_or_else(|| {
+            crate::otel::add_event("oauth2_invalid_code", vec![]);
+            oauth2_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_grant",
+                "Invalid authorization code",
+            )
         })?;
-        db_find_auth_code_by_hash(&mut conn, &code_hash)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("db_error", &e);
-                oauth2_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "server_error",
-                    "Internal error",
-                )
-            })?
-            .ok_or_else(|| {
-                crate::otel::add_event("oauth2_invalid_code", vec![]);
-                oauth2_error(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_grant",
-                    "Invalid authorization code",
-                )
-            })?
-    };
 
     // Check if code was already used
     if stored_code.used {
@@ -1064,49 +685,35 @@ async fn handle_authorization_code_grant(
     }
 
     // Mark code as used
-    {
-        let mut conn = state.db.get().await.map_err(|_| {
+    state
+        .repos
+        .authorization_codes
+        .mark_used(stored_code.id)
+        .await
+        .map_err(|e| {
+            crate::otel::record_error("oauth2_auth_code_mark_used_failed", &e);
             oauth2_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "server_error",
                 "Internal error",
             )
         })?;
-        db_mark_auth_code_used(&mut conn, stored_code.id)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("oauth2_auth_code_mark_used_failed", &e);
-                oauth2_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "server_error",
-                    "Internal error",
-                )
-            })?;
-    }
 
     // Look up user
-    let user = {
-        let mut conn = state.db.get().await.map_err(|_| {
+    let user = state
+        .repos
+        .users
+        .find_by_id(stored_code.user_id)
+        .await
+        .map_err(|e| {
+            crate::otel::record_error("db_error", &e);
             oauth2_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "server_error",
                 "Internal error",
             )
-        })?;
-        find_user_by_id(&mut conn, stored_code.user_id)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("db_error", &e);
-                oauth2_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "server_error",
-                    "Internal error",
-                )
-            })?
-            .ok_or_else(|| {
-                oauth2_error(StatusCode::BAD_REQUEST, "invalid_grant", "User not found")
-            })?
-    };
+        })?
+        .ok_or_else(|| oauth2_error(StatusCode::BAD_REQUEST, "invalid_grant", "User not found"))?;
 
     if user.banned {
         return Err(oauth2_error(
@@ -1128,7 +735,6 @@ async fn handle_authorization_code_grant(
                 .join(" ")
         });
 
-    // Check whether the openid scope was requested (for OIDC id_token)
     #[allow(unused_variables)]
     let has_openid_scope = scope_str
         .as_deref()
@@ -1160,15 +766,8 @@ async fn handle_authorization_code_grant(
         })?;
 
         let family_id = Uuid::new_v4();
-        let mut conn = state.db.get().await.map_err(|_| {
-            oauth2_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "server_error",
-                "Internal error",
-            )
-        })?;
-        let refresh_token = create_refresh_token_for_oauth2_diesel(
-            &mut conn,
+        let refresh_token = create_refresh_token_for_oauth2(
+            state,
             user.id,
             family_id,
             bearer_config.refresh_token_ttl,
@@ -1273,49 +872,26 @@ async fn handle_oauth2_refresh_token(
     {
         let token_hash = crypto::hash_token(refresh_token_raw);
 
-        // Stored refresh token info
-        struct StoredRefresh {
-            id: Uuid,
-            user_id: Uuid,
-            family_id: Uuid,
-            expires_at: chrono::NaiveDateTime,
-            revoked: bool,
-        }
-
-        // Find the refresh token
-        let stored = {
-            let mut conn = state.db.get().await.map_err(|_| {
+        let stored = state
+            .repos
+            .refresh_tokens
+            .find_by_token_hash(&token_hash)
+            .await
+            .map_err(|e| {
+                crate::otel::record_error("db_error", &e);
                 oauth2_error(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "server_error",
                     "Internal error",
                 )
+            })?
+            .ok_or_else(|| {
+                oauth2_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_grant",
+                    "Invalid refresh token",
+                )
             })?;
-            let row = db_find_refresh_token_by_hash(&mut conn, &token_hash)
-                .await
-                .map_err(|e| {
-                    crate::otel::record_error("db_error", &e);
-                    oauth2_error(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "server_error",
-                        "Internal error",
-                    )
-                })?
-                .ok_or_else(|| {
-                    oauth2_error(
-                        StatusCode::BAD_REQUEST,
-                        "invalid_grant",
-                        "Invalid refresh token",
-                    )
-                })?;
-            StoredRefresh {
-                id: row.id,
-                user_id: row.user_id,
-                family_id: row.family_id,
-                expires_at: row.expires_at,
-                revoked: row.revoked,
-            }
-        };
 
         if stored.revoked {
             crate::otel::add_event(
@@ -1328,12 +904,11 @@ async fn handle_oauth2_refresh_token(
                 #[cfg(not(feature = "telemetry"))]
                 vec![],
             );
-            {
-                let mut conn = state.db.get().await.ok();
-                if let Some(ref mut conn) = conn {
-                    let _ = db_revoke_family(conn, stored.family_id).await;
-                }
-            }
+            let _ = state
+                .repos
+                .refresh_tokens
+                .revoke_family(stored.family_id)
+                .await;
             return Err(oauth2_error(
                 StatusCode::BAD_REQUEST,
                 "invalid_grant",
@@ -1353,49 +928,37 @@ async fn handle_oauth2_refresh_token(
         // Revoke old token
         let family_id = stored.family_id;
         let user_id = stored.user_id;
-        {
-            let mut conn = state.db.get().await.map_err(|_| {
+        state
+            .repos
+            .refresh_tokens
+            .revoke(stored.id)
+            .await
+            .map_err(|e| {
+                crate::otel::record_error("oauth2_refresh_token_revoke_failed", &e);
                 oauth2_error(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "server_error",
                     "Internal error",
                 )
             })?;
-            db_revoke_refresh_token(&mut conn, stored.id)
-                .await
-                .map_err(|e| {
-                    crate::otel::record_error("oauth2_refresh_token_revoke_failed", &e);
-                    oauth2_error(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "server_error",
-                        "Internal error",
-                    )
-                })?;
-        }
 
         // Look up user
-        let user = {
-            let mut conn = state.db.get().await.map_err(|_| {
+        let user = state
+            .repos
+            .users
+            .find_by_id(user_id)
+            .await
+            .map_err(|e| {
+                crate::otel::record_error("db_error", &e);
                 oauth2_error(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "server_error",
                     "Internal error",
                 )
+            })?
+            .ok_or_else(|| {
+                oauth2_error(StatusCode::BAD_REQUEST, "invalid_grant", "User not found")
             })?;
-            find_user_by_id(&mut conn, user_id)
-                .await
-                .map_err(|e| {
-                    crate::otel::record_error("db_error", &e);
-                    oauth2_error(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "server_error",
-                        "Internal error",
-                    )
-                })?
-                .ok_or_else(|| {
-                    oauth2_error(StatusCode::BAD_REQUEST, "invalid_grant", "User not found")
-                })?
-        };
 
         if user.banned {
             return Err(oauth2_error(
@@ -1427,29 +990,20 @@ async fn handle_oauth2_refresh_token(
             })?
         };
 
-        let new_refresh = {
-            let mut conn = state.db.get().await.map_err(|_| {
-                oauth2_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "server_error",
-                    "Internal error",
-                )
-            })?;
-            create_refresh_token_for_oauth2_diesel(
-                &mut conn,
-                user.id,
-                family_id,
-                bearer_config.refresh_token_ttl,
+        let new_refresh = create_refresh_token_for_oauth2(
+            state,
+            user.id,
+            family_id,
+            bearer_config.refresh_token_ttl,
+        )
+        .await
+        .map_err(|_| {
+            oauth2_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "Failed to create refresh token",
             )
-            .await
-            .map_err(|_| {
-                oauth2_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "server_error",
-                    "Failed to create refresh token",
-                )
-            })?
-        };
+        })?;
 
         let expires_in = bearer_config.access_token_ttl.as_secs();
 
@@ -1514,7 +1068,6 @@ async fn dynamic_client_registration(
         ));
     }
 
-    // Validate redirect URIs
     if input.redirect_uris.is_empty() {
         return Err(api_err(
             StatusCode::BAD_REQUEST,
@@ -1534,13 +1087,11 @@ async fn dynamic_client_registration(
     let grant_types = input
         .grant_types
         .unwrap_or_else(|| vec!["authorization_code".into()]);
-
     let auth_method = input
         .token_endpoint_auth_method
         .as_deref()
         .unwrap_or("none");
 
-    // Generate client credentials
     let client_id = Uuid::new_v4().to_string();
     let (client_secret, client_secret_hash, is_public) = if auth_method == "none" {
         (None, None, true)
@@ -1555,29 +1106,24 @@ async fn dynamic_client_registration(
         .as_ref()
         .map(|s| serde_json::json!(s.split_whitespace().collect::<Vec<_>>()));
 
-    let now = Utc::now().fixed_offset();
+    let now = Utc::now();
 
-    let redirect_uris_json = serde_json::json!(input.redirect_uris);
-    let grant_types_json = serde_json::json!(grant_types);
+    let new_client = crate::domain::NewOauth2Client {
+        id: Uuid::new_v4(),
+        client_id: client_id.clone(),
+        client_secret_hash,
+        redirect_uris: serde_json::json!(input.redirect_uris),
+        client_name: input.client_name.clone(),
+        grant_types: serde_json::json!(grant_types),
+        scopes: scopes_json,
+        is_public,
+        created_at: now.naive_utc(),
+    };
 
-    {
-        let mut conn = state
-            .db
-            .get()
-            .await
-            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-        db_insert_client(
-            &mut conn,
-            Uuid::new_v4(),
-            &client_id,
-            client_secret_hash.as_deref(),
-            &redirect_uris_json,
-            input.client_name.as_deref(),
-            &grant_types_json,
-            scopes_json.as_ref(),
-            is_public,
-            now,
-        )
+    state
+        .repos
+        .oauth2_clients
+        .create(new_client)
         .await
         .map_err(|e| {
             crate::otel::record_error("oauth2_client_register_failed", &e);
@@ -1586,7 +1132,6 @@ async fn dynamic_client_registration(
                 "Failed to register client",
             )
         })?;
-    }
 
     crate::otel::add_event(
         "oauth2_client_registered",
@@ -1629,12 +1174,13 @@ fn generate_user_code() -> String {
 }
 
 /// Generate a unique user code, retrying on collision with pending codes.
-async fn generate_unique_user_code_diesel(
-    conn: &mut diesel_async_crate::AsyncPgConnection,
-) -> Result<String, ApiError> {
+async fn generate_unique_user_code(state: &YAuthState) -> Result<String, ApiError> {
     for _ in 0..10 {
         let code = generate_user_code();
-        let existing = db_find_device_code_by_user_code_pending(conn, &code)
+        let existing = state
+            .repos
+            .device_codes
+            .find_by_user_code_pending(&code)
             .await
             .map_err(|e| {
                 crate::otel::record_error("oauth2_user_code_uniqueness_check_error", &e);
@@ -1668,12 +1214,11 @@ struct DeviceAuthorizationResponse {
     interval: u32,
 }
 
-/// POST /oauth/device/code — Client requests device + user codes.
+/// POST /oauth/device/code
 async fn device_authorization(
     State(state): State<YAuthState>,
     Json(input): Json<DeviceAuthorizationRequest>,
 ) -> Response {
-    // Verify client exists
     if let Err(e) = lookup_client(&state, &input.client_id).await {
         return e.into_response();
     }
@@ -1682,15 +1227,7 @@ async fn device_authorization(
     let interval = config.device_poll_interval;
     let ttl = config.device_code_ttl;
 
-    // Generate codes
-    let mut conn = match state.db.get().await {
-        Ok(c) => c,
-        Err(_) => {
-            return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
-        }
-    };
-
-    let user_code = match generate_unique_user_code_diesel(&mut conn).await {
+    let user_code = match generate_unique_user_code(&state).await {
         Ok(c) => c,
         Err(e) => return e.into_response(),
     };
@@ -1698,33 +1235,31 @@ async fn device_authorization(
     let raw_device_code = crypto::generate_token();
     let device_code_hash = crypto::hash_token(&raw_device_code);
 
-    let now = Utc::now().fixed_offset();
-    let expires_at = (Utc::now()
-        + chrono::Duration::from_std(ttl).unwrap_or(chrono::Duration::seconds(600)))
-    .fixed_offset();
+    let now = Utc::now();
+    let expires_at =
+        now + chrono::Duration::from_std(ttl).unwrap_or(chrono::Duration::seconds(600));
 
     let scopes_json = input
         .scope
         .as_ref()
         .map(|s| serde_json::json!(s.split_whitespace().collect::<Vec<_>>()));
 
-    {
-        if let Err(e) = db_insert_device_code(
-            &mut conn,
-            Uuid::new_v4(),
-            &device_code_hash,
-            &user_code,
-            &input.client_id,
-            scopes_json.as_ref(),
-            interval as i32,
-            expires_at,
-            now,
-        )
-        .await
-        {
-            crate::otel::record_error("oauth2_device_code_store_failed", &e);
-            return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
-        }
+    let new_dc = crate::domain::NewDeviceCode {
+        id: Uuid::new_v4(),
+        device_code_hash,
+        user_code: user_code.clone(),
+        client_id: input.client_id.clone(),
+        scopes: scopes_json,
+        user_id: None,
+        status: "pending".to_string(),
+        interval: interval as i32,
+        expires_at: expires_at.naive_utc(),
+        created_at: now.naive_utc(),
+    };
+
+    if let Err(e) = state.repos.device_codes.create(new_dc).await {
+        crate::otel::record_error("oauth2_device_code_store_failed", &e);
+        return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
     }
 
     let verification_uri = config
@@ -1749,9 +1284,7 @@ async fn device_authorization(
         .write_audit_log(
             None,
             "device_authorization_initiated",
-            Some(serde_json::json!({
-                "client_id": input.client_id,
-            })),
+            Some(serde_json::json!({ "client_id": input.client_id })),
             None,
         )
         .await;
@@ -1773,40 +1306,17 @@ pub struct DeviceVerifyQuery {
     pub user_code: Option<String>,
 }
 
-/// GET /oauth/device — Returns JSON for the SPA consent page.
+/// GET /oauth/device
 async fn device_verify_get(
     State(state): State<YAuthState>,
     Query(query): Query<DeviceVerifyQuery>,
 ) -> Response {
-    // If a user_code is provided, look up the pending device code
     if let Some(ref code) = query.user_code {
-        // Device code data
-        struct DcInfo {
-            user_code: String,
-            client_id: String,
-            scopes: Option<serde_json::Value>,
-            expires_at: chrono::NaiveDateTime,
-        }
-
-        let dc_result: Result<Option<DcInfo>, String> = {
-            let mut conn = match state.db.get().await {
-                Ok(c) => c,
-                Err(_) => {
-                    return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-                        .into_response();
-                }
-            };
-            db_find_device_code_by_user_code_pending(&mut conn, code)
-                .await
-                .map(|opt| {
-                    opt.map(|dc| DcInfo {
-                        user_code: dc.user_code,
-                        client_id: dc.client_id,
-                        scopes: dc.scopes,
-                        expires_at: dc.expires_at,
-                    })
-                })
-        };
+        let dc_result = state
+            .repos
+            .device_codes
+            .find_by_user_code_pending(code)
+            .await;
 
         match dc_result {
             Ok(Some(dc)) => {
@@ -1821,20 +1331,14 @@ async fn device_verify_get(
                 }
 
                 // Look up client name
-                let client_name = {
-                    let mut conn = match state.db.get().await {
-                        Ok(c) => c,
-                        Err(_) => {
-                            return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-                                .into_response();
-                        }
-                    };
-                    db_find_client_by_client_id(&mut conn, &dc.client_id)
-                        .await
-                        .ok()
-                        .flatten()
-                        .and_then(|c| c.client_name)
-                };
+                let client_name = state
+                    .repos
+                    .oauth2_clients
+                    .find_by_client_id(&dc.client_id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .and_then(|c| c.client_name);
 
                 let scope = dc.scopes.as_ref().and_then(|v| v.as_array()).map(|arr| {
                     arr.iter()
@@ -1870,7 +1374,6 @@ async fn device_verify_get(
         }
     }
 
-    // No user_code — return a prompt for the user to enter one
     Json(serde_json::json!({
         "type": "device_verification",
         "message": "Enter the code displayed on your device",
@@ -1885,15 +1388,13 @@ pub struct DeviceVerifyRequest {
     pub approved: bool,
 }
 
-/// POST /oauth/device — User approves or denies the device authorization.
-/// Requires authentication (session cookie or bearer token).
+/// POST /oauth/device
 async fn device_verify_post(
     State(state): State<YAuthState>,
     jar: axum_extra::extract::cookie::CookieJar,
     headers: axum::http::HeaderMap,
     Json(input): Json<DeviceVerifyRequest>,
 ) -> Response {
-    // Authenticate the user
     let auth_user = match authenticate_user(&state, &jar, &headers).await {
         Ok(u) => u,
         Err(_) => {
@@ -1908,41 +1409,26 @@ async fn device_verify_post(
         }
     };
 
-    // Find the pending device code by user_code
-    struct DcInfo {
-        id: Uuid,
-        expires_at: chrono::NaiveDateTime,
-    }
-
-    let dc = {
-        let mut conn = match state.db.get().await {
-            Ok(c) => c,
-            Err(_) => {
-                return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-                    .into_response();
-            }
-        };
-        match db_find_device_code_by_user_code_pending(&mut conn, &input.user_code).await {
-            Ok(Some(dc)) => DcInfo {
-                id: dc.id,
-                expires_at: dc.expires_at,
-            },
-            Ok(None) => {
-                return oauth2_error(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_request",
-                    "Invalid or already used user code",
-                );
-            }
-            Err(e) => {
-                crate::otel::record_error("db_error", &e);
-                return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-                    .into_response();
-            }
+    let dc = match state
+        .repos
+        .device_codes
+        .find_by_user_code_pending(&input.user_code)
+        .await
+    {
+        Ok(Some(dc)) => dc,
+        Ok(None) => {
+            return oauth2_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "Invalid or already used user code",
+            );
+        }
+        Err(e) => {
+            crate::otel::record_error("db_error", &e);
+            return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
         }
     };
 
-    // Check expiration
     let now_naive = Utc::now().naive_utc();
     if dc.expires_at < now_naive {
         return oauth2_error(
@@ -1953,24 +1439,20 @@ async fn device_verify_post(
     }
 
     let new_status = if input.approved { "approved" } else { "denied" };
+    let user_id = if input.approved {
+        Some(auth_user.id)
+    } else {
+        None
+    };
 
+    if let Err(e) = state
+        .repos
+        .device_codes
+        .update_status(dc.id, new_status, user_id)
+        .await
     {
-        let mut conn = match state.db.get().await {
-            Ok(c) => c,
-            Err(_) => {
-                return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-                    .into_response();
-            }
-        };
-        let user_id = if input.approved {
-            Some(auth_user.id)
-        } else {
-            None
-        };
-        if let Err(e) = db_update_device_code_status(&mut conn, dc.id, new_status, user_id).await {
-            crate::otel::record_error("oauth2_device_code_update_failed", &e);
-            return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
-        }
+        crate::otel::record_error("oauth2_device_code_update_failed", &e);
+        return api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
     }
 
     crate::otel::add_event(
@@ -1992,9 +1474,7 @@ async fn device_verify_post(
             } else {
                 "device_authorization_denied"
             },
-            Some(serde_json::json!({
-                "user_code": input.user_code,
-            })),
+            Some(serde_json::json!({ "user_code": input.user_code })),
             None,
         )
         .await;
@@ -2027,64 +1507,33 @@ async fn handle_device_code_grant(
         )
     })?;
 
-    // Verify client exists
     let _client = lookup_client(state, client_id)
         .await
         .map_err(|e| e.into_response())?;
 
-    // Find device code
     let device_code_hash = crypto::hash_token(device_code_raw);
 
-    // Device code info
-    struct StoredDc {
-        id: Uuid,
-        client_id: String,
-        scopes: Option<serde_json::Value>,
-        user_id: Option<Uuid>,
-        status: String,
-        interval: i32,
-        expires_at: chrono::NaiveDateTime,
-        last_polled_at: Option<chrono::NaiveDateTime>,
-    }
-
-    let stored = {
-        let mut conn = state.db.get().await.map_err(|_| {
+    let stored = state
+        .repos
+        .device_codes
+        .find_by_device_code_hash(&device_code_hash)
+        .await
+        .map_err(|e| {
+            crate::otel::record_error("db_error", &e);
             oauth2_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "server_error",
                 "Internal error",
             )
+        })?
+        .ok_or_else(|| {
+            oauth2_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_grant",
+                "Invalid device code",
+            )
         })?;
-        let row = db_find_device_code_by_hash(&mut conn, &device_code_hash)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("db_error", &e);
-                oauth2_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "server_error",
-                    "Internal error",
-                )
-            })?
-            .ok_or_else(|| {
-                oauth2_error(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_grant",
-                    "Invalid device code",
-                )
-            })?;
-        StoredDc {
-            id: row.id,
-            client_id: row.client_id,
-            scopes: row.scopes,
-            user_id: row.user_id,
-            status: row.status,
-            interval: row.interval,
-            expires_at: row.expires_at,
-            last_polled_at: row.last_polled_at,
-        }
-    };
 
-    // Validate client_id matches
     if stored.client_id != client_id {
         return Err(oauth2_error(
             StatusCode::BAD_REQUEST,
@@ -2093,7 +1542,6 @@ async fn handle_device_code_grant(
         ));
     }
 
-    // Check expiration
     let now = Utc::now().fixed_offset();
     let now_naive = now.naive_utc();
     if stored.expires_at < now_naive {
@@ -2108,15 +1556,11 @@ async fn handle_device_code_grant(
     if let Some(last_polled) = stored.last_polled_at {
         let elapsed = now_naive.signed_duration_since(last_polled);
         if elapsed.num_seconds() < stored.interval as i64 {
-            // Too fast — increment interval by 5s
-            {
-                let mut conn = state.db.get().await.ok();
-                if let Some(ref mut conn) = conn {
-                    let _ =
-                        db_update_device_code_slow_down(conn, stored.id, stored.interval + 5, now)
-                            .await;
-                }
-            }
+            let _ = state
+                .repos
+                .device_codes
+                .update_interval(stored.id, stored.interval + 5)
+                .await;
             return Err(oauth2_error(
                 StatusCode::BAD_REQUEST,
                 "slow_down",
@@ -2126,15 +1570,9 @@ async fn handle_device_code_grant(
     }
 
     // Update last_polled_at
-    let current_status = stored.status.clone();
-    {
-        let mut conn = state.db.get().await.ok();
-        if let Some(ref mut conn) = conn {
-            let _ = db_update_device_code_polled(conn, stored.id, now).await;
-        }
-    }
+    let _ = state.repos.device_codes.update_last_polled(stored.id).await;
 
-    match current_status.as_str() {
+    match stored.status.as_str() {
         "pending" => {
             return Err(oauth2_error(
                 StatusCode::BAD_REQUEST,
@@ -2168,7 +1606,6 @@ async fn handle_device_code_grant(
         }
     }
 
-    // Get user_id from the stored device code
     let user_id = stored.user_id.ok_or_else(|| {
         oauth2_error(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -2178,49 +1615,35 @@ async fn handle_device_code_grant(
     })?;
 
     // Mark as used
-    {
-        let mut conn = state.db.get().await.map_err(|_| {
+    state
+        .repos
+        .device_codes
+        .update_status(stored.id, "used", stored.user_id)
+        .await
+        .map_err(|e| {
+            crate::otel::record_error("oauth2_device_code_mark_used_failed", &e);
             oauth2_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "server_error",
                 "Internal error",
             )
         })?;
-        db_update_device_code_status(&mut conn, stored.id, "used", stored.user_id)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("oauth2_device_code_mark_used_failed", &e);
-                oauth2_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "server_error",
-                    "Internal error",
-                )
-            })?;
-    }
 
     // Look up user
-    let user = {
-        let mut conn = state.db.get().await.map_err(|_| {
+    let user = state
+        .repos
+        .users
+        .find_by_id(user_id)
+        .await
+        .map_err(|e| {
+            crate::otel::record_error("db_error", &e);
             oauth2_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "server_error",
                 "Internal error",
             )
-        })?;
-        find_user_by_id(&mut conn, user_id)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("db_error", &e);
-                oauth2_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "server_error",
-                    "Internal error",
-                )
-            })?
-            .ok_or_else(|| {
-                oauth2_error(StatusCode::BAD_REQUEST, "invalid_grant", "User not found")
-            })?
-    };
+        })?
+        .ok_or_else(|| oauth2_error(StatusCode::BAD_REQUEST, "invalid_grant", "User not found"))?;
 
     if user.banned {
         return Err(oauth2_error(
@@ -2230,7 +1653,6 @@ async fn handle_device_code_grant(
         ));
     }
 
-    // Parse scopes
     let scope_str = stored
         .scopes
         .as_ref()
@@ -2242,7 +1664,6 @@ async fn handle_device_code_grant(
                 .join(" ")
         });
 
-    // Issue tokens
     #[cfg(feature = "bearer")]
     {
         let bearer_config = &state.bearer_config;
@@ -2267,15 +1688,8 @@ async fn handle_device_code_grant(
         })?;
 
         let family_id = Uuid::new_v4();
-        let mut conn = state.db.get().await.map_err(|_| {
-            oauth2_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "server_error",
-                "Internal error",
-            )
-        })?;
-        let refresh_token = create_refresh_token_for_oauth2_diesel(
-            &mut conn,
+        let refresh_token = create_refresh_token_for_oauth2(
+            state,
             user.id,
             family_id,
             bearer_config.refresh_token_ttl,
@@ -2349,7 +1763,6 @@ async fn introspect_endpoint(
         Err(msg) => return oauth2_error(StatusCode::BAD_REQUEST, "invalid_request", &msg),
     };
 
-    // Client authentication
     if let Err(e) = authenticate_client(
         &state,
         input.client_id.as_deref(),
@@ -2365,7 +1778,6 @@ async fn introspect_endpoint(
         return Json(IntrospectResponse::inactive()).into_response();
     }
 
-    // Determine token type to check. Default order: access_token first, then refresh_token.
     let hints = match input.token_type_hint.as_deref() {
         Some("refresh_token") => vec!["refresh_token", "access_token"],
         _ => vec!["access_token", "refresh_token"],
@@ -2411,32 +1823,13 @@ async fn introspect_endpoint(
             "refresh_token" => {
                 let token_hash = crypto::hash_token(token);
 
-                // Find refresh token and check active
-                struct RefreshInfo {
-                    user_id: Uuid,
-                    expires_at: chrono::NaiveDateTime,
-                    created_at: chrono::NaiveDateTime,
-                    revoked: bool,
-                }
-
-                let rt_opt: Option<RefreshInfo> = {
-                    let mut conn = match state.db.get().await {
-                        Ok(c) => c,
-                        Err(_) => {
-                            continue;
-                        }
-                    };
-                    db_find_refresh_token_by_hash(&mut conn, &token_hash)
-                        .await
-                        .ok()
-                        .flatten()
-                        .map(|s| RefreshInfo {
-                            user_id: s.user_id,
-                            expires_at: s.expires_at,
-                            created_at: s.created_at,
-                            revoked: s.revoked,
-                        })
-                };
+                let rt_opt = state
+                    .repos
+                    .refresh_tokens
+                    .find_by_token_hash(&token_hash)
+                    .await
+                    .ok()
+                    .flatten();
 
                 if let Some(stored) = rt_opt
                     && !stored.revoked
@@ -2458,7 +1851,6 @@ async fn introspect_endpoint(
         }
     }
 
-    // Invalid or expired token — return inactive per RFC 7662
     Json(IntrospectResponse::inactive()).into_response()
 }
 
@@ -2473,11 +1865,9 @@ async fn revoke_endpoint(
 ) -> Response {
     let input: RevokeTokenRequest = match parse_json_or_form(&headers, &body) {
         Ok(v) => v,
-        // RFC 7009: always return 200
         Err(_) => return StatusCode::OK.into_response(),
     };
 
-    // Client authentication
     if let Err(e) = authenticate_client(
         &state,
         input.client_id.as_deref(),
@@ -2493,7 +1883,6 @@ async fn revoke_endpoint(
         return StatusCode::OK.into_response();
     }
 
-    // Determine token type to try revoking. Default order: refresh_token first.
     let hints = match input.token_type_hint.as_deref() {
         Some("access_token") => vec!["access_token", "refresh_token"],
         _ => vec!["refresh_token", "access_token"],
@@ -2504,38 +1893,29 @@ async fn revoke_endpoint(
             "refresh_token" => {
                 let token_hash = crypto::hash_token(token);
 
-                let rt_opt = {
-                    let mut conn = match state.db.get().await {
-                        Ok(c) => c,
-                        Err(_) => {
-                            continue;
-                        }
-                    };
-                    db_find_refresh_token_by_hash(&mut conn, &token_hash)
-                        .await
-                        .ok()
-                        .flatten()
-                };
+                let rt_opt = state
+                    .repos
+                    .refresh_tokens
+                    .find_by_token_hash(&token_hash)
+                    .await
+                    .ok()
+                    .flatten();
 
                 if let Some(stored) = rt_opt {
                     // Revoke this token and its entire family
                     #[cfg(feature = "bearer")]
                     {
-                        let mut conn = state.db.get().await.ok();
-                        if let Some(ref mut conn) = conn {
-                            let _ = db_revoke_family(conn, stored.family_id).await;
-                        }
+                        let _ = state
+                            .repos
+                            .refresh_tokens
+                            .revoke_family(stored.family_id)
+                            .await;
                     }
 
                     #[cfg(not(feature = "bearer"))]
                     {
                         if !stored.revoked {
-                            {
-                                let mut conn = state.db.get().await.ok();
-                                if let Some(ref mut conn) = conn {
-                                    let _ = db_revoke_refresh_token(conn, stored.id).await;
-                                }
-                            }
+                            let _ = state.repos.refresh_tokens.revoke(stored.id).await;
                         }
                     }
 
@@ -2551,18 +1931,16 @@ async fn revoke_endpoint(
             }
             "access_token" => {
                 // Stateless JWTs cannot be revoked — just return 200 OK per RFC 7009
-                // We still check if it looks like a valid JWT to match the hint
             }
             _ => {}
         }
     }
 
-    // Per RFC 7009, always return 200 OK even for invalid tokens
     StatusCode::OK.into_response()
 }
 
 // ---------------------------------------------------------------------------
-// Client Credentials Grant (RFC 6749 §4.4) — via token_endpoint
+// Client Credentials Grant (RFC 6749 §4.4)
 // ---------------------------------------------------------------------------
 
 #[allow(unused_variables, clippy::needless_return)]
@@ -2585,12 +1963,10 @@ async fn handle_client_credentials_grant(
         )
     })?;
 
-    // Look up client
     let client = lookup_client(state, client_id)
         .await
         .map_err(|e| e.into_response())?;
 
-    // Authenticate client secret
     let secret_hash = client.client_secret_hash.as_deref().ok_or_else(|| {
         oauth2_error(
             StatusCode::UNAUTHORIZED,
@@ -2620,7 +1996,6 @@ async fn handle_client_credentials_grant(
         ));
     }
 
-    // Verify client has "client_credentials" in its grant_types
     let empty_arr = vec![];
     let grant_types = client
         .grant_types
@@ -2638,7 +2013,6 @@ async fn handle_client_credentials_grant(
         ));
     }
 
-    // Verify requested scopes are a subset of client's registered scopes
     let registered_scopes: Vec<&str> = client
         .scopes
         .as_ref()
@@ -2659,10 +2033,8 @@ async fn handle_client_credentials_grant(
         }
     }
 
-    // Effective scope is only what was explicitly requested (don't auto-grant all scopes)
     let effective_scope = requested_scope;
 
-    // Issue a JWT access token with sub = client_id (not a user ID)
     #[cfg(feature = "bearer")]
     {
         let bearer_config = &state.bearer_config;
@@ -2756,9 +2128,6 @@ async fn handle_client_credentials_grant(
 // Client Authentication Helper
 // ---------------------------------------------------------------------------
 
-/// Authenticate a client by client_id + client_secret from the request body.
-/// If client_id/client_secret are provided, validates them.
-/// If neither is provided, succeeds (public client or no auth required).
 async fn authenticate_client(
     state: &YAuthState,
     client_id: Option<&str>,
@@ -2782,7 +2151,6 @@ async fn authenticate_client(
             Ok(())
         }
         (Some(cid), None) => {
-            // Client ID provided but no secret — verify client exists (public client)
             let _client = lookup_client(state, cid)
                 .await
                 .map_err(|e| e.into_response())?;
@@ -2849,13 +2217,14 @@ fn validate_authorize_params_from_consent(input: &AuthorizeConsentRequest) -> Re
     Ok(())
 }
 
-async fn lookup_client(state: &YAuthState, client_id: &str) -> Result<Oauth2Client, ApiError> {
-    let mut conn = state
-        .db
-        .get()
-        .await
-        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-    db_find_client_by_client_id(&mut conn, client_id)
+async fn lookup_client(
+    state: &YAuthState,
+    client_id: &str,
+) -> Result<crate::domain::Oauth2Client, ApiError> {
+    state
+        .repos
+        .oauth2_clients
+        .find_by_client_id(client_id)
         .await
         .map_err(|e| {
             crate::otel::record_error("oauth2_client_lookup_error", &e);
@@ -2864,10 +2233,8 @@ async fn lookup_client(state: &YAuthState, client_id: &str) -> Result<Oauth2Clie
         .ok_or_else(|| api_err(StatusCode::BAD_REQUEST, "Unknown client_id"))
 }
 
-/// Resolve redirect_uri: if provided, validate against registered URIs.
-/// If omitted, default to the client's single registered URI (RFC 6749 §3.1.2.3).
 fn resolve_redirect_uri(
-    client: &Oauth2Client,
+    client: &crate::domain::Oauth2Client,
     redirect_uri: Option<&str>,
 ) -> Result<String, ApiError> {
     let empty = vec![];
@@ -2902,7 +2269,10 @@ fn resolve_redirect_uri(
     }
 }
 
-fn validate_redirect_uri(client: &Oauth2Client, redirect_uri: &str) -> Result<(), ApiError> {
+fn validate_redirect_uri(
+    client: &crate::domain::Oauth2Client,
+    redirect_uri: &str,
+) -> Result<(), ApiError> {
     resolve_redirect_uri(client, Some(redirect_uri)).map(|_| ())
 }
 
@@ -2919,31 +2289,24 @@ async fn authenticate_user(
         if let Ok(Some(session_user)) =
             crate::auth::session::validate_session(state, token, None, None).await
         {
-            {
-                let mut conn = match state.db.get().await {
-                    Ok(c) => c,
-                    Err(_) => return Err(()),
-                };
-                if let Ok(Some(user)) = find_user_by_id(&mut conn, session_user.user_id).await {
-                    if !user.banned {
-                        return Ok(AuthUser {
-                            id: user.id,
-                            email: user.email,
-                            display_name: user.display_name,
-                            email_verified: user.email_verified,
-                            role: user.role,
-                            banned: user.banned,
-                            auth_method: crate::middleware::AuthMethod::Session,
-                            scopes: None,
-                        });
-                    }
+            if let Ok(Some(user)) = state.repos.users.find_by_id(session_user.user_id).await {
+                if !user.banned {
+                    return Ok(AuthUser {
+                        id: user.id,
+                        email: user.email,
+                        display_name: user.display_name,
+                        email_verified: user.email_verified,
+                        role: user.role,
+                        banned: user.banned,
+                        auth_method: crate::middleware::AuthMethod::Session,
+                        scopes: None,
+                    });
                 }
             }
         }
     }
 
     // Try bearer token
-    // Note: nested ifs are intentional — collapsing causes type inference failures (E0282)
     #[cfg(feature = "bearer")]
     if let Some(auth_header) = headers.get("authorization") {
         if let Ok(header_str) = auth_header.to_str() {
@@ -2965,37 +2328,32 @@ async fn save_consent(
     client_id: &str,
     scopes: Option<serde_json::Value>,
 ) {
-    {
-        let mut conn = match state.db.get().await {
-            Ok(c) => c,
-            Err(e) => {
-                crate::otel::record_error("oauth2_consent_pool_error", &e);
-                return;
-            }
-        };
-        let existing = db_find_consent(&mut conn, user_id, client_id).await;
-        let now = Utc::now().fixed_offset();
-        match existing {
-            Ok(Some(existing)) => {
-                if let Err(e) =
-                    db_update_consent(&mut conn, existing.id, scopes.as_ref(), now).await
-                {
-                    crate::otel::record_error("oauth2_consent_update_failed", &e);
-                }
-            }
-            _ => {
-                if let Err(e) = db_insert_consent(
-                    &mut conn,
-                    Uuid::new_v4(),
-                    user_id,
-                    client_id,
-                    scopes.as_ref(),
-                    now,
-                )
+    let existing = state
+        .repos
+        .consents
+        .find_by_user_and_client(user_id, client_id)
+        .await;
+    match existing {
+        Ok(Some(existing)) => {
+            if let Err(e) = state
+                .repos
+                .consents
+                .update_scopes(existing.id, scopes)
                 .await
-                {
-                    crate::otel::record_error("oauth2_consent_save_failed", &e);
-                }
+            {
+                crate::otel::record_error("oauth2_consent_update_failed", &e);
+            }
+        }
+        _ => {
+            let new_consent = crate::domain::NewConsent {
+                id: Uuid::new_v4(),
+                user_id,
+                client_id: client_id.to_string(),
+                scopes,
+                created_at: Utc::now().naive_utc(),
+            };
+            if let Err(e) = state.repos.consents.create(new_consent).await {
+                crate::otel::record_error("oauth2_consent_save_failed", &e);
             }
         }
     }
@@ -3003,33 +2361,36 @@ async fn save_consent(
 
 /// Create a refresh token for the OAuth2 flow.
 #[cfg(feature = "bearer")]
-async fn create_refresh_token_for_oauth2_diesel(
-    conn: &mut diesel_async_crate::AsyncPgConnection,
+async fn create_refresh_token_for_oauth2(
+    state: &YAuthState,
     user_id: Uuid,
     family_id: Uuid,
     ttl: std::time::Duration,
 ) -> Result<String, ApiError> {
     let raw_token = crypto::generate_token();
     let token_hash = crypto::hash_token(&raw_token);
-    let now = Utc::now().fixed_offset();
-    let expires_at = (Utc::now()
-        + chrono::Duration::from_std(ttl).unwrap_or(chrono::Duration::days(7)))
-    .fixed_offset();
+    let now = Utc::now();
+    let expires_at = now + chrono::Duration::from_std(ttl).unwrap_or(chrono::Duration::days(7));
 
-    db_insert_refresh_token(
-        conn,
-        Uuid::new_v4(),
+    let new_token = crate::domain::NewRefreshToken {
+        id: Uuid::new_v4(),
         user_id,
-        &token_hash,
+        token_hash,
         family_id,
-        expires_at,
-        now,
-    )
-    .await
-    .map_err(|e| {
-        crate::otel::record_error("refresh_token_create_failed", &e);
-        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-    })?;
+        expires_at: expires_at.naive_utc(),
+        revoked: false,
+        created_at: now.naive_utc(),
+    };
+
+    state
+        .repos
+        .refresh_tokens
+        .create(new_token)
+        .await
+        .map_err(|e| {
+            crate::otel::record_error("refresh_token_create_failed", &e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
 
     Ok(raw_token)
 }
@@ -3056,7 +2417,6 @@ mod tests {
 
     #[test]
     fn pkce_s256_matches_spec() {
-        // RFC 7636 Appendix B example
         let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
         let challenge = pkce_s256_challenge(verifier);
         assert_eq!(challenge, "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM");
@@ -3114,7 +2474,7 @@ mod tests {
     #[test]
     fn user_code_format_is_xxxx_dash_xxxx() {
         let code = generate_user_code();
-        assert_eq!(code.len(), 9); // 4 + 1 + 4
+        assert_eq!(code.len(), 9);
         assert_eq!(&code[4..5], "-");
     }
 
@@ -3137,7 +2497,6 @@ mod tests {
 
     #[test]
     fn user_code_excludes_ambiguous_chars() {
-        // Run many iterations to check no 0, O, 1, I, L appear
         let ambiguous = b"0O1IL";
         for _ in 0..1000 {
             let code = generate_user_code();
@@ -3158,7 +2517,6 @@ mod tests {
     fn user_codes_are_unique() {
         let codes: std::collections::HashSet<String> =
             (0..100).map(|_| generate_user_code()).collect();
-        // With 30^8 space, 100 codes should all be unique
         assert_eq!(codes.len(), 100);
     }
 
@@ -3173,7 +2531,6 @@ mod tests {
         assert!(resp.iat.is_none());
         assert!(resp.token_type.is_none());
 
-        // Verify JSON serialization omits None fields
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json, serde_json::json!({"active": false}));
     }

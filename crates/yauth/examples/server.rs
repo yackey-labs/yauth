@@ -19,7 +19,8 @@
 //!
 //! | Variable              | Default                     | Description                         |
 //! |-----------------------|-----------------------------|-------------------------------------|
-//! | `DATABASE_URL`        | *(required)*                | PostgreSQL connection string         |
+//! | `YAUTH_BACKEND`       | `diesel`                    | Backend: `diesel` or `memory`        |
+//! | `DATABASE_URL`        | *(required for diesel)*     | PostgreSQL connection string         |
 //! | `PORT`                | `3000`                      | Server listen port                   |
 //! | `BASE_URL`            | `http://localhost:3000`     | Public-facing base URL               |
 //! | `SESSION_COOKIE_NAME` | `session`                   | Name of the session cookie           |
@@ -63,8 +64,14 @@ async fn main() {
     // -----------------------------------------------------------------------
     // 2. Read configuration from environment variables
     // -----------------------------------------------------------------------
-    let database_url = env::var("DATABASE_URL")
-        .expect("DATABASE_URL must be set (e.g. postgres://user:pass@host/db)");
+    let yauth_backend = env::var("YAUTH_BACKEND").unwrap_or_else(|_| "diesel".into());
+    let database_url = if yauth_backend == "memory" {
+        None
+    } else {
+        Some(env::var("DATABASE_URL").expect(
+            "DATABASE_URL must be set (e.g. postgres://user:pass@host/db or file:yauth.db)",
+        ))
+    };
     let port: u16 = env::var("PORT")
         .ok()
         .and_then(|p| p.parse().ok())
@@ -104,27 +111,37 @@ async fn main() {
     }
 
     // -----------------------------------------------------------------------
-    // 3. Connect to the database and run migrations
+    // 3. Create the database backend
     // -----------------------------------------------------------------------
-    log::info!("Connecting to database...");
-    let config =
-        yauth::AsyncDieselConnectionManager::<yauth::AsyncPgConnection>::new(&database_url);
-    let pool = yauth::DieselPool::builder(config)
-        .build()
-        .expect("Failed to create connection pool");
-
-    log::info!("Running migrations...");
-    yauth::migration::diesel_migrations::run_migrations(&pool)
-        .await
-        .expect("Failed to run migrations");
-    log::info!("Migrations complete.");
+    let backend: Box<dyn yauth::repo::DatabaseBackend> = match yauth_backend.as_str() {
+        "memory" => {
+            log::info!("Using in-memory backend (no database required)");
+            Box::new(yauth::backends::memory::InMemoryBackend::new())
+        }
+        "libsql" => {
+            log::info!("Using libSQL/SQLite backend");
+            let url = database_url.as_ref().unwrap();
+            Box::new(
+                yauth::backends::diesel_libsql::DieselLibsqlBackend::new(url)
+                    .expect("Failed to create libsql backend"),
+            )
+        }
+        _ => {
+            log::info!("Connecting to PostgreSQL database...");
+            let url = database_url.as_ref().unwrap();
+            Box::new(
+                yauth::backends::diesel::DieselBackend::new(url)
+                    .expect("Failed to create database backend"),
+            )
+        }
+    };
 
     // -----------------------------------------------------------------------
     // 4. Build the YAuth instance with all plugins enabled
     // -----------------------------------------------------------------------
     #[allow(unused_mut)]
     let mut builder = YAuthBuilder::new(
-        pool,
+        backend,
         yauth::config::YAuthConfig {
             base_url: base_url.clone(),
             session_cookie_name,
@@ -208,7 +225,7 @@ async fn main() {
         builder
     };
 
-    let auth = builder.build();
+    let auth = builder.build().await.expect("Failed to build YAuth");
 
     // -----------------------------------------------------------------------
     // 5. Build the Axum application

@@ -11,16 +11,10 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::auth::{crypto, session};
-use crate::db::models::{NewAuditLog, NewSession, Session, UpdateUser, User};
-use crate::db::schema::{yauth_audit_log, yauth_sessions, yauth_users};
 use crate::error::{ApiError, api_err};
 use crate::middleware::{AuthUser, require_admin};
 use crate::plugin::{PluginContext, YAuthPlugin};
 use crate::state::YAuthState;
-
-use diesel::prelude::*;
-use diesel::result::OptionalExtension;
-use diesel_async_crate::RunQueryDsl;
 
 pub struct AdminPlugin;
 
@@ -110,8 +104,8 @@ pub struct AdminUserInfo {
     pub updated_at: String,
 }
 
-impl From<crate::db::models::User> for AdminUserInfo {
-    fn from(u: crate::db::models::User) -> Self {
+impl From<crate::domain::User> for AdminUserInfo {
+    fn from(u: crate::domain::User) -> Self {
         AdminUserInfo {
             id: u.id.to_string(),
             email: u.email,
@@ -160,8 +154,8 @@ struct SessionInfo {
     pub created_at: chrono::NaiveDateTime,
 }
 
-impl From<Session> for SessionInfo {
-    fn from(s: Session) -> Self {
+impl From<crate::domain::Session> for SessionInfo {
+    fn from(s: crate::domain::Session) -> Self {
         Self {
             id: s.id,
             user_id: s.user_id,
@@ -194,82 +188,24 @@ async fn list_users(
 ) -> Result<impl IntoResponse, ApiError> {
     let (page, per_page) = paginate_params(params.page, params.per_page);
 
-    let mut conn = state
-        .db
-        .get()
-        .await
-        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-
     let offset = ((page - 1) * per_page) as i64;
     let limit = per_page as i64;
 
-    let (total, users) = match params.search.as_deref() {
-        Some(pattern) => {
-            let like_pattern = format!("%{}%", pattern);
-            let count: i64 = yauth_users::table
-                .filter(
-                    yauth_users::email
-                        .ilike(&like_pattern)
-                        .or(yauth_users::display_name.ilike(&like_pattern)),
-                )
-                .count()
-                .get_result(&mut conn)
-                .await
-                .map_err(|e| {
-                    crate::otel::record_error("admin_db_count_users_error", &e);
-                    api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-                })?;
-
-            let rows: Vec<User> = yauth_users::table
-                .filter(
-                    yauth_users::email
-                        .ilike(&like_pattern)
-                        .or(yauth_users::display_name.ilike(&like_pattern)),
-                )
-                .order(yauth_users::created_at.asc())
-                .limit(limit)
-                .offset(offset)
-                .select(User::as_select())
-                .load(&mut conn)
-                .await
-                .map_err(|e| {
-                    crate::otel::record_error("admin_db_list_users_error", &e);
-                    api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-                })?;
-
-            (count as u64, rows)
-        }
-        None => {
-            let count: i64 = yauth_users::table
-                .count()
-                .get_result(&mut conn)
-                .await
-                .map_err(|e| {
-                    crate::otel::record_error("admin_db_count_users_error", &e);
-                    api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-                })?;
-
-            let rows: Vec<User> = yauth_users::table
-                .order(yauth_users::created_at.asc())
-                .limit(limit)
-                .offset(offset)
-                .select(User::as_select())
-                .load(&mut conn)
-                .await
-                .map_err(|e| {
-                    crate::otel::record_error("admin_db_list_users_error", &e);
-                    api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-                })?;
-
-            (count as u64, rows)
-        }
-    };
+    let (users, total) = state
+        .repos
+        .users
+        .list(params.search.as_deref(), limit, offset)
+        .await
+        .map_err(|e| {
+            crate::otel::record_error("admin_db_list_users_error", &e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
 
     let user_infos: Vec<AdminUserInfo> = users.into_iter().map(AdminUserInfo::from).collect();
 
     Ok(Json(serde_json::json!({
         "users": user_infos,
-        "total": total,
+        "total": total as u64,
         "page": page,
         "per_page": per_page,
     })))
@@ -284,18 +220,11 @@ async fn get_user(
     Extension(_admin): Extension<AuthUser>,
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let mut conn = state
-        .db
-        .get()
+    let user = state
+        .repos
+        .users
+        .find_by_id(id)
         .await
-        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-
-    let user: User = yauth_users::table
-        .find(id)
-        .select(User::as_select())
-        .first(&mut conn)
-        .await
-        .optional()
         .map_err(|e| {
             crate::otel::record_error("admin_db_fetch_user_error", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
@@ -315,49 +244,33 @@ async fn update_user(
     Path(id): Path<Uuid>,
     Json(input): Json<UpdateUserRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let updated = {
-        let mut conn = state
-            .db
-            .get()
-            .await
-            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
+    // Verify user exists
+    state
+        .repos
+        .users
+        .find_by_id(id)
+        .await
+        .map_err(|e| {
+            crate::otel::record_error("admin_db_fetch_user_error", &e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?
+        .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "User not found"))?;
 
-        // Verify user exists
-        yauth_users::table
-            .find(id)
-            .select(User::as_select())
-            .first(&mut conn)
-            .await
-            .optional()
-            .map_err(|e| {
-                crate::otel::record_error("admin_db_fetch_user_error", &e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?
-            .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "User not found"))?;
-
-        let changeset = UpdateUser {
-            email: None,
-            display_name: input.display_name.map(Some),
-            email_verified: input.email_verified,
-            role: input.role,
-            banned: None,
-            banned_reason: None,
-            banned_until: None,
-            updated_at: Some(Utc::now().naive_utc()),
-        };
-
-        let updated: User = diesel::update(yauth_users::table.find(id))
-            .set(&changeset)
-            .returning(User::as_returning())
-            .get_result(&mut conn)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("admin_db_update_user_error", &e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
-
-        updated
+    let changeset = crate::domain::UpdateUser {
+        email: None,
+        display_name: input.display_name.map(Some),
+        email_verified: input.email_verified,
+        role: input.role,
+        banned: None,
+        banned_reason: None,
+        banned_until: None,
+        updated_at: Some(Utc::now().naive_utc()),
     };
+
+    let updated = state.repos.users.update(id, changeset).await.map_err(|e| {
+        crate::otel::record_error("admin_db_update_user_error", &e);
+        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+    })?;
 
     crate::otel::add_event(
         "admin_user_updated",
@@ -395,33 +308,22 @@ async fn delete_user(
         return Err(api_err(StatusCode::BAD_REQUEST, "Cannot delete yourself"));
     }
 
-    {
-        let mut conn = state
-            .db
-            .get()
-            .await
-            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
+    // Verify user exists
+    state
+        .repos
+        .users
+        .find_by_id(id)
+        .await
+        .map_err(|e| {
+            crate::otel::record_error("admin_db_fetch_user_error", &e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?
+        .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "User not found"))?;
 
-        yauth_users::table
-            .find(id)
-            .select(User::as_select())
-            .first(&mut conn)
-            .await
-            .optional()
-            .map_err(|e| {
-                crate::otel::record_error("admin_db_fetch_user_error", &e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?
-            .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "User not found"))?;
-
-        diesel::delete(yauth_users::table.find(id))
-            .execute(&mut conn)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("admin_db_delete_user_error", &e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
-    }
+    state.repos.users.delete(id).await.map_err(|e| {
+        crate::otel::record_error("admin_db_delete_user_error", &e);
+        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+    })?;
 
     crate::otel::add_event(
         "admin_user_deleted",
@@ -468,53 +370,38 @@ async fn ban_user(
                     "Invalid 'until' timestamp, expected RFC 3339 format",
                 )
             })?;
-            Some(parsed.fixed_offset())
+            Some(parsed.naive_utc())
         }
         None => None,
     };
 
-    let updated = {
-        let mut conn = state
-            .db
-            .get()
-            .await
-            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
+    // Verify user exists
+    state
+        .repos
+        .users
+        .find_by_id(id)
+        .await
+        .map_err(|e| {
+            crate::otel::record_error("admin_db_fetch_user_error", &e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?
+        .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "User not found"))?;
 
-        yauth_users::table
-            .find(id)
-            .select(User::as_select())
-            .first(&mut conn)
-            .await
-            .optional()
-            .map_err(|e| {
-                crate::otel::record_error("admin_db_fetch_user_error", &e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?
-            .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "User not found"))?;
-
-        let changeset = UpdateUser {
-            email: None,
-            display_name: None,
-            email_verified: None,
-            role: None,
-            banned: Some(true),
-            banned_reason: Some(input.reason.clone()),
-            banned_until: Some(banned_until.map(|t| t.naive_utc())),
-            updated_at: Some(Utc::now().naive_utc()),
-        };
-
-        let updated: User = diesel::update(yauth_users::table.find(id))
-            .set(&changeset)
-            .returning(User::as_returning())
-            .get_result(&mut conn)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("admin_db_ban_user_error", &e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
-
-        updated
+    let changeset = crate::domain::UpdateUser {
+        email: None,
+        display_name: None,
+        email_verified: None,
+        role: None,
+        banned: Some(true),
+        banned_reason: Some(input.reason.clone()),
+        banned_until: Some(banned_until),
+        updated_at: Some(Utc::now().naive_utc()),
     };
+
+    let updated = state.repos.users.update(id, changeset).await.map_err(|e| {
+        crate::otel::record_error("admin_db_ban_user_error", &e);
+        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+    })?;
 
     // Delete all active sessions for the banned user
     let deleted_sessions = session::delete_all_user_sessions(&state, id)
@@ -555,48 +442,33 @@ async fn unban_user(
     Extension(admin): Extension<AuthUser>,
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let updated = {
-        let mut conn = state
-            .db
-            .get()
-            .await
-            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
+    // Verify user exists
+    state
+        .repos
+        .users
+        .find_by_id(id)
+        .await
+        .map_err(|e| {
+            crate::otel::record_error("admin_db_fetch_user_error", &e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?
+        .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "User not found"))?;
 
-        yauth_users::table
-            .find(id)
-            .select(User::as_select())
-            .first(&mut conn)
-            .await
-            .optional()
-            .map_err(|e| {
-                crate::otel::record_error("admin_db_fetch_user_error", &e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?
-            .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "User not found"))?;
-
-        let changeset = UpdateUser {
-            email: None,
-            display_name: None,
-            email_verified: None,
-            role: None,
-            banned: Some(false),
-            banned_reason: Some(None),
-            banned_until: Some(None),
-            updated_at: Some(Utc::now().naive_utc()),
-        };
-
-        let updated: User = diesel::update(yauth_users::table.find(id))
-            .set(&changeset)
-            .returning(User::as_returning())
-            .get_result(&mut conn)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("admin_db_unban_user_error", &e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
-
-        updated
+    let changeset = crate::domain::UpdateUser {
+        email: None,
+        display_name: None,
+        email_verified: None,
+        role: None,
+        banned: Some(false),
+        banned_reason: Some(None),
+        banned_until: Some(None),
+        updated_at: Some(Utc::now().naive_utc()),
     };
+
+    let updated = state.repos.users.update(id, changeset).await.map_err(|e| {
+        crate::otel::record_error("admin_db_unban_user_error", &e);
+        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+    })?;
 
     crate::otel::add_event(
         "admin_user_unbanned",
@@ -637,19 +509,12 @@ async fn impersonate_user(
         ));
     }
 
-    let mut conn = state
-        .db
-        .get()
-        .await
-        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-
     // Verify target user exists
-    yauth_users::table
-        .find(id)
-        .select(User::as_select())
-        .first(&mut conn)
+    state
+        .repos
+        .users
+        .find_by_id(id)
         .await
-        .optional()
         .map_err(|e| {
             crate::otel::record_error("admin_db_fetch_user_error", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
@@ -663,7 +528,7 @@ async fn impersonate_user(
     let now = Utc::now();
     let expires_at = now + Duration::hours(1);
 
-    let new_session = NewSession {
+    let new_session = crate::domain::NewSession {
         id: session_id,
         user_id: id,
         token_hash: token_hash.clone(),
@@ -673,36 +538,28 @@ async fn impersonate_user(
         created_at: now.naive_utc(),
     };
 
-    diesel::insert_into(yauth_sessions::table)
-        .values(&new_session)
-        .execute(&mut conn)
+    state
+        .repos
+        .sessions
+        .create(new_session)
         .await
         .map_err(|e| {
             crate::otel::record_error("admin_impersonation_session_error", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?;
 
-    let new_audit = NewAuditLog {
-        id: Uuid::new_v4(),
-        user_id: Some(admin.id),
-        event_type: "admin_impersonate".to_string(),
-        metadata: Some(serde_json::json!({
-            "admin_user_id": admin.id,
-            "target_user_id": id,
-            "session_id": session_id,
-        })),
-        ip_address: None,
-        created_at: now.naive_utc(),
-    };
-
-    diesel::insert_into(yauth_audit_log::table)
-        .values(&new_audit)
-        .execute(&mut conn)
-        .await
-        .map_err(|e| {
-            crate::otel::record_error("admin_audit_log_write_error", &e);
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
+    state
+        .write_audit_log(
+            Some(admin.id),
+            "admin_impersonate",
+            Some(serde_json::json!({
+                "admin_user_id": admin.id,
+                "target_user_id": id,
+                "session_id": session_id,
+            })),
+            None,
+        )
+        .await;
 
     crate::otel::add_event(
         "admin_impersonated_user",
@@ -734,38 +591,20 @@ async fn list_sessions(
 ) -> Result<impl IntoResponse, ApiError> {
     let (page, per_page) = paginate_params(params.page, params.per_page);
 
-    let mut conn = state
-        .db
-        .get()
-        .await
-        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-
     let offset = ((page - 1) * per_page) as i64;
     let limit = per_page as i64;
 
-    let total: i64 = yauth_sessions::table
-        .count()
-        .get_result(&mut conn)
-        .await
-        .map_err(|e| {
-            crate::otel::record_error("admin_db_count_sessions_error", &e);
-            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?;
-
-    let sessions: Vec<SessionInfo> = yauth_sessions::table
-        .order(yauth_sessions::created_at.desc())
-        .limit(limit)
-        .offset(offset)
-        .select(Session::as_select())
-        .load(&mut conn)
+    let (sessions_raw, total) = state
+        .repos
+        .sessions
+        .list(limit, offset)
         .await
         .map_err(|e| {
             crate::otel::record_error("admin_db_list_sessions_error", &e);
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        })?
-        .into_iter()
-        .map(SessionInfo::from)
-        .collect();
+        })?;
+
+    let sessions: Vec<SessionInfo> = sessions_raw.into_iter().map(SessionInfo::from).collect();
 
     Ok(Json(serde_json::json!({
         "sessions": sessions,
@@ -785,18 +624,11 @@ async fn delete_session(
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
     let session_user_id = {
-        let mut conn = state
-            .db
-            .get()
+        let session = state
+            .repos
+            .sessions
+            .find_by_id(id)
             .await
-            .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?;
-
-        let session: Session = yauth_sessions::table
-            .find(id)
-            .select(Session::as_select())
-            .first(&mut conn)
-            .await
-            .optional()
             .map_err(|e| {
                 crate::otel::record_error("admin_db_fetch_session_error", &e);
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
@@ -805,13 +637,10 @@ async fn delete_session(
 
         let uid = session.user_id;
 
-        diesel::delete(yauth_sessions::table.find(id))
-            .execute(&mut conn)
-            .await
-            .map_err(|e| {
-                crate::otel::record_error("admin_db_delete_session_error", &e);
-                api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-            })?;
+        state.repos.sessions.delete(id).await.map_err(|e| {
+            crate::otel::record_error("admin_db_delete_session_error", &e);
+            api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        })?;
 
         uid
     };

@@ -5,55 +5,55 @@ use diesel_async_crate::RunQueryDsl;
 type Pool =
     diesel_async_crate::pooled_connection::deadpool::Pool<diesel_async_crate::AsyncPgConnection>;
 
-const CORE_UP: &str = include_str!("../../diesel_migrations/00000000000001_core/up.sql");
+const CORE_UP: &str = include_str!("../../../diesel_migrations/00000000000001_core/up.sql");
 
 #[cfg(feature = "email-password")]
 const EMAIL_PASSWORD_UP: &str =
-    include_str!("../../diesel_migrations/00000000000002_email_password/up.sql");
+    include_str!("../../../diesel_migrations/00000000000002_email_password/up.sql");
 
 #[cfg(feature = "passkey")]
-const PASSKEY_UP: &str = include_str!("../../diesel_migrations/00000000000003_passkey/up.sql");
+const PASSKEY_UP: &str = include_str!("../../../diesel_migrations/00000000000003_passkey/up.sql");
 
 #[cfg(feature = "mfa")]
-const MFA_UP: &str = include_str!("../../diesel_migrations/00000000000004_mfa/up.sql");
+const MFA_UP: &str = include_str!("../../../diesel_migrations/00000000000004_mfa/up.sql");
 
 #[cfg(feature = "oauth")]
-const OAUTH_UP: &str = include_str!("../../diesel_migrations/00000000000005_oauth/up.sql");
+const OAUTH_UP: &str = include_str!("../../../diesel_migrations/00000000000005_oauth/up.sql");
 
 #[cfg(feature = "bearer")]
-const BEARER_UP: &str = include_str!("../../diesel_migrations/00000000000006_bearer/up.sql");
+const BEARER_UP: &str = include_str!("../../../diesel_migrations/00000000000006_bearer/up.sql");
 
 #[cfg(feature = "api-key")]
-const API_KEY_UP: &str = include_str!("../../diesel_migrations/00000000000007_api_key/up.sql");
+const API_KEY_UP: &str = include_str!("../../../diesel_migrations/00000000000007_api_key/up.sql");
 
 #[cfg(feature = "magic-link")]
 const MAGIC_LINK_UP: &str =
-    include_str!("../../diesel_migrations/00000000000008_magic_link/up.sql");
+    include_str!("../../../diesel_migrations/00000000000008_magic_link/up.sql");
 
 #[cfg(feature = "oauth")]
 const OAUTH_TOKEN_REFRESH_UP: &str =
-    include_str!("../../diesel_migrations/00000000000009_oauth_token_refresh/up.sql");
+    include_str!("../../../diesel_migrations/00000000000009_oauth_token_refresh/up.sql");
 
 #[cfg(feature = "oauth2-server")]
 const OAUTH2_SERVER_UP: &str =
-    include_str!("../../diesel_migrations/00000000000010_oauth2_server/up.sql");
+    include_str!("../../../diesel_migrations/00000000000010_oauth2_server/up.sql");
 
 #[cfg(feature = "oauth2-server")]
 const DEVICE_AUTHORIZATION_UP: &str =
-    include_str!("../../diesel_migrations/00000000000011_device_authorization/up.sql");
+    include_str!("../../../diesel_migrations/00000000000011_device_authorization/up.sql");
 
 #[cfg(feature = "account-lockout")]
 const ACCOUNT_LOCKOUT_UP: &str =
-    include_str!("../../diesel_migrations/00000000000012_account_lockout/up.sql");
+    include_str!("../../../diesel_migrations/00000000000012_account_lockout/up.sql");
 
 #[cfg(feature = "webhooks")]
-const WEBHOOKS_UP: &str = include_str!("../../diesel_migrations/00000000000014_webhooks/up.sql");
+const WEBHOOKS_UP: &str = include_str!("../../../diesel_migrations/00000000000014_webhooks/up.sql");
 
 #[cfg(feature = "oidc")]
-const OIDC_UP: &str = include_str!("../../diesel_migrations/00000000000015_oidc/up.sql");
+const OIDC_UP: &str = include_str!("../../../diesel_migrations/00000000000015_oidc/up.sql");
 
 const FIX_JSON_JSONB_UP: &str =
-    include_str!("../../diesel_migrations/00000000000016_fix_json_to_jsonb/up.sql");
+    include_str!("../../../diesel_migrations/00000000000016_fix_json_to_jsonb/up.sql");
 
 async fn exec_sql(
     conn: &mut diesel_async_crate::AsyncPgConnection,
@@ -104,6 +104,120 @@ async fn json_columns_remaining(
     Ok(rows.into_iter().next().map(|r| r.count).unwrap_or(0))
 }
 
+/// Collect all table definitions based on compile-time feature flags.
+///
+/// This mirrors what the plugins declare via `schema()`, but uses feature
+/// flags directly so it can be called before plugin instances exist.
+fn collect_feature_gated_schemas() -> Vec<Vec<crate::schema::TableDef>> {
+    let mut lists = vec![crate::schema::core_schema()];
+
+    #[cfg(feature = "email-password")]
+    lists.push(crate::schema::plugin_schemas::email_password_schema());
+
+    #[cfg(feature = "passkey")]
+    lists.push(crate::schema::plugin_schemas::passkey_schema());
+
+    #[cfg(feature = "mfa")]
+    lists.push(crate::schema::plugin_schemas::mfa_schema());
+
+    #[cfg(feature = "oauth")]
+    lists.push(crate::schema::plugin_schemas::oauth_schema());
+
+    #[cfg(feature = "bearer")]
+    lists.push(crate::schema::plugin_schemas::bearer_schema());
+
+    #[cfg(feature = "api-key")]
+    lists.push(crate::schema::plugin_schemas::api_key_schema());
+
+    #[cfg(feature = "magic-link")]
+    lists.push(crate::schema::plugin_schemas::magic_link_schema());
+
+    #[cfg(feature = "oauth2-server")]
+    lists.push(crate::schema::plugin_schemas::oauth2_server_schema());
+
+    #[cfg(feature = "account-lockout")]
+    lists.push(crate::schema::plugin_schemas::account_lockout_schema());
+
+    #[cfg(feature = "webhooks")]
+    lists.push(crate::schema::plugin_schemas::webhooks_schema());
+
+    #[cfg(feature = "oidc")]
+    lists.push(crate::schema::plugin_schemas::oidc_schema());
+
+    lists
+}
+
+/// Run migrations using the declarative schema system.
+///
+/// 1. Collects core + plugin schemas based on compile-time feature flags
+/// 2. Generates DDL
+/// 3. Checks if schema hash has changed
+/// 4. Runs CREATE TABLE IF NOT EXISTS for all tables
+/// 5. Runs ALTER TABLE ADD COLUMN for any new columns on existing tables
+/// 6. Records the schema hash in the tracking table
+pub async fn run_declarative_migrations_with_schema(
+    pool: &Pool,
+    schema_name: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use crate::schema;
+
+    // Validate schema name
+    if schema_name != "public" {
+        crate::validate_schema_name(schema_name)?;
+    }
+
+    let table_lists = collect_feature_gated_schemas();
+    let merged = schema::collect_schema(table_lists)
+        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+
+    let mut conn = pool.get().await?;
+
+    // Create schema if non-default and set search_path
+    if schema_name != "public" {
+        exec_sql(
+            &mut conn,
+            &format!("CREATE SCHEMA IF NOT EXISTS {schema_name}"),
+        )
+        .await?;
+        exec_sql(
+            &mut conn,
+            &format!("SET search_path TO {schema_name}, public"),
+        )
+        .await?;
+    }
+
+    // Ensure tracking table exists
+    schema::ensure_tracking_table(&mut conn).await?;
+
+    // Check schema hash
+    let hash = schema::schema_hash(&merged);
+    if schema::is_schema_applied(&mut conn, &hash).await? {
+        // Schema hasn't changed — no-op
+        return Ok(());
+    }
+
+    // Generate and run CREATE TABLE IF NOT EXISTS DDL
+    let ddl = schema::generate_postgres_ddl(&merged);
+    exec_sql(&mut conn, &ddl).await?;
+
+    // Generate and run ALTER TABLE ADD COLUMN for new columns
+    let alter_statements = schema::generate_migration_diff(&mut conn, schema_name, &merged).await?;
+    for stmt in &alter_statements {
+        exec_sql(&mut conn, stmt).await?;
+    }
+
+    // Fix json → jsonb (legacy migration 016)
+    if json_columns_remaining(&mut conn, schema_name).await? > 0 {
+        exec_sql(&mut conn, FIX_JSON_JSONB_UP).await?;
+    }
+
+    // Record the schema hash
+    schema::record_schema_applied(&mut conn, &hash).await?;
+
+    Ok(())
+}
+
+#[allow(dead_code)]
 pub async fn run_migrations(pool: &Pool) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     run_migrations_with_schema(pool, "public").await
 }
@@ -188,17 +302,20 @@ pub async fn run_migrations_with_schema(
 }
 
 #[derive(QueryableByName)]
+#[allow(dead_code)]
 struct TableName {
     #[diesel(sql_type = Text)]
     pub table_name: String,
 }
 
+#[allow(dead_code)]
 pub async fn list_yauth_tables(
     pool: &Pool,
 ) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
     list_yauth_tables_in_schema(pool, "public").await
 }
 
+#[allow(dead_code)]
 pub async fn list_yauth_tables_in_schema(
     pool: &Pool,
     schema: &str,

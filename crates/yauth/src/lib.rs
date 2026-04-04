@@ -1,9 +1,12 @@
 pub mod auth;
+pub mod backends;
 pub mod config;
-pub mod db;
+pub mod domain;
 pub mod error;
 pub mod middleware;
 pub mod plugin;
+pub mod repo;
+pub mod schema;
 pub mod state;
 pub mod stores;
 
@@ -18,7 +21,10 @@ pub mod telemetry;
 
 /// Validate a PostgreSQL schema name to prevent SQL injection.
 /// PostgreSQL unquoted identifiers: `[a-z_][a-z0-9_$]*`, max 63 chars.
-fn validate_schema_name(name: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+#[cfg(feature = "diesel-backend")]
+pub(crate) fn validate_schema_name(
+    name: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if name.is_empty() || name.len() > 63 {
         return Err(format!("Invalid schema name '{}': must be 1-63 characters", name).into());
     }
@@ -39,59 +45,6 @@ fn validate_schema_name(name: &str) -> Result<(), Box<dyn std::error::Error + Se
     Ok(())
 }
 
-/// Create a database pool with the configured PostgreSQL schema search path.
-/// When `db_schema` is `"public"` (default), this creates a standard pool.
-/// When `db_schema` is something else (e.g. `"auth"`), each connection sets
-/// `search_path` to that schema so yauth tables resolve correctly.
-pub fn create_pool(
-    database_url: &str,
-    config: &config::YAuthConfig,
-) -> Result<state::DbPool, Box<dyn std::error::Error + Send + Sync>> {
-    use diesel_async_crate::AsyncConnection;
-    use diesel_async_crate::pooled_connection::{AsyncDieselConnectionManager, ManagerConfig};
-    use futures_util::FutureExt;
-
-    if config.db_schema != "public" {
-        validate_schema_name(&config.db_schema)?;
-        let schema = config.db_schema.clone();
-        let mut manager_config = ManagerConfig::<diesel_async_crate::AsyncPgConnection>::default();
-        manager_config.custom_setup = Box::new(move |url| {
-            let schema = schema.clone();
-            async move {
-                let mut conn = diesel_async_crate::AsyncPgConnection::establish(url).await?;
-                use diesel_async_crate::RunQueryDsl;
-                diesel::sql_query(format!("SET search_path TO {schema}, public"))
-                    .execute(&mut conn)
-                    .await
-                    .map_err(diesel::ConnectionError::CouldntSetupConfiguration)?;
-                Ok(conn)
-            }
-            .boxed()
-        });
-        let manager = AsyncDieselConnectionManager::new_with_config(database_url, manager_config);
-        Ok(state::DbPool::builder(manager).build()?)
-    } else {
-        let manager = AsyncDieselConnectionManager::<diesel_async_crate::AsyncPgConnection>::new(
-            database_url,
-        );
-        Ok(state::DbPool::builder(manager).build()?)
-    }
-}
-
-// Backward-compatible re-exports for consumers using the old crate paths
-pub mod entity {
-    pub use crate::db::*;
-}
-pub mod migration {
-    pub use crate::db::migrations as diesel_migrations;
-}
-
-// Re-export diesel pool types for host app use
-pub use diesel_async_crate::AsyncPgConnection;
-pub use diesel_async_crate::RunQueryDsl;
-pub use diesel_async_crate::pooled_connection::AsyncDieselConnectionManager;
-pub use diesel_async_crate::pooled_connection::deadpool::Pool as DieselPool;
-
 pub mod prelude {
     pub use crate::YAuthBuilder;
     pub use crate::config::*;
@@ -104,7 +57,8 @@ pub mod prelude {
 use axum::Router;
 use config::YAuthConfig;
 use plugin::YAuthPlugin;
-use state::{DbPool, YAuthState};
+use repo::{DatabaseBackend, EnabledFeatures, RepoError};
+use state::YAuthState;
 use stores::StoreBackend;
 
 pub struct YAuth {
@@ -112,6 +66,30 @@ pub struct YAuth {
 }
 
 impl YAuth {
+    /// Get the merged declarative schema for all enabled plugins.
+    ///
+    /// Returns an error if there are duplicate table definitions or missing FK dependencies.
+    pub fn schema(&self) -> Result<schema::YAuthSchema, schema::SchemaError> {
+        let mut table_lists = vec![schema::core_schema()];
+        for plugin in self.state.plugins.iter() {
+            let s = plugin.schema();
+            if !s.is_empty() {
+                table_lists.push(s);
+            }
+        }
+        schema::collect_schema(table_lists)
+    }
+
+    /// Generate DDL for the specified dialect.
+    pub fn generate_ddl(&self, dialect: schema::Dialect) -> Result<String, schema::SchemaError> {
+        let merged = self.schema()?;
+        Ok(match dialect {
+            schema::Dialect::Postgres => schema::generate_postgres_ddl(&merged),
+            schema::Dialect::Sqlite => schema::generate_sqlite_ddl(&merged),
+            schema::Dialect::Mysql => schema::generate_mysql_ddl(&merged),
+        })
+    }
+
     pub fn router(&self) -> Router<YAuthState> {
         let ctx = plugin::PluginContext::new(&self.state);
         let mut public_router = Router::new();
@@ -154,10 +132,10 @@ impl YAuth {
 }
 
 pub struct YAuthBuilder {
-    db: DbPool,
+    backend: Box<dyn DatabaseBackend>,
     config: YAuthConfig,
     plugins: Vec<Box<dyn YAuthPlugin>>,
-    store_backend: StoreBackend,
+    store_backend: Option<StoreBackend>,
     #[cfg(feature = "email-password")]
     email_password_config: Option<config::EmailPasswordConfig>,
     #[cfg(feature = "passkey")]
@@ -181,12 +159,12 @@ pub struct YAuthBuilder {
 }
 
 impl YAuthBuilder {
-    pub fn new(db: DbPool, config: YAuthConfig) -> Self {
+    pub fn new(backend: impl DatabaseBackend + 'static, config: YAuthConfig) -> Self {
         Self {
-            db,
+            backend: Box::new(backend),
             config,
             plugins: Vec::new(),
-            store_backend: StoreBackend::Memory,
+            store_backend: None,
             #[cfg(feature = "email-password")]
             email_password_config: None,
             #[cfg(feature = "passkey")]
@@ -289,7 +267,7 @@ impl YAuthBuilder {
     }
 
     pub fn with_store_backend(mut self, backend: StoreBackend) -> Self {
-        self.store_backend = backend;
+        self.store_backend = Some(backend);
         self
     }
 
@@ -320,7 +298,32 @@ impl YAuthBuilder {
     }
 
     #[allow(unused_mut)]
-    pub fn build(mut self) -> YAuth {
+    pub async fn build(mut self) -> Result<YAuth, RepoError> {
+        // Run migrations
+        let features = EnabledFeatures::from_compile_flags();
+        self.backend.migrate(&features).await?;
+
+        // Build repositories from the backend
+        let repos = self.backend.repositories();
+
+        // Resolve store backend:
+        // 1. If user explicitly set store_backend, use that
+        // 2. Else if backend provides a Postgres pool, use Postgres ephemeral stores
+        // 3. Else fall back to memory stores
+        let effective_store_backend = match self.store_backend {
+            Some(sb) => sb,
+            None => {
+                #[cfg(feature = "diesel-backend")]
+                if self.backend.postgres_pool_for_stores().is_some() {
+                    StoreBackend::Postgres
+                } else {
+                    StoreBackend::Memory
+                }
+                #[cfg(not(feature = "diesel-backend"))]
+                StoreBackend::Memory
+            }
+        };
+
         // Build dummy hash for timing-safe login
         let dummy_hash = auth::password::hash_password_sync("dummy-password-for-timing")
             .expect("Failed to generate dummy hash");
@@ -328,41 +331,60 @@ impl YAuthBuilder {
         // Build rate limiter
         let rate_limiter = auth::rate_limit::RateLimiter::new(10, 60);
 
+        // Helper: get pool for Postgres stores (if applicable)
+        #[cfg(feature = "diesel-backend")]
+        let pool_for_stores = self.backend.postgres_pool_for_stores();
+
         // Build challenge store
-        let challenge_store: std::sync::Arc<dyn stores::ChallengeStore> = match &self.store_backend
-        {
-            StoreBackend::Memory => {
-                std::sync::Arc::new(stores::memory::MemoryChallengeStore::new())
-            }
-            StoreBackend::Postgres => std::sync::Arc::new(
-                stores::postgres::PostgresChallengeStore::new(self.db.clone()),
-            ),
-            #[cfg(feature = "redis")]
-            StoreBackend::Redis(conn, prefix) => std::sync::Arc::new(
-                stores::redis::RedisChallengeStore::new(*conn.clone()).with_prefix(prefix.clone()),
-            ),
-        };
+        let challenge_store: std::sync::Arc<dyn stores::ChallengeStore> =
+            match &effective_store_backend {
+                StoreBackend::Memory => {
+                    std::sync::Arc::new(stores::memory::MemoryChallengeStore::new())
+                }
+                #[cfg(feature = "diesel-backend")]
+                StoreBackend::Postgres => {
+                    let pool = pool_for_stores.clone().expect(
+                        "Postgres store backend requires a Postgres pool from the database backend",
+                    );
+                    std::sync::Arc::new(stores::postgres::PostgresChallengeStore::new(pool))
+                }
+                #[cfg(feature = "redis")]
+                StoreBackend::Redis(conn, prefix) => std::sync::Arc::new(
+                    stores::redis::RedisChallengeStore::new(*conn.clone())
+                        .with_prefix(prefix.clone()),
+                ),
+            };
 
         // Build rate limit store
-        let rate_limit_store: std::sync::Arc<dyn stores::RateLimitStore> = match &self.store_backend
-        {
-            StoreBackend::Memory => {
-                std::sync::Arc::new(stores::memory::MemoryRateLimitStore::new(10, 60))
-            }
-            StoreBackend::Postgres => std::sync::Arc::new(
-                stores::postgres::PostgresRateLimitStore::new(self.db.clone()),
-            ),
-            #[cfg(feature = "redis")]
-            StoreBackend::Redis(conn, prefix) => std::sync::Arc::new(
-                stores::redis::RedisRateLimitStore::new(*conn.clone()).with_prefix(prefix.clone()),
-            ),
-        };
+        let rate_limit_store: std::sync::Arc<dyn stores::RateLimitStore> =
+            match &effective_store_backend {
+                StoreBackend::Memory => {
+                    std::sync::Arc::new(stores::memory::MemoryRateLimitStore::new(10, 60))
+                }
+                #[cfg(feature = "diesel-backend")]
+                StoreBackend::Postgres => {
+                    let pool = pool_for_stores
+                        .clone()
+                        .expect("Postgres store backend requires a Postgres pool");
+                    std::sync::Arc::new(stores::postgres::PostgresRateLimitStore::new(pool))
+                }
+                #[cfg(feature = "redis")]
+                StoreBackend::Redis(conn, prefix) => std::sync::Arc::new(
+                    stores::redis::RedisRateLimitStore::new(*conn.clone())
+                        .with_prefix(prefix.clone()),
+                ),
+            };
 
         // Build session store
-        let session_store: std::sync::Arc<dyn stores::SessionStore> = match &self.store_backend {
+        let session_store: std::sync::Arc<dyn stores::SessionStore> = match &effective_store_backend
+        {
             StoreBackend::Memory => std::sync::Arc::new(stores::memory::MemorySessionStore::new()),
+            #[cfg(feature = "diesel-backend")]
             StoreBackend::Postgres => {
-                std::sync::Arc::new(stores::postgres::PostgresSessionStore::new(self.db.clone()))
+                let pool = pool_for_stores
+                    .clone()
+                    .expect("Postgres store backend requires a Postgres pool");
+                std::sync::Arc::new(stores::postgres::PostgresSessionStore::new(pool))
             }
             #[cfg(feature = "redis")]
             StoreBackend::Redis(conn, prefix) => std::sync::Arc::new(
@@ -371,20 +393,23 @@ impl YAuthBuilder {
         };
 
         // Build revocation store
-        let revocation_store: std::sync::Arc<dyn stores::RevocationStore> = match &self
-            .store_backend
-        {
-            StoreBackend::Memory => {
-                std::sync::Arc::new(stores::memory::MemoryRevocationStore::new())
-            }
-            StoreBackend::Postgres => std::sync::Arc::new(
-                stores::postgres::PostgresRevocationStore::new(self.db.clone()),
-            ),
-            #[cfg(feature = "redis")]
-            StoreBackend::Redis(conn, prefix) => std::sync::Arc::new(
-                stores::redis::RedisRevocationStore::new(*conn.clone()).with_prefix(prefix.clone()),
-            ),
-        };
+        let revocation_store: std::sync::Arc<dyn stores::RevocationStore> =
+            match &effective_store_backend {
+                StoreBackend::Memory => {
+                    std::sync::Arc::new(stores::memory::MemoryRevocationStore::new())
+                }
+                #[cfg(feature = "diesel-backend")]
+                StoreBackend::Postgres => {
+                    let pool =
+                        pool_for_stores.expect("Postgres store backend requires a Postgres pool");
+                    std::sync::Arc::new(stores::postgres::PostgresRevocationStore::new(pool))
+                }
+                #[cfg(feature = "redis")]
+                StoreBackend::Redis(conn, prefix) => std::sync::Arc::new(
+                    stores::redis::RedisRevocationStore::new(*conn.clone())
+                        .with_prefix(prefix.clone()),
+                ),
+            };
 
         // Build email service
         let email_service = self.config.smtp.as_ref().map(|smtp| {
@@ -418,7 +443,7 @@ impl YAuthBuilder {
         // Passkey needs state for WebAuthn init, but we need a temporary state ref.
         // Build a partial state first, then construct passkey plugin.
         let state = YAuthState {
-            db: self.db,
+            repos,
             config: std::sync::Arc::new(self.config),
             dummy_hash,
             rate_limiter,
@@ -524,6 +549,6 @@ impl YAuthBuilder {
         let mut state = state;
         state.plugins = std::sync::Arc::new(self.plugins);
 
-        YAuth { state }
+        Ok(YAuth { state })
     }
 }

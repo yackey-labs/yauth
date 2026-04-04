@@ -673,7 +673,7 @@ yauth uses a `DatabaseBackend` trait with pluggable implementations. All persist
 | `DieselLibsqlBackend` | `diesel-libsql-backend` | Local SQLite / remote Turso via diesel-libsql 0.1.4 | Embedded, edge, local dev |
 | `InMemoryBackend` | `memory-backend` | None (all data in HashMaps) | Tests, prototyping |
 
-Migrations run automatically inside `build().await` via the declarative schema system. Plugins declare tables as Rust data, and DDL is generated per dialect (Postgres, SQLite, MySQL).
+Migrations are explicit — call `backend.migrate()` before `build()`. Plugins declare tables as Rust data, and DDL is generated per dialect (Postgres, SQLite, MySQL) via the declarative schema system.
 
 ### Configurable PostgreSQL Schema
 

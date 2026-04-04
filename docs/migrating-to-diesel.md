@@ -77,7 +77,7 @@ let yauth = YAuthBuilder::new(backend, yauth_config)
 
 ### yauth tables
 
-yauth migrations run automatically inside `build().await` via the declarative schema system. No manual migration step is needed. Only tables for your enabled features are created, and the operation is idempotent.
+yauth migrations are explicit — call `backend.migrate(&EnabledFeatures::from_compile_flags()).await?` before `build()`. Only tables for your enabled features are created, and the operation is idempotent.
 
 ### App tables
 
@@ -281,8 +281,9 @@ let pool = Pool::builder(config)
     .max_size(16)  // tune for your workload
     .build()?;
 
-// Build yauth with the shared pool (migrations run inside build())
+// Build yauth with the shared pool
 let backend = DieselBackend::from_pool(pool.clone());
+backend.migrate(&EnabledFeatures::from_compile_flags()).await?;
 let yauth = YAuthBuilder::new(backend, yauth_config)
     .with_email_password(ep_config)
     .build()

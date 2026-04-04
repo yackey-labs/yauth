@@ -13,8 +13,6 @@
 | Crate | Purpose |
 |---|---|
 | `yauth` | Main library — plugins, middleware, builder, auth logic, backends, repository traits, declarative schema |
-| `yauth-entity` | Diesel entities (all tables prefixed `yauth_`) |
-| `yauth-migration` | Diesel migrations (feature-gated per plugin) |
 
 Key internal modules in `yauth`:
 - `backends/diesel_pg/` — PostgreSQL backend (`DieselBackend`)
@@ -115,12 +113,14 @@ Redis (`with_redis()`) is a **caching decorator** that wraps repository traits f
 
 ### Builder Pattern
 
-`build()` is **async** and returns `Result<YAuth, RepoError>`. It runs migrations and constructs all repository implementations from the chosen backend.
+`build()` is **async** and returns `Result<YAuth, RepoError>`. Migrations are explicit — call `backend.migrate()` before building.
 
 ```rust
 use yauth::backends::diesel_pg::DieselBackend;
+use yauth::repo::{DatabaseBackend, EnabledFeatures};
 
 let backend = DieselBackend::new("postgres://user:pass@localhost/mydb")?;
+backend.migrate(&EnabledFeatures::from_compile_flags()).await?;
 
 let yauth = YAuthBuilder::new(backend, config)
     .with_email_password(ep_config)

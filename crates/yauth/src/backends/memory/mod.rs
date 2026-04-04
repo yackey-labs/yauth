@@ -76,9 +76,10 @@ pub(crate) struct RevocationEntry {
     pub(crate) expires_at: Instant,
 }
 
-/// Entry for the ephemeral rate limit store (key → timestamps).
+/// Entry for the ephemeral rate limit store (fixed-window counter).
 pub(crate) struct RateLimitEntry {
-    pub(crate) timestamps: Vec<Instant>,
+    pub(crate) count: u32,
+    pub(crate) window_start: Instant,
 }
 
 #[derive(Clone)]
@@ -88,7 +89,7 @@ pub(crate) struct Storage {
     pub(crate) audit_logs: Arc<RwLock<Vec<domain::NewAuditLog>>>,
 
     // Ephemeral stores (keyed by token_hash / string key)
-    pub(crate) session_ops: Arc<Mutex<HashMap<String, domain::StoredSession>>>,
+    pub(crate) session_ops: Arc<RwLock<HashMap<String, domain::StoredSession>>>,
     pub(crate) challenges: Arc<Mutex<HashMap<String, ChallengeEntry>>>,
     pub(crate) rate_limits: Arc<Mutex<HashMap<String, RateLimitEntry>>>,
     pub(crate) revocations: Arc<Mutex<HashMap<String, RevocationEntry>>>,
@@ -149,7 +150,7 @@ impl Storage {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             audit_logs: Arc::new(RwLock::new(Vec::new())),
 
-            session_ops: Arc::new(Mutex::new(HashMap::new())),
+            session_ops: Arc::new(RwLock::new(HashMap::new())),
             challenges: Arc::new(Mutex::new(HashMap::new())),
             rate_limits: Arc::new(Mutex::new(HashMap::new())),
             revocations: Arc::new(Mutex::new(HashMap::new())),

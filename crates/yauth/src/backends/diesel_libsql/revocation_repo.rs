@@ -1,5 +1,3 @@
-use std::sync::atomic::{AtomicBool, Ordering};
-
 use super::LibsqlPool;
 use super::models::str_to_dt;
 use crate::backends::diesel_common::get_conn;
@@ -13,28 +11,26 @@ CREATE TABLE IF NOT EXISTS yauth_revocations (\
 
 pub(crate) struct LibsqlRevocationRepo {
     pool: LibsqlPool,
-    initialized: AtomicBool,
+    initialized: tokio::sync::OnceCell<()>,
 }
 
 impl LibsqlRevocationRepo {
     pub(crate) fn new(pool: LibsqlPool) -> Self {
         Self {
             pool,
-            initialized: AtomicBool::new(false),
+            initialized: tokio::sync::OnceCell::const_new(),
         }
     }
 
-    async fn ensure_init(&self) -> Result<(), RepoError> {
-        if !self.initialized.load(Ordering::Relaxed) {
-            use diesel_async_crate::SimpleAsyncConnection;
-            let mut conn = get_conn(&self.pool).await?;
-            (*conn)
-                .batch_execute(CREATE_REVOCATIONS_TABLE)
-                .await
-                .map_err(|e| RepoError::Internal(format!("failed to create table: {e}").into()))?;
-            self.initialized.store(true, Ordering::Relaxed);
-        }
-        Ok(())
+    async fn ensure_init(&self) {
+        self.initialized
+            .get_or_init(|| async {
+                use diesel_async_crate::SimpleAsyncConnection;
+                if let Ok(mut conn) = get_conn(&self.pool).await {
+                    let _ = (*conn).batch_execute(CREATE_REVOCATIONS_TABLE).await;
+                }
+            })
+            .await;
     }
 }
 
@@ -44,7 +40,7 @@ impl RevocationRepository for LibsqlRevocationRepo {
     fn revoke_token(&self, jti: &str, ttl: std::time::Duration) -> RepoFuture<'_, ()> {
         let jti = jti.to_string();
         Box::pin(async move {
-            self.ensure_init().await?;
+            self.ensure_init().await;
 
             let mut conn = get_conn(&self.pool).await?;
             {
@@ -71,7 +67,7 @@ impl RevocationRepository for LibsqlRevocationRepo {
     fn is_token_revoked(&self, jti: &str) -> RepoFuture<'_, bool> {
         let jti = jti.to_string();
         Box::pin(async move {
-            self.ensure_init().await?;
+            self.ensure_init().await;
 
             let mut conn = get_conn(&self.pool).await?;
 

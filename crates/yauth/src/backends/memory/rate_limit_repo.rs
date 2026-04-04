@@ -35,21 +35,28 @@ impl RateLimitRepository for InMemoryRateLimitRepo {
 
             // Cleanup if map is large
             if map.len() > 10_000 {
-                map.retain(|_, e| {
-                    e.timestamps.retain(|t| now.duration_since(*t) < window);
-                    !e.timestamps.is_empty()
-                });
+                map.retain(|_, e| now.duration_since(e.window_start) < window);
             }
 
             let entry = map.entry(key).or_insert_with(|| RateLimitEntry {
-                timestamps: Vec::new(),
+                count: 0,
+                window_start: now,
             });
-            entry.timestamps.retain(|t| now.duration_since(*t) < window);
 
-            if entry.timestamps.len() >= limit as usize {
-                let oldest = entry.timestamps.first().copied().unwrap_or(now);
+            // Reset window if expired
+            if now.duration_since(entry.window_start) >= window {
+                entry.count = 1;
+                entry.window_start = now;
+                return Ok(domain::RateLimitResult {
+                    allowed: true,
+                    remaining: limit.saturating_sub(1),
+                    retry_after: 0,
+                });
+            }
+
+            if entry.count >= limit {
                 let retry_after = window
-                    .checked_sub(now.duration_since(oldest))
+                    .checked_sub(now.duration_since(entry.window_start))
                     .unwrap_or_default()
                     .as_secs();
                 Ok(domain::RateLimitResult {
@@ -58,10 +65,10 @@ impl RateLimitRepository for InMemoryRateLimitRepo {
                     retry_after,
                 })
             } else {
-                entry.timestamps.push(now);
+                entry.count += 1;
                 Ok(domain::RateLimitResult {
                     allowed: true,
-                    remaining: limit - entry.timestamps.len() as u32,
+                    remaining: limit - entry.count,
                     retry_after: 0,
                 })
             }

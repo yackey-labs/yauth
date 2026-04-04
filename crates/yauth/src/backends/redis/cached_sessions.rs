@@ -143,19 +143,20 @@ impl SessionOpsRepository for RedisCachedSessionOps {
             // Fall back to inner (database)
             let result = self.inner.validate_session(&token_hash).await?;
 
-            // Cache the result on miss (best-effort)
+            // Cache the result on miss (best-effort, background)
             if let Some(ref session) = result {
                 if let Ok(json) = serde_json::to_string(session) {
                     let now = chrono::Utc::now().naive_utc();
-                    let remaining_secs = (session.expires_at - now).num_seconds().max(1);
+                    let remaining_secs = (session.expires_at - now).num_seconds().max(1) as u64;
                     let session_key = self.session_key(&token_hash);
                     let mut conn = self.redis.clone();
-                    let r: Result<(), redis::RedisError> = conn
-                        .set_ex(&session_key, &json, remaining_secs as u64)
-                        .await;
-                    if let Err(e) = r {
-                        log::warn!("Redis cache backfill failed for session validate: {e}");
-                    }
+                    tokio::spawn(async move {
+                        let r: Result<(), redis::RedisError> =
+                            conn.set_ex(session_key, json, remaining_secs).await;
+                        if let Err(e) = r {
+                            log::warn!("Redis cache backfill failed for session validate: {e}");
+                        }
+                    });
                 }
             }
 

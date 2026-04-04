@@ -1,10 +1,8 @@
-use std::sync::atomic::{AtomicBool, Ordering};
-
 use super::LibsqlPool;
 use super::models::str_to_dt;
 use crate::backends::diesel_common::{get_conn, rate_limit_result};
 use crate::domain;
-use crate::repo::{RateLimitRepository, RepoError, RepoFuture, sealed};
+use crate::repo::{RateLimitRepository, RepoFuture, sealed};
 
 const CREATE_RATE_LIMITS_TABLE: &str = "\
 CREATE TABLE IF NOT EXISTS yauth_rate_limits (\
@@ -15,28 +13,26 @@ CREATE TABLE IF NOT EXISTS yauth_rate_limits (\
 
 pub(crate) struct LibsqlRateLimitRepo {
     pool: LibsqlPool,
-    initialized: AtomicBool,
+    initialized: tokio::sync::OnceCell<()>,
 }
 
 impl LibsqlRateLimitRepo {
     pub(crate) fn new(pool: LibsqlPool) -> Self {
         Self {
             pool,
-            initialized: AtomicBool::new(false),
+            initialized: tokio::sync::OnceCell::const_new(),
         }
     }
 
-    async fn ensure_init(&self) -> Result<(), RepoError> {
-        if !self.initialized.load(Ordering::Relaxed) {
-            use diesel_async_crate::SimpleAsyncConnection;
-            let mut conn = get_conn(&self.pool).await?;
-            (*conn)
-                .batch_execute(CREATE_RATE_LIMITS_TABLE)
-                .await
-                .map_err(|e| RepoError::Internal(format!("failed to create table: {e}").into()))?;
-            self.initialized.store(true, Ordering::Relaxed);
-        }
-        Ok(())
+    async fn ensure_init(&self) {
+        self.initialized
+            .get_or_init(|| async {
+                use diesel_async_crate::SimpleAsyncConnection;
+                if let Ok(mut conn) = get_conn(&self.pool).await {
+                    let _ = (*conn).batch_execute(CREATE_RATE_LIMITS_TABLE).await;
+                }
+            })
+            .await;
     }
 }
 
@@ -51,15 +47,8 @@ impl RateLimitRepository for LibsqlRateLimitRepo {
     ) -> RepoFuture<'_, domain::RateLimitResult> {
         let key = key.to_string();
         Box::pin(async move {
-            // Fail-open on init error
-            if let Err(e) = self.ensure_init().await {
-                crate::otel::record_error("rate_limit_repo_init_failed", &e);
-                return Ok(domain::RateLimitResult {
-                    allowed: true,
-                    remaining: limit.saturating_sub(1),
-                    retry_after: 0,
-                });
-            }
+            // Fail-open: ensure table exists (runs once)
+            self.ensure_init().await;
 
             // SQLite-compatible upsert with window reset logic.
             // We use two statements: upsert then select.

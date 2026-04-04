@@ -1,9 +1,7 @@
-use std::sync::atomic::{AtomicBool, Ordering};
-
 use super::models::DieselChallenge;
 use super::schema::yauth_challenges;
 use crate::backends::diesel_common::{diesel_err, get_conn};
-use crate::repo::{ChallengeRepository, RepoError, RepoFuture, sealed};
+use crate::repo::{ChallengeRepository, RepoFuture, sealed};
 use crate::state::DbPool;
 
 const CREATE_CHALLENGES_TABLE: &str = r#"
@@ -16,41 +14,28 @@ CREATE UNLOGGED TABLE IF NOT EXISTS yauth_challenges (
 
 pub(crate) struct DieselChallengeRepo {
     pool: DbPool,
-    initialized: AtomicBool,
+    initialized: tokio::sync::OnceCell<()>,
 }
 
 impl DieselChallengeRepo {
     pub(crate) fn new(pool: DbPool) -> Self {
         Self {
             pool,
-            initialized: AtomicBool::new(false),
+            initialized: tokio::sync::OnceCell::const_new(),
         }
     }
 
-    async fn ensure_init(&self) -> Result<(), RepoError> {
-        if !self.initialized.load(Ordering::Relaxed) {
-            use diesel_async_crate::RunQueryDsl;
-            let mut conn = get_conn(&self.pool).await?;
-            // Ignore errors — concurrent CREATE TABLE can race even with IF NOT EXISTS
-            let _ = diesel::sql_query(CREATE_CHALLENGES_TABLE)
-                .execute(&mut conn)
-                .await;
-            self.initialized.store(true, Ordering::Relaxed);
-        }
-        Ok(())
-    }
-
-    async fn cleanup_expired(&self) -> Result<(), RepoError> {
-        use diesel::prelude::*;
-        use diesel_async_crate::RunQueryDsl;
-        let mut conn = get_conn(&self.pool).await?;
-        diesel::delete(
-            yauth_challenges::table.filter(yauth_challenges::expires_at.lt(diesel::dsl::now)),
-        )
-        .execute(&mut conn)
-        .await
-        .map_err(diesel_err)?;
-        Ok(())
+    async fn ensure_init(&self) {
+        self.initialized
+            .get_or_init(|| async {
+                use diesel_async_crate::RunQueryDsl;
+                if let Ok(mut conn) = get_conn(&self.pool).await {
+                    let _ = diesel::sql_query(CREATE_CHALLENGES_TABLE)
+                        .execute(&mut conn)
+                        .await;
+                }
+            })
+            .await;
     }
 }
 
@@ -65,8 +50,22 @@ impl ChallengeRepository for DieselChallengeRepo {
     ) -> RepoFuture<'_, ()> {
         let key = key.to_string();
         Box::pin(async move {
-            self.ensure_init().await?;
-            let _ = self.cleanup_expired().await;
+            self.ensure_init().await;
+
+            let mut conn = get_conn(&self.pool).await?;
+
+            // Cleanup expired in same connection
+            {
+                use diesel::prelude::*;
+                use diesel_async_crate::RunQueryDsl;
+                diesel::delete(
+                    yauth_challenges::table
+                        .filter(yauth_challenges::expires_at.lt(diesel::dsl::now)),
+                )
+                .execute(&mut conn)
+                .await
+                .ok();
+            }
 
             let sql = r#"
                 INSERT INTO yauth_challenges (key, value, expires_at)
@@ -77,7 +76,6 @@ impl ChallengeRepository for DieselChallengeRepo {
             "#;
 
             use diesel_async_crate::RunQueryDsl;
-            let mut conn = get_conn(&self.pool).await?;
             diesel::sql_query(sql)
                 .bind::<diesel::sql_types::Text, _>(&key)
                 .bind::<diesel::sql_types::Jsonb, _>(value)
@@ -92,7 +90,7 @@ impl ChallengeRepository for DieselChallengeRepo {
     fn get_challenge(&self, key: &str) -> RepoFuture<'_, Option<serde_json::Value>> {
         let key = key.to_string();
         Box::pin(async move {
-            self.ensure_init().await?;
+            self.ensure_init().await;
 
             use diesel::prelude::*;
             use diesel::result::OptionalExtension;
@@ -114,7 +112,7 @@ impl ChallengeRepository for DieselChallengeRepo {
     fn delete_challenge(&self, key: &str) -> RepoFuture<'_, ()> {
         let key = key.to_string();
         Box::pin(async move {
-            self.ensure_init().await?;
+            self.ensure_init().await;
 
             use diesel::prelude::*;
             use diesel_async_crate::RunQueryDsl;

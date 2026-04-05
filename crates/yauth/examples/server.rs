@@ -19,8 +19,8 @@
 //!
 //! | Variable              | Default                     | Description                         |
 //! |-----------------------|-----------------------------|-------------------------------------|
-//! | `YAUTH_BACKEND`       | `diesel`                    | Backend: `diesel` (PostgreSQL), `libsql` (SQLite/Turso), or `memory` (no DB) |
-//! | `DATABASE_URL`        | *(required for diesel/libsql)* | Connection string — Postgres URL for `diesel`, file path or Turso URL for `libsql`, not needed for `memory` |
+//! | `YAUTH_BACKEND`       | `diesel`                    | Backend: `diesel` (PostgreSQL), `mysql` (MySQL/MariaDB), `libsql` (SQLite/Turso), or `memory` (no DB) |
+//! | `DATABASE_URL`        | *(required for diesel/libsql/mysql)* | Connection string — Postgres URL for `diesel`, MySQL URL for `mysql`, file path or Turso URL for `libsql`, not needed for `memory` |
 //! | `PORT`                | `3000`                      | Server listen port                   |
 //! | `BASE_URL`            | `http://localhost:3000`     | Public-facing base URL               |
 //! | `SESSION_COOKIE_NAME` | `session`                   | Name of the session cookie           |
@@ -104,9 +104,10 @@ async fn main() {
         .map(|v| v != "false" && v != "0")
         .unwrap_or(true);
 
-    if smtp_config.is_none() {
+    let has_smtp = smtp_config.is_some();
+    if !has_smtp {
         log::warn!(
-            "SMTP_HOST not set — email sending is disabled. \
+            "SMTP_HOST not set — email sending and verification disabled. \
              Set SMTP_HOST, SMTP_PORT, and SMTP_FROM to enable."
         );
     }
@@ -125,6 +126,14 @@ async fn main() {
             Box::new(
                 yauth::backends::diesel_libsql::DieselLibsqlBackend::new(url)
                     .expect("Failed to create libsql backend"),
+            )
+        }
+        "mysql" => {
+            log::info!("Connecting to MySQL/MariaDB database...");
+            let url = database_url.as_ref().unwrap();
+            Box::new(
+                yauth::backends::diesel_mysql::DieselMysqlBackend::new(url)
+                    .expect("Failed to create MySQL backend"),
             )
         }
         _ => {
@@ -167,7 +176,8 @@ async fn main() {
     // Email + password registration and login
     .with_email_password(yauth::config::EmailPasswordConfig {
         min_password_length: 8,
-        require_email_verification: true,
+        // Skip email verification when SMTP isn't configured (dev/testing)
+        require_email_verification: has_smtp,
         hibp_check: true, // Check passwords against Have I Been Pwned
         ..Default::default()
     })

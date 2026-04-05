@@ -1,3 +1,9 @@
+## 0.7.0 (2026-04-05)
+
+### Breaking Changes
+
+- add MySQL/MariaDB backend + cross-backend conformance test suite
+
 ## 0.6.2 (2026-04-05)
 
 ### Fixes

@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Modular, plugin-based authentication for Axum — passkey, MFA, OAuth, JWT, API keys"
+readme = "../../README.md"
 keywords = ["axum", "authentication", "webauthn", "totp", "oauth"]
 categories = ["authentication", "web-programming"]
 publish = true

@@ -31,20 +31,20 @@ yauth = { version = "0.2", features = ["full"] }
 
 ## Step 2: Update DB Pool Initialization
 
-Replace SeaORM's `Database::connect()` with a `DieselBackend`:
+Replace SeaORM's `Database::connect()` with a `DieselPgBackend`:
 
 ```diff
 -use sea_orm::Database;
 -
 -let db = Database::connect(&database_url).await?;
-+use yauth::backends::diesel_pg::DieselBackend;
++use yauth::backends::diesel_pg::DieselPgBackend;
 +
-+let backend = DieselBackend::new(&database_url)?;
++let backend = DieselPgBackend::new(&database_url)?;
 +// Or with a custom PostgreSQL schema:
-+// let backend = DieselBackend::with_schema(&database_url, "auth")?;
++// let backend = DieselPgBackend::with_schema(&database_url, "auth")?;
 ```
 
-If you need direct pool access for your own queries, use `DieselBackend::from_pool()` with an existing pool.
+If you need direct pool access for your own queries, use `DieselPgBackend::from_pool()` with an existing pool.
 
 ## Step 3: Update AppState
 
@@ -66,7 +66,7 @@ If your AppState previously held a `sea_orm::DatabaseConnection`, replace it:
 The `YAuthBuilder` now accepts a `DatabaseBackend` implementation instead of a raw pool. `build()` is async and returns `Result`:
 
 ```rust
-let backend = DieselBackend::new(&database_url)?;
+let backend = DieselPgBackend::new(&database_url)?;
 let yauth = YAuthBuilder::new(backend, yauth_config)
     .with_email_password(ep_config)
     .build()
@@ -267,13 +267,13 @@ let mut conn = pool.get().await.map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
 
 ## Step 7: Pool Sharing
 
-If you need to share a pool between yauth and your own app queries, use `DieselBackend::from_pool()`:
+If you need to share a pool between yauth and your own app queries, use `DieselPgBackend::from_pool()`:
 
 ```rust
 use diesel_async::pooled_connection::{deadpool::Pool, AsyncDieselConnectionManager};
 use diesel_async::AsyncPgConnection;
 use yauth::prelude::*;
-use yauth::backends::diesel_pg::DieselBackend;
+use yauth::backends::diesel_pg::DieselPgBackend;
 
 // Create pool
 let config = AsyncDieselConnectionManager::<AsyncPgConnection>::new(&database_url);
@@ -282,7 +282,7 @@ let pool = Pool::builder(config)
     .build()?;
 
 // Build yauth with the shared pool
-let backend = DieselBackend::from_pool(pool.clone());
+let backend = DieselPgBackend::from_pool(pool.clone());
 backend.migrate(&EnabledFeatures::from_compile_flags()).await?;
 let yauth = YAuthBuilder::new(backend, yauth_config)
     .with_email_password(ep_config)

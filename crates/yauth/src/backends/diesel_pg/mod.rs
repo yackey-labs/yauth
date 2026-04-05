@@ -1,6 +1,6 @@
 //! Diesel backend implementation for yauth.
 //!
-//! This module contains the `DieselBackend` struct, Diesel-annotated models,
+//! This module contains the `DieselPgBackend` struct, Diesel-annotated models,
 //! schema definitions, migration runner, and all repository implementations.
 
 pub mod migrations;
@@ -53,12 +53,12 @@ pub use diesel_async_crate::pooled_connection::deadpool::Pool as DieselPool;
 /// Owns a connection pool and implements `DatabaseBackend` to provide
 /// all repository implementations. Also handles migrations and optional
 /// Diesel query instrumentation.
-pub struct DieselBackend {
+pub struct DieselPgBackend {
     pool: DbPool,
     schema: String,
 }
 
-impl DieselBackend {
+impl DieselPgBackend {
     /// Create from a database URL.
     ///
     /// Handles pool creation, schema validation, and Diesel query instrumentation setup.
@@ -98,7 +98,7 @@ impl DieselBackend {
     }
 }
 
-impl DatabaseBackend for DieselBackend {
+impl DatabaseBackend for DieselPgBackend {
     fn migrate(
         &self,
         _features: &EnabledFeatures,

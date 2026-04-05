@@ -16,7 +16,7 @@ use opentelemetry_semantic_conventions::resource::SERVICE_NAME;
 /// - Registers the `TraceContextPropagator` globally for W3C traceparent/tracestate extraction
 /// - Registers the tracer provider globally
 ///
-/// **Diesel query instrumentation** is now handled by `DieselBackend` construction —
+/// **Diesel query instrumentation** is now handled by `DieselPgBackend` construction —
 /// it is backend-specific and only active when using the Diesel backend.
 ///
 /// **Does NOT** set up any log subscriber — that is the consumer's responsibility.

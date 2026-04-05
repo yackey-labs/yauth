@@ -1,6 +1,6 @@
 # yauth
 
-Modular, plugin-based authentication library for Rust (Axum) with a generated TypeScript client and SolidJS UI components.
+Modular, plugin-based authentication library for Rust (Axum) with a generated TypeScript client, Vue 3 components, and SolidJS components.
 
 Every feature is behind a **feature flag** — enable only what you need.
 
@@ -21,12 +21,55 @@ Every feature is behind a **feature flag** — enable only what you need.
 | `account-lockout` | Brute-force protection with exponential backoff, unlock via email or admin | When you need per-account lockout beyond IP rate limiting |
 | `webhooks` | HMAC-signed HTTP callbacks on auth events with retry + delivery history | When external systems need real-time auth event notifications |
 | `oidc` | OpenID Connect Provider — id_token issuance, OIDC discovery, JWKS, /userinfo | When downstream apps need OIDC-compliant SSO |
-| `telemetry` | OpenTelemetry tracing bridge | When you need distributed tracing |
+| `telemetry` | Native OpenTelemetry SDK instrumentation | When you need distributed tracing |
 | `openapi` | utoipa OpenAPI spec generation for client codegen | When you need to generate or update the TypeScript client |
-| `redis` | Redis store backend for sessions, rate limits, challenges, revocation | Multi-replica deployments, high-traffic apps |
+| `redis` | Redis caching decorator — wraps repository traits for sub-ms lookups | Multi-replica deployments, high-traffic apps |
+| `diesel-pg-backend` | PostgreSQL backend via diesel-async + deadpool | Production Postgres deployments (default) |
+| `diesel-libsql-backend` | SQLite/Turso backend via diesel-libsql | Local dev, embedded apps, Turso edge databases |
+| `memory-backend` | Fully in-memory backend (no database) | Unit tests, prototyping, CI |
 | `full` | All of the above | Development/testing |
 
 `email-password` is enabled by default.
+
+## Try It in 30 Seconds
+
+No database needed. Copy, paste, run:
+
+```rust
+use yauth::prelude::*;
+use yauth::backends::memory::InMemoryBackend;
+
+#[tokio::main]
+async fn main() {
+    let yauth = YAuthBuilder::new(InMemoryBackend::new(), YAuthConfig::default())
+        .with_email_password(EmailPasswordConfig {
+            require_email_verification: false,
+            ..Default::default()
+        })
+        .build()
+        .await
+        .unwrap();
+
+    let app = axum::Router::new()
+        .nest("/auth", yauth.router())
+        .with_state(yauth.state().clone());
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    axum::serve(listener, app).await.unwrap();
+}
+```
+
+```bash
+# Register
+curl -X POST http://localhost:3000/auth/register \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"test@example.com","password":"MyPassword123!"}'
+
+# Login
+curl -X POST http://localhost:3000/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"test@example.com","password":"MyPassword123!"}'
+```
 
 ## Quick Start
 
@@ -39,29 +82,33 @@ cargo add axum
 ```
 
 ```rust
-use yauth::{YAuthBuilder, config::*, create_pool};
+use yauth::prelude::*;
+use yauth::repo::{DatabaseBackend, EnabledFeatures};
+use yauth::backends::diesel_pg::DieselBackend;
 use axum::Router;
 
 #[tokio::main]
 async fn main() {
+    let backend = DieselBackend::new("postgres://user:pass@localhost/mydb")
+        .expect("Failed to create backend");
+
+    // Run migrations (creates yauth_* tables)
+    backend.migrate(&EnabledFeatures::from_compile_flags()).await.unwrap();
+
     let config = YAuthConfig {
         base_url: "http://localhost:3000".into(),
         ..Default::default()
     };
 
-    let pool = create_pool("postgres://user:pass@localhost/mydb", &config)
-        .expect("Failed to create pool");
-
-    // Run yauth migrations (creates yauth_* tables)
-    yauth::migration::diesel_migrations::run_migrations(&pool).await.unwrap();
-
-    let yauth = YAuthBuilder::new(pool, config)
+    let yauth = YAuthBuilder::new(backend, config)
         .with_email_password(EmailPasswordConfig::default())
-        .build();
+        .build()
+        .await
+        .expect("Failed to build YAuth");
 
     let app = Router::new()
         .nest("/api/auth", yauth.router())
-        .with_state(yauth.into_state());
+        .with_state(yauth.state().clone());
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
     axum::serve(listener, app).await.unwrap();
@@ -224,7 +271,7 @@ cargo add yauth --features email-password,passkey,mfa,oauth
 ```
 
 ```rust
-let yauth = YAuthBuilder::new(pool, config)
+let yauth = YAuthBuilder::new(backend, config)
     .with_email_password(EmailPasswordConfig::default())
     .with_passkey(PasskeyConfig {
         rp_id: "myapp.example.com".into(),
@@ -235,10 +282,76 @@ let yauth = YAuthBuilder::new(pool, config)
     .with_oauth(OAuthConfig {
         providers: vec![/* Google, GitHub, etc. */],
     })
-    .build();
+    .build()
+    .await?;
 ```
 
 All new endpoints are automatically available on the client — no regeneration needed if you use the pre-built `@yackey-labs/yauth-client` package.
+
+### Choose Your Backend
+
+#### PostgreSQL (default)
+
+```rust
+use yauth::backends::diesel_pg::DieselBackend;
+
+let backend = DieselBackend::new("postgres://user:pass@localhost/mydb")?;
+// Or with a custom PostgreSQL schema:
+let backend = DieselBackend::with_schema("postgres://user:pass@localhost/mydb", "auth")?;
+
+let yauth = YAuthBuilder::new(backend, config).build().await?;
+```
+
+#### SQLite / Turso (diesel-libsql)
+
+```bash
+cargo add yauth --features email-password,diesel-libsql-backend --no-default-features
+```
+
+```rust
+use yauth::backends::diesel_libsql::DieselLibsqlBackend;
+
+// Local SQLite file
+let backend = DieselLibsqlBackend::new("file:yauth.db")?;
+// In-memory SQLite
+let backend = DieselLibsqlBackend::new(":memory:")?;
+// Remote Turso (set LIBSQL_AUTH_TOKEN env var)
+let backend = DieselLibsqlBackend::new("libsql://your-db.turso.io")?;
+
+let yauth = YAuthBuilder::new(backend, config).build().await?;
+```
+
+#### In-Memory (no database)
+
+```bash
+cargo add yauth --features email-password,memory-backend --no-default-features
+```
+
+```rust
+use yauth::backends::memory::InMemoryBackend;
+
+let backend = InMemoryBackend::new();
+let yauth = YAuthBuilder::new(backend, config).build().await?;
+```
+
+### Redis Caching
+
+Redis wraps repository traits as a caching decorator. The database remains the source of truth.
+
+```bash
+cargo add yauth --features email-password,redis
+```
+
+```rust
+let redis_client = redis::Client::open("redis://127.0.0.1:6379")?;
+let redis_conn = redis_client.get_connection_manager().await?;
+
+let yauth = YAuthBuilder::new(backend, config)
+    .with_redis(redis_conn)  // caches sessions, rate limits, challenges, revocation
+    .with_email_password(EmailPasswordConfig::default())
+    .build()
+    .await?;
+```
 
 ## Architecture
 
@@ -550,32 +663,29 @@ Pre-built SolidJS components:
 - **Webhook signing** — HMAC-SHA256 signatures for payload integrity
 - **PKCE S256** — required for all OAuth2 authorization code flows
 
-## Database Backend
+## Database Backends
 
-yauth uses **diesel-async** with deadpool as its database backend.
+yauth uses a `DatabaseBackend` trait with pluggable implementations. All persistent data (users, passwords, sessions, API keys, etc.) is accessed through repository traits, making the auth logic fully database-agnostic.
 
-```bash
-cargo add yauth --features email-password,passkey,mfa
-```
+| Backend | Feature Flag | Connection | Use case |
+|---|---|---|---|
+| `DieselBackend` | `diesel-pg-backend` (default) | PostgreSQL via diesel-async 0.8 + deadpool | Production |
+| `DieselLibsqlBackend` | `diesel-libsql-backend` | Local SQLite / remote Turso via diesel-libsql 0.1.4 | Embedded, edge, local dev |
+| `InMemoryBackend` | `memory-backend` | None (all data in HashMaps) | Tests, prototyping |
 
-See [docs/migrating-to-diesel.md](docs/migrating-to-diesel.md) for a migration guide if upgrading from yauth v0.1.x (which supported SeaORM).
+Migrations are explicit — call `backend.migrate()` before `build()`. Plugins declare tables as Rust data, and DDL is generated per dialect (Postgres, SQLite, MySQL) via the declarative schema system.
 
 ### Configurable PostgreSQL Schema
 
-By default, yauth tables live in the `public` schema. Set `db_schema` in `YAuthConfig` to isolate them:
+By default, yauth tables live in the `public` schema. Use `DieselBackend::with_schema()` to isolate them:
 
 ```rust
-let config = YAuthConfig {
-    db_schema: "auth".into(),
-    ..Default::default()
-};
-// Use create_pool() to get a pool with search_path configured
-let pool = yauth::create_pool(&database_url, &config)?;
+let backend = DieselBackend::with_schema(&database_url, "auth")?;
 ```
 
-### Redis Store Backend
+### Redis Caching
 
-Enable the `redis` feature for Redis-backed sessions, rate limiting, challenges, and JTI revocation:
+Enable the `redis` feature for Redis-backed caching of sessions, rate limits, challenges, and JTI revocation:
 
 ```bash
 cargo add yauth --features email-password,redis
@@ -585,47 +695,41 @@ cargo add yauth --features email-password,redis
 let redis_client = redis::Client::open("redis://127.0.0.1:6379")?;
 let redis_conn = redis_client.get_connection_manager().await?;
 
-let yauth = YAuthBuilder::new(pool, config)
-    .with_redis(redis_conn)        // all ephemeral stores use Redis
+let yauth = YAuthBuilder::new(backend, config)
+    .with_redis(redis_conn)  // wraps repo traits with Redis caching
     .with_email_password(EmailPasswordConfig::default())
-    .build();
+    .build()
+    .await?;
 ```
 
-`.with_redis()` switches all ephemeral stores (sessions, rate limits, challenges, revocation) to Redis. Durable data (users, passwords, API keys) stays in Postgres.
-
-**Note:** The `yauth_sessions` table is always created in Postgres by migrations, even when Redis is the session store. This is intentional — it allows switching backends without re-running migrations, and the `CREATE TABLE IF NOT EXISTS` is a no-op.
+`.with_redis()` adds a caching layer around repository operations for sessions, rate limits, challenges, and token revocation. The database backend remains the source of truth.
 
 **When to use Redis:** multi-replica deployments (shared sessions), high-traffic apps (sub-millisecond session lookups), or when you need instant JWT revocation across all nodes.
 
-#### Advanced: Per-Store Overrides
-
-The store traits (`SessionStore`, `RateLimitStore`, `ChallengeStore`, `RevocationStore`) are public. You can mix backends or provide custom implementations:
-
-```rust
-use yauth::stores::{StoreBackend, memory::MemoryRateLimitStore};
-
-let yauth = YAuthBuilder::new(pool, config)
-    .with_redis(redis_conn)                    // default: Redis for everything
-    .with_store_backend(StoreBackend::Memory)   // override: use memory instead
-    .build();
-
-// Or implement a custom store:
-// struct MyCustomSessionStore { ... }
-// impl SessionStore for MyCustomSessionStore { ... }
-```
+See [docs/migrating-to-diesel.md](docs/migrating-to-diesel.md) for a migration guide if upgrading from yauth v0.1.x (which supported SeaORM).
 
 ## Database Schema
 
-yauth uses PostgreSQL. All tables are prefixed with `yauth_`. Migrations are feature-gated — only tables for enabled features are created.
+All tables are prefixed with `yauth_`. Migrations are feature-gated — only tables for enabled features are created.
 
-Run migrations at startup:
+Migrations are explicit — call `backend.migrate()` when and where you want:
 
 ```rust
-// Standard (public schema)
-yauth::migration::diesel_migrations::run_migrations(&pool).await?;
+// At app startup
+let backend = DieselPgBackend::new(&database_url)?;
+backend.migrate(&EnabledFeatures::from_compile_flags()).await?;
+```
 
-// Custom schema
-yauth::migration::diesel_migrations::run_migrations_with_schema(&pool, "auth").await?;
+```rust
+// Or in CI / init container / CLI tool — same call, different context
+let backend = DieselPgBackend::new(&database_url)?;
+backend.migrate(&EnabledFeatures::from_compile_flags()).await?;
+// No need to build YAuth — just run migrations and exit
+```
+
+```rust
+// Or export DDL for your own migration tool (Flyway, Liquibase, sqlx, etc.)
+let ddl = yauth.generate_ddl(Dialect::Postgres)?;
 ```
 
 ### Schema by Plugin

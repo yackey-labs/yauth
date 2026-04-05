@@ -19,8 +19,8 @@
 //!
 //! | Variable              | Default                     | Description                         |
 //! |-----------------------|-----------------------------|-------------------------------------|
-//! | `YAUTH_BACKEND`       | `diesel`                    | Backend: `diesel` or `memory`        |
-//! | `DATABASE_URL`        | *(required for diesel)*     | PostgreSQL connection string         |
+//! | `YAUTH_BACKEND`       | `diesel`                    | Backend: `diesel` (PostgreSQL), `libsql` (SQLite/Turso), or `memory` (no DB) |
+//! | `DATABASE_URL`        | *(required for diesel/libsql)* | Connection string — Postgres URL for `diesel`, file path or Turso URL for `libsql`, not needed for `memory` |
 //! | `PORT`                | `3000`                      | Server listen port                   |
 //! | `BASE_URL`            | `http://localhost:3000`     | Public-facing base URL               |
 //! | `SESSION_COOKIE_NAME` | `session`                   | Name of the session cookie           |
@@ -49,6 +49,7 @@ use tokio::net::TcpListener;
 
 use yauth::middleware::AuthUser;
 use yauth::prelude::*;
+use yauth::repo::{DatabaseBackend, EnabledFeatures};
 
 // ---------------------------------------------------------------------------
 // Main
@@ -130,11 +131,19 @@ async fn main() {
             log::info!("Connecting to PostgreSQL database...");
             let url = database_url.as_ref().unwrap();
             Box::new(
-                yauth::backends::diesel::DieselBackend::new(url)
+                yauth::backends::diesel_pg::DieselBackend::new(url)
                     .expect("Failed to create database backend"),
             )
         }
     };
+
+    // -----------------------------------------------------------------------
+    // 3b. Run migrations
+    // -----------------------------------------------------------------------
+    backend
+        .migrate(&EnabledFeatures::from_compile_flags())
+        .await
+        .expect("Failed to run migrations");
 
     // -----------------------------------------------------------------------
     // 4. Build the YAuth instance with all plugins enabled

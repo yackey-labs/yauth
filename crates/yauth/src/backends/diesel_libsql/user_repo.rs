@@ -6,16 +6,9 @@ use uuid::Uuid;
 use super::LibsqlPool;
 use super::models::*;
 use super::schema::*;
+use crate::backends::diesel_common::{diesel_conflict_sqlite, diesel_err, get_conn};
 use crate::domain;
-use crate::repo::{RepoError, RepoFuture, SessionRepository, UserRepository, sealed};
-
-fn pool_err(e: impl std::fmt::Display) -> RepoError {
-    RepoError::Internal(format!("pool error: {e}").into())
-}
-
-fn diesel_err(e: diesel::result::Error) -> RepoError {
-    RepoError::Internal(e.into())
-}
+use crate::repo::{RepoFuture, SessionRepository, UserRepository, sealed};
 
 pub(crate) struct LibsqlUserRepo {
     pool: LibsqlPool,
@@ -32,7 +25,7 @@ impl sealed::Sealed for LibsqlUserRepo {}
 impl UserRepository for LibsqlUserRepo {
     fn find_by_id(&self, id: Uuid) -> RepoFuture<'_, Option<domain::User>> {
         Box::pin(async move {
-            let mut conn = self.pool.get().await.map_err(pool_err)?;
+            let mut conn = get_conn(&self.pool).await?;
             let id_str = uuid_to_str(id);
             let result = yauth_users::table
                 .find(&id_str)
@@ -48,7 +41,7 @@ impl UserRepository for LibsqlUserRepo {
     fn find_by_email(&self, email: &str) -> RepoFuture<'_, Option<domain::User>> {
         let email = email.to_lowercase();
         Box::pin(async move {
-            let mut conn = self.pool.get().await.map_err(pool_err)?;
+            let mut conn = get_conn(&self.pool).await?;
             let result = yauth_users::table
                 .filter(yauth_users::email.eq(&email))
                 .select(LibsqlUser::as_select())
@@ -62,7 +55,7 @@ impl UserRepository for LibsqlUserRepo {
 
     fn create(&self, input: domain::NewUser) -> RepoFuture<'_, domain::User> {
         Box::pin(async move {
-            let mut conn = self.pool.get().await.map_err(pool_err)?;
+            let mut conn = get_conn(&self.pool).await?;
             let u = LibsqlNewUser::from_domain(input);
             // Use sql_query because diesel-libsql doesn't support Insertable derive
             let result = diesel::sql_query(
@@ -81,32 +74,18 @@ impl UserRepository for LibsqlUserRepo {
             .bind::<diesel::sql_types::Text, _>(&u.created_at)
             .bind::<diesel::sql_types::Text, _>(&u.updated_at)
             .get_result::<LibsqlUserByName>(&mut *conn)
-            .await;
+            .await
+            .map_err(diesel_conflict_sqlite)?;
 
-            match result {
-                Ok(user) => Ok(user.into_domain()),
-                Err(diesel::result::Error::DatabaseError(
-                    diesel::result::DatabaseErrorKind::UniqueViolation,
-                    info,
-                )) => Err(RepoError::Conflict(info.message().to_string())),
-                Err(e) => {
-                    let msg = e.to_string();
-                    if msg.contains("UNIQUE constraint failed") {
-                        Err(RepoError::Conflict(msg))
-                    } else {
-                        Err(RepoError::Internal(e.into()))
-                    }
-                }
-            }
+            Ok(result.into_domain())
         })
     }
 
     fn update(&self, id: Uuid, changes: domain::UpdateUser) -> RepoFuture<'_, domain::User> {
         Box::pin(async move {
-            let mut conn = self.pool.get().await.map_err(pool_err)?;
+            let mut conn = get_conn(&self.pool).await?;
             let id_str = uuid_to_str(id);
             let libsql_changes = LibsqlUpdateUser::from_domain(changes);
-            // Use Diesel's AsChangeset (which doesn't have the Insertable issue)
             let result = diesel::update(yauth_users::table.find(&id_str))
                 .set(&libsql_changes)
                 .returning(LibsqlUser::as_returning())
@@ -119,7 +98,7 @@ impl UserRepository for LibsqlUserRepo {
 
     fn delete(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            let mut conn = self.pool.get().await.map_err(pool_err)?;
+            let mut conn = get_conn(&self.pool).await?;
             let id_str = uuid_to_str(id);
             diesel::delete(yauth_users::table.find(&id_str))
                 .execute(&mut *conn)
@@ -131,7 +110,7 @@ impl UserRepository for LibsqlUserRepo {
 
     fn any_exists(&self) -> RepoFuture<'_, bool> {
         Box::pin(async move {
-            let mut conn = self.pool.get().await.map_err(pool_err)?;
+            let mut conn = get_conn(&self.pool).await?;
             let exists: Option<String> = yauth_users::table
                 .select(yauth_users::id)
                 .first::<String>(&mut *conn)
@@ -150,7 +129,7 @@ impl UserRepository for LibsqlUserRepo {
     ) -> RepoFuture<'_, (Vec<domain::User>, i64)> {
         let search = search.map(|s| s.to_string());
         Box::pin(async move {
-            let mut conn = self.pool.get().await.map_err(pool_err)?;
+            let mut conn = get_conn(&self.pool).await?;
             let total: i64 = if let Some(ref s) = search {
                 let pattern = format!("%{}%", s.to_lowercase());
                 yauth_users::table
@@ -213,7 +192,7 @@ impl sealed::Sealed for LibsqlSessionRepo {}
 impl SessionRepository for LibsqlSessionRepo {
     fn find_by_id(&self, id: Uuid) -> RepoFuture<'_, Option<domain::Session>> {
         Box::pin(async move {
-            let mut conn = self.pool.get().await.map_err(pool_err)?;
+            let mut conn = get_conn(&self.pool).await?;
             let id_str = uuid_to_str(id);
             let result = yauth_sessions::table
                 .find(&id_str)
@@ -228,7 +207,7 @@ impl SessionRepository for LibsqlSessionRepo {
 
     fn create(&self, input: domain::NewSession) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            let mut conn = self.pool.get().await.map_err(pool_err)?;
+            let mut conn = get_conn(&self.pool).await?;
             let s = LibsqlNewSession::from_domain(input);
             diesel::sql_query(
                 "INSERT INTO yauth_sessions (id, user_id, token_hash, ip_address, user_agent, expires_at, created_at) \
@@ -250,7 +229,7 @@ impl SessionRepository for LibsqlSessionRepo {
 
     fn delete(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            let mut conn = self.pool.get().await.map_err(pool_err)?;
+            let mut conn = get_conn(&self.pool).await?;
             let id_str = uuid_to_str(id);
             diesel::delete(yauth_sessions::table.find(&id_str))
                 .execute(&mut *conn)
@@ -262,7 +241,7 @@ impl SessionRepository for LibsqlSessionRepo {
 
     fn list(&self, limit: i64, offset: i64) -> RepoFuture<'_, (Vec<domain::Session>, i64)> {
         Box::pin(async move {
-            let mut conn = self.pool.get().await.map_err(pool_err)?;
+            let mut conn = get_conn(&self.pool).await?;
             let total: i64 = yauth_sessions::table
                 .count()
                 .get_result(&mut *conn)

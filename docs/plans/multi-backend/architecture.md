@@ -1,5 +1,7 @@
 # Architecture
 
+> **Status: COMPLETED** -- Multi-backend system is implemented with DieselBackend (Postgres), DieselLibsqlBackend (SQLite/Turso), and InMemoryBackend. Stores merged into repository traits. Redis operates as a caching decorator.
+
 ## Core Concept
 
 Extend the proven store trait pattern (SessionStore, ChallengeStore, etc. with Memory/Postgres/Redis impls) to cover ALL persistent data — users, passwords, passkeys, OAuth accounts, API keys, etc. The result: yauth's auth logic is fully database-agnostic, and backends are pluggable.

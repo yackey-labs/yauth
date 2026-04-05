@@ -204,9 +204,12 @@ async fn create_token(
     let email = input.email.trim().to_lowercase();
 
     if !state
-        .rate_limiter
-        .check(&format!("bearer_login:{}", email))
+        .repos
+        .rate_limits
+        .check_rate_limit(&format!("bearer_login:{}", email), 10, 60)
         .await
+        .map(|r| r.allowed)
+        .unwrap_or(true)
     {
         crate::otel::add_event(
             "bearer_login_rate_limited",
@@ -541,7 +544,7 @@ async fn revoke_token(
     // header that was used to authenticate this request.
     if let Some(jti) = extract_jti_from_auth_header(&headers, &state) {
         let ttl = state.bearer_config.access_token_ttl;
-        if let Err(e) = state.revocation_store.revoke(&jti, ttl).await {
+        if let Err(e) = state.repos.revocations.revoke_token(&jti, ttl).await {
             crate::otel::record_error("bearer_jti_revoke_failed", &e);
         }
     }
@@ -621,8 +624,9 @@ pub async fn validate_jwt(token: &str, state: &YAuthState) -> Result<AuthUser, S
 
     // Check JTI revocation before accepting the token
     if state
-        .revocation_store
-        .is_revoked(&claims.jti)
+        .repos
+        .revocations
+        .is_token_revoked(&claims.jti)
         .await
         .unwrap_or(false)
     {

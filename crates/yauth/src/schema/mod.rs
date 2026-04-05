@@ -14,7 +14,7 @@ mod collector;
 pub use collector::{SchemaError, YAuthSchema, collect_schema};
 
 mod postgres;
-#[cfg(feature = "diesel-backend")]
+#[cfg(feature = "diesel-pg-backend")]
 pub use postgres::generate_migration_diff;
 pub use postgres::generate_postgres_ddl;
 
@@ -26,7 +26,7 @@ pub use mysql::generate_mysql_ddl;
 
 mod tracking;
 pub use tracking::schema_hash;
-#[cfg(feature = "diesel-backend")]
+#[cfg(feature = "diesel-pg-backend")]
 pub use tracking::{ensure_tracking_table, is_schema_applied, record_schema_applied};
 
 pub mod plugin_schemas;

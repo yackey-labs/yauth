@@ -342,9 +342,12 @@ async fn request_unlock(
 
     // Rate limit unlock requests
     if !state
-        .rate_limiter
-        .check(&format!("unlock_request:{}", email))
+        .repos
+        .rate_limits
+        .check_rate_limit(&format!("unlock_request:{}", email), 10, 60)
         .await
+        .map(|r| r.allowed)
+        .unwrap_or(true)
     {
         crate::otel::add_event(
             "lockout_unlock_rate_limited",

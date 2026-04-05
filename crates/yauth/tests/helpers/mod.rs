@@ -17,10 +17,12 @@ pub struct TestDb {
 
 /// Shared testcontainer — started once, reused across all tests.
 /// Migrations run once at init. Tests use unique data to avoid conflicts.
+#[allow(dead_code)]
 static SHARED_DB: OnceCell<Option<TestDb>> = OnceCell::const_new();
 
 impl TestDb {
     /// Get or create the shared test database. Returns None if no DB available.
+    #[allow(dead_code)]
     pub async fn shared() -> Option<&'static TestDb> {
         SHARED_DB
             .get_or_init(|| async { Self::try_new().await })

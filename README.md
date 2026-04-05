@@ -845,7 +845,7 @@ bun generate:check    # CI: fail if client is out of date
 
 # Integration testing
 docker compose up -d                 # PostgreSQL + Mailpit
-bash pentest/pentest-yauth.sh        # 172+ OWASP security test cases
+cargo test --features full --test pentest -- --test-threads=1  # OWASP pentest (memory + diesel_pg)
 ```
 
 ## Versioning

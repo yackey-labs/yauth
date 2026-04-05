@@ -1,3 +1,13 @@
+## 0.5.0 (2026-04-05)
+
+### Breaking Changes
+
+- unified repo architecture + stores merged + Redis decorators (#30)
+
+### Features
+
+- declarative schema system + diesel-libsql backend (#27)
+
 ## 0.4.0 (2026-04-04)
 
 ### Breaking Changes

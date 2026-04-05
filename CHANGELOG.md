@@ -1,3 +1,10 @@
+## 0.6.1 (2026-04-05)
+
+### Fixes
+
+- update CLAUDE.md pentest references to unified Rust suite (#37)
+- regenerate client for 0.6.0 version
+
 ## 0.6.0 (2026-04-05)
 
 ### Breaking Changes

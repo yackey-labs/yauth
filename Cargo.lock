@@ -5470,7 +5470,7 @@ dependencies = [
 
 [[package]]
 name = "yauth"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "argon2",
  "axum 0.8.8",

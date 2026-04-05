@@ -33,7 +33,13 @@ Every feature is behind a **feature flag** — enable only what you need.
 
 ## Try It in 30 Seconds
 
-No database needed. Copy, paste, run:
+No database needed. Add the dependencies, then copy, paste, run:
+
+```bash
+cargo add yauth --features memory-backend,email-password
+cargo add axum
+cargo add tokio --features full
+```
 
 ```rust
 use yauth::prelude::*;
@@ -51,7 +57,7 @@ async fn main() {
         .unwrap();
 
     let app = axum::Router::new()
-        .nest("/auth", yauth.router())
+        .nest("/api/auth", yauth.router())
         .with_state(yauth.state().clone());
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
@@ -61,12 +67,12 @@ async fn main() {
 
 ```bash
 # Register
-curl -X POST http://localhost:3000/auth/register \
+curl -X POST http://localhost:3000/api/auth/register \
   -H 'Content-Type: application/json' \
   -d '{"email":"test@example.com","password":"MyPassword123!"}'
 
 # Login
-curl -X POST http://localhost:3000/auth/login \
+curl -X POST http://localhost:3000/api/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"email":"test@example.com","password":"MyPassword123!"}'
 ```

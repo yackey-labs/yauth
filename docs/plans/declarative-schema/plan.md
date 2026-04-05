@@ -17,13 +17,13 @@ Follow the repo's `CLAUDE.md` exactly. Every rule in it is mandatory.
 4. Postgres DDL generator produces `CREATE TABLE IF NOT EXISTS` statements matching the existing SQL migration output exactly
 5. Migration diff introspects existing tables via `information_schema` and generates `ALTER TABLE ADD COLUMN` for new columns (additive only)
 6. `yauth_schema_migrations` tracking table records a deterministic hash of the applied schema — second run is a no-op
-7. `DieselBackend::migrate()` uses the declarative system instead of `include_str!()` SQL files
+7. `DieselPgBackend::migrate()` uses the declarative system instead of `include_str!()` SQL files
 8. Consumer can call `YAuth::schema()` to inspect the merged schema and `YAuth::generate_ddl(Dialect::Postgres)` to export DDL
 
 ### After building, prove it works:
 Start a fresh Postgres database. Build with `--features full`.
 
-- Run the example server with `DieselBackend` — all tables created automatically
+- Run the example server with `DieselPgBackend` — all tables created automatically
 - `cargo test --features full --lib` — 150 unit tests pass
 - `cargo test --features full --test diesel_integration` — integration tests pass
 - `cargo test --features full --test pentest_memory` — 13 memory pentest tests pass

@@ -1,6 +1,6 @@
 # Architecture
 
-> **Status: COMPLETED** -- Multi-backend system is implemented with DieselBackend (Postgres), DieselLibsqlBackend (SQLite/Turso), and InMemoryBackend. Stores merged into repository traits. Redis operates as a caching decorator.
+> **Status: COMPLETED** -- Multi-backend system is implemented with DieselPgBackend (Postgres), DieselLibsqlBackend (SQLite/Turso), and InMemoryBackend. Stores merged into repository traits. Redis operates as a caching decorator.
 
 ## Core Concept
 
@@ -308,7 +308,7 @@ src/
 ├── backends/               — trait implementations (feature-gated per backend)
 │   ├── mod.rs              — re-exports
 │   ├── diesel/             — #[cfg(feature = "diesel-backend")]
-│   │   ├── mod.rs          — DieselBackend impl + impl sealed::Sealed for each repo type
+│   │   ├── mod.rs          — DieselPgBackend impl + impl sealed::Sealed for each repo type
 │   │   ├── models.rs       — Diesel-annotated models (private, with into_domain() methods)
 │   │   ├── schema.rs       — diesel::table! macros (moved from db/schema.rs)
 │   │   ├── migrations.rs   — SQL migration runner (moved from db/migrations.rs)
@@ -327,12 +327,12 @@ src/
 └── ...
 ```
 
-### DieselBackend Construction
+### DieselPgBackend Construction
 
-`DieselBackend` handles pool creation internally. All constructors return `Result` (except `from_pool`):
+`DieselPgBackend` handles pool creation internally. All constructors return `Result` (except `from_pool`):
 
 ```rust
-impl DieselBackend {
+impl DieselPgBackend {
     /// Create from a database URL. Handles pool creation, schema validation,
     /// and Diesel query instrumentation setup.
     pub fn new(url: &str) -> Result<Self, RepoError> { ... }
@@ -351,7 +351,7 @@ impl DieselBackend {
 
 Schema validation, search_path configuration, and Diesel query instrumentation (`QueryTracing` + `set_default_instrumentation`) all happen inside construction.
 
-`DieselBackend` also implements `postgres_pool_for_stores()` to return the pool for Postgres ephemeral stores.
+`DieselPgBackend` also implements `postgres_pool_for_stores()` to return the pool for Postgres ephemeral stores.
 
 ### Diesel Model Conversions
 
@@ -400,9 +400,9 @@ This avoids orphan rule issues if crates are ever split, keeps conversions co-lo
 
 The `StoreBackend` enum (Memory/Postgres/Redis) for ephemeral stores remains **independent** of `DatabaseBackend`:
 
-- `DieselBackend` + `StoreBackend::Redis` — Diesel for persistence, Redis for sessions/rate-limits. Common in production.
-- `DieselBackend` + `StoreBackend::Postgres` — Diesel for everything. The Postgres stores get the pool via `backend.postgres_pool_for_stores()`.
-- `DieselBackend` + no explicit store config — auto-detects to `StoreBackend::Postgres` (since pool is available).
+- `DieselPgBackend` + `StoreBackend::Redis` — Diesel for persistence, Redis for sessions/rate-limits. Common in production.
+- `DieselPgBackend` + `StoreBackend::Postgres` — Diesel for everything. The Postgres stores get the pool via `backend.postgres_pool_for_stores()`.
+- `DieselPgBackend` + no explicit store config — auto-detects to `StoreBackend::Postgres` (since pool is available).
 - `InMemoryBackend` + no explicit store config — auto-detects to `StoreBackend::Memory`.
 - `InMemoryBackend` + `StoreBackend::Redis` — in-memory persistence, Redis ephemeral stores. Unusual but valid for testing Redis store behavior.
 - `InMemoryBackend` + `StoreBackend::Postgres` — invalid combination (no pool available). Builder returns an error.
@@ -417,7 +417,7 @@ This is a breaking change for any consumers who implement custom store backends 
 
 - Remove Diesel re-exports from `lib.rs` (`AsyncPgConnection`, `RunQueryDsl`, `DieselPool`, etc.)
 - Move them into `backends::diesel` module (still accessible, just namespaced)
-- `create_pool()` free function removed — replaced by `DieselBackend::new(url)` / `DieselBackend::with_schema(url, schema)`
+- `create_pool()` free function removed — replaced by `DieselPgBackend::new(url)` / `DieselPgBackend::with_schema(url, schema)`
 - Backward-compat `entity` and `migration` re-export modules removed (or re-pointed to `backends::diesel`)
 - `async_trait` removed as a dependency — all traits use manual `BoxFuture`
 - `RepoFuture<'a, T>` type alias exported for consumers implementing `DatabaseBackend`
@@ -425,7 +425,7 @@ This is a breaking change for any consumers who implement custom store backends 
 ### Telemetry Integration
 
 - The existing native OTel helpers (`crate::otel::*`) work unchanged in repository impls
-- Diesel query instrumentation (`QueryTracing` + `set_default_instrumentation`) moves into `DieselBackend` construction — it's Diesel-specific, not a global concern
+- Diesel query instrumentation (`QueryTracing` + `set_default_instrumentation`) moves into `DieselPgBackend` construction — it's Diesel-specific, not a global concern
 - `telemetry::init()` is reduced to pure OTel SDK setup (exporter, provider, propagator) — no Diesel-specific code
 - Other backends instrument queries their own way (sqlx has built-in tracing, etc.)
 

@@ -15,7 +15,7 @@
 | `yauth` | Main library — plugins, middleware, builder, auth logic, backends, repository traits, declarative schema |
 
 Key internal modules in `yauth`:
-- `backends/diesel_pg/` — PostgreSQL backend (`DieselBackend`)
+- `backends/diesel_pg/` — PostgreSQL backend (`DieselPgBackend`)
 - `backends/diesel_libsql/` — SQLite/Turso backend (`DieselLibsqlBackend`)
 - `backends/memory/` — In-memory backend (`InMemoryBackend`)
 - `backends/redis/` — Redis caching decorators
@@ -105,7 +105,7 @@ yauth uses a `DatabaseBackend` trait with three implementations:
 
 | Backend | Type | Use case |
 |---|---|---|
-| `DieselBackend` | `backends::diesel_pg` | Production PostgreSQL (default) |
+| `DieselPgBackend` | `backends::diesel_pg` | Production PostgreSQL (default) |
 | `DieselLibsqlBackend` | `backends::diesel_libsql` | Local SQLite files or remote Turso databases |
 | `InMemoryBackend` | `backends::memory` | Tests, prototyping, CI — no database required |
 
@@ -116,10 +116,10 @@ Redis (`with_redis()`) is a **caching decorator** that wraps repository traits f
 `build()` is **async** and returns `Result<YAuth, RepoError>`. Migrations are explicit — call `backend.migrate()` before building.
 
 ```rust
-use yauth::backends::diesel_pg::DieselBackend;
+use yauth::backends::diesel_pg::DieselPgBackend;
 use yauth::repo::{DatabaseBackend, EnabledFeatures};
 
-let backend = DieselBackend::new("postgres://user:pass@localhost/mydb")?;
+let backend = DieselPgBackend::new("postgres://user:pass@localhost/mydb")?;
 backend.migrate(&EnabledFeatures::from_compile_flags()).await?;
 
 let yauth = YAuthBuilder::new(backend, config)
@@ -204,7 +204,7 @@ If CI publishes to crates.io/npm but fails before pushing the version commit and
 - **Biome** for TypeScript linting/formatting (not ESLint)
 - **`cargo fmt` + `cargo clippy`** for Rust
 - **`yauth_` table prefix** on all database tables
-- **Configurable PG schema** — use `DieselBackend::with_schema(url, "auth")` to isolate yauth tables in a separate PostgreSQL schema (default `"public"`).
+- **Configurable PG schema** — use `DieselPgBackend::with_schema(url, "auth")` to isolate yauth tables in a separate PostgreSQL schema (default `"public"`).
 - **Timing-safe patterns** — dummy password hash on failed lookups to prevent timing attacks
 - **HIBP k-anonymity** — password breach checking via HaveIBeenPwned API (configurable)
 - **Rate limiting** — per-operation rate limits (login, register, forgot-password, etc.)

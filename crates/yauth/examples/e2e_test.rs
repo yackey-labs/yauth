@@ -11,7 +11,7 @@ use tokio::net::TcpListener;
 use totp_rs::{Algorithm, Secret, TOTP};
 
 use yauth::backends::diesel_pg::{
-    AsyncDieselConnectionManager, AsyncPgConnection, DieselBackend, DieselPool,
+    AsyncDieselConnectionManager, AsyncPgConnection, DieselPgBackend, DieselPool,
 };
 
 type Pool = yauth::state::DbPool;
@@ -1327,7 +1327,7 @@ async fn start_server(db: Pool) -> u16 {
     use yauth::prelude::*;
     use yauth::repo::{DatabaseBackend, EnabledFeatures};
 
-    let backend = DieselBackend::from_pool(db);
+    let backend = DieselPgBackend::from_pool(db);
     backend
         .migrate(&EnabledFeatures::from_compile_flags())
         .await
@@ -1393,7 +1393,7 @@ async fn start_server_with_audience(db: Pool, audience: &str) -> u16 {
     use yauth::prelude::*;
     use yauth::repo::{DatabaseBackend, EnabledFeatures};
 
-    let backend = DieselBackend::from_pool(db);
+    let backend = DieselPgBackend::from_pool(db);
     backend
         .migrate(&EnabledFeatures::from_compile_flags())
         .await
@@ -1466,7 +1466,7 @@ async fn start_server_with_oauth2(db: Pool) -> u16 {
     use yauth::prelude::*;
     use yauth::repo::{DatabaseBackend, EnabledFeatures};
 
-    let backend = DieselBackend::from_pool(db);
+    let backend = DieselPgBackend::from_pool(db);
     backend
         .migrate(&EnabledFeatures::from_compile_flags())
         .await

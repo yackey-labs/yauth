@@ -90,12 +90,12 @@ cargo add axum
 ```rust
 use yauth::prelude::*;
 use yauth::repo::{DatabaseBackend, EnabledFeatures};
-use yauth::backends::diesel_pg::DieselBackend;
+use yauth::backends::diesel_pg::DieselPgBackend;
 use axum::Router;
 
 #[tokio::main]
 async fn main() {
-    let backend = DieselBackend::new("postgres://user:pass@localhost/mydb")
+    let backend = DieselPgBackend::new("postgres://user:pass@localhost/mydb")
         .expect("Failed to create backend");
 
     // Run migrations (creates yauth_* tables)
@@ -299,11 +299,11 @@ All new endpoints are automatically available on the client — no regeneration 
 #### PostgreSQL (default)
 
 ```rust
-use yauth::backends::diesel_pg::DieselBackend;
+use yauth::backends::diesel_pg::DieselPgBackend;
 
-let backend = DieselBackend::new("postgres://user:pass@localhost/mydb")?;
+let backend = DieselPgBackend::new("postgres://user:pass@localhost/mydb")?;
 // Or with a custom PostgreSQL schema:
-let backend = DieselBackend::with_schema("postgres://user:pass@localhost/mydb", "auth")?;
+let backend = DieselPgBackend::with_schema("postgres://user:pass@localhost/mydb", "auth")?;
 
 let yauth = YAuthBuilder::new(backend, config).build().await?;
 ```
@@ -675,7 +675,7 @@ yauth uses a `DatabaseBackend` trait with pluggable implementations. All persist
 
 | Backend | Feature Flag | Connection | Use case |
 |---|---|---|---|
-| `DieselBackend` | `diesel-pg-backend` (default) | PostgreSQL via diesel-async 0.8 + deadpool | Production |
+| `DieselPgBackend` | `diesel-pg-backend` (default) | PostgreSQL via diesel-async 0.8 + deadpool | Production |
 | `DieselLibsqlBackend` | `diesel-libsql-backend` | Local SQLite / remote Turso via diesel-libsql 0.1.4 | Embedded, edge, local dev |
 | `InMemoryBackend` | `memory-backend` | None (all data in HashMaps) | Tests, prototyping |
 
@@ -683,10 +683,10 @@ Migrations are explicit — call `backend.migrate()` before `build()`. Plugins d
 
 ### Configurable PostgreSQL Schema
 
-By default, yauth tables live in the `public` schema. Use `DieselBackend::with_schema()` to isolate them:
+By default, yauth tables live in the `public` schema. Use `DieselPgBackend::with_schema()` to isolate them:
 
 ```rust
-let backend = DieselBackend::with_schema(&database_url, "auth")?;
+let backend = DieselPgBackend::with_schema(&database_url, "auth")?;
 ```
 
 ### Redis Caching

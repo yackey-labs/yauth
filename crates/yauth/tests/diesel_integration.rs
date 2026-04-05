@@ -10,7 +10,7 @@
 use std::time::Duration;
 
 use uuid::Uuid;
-use yauth::backends::diesel_pg::{DieselBackend, RunQueryDsl};
+use yauth::backends::diesel_pg::{DieselPgBackend, RunQueryDsl};
 
 use yauth::config::YAuthConfig;
 use yauth::prelude::*;
@@ -108,7 +108,7 @@ async fn diesel_session_create_validate_delete() {
 
     // Build state for session operations
     let config = YAuthConfig::default();
-    let backend = DieselBackend::from_pool(db.pool.clone());
+    let backend = DieselPgBackend::from_pool(db.pool.clone());
     use yauth::repo::{DatabaseBackend, EnabledFeatures};
     backend
         .migrate(&EnabledFeatures::from_compile_flags())
@@ -186,7 +186,7 @@ async fn diesel_pool_sharing() {
 
     // Build YAuth with the pool
     let config = YAuthConfig::default();
-    let backend = DieselBackend::from_pool(db.pool.clone());
+    let backend = DieselPgBackend::from_pool(db.pool.clone());
     use yauth::repo::{DatabaseBackend, EnabledFeatures};
     backend
         .migrate(&EnabledFeatures::from_compile_flags())

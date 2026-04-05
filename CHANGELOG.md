@@ -1,3 +1,9 @@
+## 0.7.1 (2026-04-05)
+
+### Features
+
+- add MySQL backend to example server, skip email verification without SMTP
+
 ## 0.7.0 (2026-04-05)
 
 ### Breaking Changes

@@ -7,22 +7,16 @@
 use chrono::NaiveDateTime;
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 use super::schema::*;
 
 // ── Helper functions ──
 
-pub(crate) fn uuid_to_str(u: Uuid) -> String {
-    u.to_string()
-}
-
-pub(crate) fn str_to_uuid(s: &str) -> Uuid {
-    Uuid::parse_str(s).unwrap_or_else(|e| {
-        log::error!("Failed to parse UUID from stored value '{}': {}", s, e);
-        Uuid::nil()
-    })
-}
+// Re-export shared UUID/JSON converters from diesel_common.
+pub(crate) use crate::backends::diesel_common::{
+    json_to_str, opt_json_to_str, opt_str_to_json, opt_str_to_uuid, opt_uuid_to_str, str_to_json,
+    str_to_uuid, uuid_to_str,
+};
 
 pub(crate) fn dt_to_str(dt: NaiveDateTime) -> String {
     dt.format("%Y-%m-%dT%H:%M:%S%.f").to_string()
@@ -49,30 +43,6 @@ pub(crate) fn opt_dt_to_str(dt: Option<NaiveDateTime>) -> Option<String> {
 
 pub(crate) fn opt_str_to_dt(s: Option<String>) -> Option<NaiveDateTime> {
     s.map(|s| str_to_dt(&s))
-}
-
-pub(crate) fn opt_uuid_to_str(u: Option<Uuid>) -> Option<String> {
-    u.map(uuid_to_str)
-}
-
-pub(crate) fn opt_str_to_uuid(s: Option<String>) -> Option<Uuid> {
-    s.map(|s| str_to_uuid(&s))
-}
-
-pub(crate) fn json_to_str(v: serde_json::Value) -> String {
-    serde_json::to_string(&v).unwrap_or_else(|_| "null".to_string())
-}
-
-pub(crate) fn str_to_json(s: &str) -> serde_json::Value {
-    serde_json::from_str(s).unwrap_or(serde_json::Value::Null)
-}
-
-pub(crate) fn opt_json_to_str(v: Option<serde_json::Value>) -> Option<String> {
-    v.map(json_to_str)
-}
-
-pub(crate) fn opt_str_to_json(s: Option<String>) -> Option<serde_json::Value> {
-    s.map(|s| str_to_json(&s))
 }
 
 // ──────────────────────────────────────────────

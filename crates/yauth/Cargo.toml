@@ -12,8 +12,9 @@ publish = true
 
 [features]
 default = ["email-password", "diesel-pg-backend"]
-diesel-pg-backend = ["dep:diesel", "dep:diesel-async-crate", "dep:futures-util"]
+diesel-pg-backend = ["dep:diesel", "dep:diesel-async-crate", "diesel-async-crate/postgres", "diesel-async-crate/deadpool", "dep:futures-util"]
 diesel-libsql-backend = ["dep:diesel", "dep:diesel-async-crate", "dep:diesel-libsql", "dep:futures-util"]
+diesel-mysql-backend = ["dep:diesel", "diesel/mysql_backend", "dep:diesel-async-crate", "diesel-async-crate/mysql", "diesel-async-crate/deadpool", "dep:futures-util"]
 memory-backend = []
 email-password = []
 passkey = ["dep:webauthn-rs"]
@@ -31,7 +32,7 @@ oidc = ["bearer", "oauth2-server"]
 telemetry = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:opentelemetry-semantic-conventions", "dep:opentelemetry-http"]
 openapi = ["dep:utoipa"]
 redis = ["dep:redis"]
-full = ["email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link", "admin", "status", "oauth2-server", "account-lockout", "webhooks", "oidc", "telemetry", "openapi", "diesel-pg-backend", "diesel-libsql-backend", "memory-backend"]
+full = ["email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link", "admin", "status", "oauth2-server", "account-lockout", "webhooks", "oidc", "telemetry", "openapi", "diesel-pg-backend", "diesel-libsql-backend", "diesel-mysql-backend", "memory-backend"]
 
 [dependencies]
 axum = { workspace = true }
@@ -40,7 +41,7 @@ tokio = { workspace = true }
 
 # Diesel (optional — pulled in by diesel-pg-backend or diesel-libsql-backend)
 diesel = { workspace = true, optional = true }
-diesel-async-crate = { version = "0.8", features = ["postgres", "deadpool"], package = "diesel-async", optional = true }
+diesel-async-crate = { version = "0.8", features = ["deadpool"], package = "diesel-async", optional = true }
 diesel-libsql = { version = "0.1.4", features = ["async", "deadpool"], optional = true }
 futures-util = { version = "0.3", optional = true }
 
@@ -95,9 +96,17 @@ uuid = { workspace = true }
 base64 = "0.22"
 url = "2"
 testcontainers = "0.27"
-testcontainers-modules = { version = "0.15", features = ["postgres"] }
+testcontainers-modules = { version = "0.15", features = ["postgres", "mysql"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
+# OTel instrumentation for conformance tests (optional, via OTEL_EXPORTER_OTLP_ENDPOINT env var)
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+opentelemetry-otlp = { version = "0.31", features = ["grpc-tonic", "http-proto", "reqwest-blocking-client", "reqwest-rustls"] }
+opentelemetry-semantic-conventions = { workspace = true }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-opentelemetry = "0.32"
 
 
 [[example]]

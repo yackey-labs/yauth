@@ -11,6 +11,7 @@ pub async fn check_password_breach(password: &str) -> Result<u64, String> {
     let span_cx =
         crate::otel::start_span("yauth.hibp_check", opentelemetry::trace::SpanKind::Client);
     #[cfg(not(feature = "telemetry"))]
+    #[allow(clippy::let_unit_value)]
     let span_cx = crate::otel::start_span("yauth.hibp_check", ());
 
     let result = check_password_breach_inner(password, &span_cx).await;

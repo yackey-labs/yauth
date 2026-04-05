@@ -1,23 +1,24 @@
-use super::LibsqlPool;
-use super::models::str_to_dt;
+use diesel::result::OptionalExtension;
+
+use super::MysqlPool;
 use crate::backends::diesel_common::{get_conn, lazy_init_table, rate_limit_result};
 use crate::domain;
 use crate::repo::{RateLimitRepository, RepoError, RepoFuture, sealed};
 
 const CREATE_RATE_LIMITS_TABLE: &str = "\
 CREATE TABLE IF NOT EXISTS yauth_rate_limits (\
-    key TEXT PRIMARY KEY, \
-    count INTEGER NOT NULL DEFAULT 1, \
-    window_start TEXT NOT NULL DEFAULT (datetime('now'))\
-)";
+    `key` VARCHAR(255) PRIMARY KEY, \
+    count INT NOT NULL DEFAULT 1, \
+    window_start DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP\
+) ENGINE=InnoDB";
 
-pub(crate) struct LibsqlRateLimitRepo {
-    pool: LibsqlPool,
+pub(crate) struct MysqlRateLimitRepo {
+    pool: MysqlPool,
     initialized: tokio::sync::OnceCell<()>,
 }
 
-impl LibsqlRateLimitRepo {
-    pub(crate) fn new(pool: LibsqlPool) -> Self {
+impl MysqlRateLimitRepo {
+    pub(crate) fn new(pool: MysqlPool) -> Self {
         Self {
             pool,
             initialized: tokio::sync::OnceCell::const_new(),
@@ -27,23 +28,26 @@ impl LibsqlRateLimitRepo {
     async fn ensure_init(&self) -> Result<(), RepoError> {
         let pool = &self.pool;
         lazy_init_table(&self.initialized, || async {
+            use diesel_async_crate::AsyncMysqlConnection;
             use diesel_async_crate::SimpleAsyncConnection;
             let mut conn = get_conn(pool).await?;
-            (*conn)
-                .batch_execute(CREATE_RATE_LIMITS_TABLE)
-                .await
-                .map_err(|e| {
-                    RepoError::Internal(format!("rate_limit table init failed: {e}").into())
-                })?;
+            <AsyncMysqlConnection as SimpleAsyncConnection>::batch_execute(
+                &mut *conn,
+                CREATE_RATE_LIMITS_TABLE,
+            )
+            .await
+            .map_err(|e| {
+                RepoError::Internal(format!("rate_limit table init failed: {e}").into())
+            })?;
             Ok(())
         })
         .await
     }
 }
 
-impl sealed::Sealed for LibsqlRateLimitRepo {}
+impl sealed::Sealed for MysqlRateLimitRepo {}
 
-impl RateLimitRepository for LibsqlRateLimitRepo {
+impl RateLimitRepository for MysqlRateLimitRepo {
     fn check_rate_limit(
         &self,
         key: &str,
@@ -52,29 +56,26 @@ impl RateLimitRepository for LibsqlRateLimitRepo {
     ) -> RepoFuture<'_, domain::RateLimitResult> {
         let key = key.to_string();
         Box::pin(async move {
-            // Fail-open: ensure table exists (runs once)
             self.ensure_init().await?;
 
-            // SQLite-compatible upsert with window reset logic.
-            // We use two statements: upsert then select.
             let conn = get_conn(&self.pool).await;
             match conn {
                 Ok(mut conn) => {
                     use diesel_async_crate::RunQueryDsl;
 
-                    // Upsert: if window expired, reset; else increment
+                    // MySQL upsert: ON DUPLICATE KEY UPDATE with window reset logic
                     let upsert_sql = "\
-                        INSERT INTO yauth_rate_limits (key, count, window_start) \
-                        VALUES (?, 1, datetime('now')) \
-                        ON CONFLICT (key) DO UPDATE SET \
+                        INSERT INTO yauth_rate_limits (`key`, count, window_start) \
+                        VALUES (?, 1, NOW()) \
+                        ON DUPLICATE KEY UPDATE \
                             count = CASE \
-                                WHEN datetime(yauth_rate_limits.window_start, '+' || ? || ' seconds') < datetime('now') \
+                                WHEN DATE_ADD(yauth_rate_limits.window_start, INTERVAL ? SECOND) < NOW() \
                                 THEN 1 \
                                 ELSE yauth_rate_limits.count + 1 \
                             END, \
                             window_start = CASE \
-                                WHEN datetime(yauth_rate_limits.window_start, '+' || ? || ' seconds') < datetime('now') \
-                                THEN datetime('now') \
+                                WHEN DATE_ADD(yauth_rate_limits.window_start, INTERVAL ? SECOND) < NOW() \
+                                THEN NOW() \
                                 ELSE yauth_rate_limits.window_start \
                             END";
 
@@ -94,30 +95,30 @@ impl RateLimitRepository for LibsqlRateLimitRepo {
                         });
                     }
 
-                    // Select current values
+                    // Select current values using native Datetime type
                     #[derive(diesel::QueryableByName)]
                     struct RateLimitRow {
                         #[diesel(sql_type = diesel::sql_types::Integer)]
                         count: i32,
-                        #[diesel(sql_type = diesel::sql_types::Text)]
-                        window_start: String,
+                        #[diesel(sql_type = diesel::sql_types::Datetime)]
+                        window_start: chrono::NaiveDateTime,
                     }
 
-                    let select_result: Result<Vec<RateLimitRow>, _> = diesel::sql_query(
-                        "SELECT count, window_start FROM yauth_rate_limits WHERE key = ?",
+                    let select_result: Result<Option<RateLimitRow>, _> = diesel::sql_query(
+                        "SELECT count, window_start FROM yauth_rate_limits WHERE `key` = ? LIMIT 1",
                     )
                     .bind::<diesel::sql_types::Text, _>(&key)
-                    .load(&mut *conn)
-                    .await;
+                    .get_result(&mut *conn)
+                    .await
+                    .optional();
 
                     match select_result {
-                        Ok(rows) => {
-                            if let Some(row) = rows.into_iter().next() {
+                        Ok(opt_row) => {
+                            if let Some(row) = opt_row {
                                 let count = row.count as u32;
-                                let window_start = str_to_dt(&row.window_start).and_utc();
+                                let window_start = row.window_start.and_utc();
                                 Ok(rate_limit_result(count, limit, window_start, window_secs))
                             } else {
-                                // Shouldn't happen after upsert, fail-open
                                 Ok(domain::RateLimitResult {
                                     allowed: true,
                                     remaining: limit.saturating_sub(1),

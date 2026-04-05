@@ -195,6 +195,27 @@ pub struct SmtpConfig {
     pub from: String,
 }
 
+/// Per-operation rate limit configuration.
+///
+/// Controls how many requests are allowed within a sliding time window.
+/// Set to `None` on `EmailPasswordConfig` to disable rate limiting entirely
+/// (useful for testing). The default preserves existing behavior: 10 requests
+/// per 60-second window.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RateLimitConfig {
+    pub max_requests: u32,
+    pub window_secs: u64,
+}
+
+impl Default for RateLimitConfig {
+    fn default() -> Self {
+        Self {
+            max_requests: 10,
+            window_secs: 60,
+        }
+    }
+}
+
 #[cfg(feature = "email-password")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmailPasswordConfig {
@@ -203,6 +224,16 @@ pub struct EmailPasswordConfig {
     pub hibp_check: bool,
     #[serde(default)]
     pub password_policy: PasswordPolicyConfig,
+    /// Per-operation rate limit. `Some(config)` enables rate limiting with the
+    /// given parameters; `None` disables rate limiting entirely. Defaults to
+    /// 10 requests per 60-second window.
+    #[serde(default = "default_rate_limit")]
+    pub rate_limit: Option<RateLimitConfig>,
+}
+
+#[cfg(feature = "email-password")]
+fn default_rate_limit() -> Option<RateLimitConfig> {
+    Some(RateLimitConfig::default())
 }
 
 #[cfg(feature = "email-password")]
@@ -213,6 +244,7 @@ impl Default for EmailPasswordConfig {
             require_email_verification: true,
             hibp_check: true,
             password_policy: PasswordPolicyConfig::default(),
+            rate_limit: Some(RateLimitConfig::default()),
         }
     }
 }

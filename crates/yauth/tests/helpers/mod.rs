@@ -1,3 +1,5 @@
+pub mod otel;
+
 use std::time::Duration;
 
 use testcontainers::ImageExt;
@@ -22,14 +24,98 @@ static SHARED_DB: OnceCell<Option<TestDb>> = OnceCell::const_new();
 
 impl TestDb {
     /// Get or create the shared test database. Returns None if no DB available.
+    /// Does NOT drop tables — just ensures migrations have run. Safe for parallel use.
     #[allow(dead_code)]
     pub async fn shared() -> Option<&'static TestDb> {
         SHARED_DB
-            .get_or_init(|| async { Self::try_new().await })
+            .get_or_init(|| async { Self::try_new_shared().await })
             .await
             .as_ref()
     }
 
+    /// Creates a shared DB that only runs migrations (no table drops).
+    async fn try_new_shared() -> Option<Self> {
+        if let Ok(url) = std::env::var("DATABASE_URL") {
+            let manager = AsyncDieselConnectionManager::<AsyncPgConnection>::new(&url);
+            // Large pool for parallel conformance tests
+            let pool = DieselPool::builder(manager)
+                .max_size(64)
+                .build()
+                .expect("failed to build diesel deadpool");
+
+            match pool.get().await {
+                Ok(_) => {
+                    // Only run migrations, don't drop tables
+                    yauth::backends::diesel_pg::migrations::run_migrations(&pool)
+                        .await
+                        .expect("failed to run migrations");
+                    return Some(Self {
+                        pool,
+                        _container: None,
+                    });
+                }
+                Err(e) => {
+                    eprintln!("DATABASE_URL set but cannot connect: {e}");
+                }
+            }
+        }
+
+        // Fall back to testcontainer
+        let db = Self::try_new_from_container().await?;
+        Some(db)
+    }
+
+    /// Create a fully isolated DB via testcontainer. Never uses DATABASE_URL.
+    /// Use for destructive tests (drop/create tables) that can't share state.
+    #[allow(dead_code)]
+    pub async fn try_new_isolated() -> Option<Self> {
+        Self::try_new_from_container().await
+    }
+
+    async fn try_new_from_container() -> Option<Self> {
+        let container = match Postgres::default().with_tag("17-alpine").start().await {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("Cannot start testcontainer (Docker unavailable?): {e}");
+                return None;
+            }
+        };
+
+        let host_port = container
+            .get_host_port_ipv4(5432)
+            .await
+            .expect("failed to get postgres port");
+
+        let url = format!("postgres://postgres:postgres@127.0.0.1:{host_port}/postgres");
+        let manager = AsyncDieselConnectionManager::<AsyncPgConnection>::new(&url);
+        let pool = DieselPool::builder(manager)
+            .max_size(8)
+            .build()
+            .expect("failed to build diesel deadpool");
+
+        for attempt in 1..=30 {
+            match pool.get().await {
+                Ok(_) => {
+                    let db = Self {
+                        pool,
+                        _container: Some(container),
+                    };
+                    Self::init_schema(&db.pool).await;
+                    return Some(db);
+                }
+                Err(_) if attempt < 30 => {
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                }
+                Err(e) => {
+                    eprintln!("Testcontainer started but postgres not ready after 15s: {e}");
+                    return None;
+                }
+            }
+        }
+        None
+    }
+
+    #[allow(dead_code)]
     pub async fn try_new() -> Option<Self> {
         if let Ok(url) = std::env::var("DATABASE_URL") {
             let manager = AsyncDieselConnectionManager::<AsyncPgConnection>::new(&url);

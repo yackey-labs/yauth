@@ -126,9 +126,15 @@ impl UserRepository for InMemoryUserRepo {
                 map.remove(&id);
             }
 
-            // Cascade: sessions
+            // Cascade: sessions (persistent session table)
             {
                 let mut map = self.storage.sessions.write().unwrap();
+                map.retain(|_, s| s.user_id != id);
+            }
+
+            // Cascade: session_ops (ephemeral session store)
+            {
+                let mut map = self.storage.session_ops.write().await;
                 map.retain(|_, s| s.user_id != id);
             }
 

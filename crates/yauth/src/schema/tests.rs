@@ -678,9 +678,9 @@ fn sqlite_ddl_foreign_keys() {
 fn mysql_ddl_core_tables() {
     let schema = collect_schema(vec![core_schema()]).unwrap();
     let ddl = generate_mysql_ddl(&schema);
-    assert!(ddl.contains("CREATE TABLE IF NOT EXISTS yauth_users"));
-    assert!(ddl.contains("CREATE TABLE IF NOT EXISTS yauth_sessions"));
-    assert!(ddl.contains("CREATE TABLE IF NOT EXISTS yauth_audit_log"));
+    assert!(ddl.contains("CREATE TABLE IF NOT EXISTS `yauth_users`"));
+    assert!(ddl.contains("CREATE TABLE IF NOT EXISTS `yauth_sessions`"));
+    assert!(ddl.contains("CREATE TABLE IF NOT EXISTS `yauth_audit_log`"));
 }
 
 #[test]
@@ -701,17 +701,17 @@ fn mysql_ddl_type_mappings() {
     let ddl = generate_mysql_ddl(&schema);
     // UUID -> CHAR(36)
     assert!(
-        ddl.contains("id CHAR(36) PRIMARY KEY"),
+        ddl.contains("`id` CHAR(36) PRIMARY KEY"),
         "UUID should map to CHAR(36) in MySQL. DDL:\n{ddl}"
     );
     // BOOLEAN -> TINYINT(1)
     assert!(
-        ddl.contains("email_verified TINYINT(1)"),
+        ddl.contains("`email_verified` TINYINT(1)"),
         "BOOLEAN should map to TINYINT(1) in MySQL. DDL:\n{ddl}"
     );
     // DateTime -> DATETIME
     assert!(
-        ddl.contains("created_at DATETIME"),
+        ddl.contains("`created_at` DATETIME"),
         "DateTime should map to DATETIME in MySQL. DDL:\n{ddl}"
     );
 }
@@ -748,7 +748,7 @@ fn mysql_ddl_json_type() {
     assert!(!ddl.contains("JSONB"), "MySQL DDL should not contain JSONB");
     // JSON should appear for the metadata column
     assert!(
-        ddl.contains("metadata JSON"),
+        ddl.contains("`metadata` JSON"),
         "MySQL DDL should use JSON type for metadata column. DDL:\n{ddl}"
     );
 }
@@ -812,7 +812,7 @@ fn mysql_ddl_has_all_tables() {
 
     for table in &expected_tables {
         assert!(
-            ddl.contains(&format!("CREATE TABLE IF NOT EXISTS {}", table)),
+            ddl.contains(&format!("CREATE TABLE IF NOT EXISTS `{}`", table)),
             "MySQL DDL missing table: {}",
             table
         );

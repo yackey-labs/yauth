@@ -197,36 +197,6 @@ impl DatabaseBackend for DieselLibsqlBackend {
     }
 }
 
-/// Collect all table definitions based on compile-time feature flags.
-fn collect_feature_gated_schemas() -> Vec<Vec<crate::schema::TableDef>> {
-    let mut lists = vec![crate::schema::core_schema()];
-
-    #[cfg(feature = "email-password")]
-    lists.push(crate::schema::plugin_schemas::email_password_schema());
-    #[cfg(feature = "passkey")]
-    lists.push(crate::schema::plugin_schemas::passkey_schema());
-    #[cfg(feature = "mfa")]
-    lists.push(crate::schema::plugin_schemas::mfa_schema());
-    #[cfg(feature = "oauth")]
-    lists.push(crate::schema::plugin_schemas::oauth_schema());
-    #[cfg(feature = "bearer")]
-    lists.push(crate::schema::plugin_schemas::bearer_schema());
-    #[cfg(feature = "api-key")]
-    lists.push(crate::schema::plugin_schemas::api_key_schema());
-    #[cfg(feature = "magic-link")]
-    lists.push(crate::schema::plugin_schemas::magic_link_schema());
-    #[cfg(feature = "oauth2-server")]
-    lists.push(crate::schema::plugin_schemas::oauth2_server_schema());
-    #[cfg(feature = "account-lockout")]
-    lists.push(crate::schema::plugin_schemas::account_lockout_schema());
-    #[cfg(feature = "webhooks")]
-    lists.push(crate::schema::plugin_schemas::webhooks_schema());
-    #[cfg(feature = "oidc")]
-    lists.push(crate::schema::plugin_schemas::oidc_schema());
-
-    lists
-}
-
 /// Run declarative migrations using the SQLite DDL generator.
 ///
 /// 1. Collects core + plugin schemas based on compile-time feature flags
@@ -239,7 +209,7 @@ async fn run_libsql_migrations(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use diesel_async_crate::{RunQueryDsl, SimpleAsyncConnection};
 
-    let table_lists = collect_feature_gated_schemas();
+    let table_lists = crate::schema::collect_feature_gated_schemas();
     let merged = crate::schema::collect_schema(table_lists)
         .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
 

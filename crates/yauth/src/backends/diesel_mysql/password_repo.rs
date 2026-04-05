@@ -1,4 +1,4 @@
-use super::LibsqlPool;
+use super::MysqlPool;
 use super::models::*;
 use super::schema::*;
 use crate::backends::diesel_common::{diesel_err, get_conn};
@@ -11,23 +11,23 @@ use diesel::result::OptionalExtension;
 use diesel_async_crate::RunQueryDsl;
 use uuid::Uuid;
 
-pub(crate) struct LibsqlPasswordRepo {
-    pool: LibsqlPool,
+pub(crate) struct MysqlPasswordRepo {
+    pool: MysqlPool,
 }
-impl LibsqlPasswordRepo {
-    pub(crate) fn new(pool: LibsqlPool) -> Self {
+impl MysqlPasswordRepo {
+    pub(crate) fn new(pool: MysqlPool) -> Self {
         Self { pool }
     }
 }
-impl sealed::Sealed for LibsqlPasswordRepo {}
-impl PasswordRepository for LibsqlPasswordRepo {
+impl sealed::Sealed for MysqlPasswordRepo {}
+impl PasswordRepository for MysqlPasswordRepo {
     fn find_by_user_id(&self, user_id: Uuid) -> RepoFuture<'_, Option<domain::Password>> {
         Box::pin(async move {
             let mut c = get_conn(&self.pool).await?;
             let uid = uuid_to_str(user_id);
             let r = yauth_passwords::table
                 .find(&uid)
-                .select(LibsqlPassword::as_select())
+                .select(MysqlPassword::as_select())
                 .first(&mut *c)
                 .await
                 .optional()
@@ -38,26 +38,33 @@ impl PasswordRepository for LibsqlPasswordRepo {
     fn upsert(&self, input: domain::NewPassword) -> RepoFuture<'_, ()> {
         Box::pin(async move {
             let mut c = get_conn(&self.pool).await?;
-            let p = LibsqlNewPassword::from_domain(input);
-            diesel::sql_query("INSERT INTO yauth_passwords (user_id, password_hash) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET password_hash = excluded.password_hash")
-                .bind::<diesel::sql_types::Text, _>(&p.user_id)
-                .bind::<diesel::sql_types::Text, _>(&p.password_hash)
-                .execute(&mut *c).await.map_err(diesel_err)?;
+            let p = MysqlNewPassword::from_domain(input);
+            // MySQL uses ON DUPLICATE KEY UPDATE
+            diesel::sql_query(
+                "INSERT INTO yauth_passwords (user_id, password_hash) VALUES (?, ?) \
+                 AS new_row \
+                 ON DUPLICATE KEY UPDATE `password_hash` = new_row.`password_hash`",
+            )
+            .bind::<diesel::sql_types::Text, _>(&p.user_id)
+            .bind::<diesel::sql_types::Text, _>(&p.password_hash)
+            .execute(&mut *c)
+            .await
+            .map_err(diesel_err)?;
             Ok(())
         })
     }
 }
 
-pub(crate) struct LibsqlEmailVerificationRepo {
-    pool: LibsqlPool,
+pub(crate) struct MysqlEmailVerificationRepo {
+    pool: MysqlPool,
 }
-impl LibsqlEmailVerificationRepo {
-    pub(crate) fn new(pool: LibsqlPool) -> Self {
+impl MysqlEmailVerificationRepo {
+    pub(crate) fn new(pool: MysqlPool) -> Self {
         Self { pool }
     }
 }
-impl sealed::Sealed for LibsqlEmailVerificationRepo {}
-impl EmailVerificationRepository for LibsqlEmailVerificationRepo {
+impl sealed::Sealed for MysqlEmailVerificationRepo {}
+impl EmailVerificationRepository for MysqlEmailVerificationRepo {
     fn find_by_token_hash(
         &self,
         token_hash: &str,
@@ -65,14 +72,14 @@ impl EmailVerificationRepository for LibsqlEmailVerificationRepo {
         let th = token_hash.to_string();
         Box::pin(async move {
             let mut c = get_conn(&self.pool).await?;
-            let now = dt_to_str(chrono::Utc::now().naive_utc());
+            let now = chrono::Utc::now().naive_utc();
             let r = yauth_email_verifications::table
                 .filter(
                     yauth_email_verifications::token_hash
                         .eq(&th)
-                        .and(yauth_email_verifications::expires_at.gt(&now)),
+                        .and(yauth_email_verifications::expires_at.gt(now)),
                 )
-                .select(LibsqlEmailVerification::as_select())
+                .select(MysqlEmailVerification::as_select())
                 .first(&mut *c)
                 .await
                 .optional()
@@ -83,10 +90,18 @@ impl EmailVerificationRepository for LibsqlEmailVerificationRepo {
     fn create(&self, input: domain::NewEmailVerification) -> RepoFuture<'_, ()> {
         Box::pin(async move {
             let mut c = get_conn(&self.pool).await?;
-            let v = LibsqlNewEmailVerification::from_domain(input);
-            diesel::sql_query("INSERT INTO yauth_email_verifications (id, user_id, token_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?)")
-                .bind::<diesel::sql_types::Text, _>(&v.id).bind::<diesel::sql_types::Text, _>(&v.user_id).bind::<diesel::sql_types::Text, _>(&v.token_hash).bind::<diesel::sql_types::Text, _>(&v.expires_at).bind::<diesel::sql_types::Text, _>(&v.created_at)
-                .execute(&mut *c).await.map_err(diesel_err)?;
+            let v = MysqlNewEmailVerification::from_domain(input);
+            diesel::sql_query(
+                "INSERT INTO yauth_email_verifications (id, user_id, token_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?)",
+            )
+            .bind::<diesel::sql_types::Text, _>(&v.id)
+            .bind::<diesel::sql_types::Text, _>(&v.user_id)
+            .bind::<diesel::sql_types::Text, _>(&v.token_hash)
+            .bind::<diesel::sql_types::Datetime, _>(&v.expires_at)
+            .bind::<diesel::sql_types::Datetime, _>(&v.created_at)
+            .execute(&mut *c)
+            .await
+            .map_err(diesel_err)?;
             Ok(())
         })
     }
@@ -117,16 +132,16 @@ impl EmailVerificationRepository for LibsqlEmailVerificationRepo {
     }
 }
 
-pub(crate) struct LibsqlPasswordResetRepo {
-    pool: LibsqlPool,
+pub(crate) struct MysqlPasswordResetRepo {
+    pool: MysqlPool,
 }
-impl LibsqlPasswordResetRepo {
-    pub(crate) fn new(pool: LibsqlPool) -> Self {
+impl MysqlPasswordResetRepo {
+    pub(crate) fn new(pool: MysqlPool) -> Self {
         Self { pool }
     }
 }
-impl sealed::Sealed for LibsqlPasswordResetRepo {}
-impl PasswordResetRepository for LibsqlPasswordResetRepo {
+impl sealed::Sealed for MysqlPasswordResetRepo {}
+impl PasswordResetRepository for MysqlPasswordResetRepo {
     fn find_by_token_hash(
         &self,
         token_hash: &str,
@@ -134,15 +149,15 @@ impl PasswordResetRepository for LibsqlPasswordResetRepo {
         let th = token_hash.to_string();
         Box::pin(async move {
             let mut c = get_conn(&self.pool).await?;
-            let now = dt_to_str(chrono::Utc::now().naive_utc());
+            let now = chrono::Utc::now().naive_utc();
             let r = yauth_password_resets::table
                 .filter(
                     yauth_password_resets::token_hash
                         .eq(&th)
                         .and(yauth_password_resets::used_at.is_null())
-                        .and(yauth_password_resets::expires_at.gt(&now)),
+                        .and(yauth_password_resets::expires_at.gt(now)),
                 )
-                .select(LibsqlPasswordReset::as_select())
+                .select(MysqlPasswordReset::as_select())
                 .first(&mut *c)
                 .await
                 .optional()
@@ -153,10 +168,18 @@ impl PasswordResetRepository for LibsqlPasswordResetRepo {
     fn create(&self, input: domain::NewPasswordReset) -> RepoFuture<'_, ()> {
         Box::pin(async move {
             let mut c = get_conn(&self.pool).await?;
-            let p = LibsqlNewPasswordReset::from_domain(input);
-            diesel::sql_query("INSERT INTO yauth_password_resets (id, user_id, token_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?)")
-                .bind::<diesel::sql_types::Text, _>(&p.id).bind::<diesel::sql_types::Text, _>(&p.user_id).bind::<diesel::sql_types::Text, _>(&p.token_hash).bind::<diesel::sql_types::Text, _>(&p.expires_at).bind::<diesel::sql_types::Text, _>(&p.created_at)
-                .execute(&mut *c).await.map_err(diesel_err)?;
+            let p = MysqlNewPasswordReset::from_domain(input);
+            diesel::sql_query(
+                "INSERT INTO yauth_password_resets (id, user_id, token_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?)",
+            )
+            .bind::<diesel::sql_types::Text, _>(&p.id)
+            .bind::<diesel::sql_types::Text, _>(&p.user_id)
+            .bind::<diesel::sql_types::Text, _>(&p.token_hash)
+            .bind::<diesel::sql_types::Datetime, _>(&p.expires_at)
+            .bind::<diesel::sql_types::Datetime, _>(&p.created_at)
+            .execute(&mut *c)
+            .await
+            .map_err(diesel_err)?;
             Ok(())
         })
     }

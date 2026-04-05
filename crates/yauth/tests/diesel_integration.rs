@@ -3,6 +3,9 @@
 //! Uses testcontainers to spin up a disposable PostgreSQL instance per test —
 //! no external database or `DATABASE_URL` required.
 //!
+//! All tests are parallel-safe: unique data per test and rate limits disabled
+//! where applicable.
+//!
 //! ```text
 //! cargo test --workspace --features "email-password" -- diesel
 //! ```
@@ -18,9 +21,10 @@ use yauth::prelude::*;
 mod helpers;
 use helpers::{TestDb, drop_yauth_tables};
 
+/// Shared DB — reuses a single migrated instance. Safe for parallel tests.
 macro_rules! require_db {
     () => {
-        match TestDb::try_new().await {
+        match TestDb::shared().await {
             Some(db) => db,
             None => {
                 eprintln!("No database available — skipping test");
@@ -31,12 +35,19 @@ macro_rules! require_db {
 }
 
 // ---------------------------------------------------------------------------
-// 1. Migration runner
+// 1. Migration runner — uses isolated testcontainer (not shared DB)
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn diesel_run_migrations_creates_tables() {
-    let db = require_db!();
+    // Use a fresh isolated DB so drop/create doesn't race with other tests
+    let db = match TestDb::try_new_isolated().await {
+        Some(db) => db,
+        None => {
+            eprintln!("No database available — skipping test");
+            return;
+        }
+    };
     drop_yauth_tables(&db.pool).await;
 
     yauth::backends::diesel_pg::migrations::run_migrations(&db.pool)
@@ -69,7 +80,13 @@ async fn diesel_run_migrations_creates_tables() {
 
 #[tokio::test]
 async fn diesel_migrations_are_idempotent() {
-    let db = require_db!();
+    let db = match TestDb::try_new_isolated().await {
+        Some(db) => db,
+        None => {
+            eprintln!("No database available — skipping test");
+            return;
+        }
+    };
 
     yauth::backends::diesel_pg::migrations::run_migrations(&db.pool)
         .await
@@ -87,33 +104,26 @@ async fn diesel_migrations_are_idempotent() {
 async fn diesel_session_create_validate_delete() {
     let db = require_db!();
 
-    yauth::backends::diesel_pg::migrations::run_migrations(&db.pool)
-        .await
-        .expect("migrations");
-
     let user_id = Uuid::now_v7();
+    let email = format!("session_test_{}@example.com", Uuid::now_v7());
 
     // Insert a dummy user so the FK (if any) is satisfied.
     {
         let mut conn = db.pool.get().await.unwrap();
         diesel::sql_query(
             "INSERT INTO yauth_users (id, display_name, email, role, banned, email_verified, created_at, updated_at) \
-             VALUES ($1, 'Test', 'test@example.com', 'user', false, true, NOW(), NOW())",
+             VALUES ($1, 'Test', $2, 'user', false, true, NOW(), NOW())",
         )
         .bind::<diesel::sql_types::Uuid, _>(user_id)
+        .bind::<diesel::sql_types::Text, _>(&email)
         .execute(&mut conn)
         .await
         .expect("insert dummy user");
     }
 
-    // Build state for session operations
+    // Build state for session operations (shared DB already migrated)
     let config = YAuthConfig::default();
     let backend = DieselPgBackend::from_pool(db.pool.clone());
-    use yauth::repo::{DatabaseBackend, EnabledFeatures};
-    backend
-        .migrate(&EnabledFeatures::from_compile_flags())
-        .await
-        .expect("migrate");
     let mut builder = YAuthBuilder::new(backend, config);
     #[cfg(feature = "bearer")]
     {
@@ -180,18 +190,9 @@ async fn diesel_session_create_validate_delete() {
 async fn diesel_pool_sharing() {
     let db = require_db!();
 
-    yauth::backends::diesel_pg::migrations::run_migrations(&db.pool)
-        .await
-        .expect("migrations");
-
-    // Build YAuth with the pool
+    // Build YAuth with the shared pool (already migrated)
     let config = YAuthConfig::default();
     let backend = DieselPgBackend::from_pool(db.pool.clone());
-    use yauth::repo::{DatabaseBackend, EnabledFeatures};
-    backend
-        .migrate(&EnabledFeatures::from_compile_flags())
-        .await
-        .expect("migrate");
     let mut builder = YAuthBuilder::new(backend, config);
     #[cfg(feature = "bearer")]
     {
@@ -205,13 +206,15 @@ async fn diesel_pool_sharing() {
     let state = builder.build().await.expect("build YAuth").into_state();
 
     // Use the pool directly for a raw query
+    let shared_email = format!("shared_{}@example.com", Uuid::now_v7());
     {
         let mut conn = db.pool.get().await.expect("direct pool connection");
         diesel::sql_query(
             "INSERT INTO yauth_users (id, display_name, email, role, banned, email_verified, created_at, updated_at) \
-             VALUES ($1, 'Shared', 'shared@example.com', 'user', false, true, NOW(), NOW())",
+             VALUES ($1, 'Shared', $2, 'user', false, true, NOW(), NOW())",
         )
         .bind::<diesel::sql_types::Uuid, _>(Uuid::now_v7())
+        .bind::<diesel::sql_types::Text, _>(&shared_email)
         .execute(&mut conn)
         .await
         .expect("direct insert via shared pool");
@@ -219,13 +222,15 @@ async fn diesel_pool_sharing() {
 
     // Verify the user is visible through the repos (pool sharing)
     {
-        let (users, total) = state
+        let user = state
             .repos
             .users
-            .list(None, 10, 0)
+            .find_by_email(&shared_email)
             .await
-            .expect("list users");
-        assert_eq!(total, 1, "should see the user inserted via the shared pool");
-        assert_eq!(users.len(), 1);
+            .expect("find_by_email");
+        assert!(
+            user.is_some(),
+            "user inserted via shared pool should be visible through repos"
+        );
     }
 }

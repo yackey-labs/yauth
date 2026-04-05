@@ -38,11 +38,13 @@ impl UserRepository for DieselUserRepo {
     }
 
     fn find_by_email(&self, email: &str) -> RepoFuture<'_, Option<domain::User>> {
-        let email = email.to_lowercase();
+        let email = email.to_string();
         Box::pin(async move {
             let mut conn = get_conn(&self.pool).await?;
+            // Case-insensitive lookup per UserRepository trait contract.
+            // ILIKE is Postgres-specific; the email is exact (no wildcards).
             let result = yauth_users::table
-                .filter(yauth_users::email.eq(&email))
+                .filter(yauth_users::email.ilike(&email))
                 .select(DieselUser::as_select())
                 .first(&mut conn)
                 .await

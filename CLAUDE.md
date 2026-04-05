@@ -53,10 +53,32 @@ bun validate:ci                      # lint + typecheck + build + generate:check
 bun generate                         # Regenerate TS client from Rust types + routes
 bun generate:check                   # Fail if generated client is out of date (CI)
 
-# Integration / Pentest
-docker compose up -d                 # Start PostgreSQL + Mailpit
-cargo test --features full --test pentest -- --test-threads=1  # OWASP pentest (memory + diesel_pg)
+# Integration / Pentest (all parallel-safe — no --test-threads=1 needed)
+docker compose up -d                 # Start PostgreSQL + MySQL + Redis + Mailpit
+cargo test --features full --test pentest                      # OWASP pentest (memory + diesel_pg + diesel_mysql)
+cargo test --features full --test diesel_integration           # Diesel PG integration tests
+cargo test --features full --test diesel_mysql_integration     # Diesel MySQL integration tests
+
+# Conformance tests (cross-backend repository trait verification)
+# All tests share a single tokio runtime via OnceLock, so connection pools survive across tests.
+DATABASE_URL=postgres://yauth:yauth@127.0.0.1:5433/yauth_test \
+MYSQL_DATABASE_URL=mysql://yauth:yauth@127.0.0.1:3307/yauth_test \
+  cargo test --features full --test repo_conformance
 ```
+
+### Conformance Test Suite
+
+`tests/repo_conformance.rs` contains 64 tests that verify every repository trait method behaves identically across all backends (memory, diesel_pg, diesel_libsql, diesel_mysql). Tests are parameterized via `test_backends()` — backends are skipped if their database URL env var is unset.
+
+The suite covers three categories:
+
+1. **Method coverage** — every method on every repository trait has at least one test that creates data, reads it back, and asserts specific return values (not just `is_ok()`).
+2. **Behavioral contracts** — semantic invariants the type system can't enforce: expired tokens return `None`, used tokens return `None`, `user.delete()` cascades to all related entities, rate limiting is fail-open on error.
+3. **Type edge cases** — UUID round-trip (CHAR(36) ↔ Uuid), NULL vs empty string, large text (no silent truncation), unicode/emoji, datetime precision, JSON structural equality, case-insensitive email.
+
+**When adding a new backend:** implement `DatabaseBackend` + all repository traits, add the backend to `test_backends()`, and run the suite. If all 64 tests pass, the backend is correct.
+
+**Shared runtime pattern:** All conformance tests use `#[test]` (not `#[tokio::test]`) with a shared `OnceLock<Runtime>`. This is critical — each `#[tokio::test]` creates its own tokio runtime, and connection pools are bound to the runtime that created them. When one test's runtime shuts down, shared pool connections die for other tests. The shared runtime ensures all pools and connections live on one runtime that outlives all tests. This enables safe parallel execution (`--test-threads=N`).
 
 ## Feature Flags
 
@@ -66,6 +88,7 @@ cargo test --features full --test pentest -- --test-threads=1  # OWASP pentest (
 |---|---|---|
 | `diesel-pg-backend` | PostgreSQL backend via diesel-async + deadpool | Yes |
 | `diesel-libsql-backend` | SQLite/Turso backend via `diesel-libsql` crate | No |
+| `diesel-mysql-backend` | MySQL/MariaDB backend via diesel-async + deadpool | No |
 | `memory-backend` | Fully in-memory backend (no database required) | No |
 
 ### Plugin Features
@@ -97,11 +120,12 @@ Plugins implement the `YAuthPlugin` trait:
 
 ### Database Backends
 
-yauth uses a `DatabaseBackend` trait with three implementations:
+yauth uses a `DatabaseBackend` trait with four implementations:
 
 | Backend | Type | Use case |
 |---|---|---|
 | `DieselPgBackend` | `backends::diesel_pg` | Production PostgreSQL (default) |
+| `DieselMysqlBackend` | `backends::diesel_mysql` | MySQL 8.0+ or MariaDB 10.6+ |
 | `DieselLibsqlBackend` | `backends::diesel_libsql` | Local SQLite files or remote Turso databases |
 | `InMemoryBackend` | `backends::memory` | Tests, prototyping, CI — no database required |
 

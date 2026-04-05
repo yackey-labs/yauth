@@ -25,6 +25,7 @@ Every feature is behind a **feature flag** — enable only what you need.
 | `openapi` | utoipa OpenAPI spec generation for client codegen | When you need to generate or update the TypeScript client |
 | `redis` | Redis caching decorator — wraps repository traits for sub-ms lookups | Multi-replica deployments, high-traffic apps |
 | `diesel-pg-backend` | PostgreSQL backend via diesel-async + deadpool | Production Postgres deployments (default) |
+| `diesel-mysql-backend` | MySQL/MariaDB backend via diesel-async + deadpool | MySQL 8.0+ / MariaDB 10.6+ deployments |
 | `diesel-libsql-backend` | SQLite/Turso backend via diesel-libsql | Local dev, embedded apps, Turso edge databases |
 | `memory-backend` | Fully in-memory backend (no database) | Unit tests, prototyping, CI |
 | `full` | All of the above | Development/testing |
@@ -305,6 +306,19 @@ let backend = DieselPgBackend::new("postgres://user:pass@localhost/mydb")?;
 // Or with a custom PostgreSQL schema:
 let backend = DieselPgBackend::with_schema("postgres://user:pass@localhost/mydb", "auth")?;
 
+let yauth = YAuthBuilder::new(backend, config).build().await?;
+```
+
+#### MySQL / MariaDB
+
+```bash
+cargo add yauth --features email-password,diesel-mysql-backend --no-default-features
+```
+
+```rust
+use yauth::backends::diesel_mysql::DieselMysqlBackend;
+
+let backend = DieselMysqlBackend::new("mysql://user:pass@localhost/mydb")?;
 let yauth = YAuthBuilder::new(backend, config).build().await?;
 ```
 
@@ -676,6 +690,7 @@ yauth uses a `DatabaseBackend` trait with pluggable implementations. All persist
 | Backend | Feature Flag | Connection | Use case |
 |---|---|---|---|
 | `DieselPgBackend` | `diesel-pg-backend` (default) | PostgreSQL via diesel-async 0.8 + deadpool | Production |
+| `DieselMysqlBackend` | `diesel-mysql-backend` | MySQL 8.0+ / MariaDB 10.6+ via diesel-async 0.8 + deadpool | MySQL/MariaDB production |
 | `DieselLibsqlBackend` | `diesel-libsql-backend` | Local SQLite / remote Turso via diesel-libsql 0.1.4 | Embedded, edge, local dev |
 | `InMemoryBackend` | `memory-backend` | None (all data in HashMaps) | Tests, prototyping |
 
@@ -845,7 +860,7 @@ bun generate:check    # CI: fail if client is out of date
 
 # Integration testing
 docker compose up -d                 # PostgreSQL + Mailpit
-cargo test --features full --test pentest -- --test-threads=1  # OWASP pentest (memory + diesel_pg)
+cargo test --features full --test pentest  # OWASP pentest (memory + diesel_pg, parallel-safe)
 ```
 
 ## Versioning

@@ -61,16 +61,16 @@ fn mysql_default(pg_default: &str) -> Option<Cow<'static, str>> {
 /// after all column definitions. This function collects FK constraints during
 /// column iteration and emits them as table-level constraints at the end.
 fn generate_create_table(table: &TableDef) -> String {
-    let mut sql = format!("CREATE TABLE IF NOT EXISTS {} (\n", table.name);
+    let mut sql = format!("CREATE TABLE IF NOT EXISTS `{}` (\n", table.name);
 
     // Collect FK constraints to emit after all columns.
     let mut fk_constraints: Vec<String> = Vec::new();
 
     let col_count = table.columns.len();
     for (i, col) in table.columns.iter().enumerate() {
-        sql.push_str("    ");
+        sql.push_str("    `");
         sql.push_str(col.name);
-        sql.push(' ');
+        sql.push_str("` ");
         sql.push_str(&mysql_type(&col.col_type));
 
         if col.primary_key {
@@ -99,7 +99,7 @@ fn generate_create_table(table: &TableDef) -> String {
         // Collect FK as a table-level constraint (never inline).
         if let Some(ref fk) = col.foreign_key {
             fk_constraints.push(format!(
-                "    FOREIGN KEY ({}) REFERENCES {}({}) {}",
+                "    FOREIGN KEY (`{}`) REFERENCES `{}`(`{}`) {}",
                 col.name,
                 fk.references_table,
                 fk.references_column,

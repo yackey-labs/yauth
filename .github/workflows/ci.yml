@@ -74,6 +74,20 @@ jobs:
           --health-interval 2s
           --health-timeout 5s
           --health-retries 10
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: yauth
+          MYSQL_USER: yauth
+          MYSQL_PASSWORD: yauth
+          MYSQL_DATABASE: yauth_test
+        ports:
+          - 3307:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -u root -pyauth"
+          --health-interval 3s
+          --health-timeout 5s
+          --health-retries 15
     steps:
       - uses: actions/checkout@v4
 
@@ -85,10 +99,17 @@ jobs:
       - name: Run unit tests
         run: cargo test --workspace --features full --lib
 
-      - name: Run integration tests (serialized — shared DB)
+      - name: Run conformance tests
         env:
           DATABASE_URL: postgres://yauth:yauth@127.0.0.1:5433/yauth_test
-        run: cargo test --workspace --features full --test diesel_integration --test pentest -- --test-threads=1
+          MYSQL_DATABASE_URL: mysql://yauth:yauth@127.0.0.1:3307/yauth_test
+        run: cargo test --workspace --features full --test repo_conformance
+
+      - name: Run integration tests (parallel-safe)
+        env:
+          DATABASE_URL: postgres://yauth:yauth@127.0.0.1:5433/yauth_test
+          MYSQL_DATABASE_URL: mysql://yauth:yauth@127.0.0.1:3307/yauth_test
+        run: cargo test --workspace --features full --test diesel_integration --test diesel_mysql_integration --test pentest
 
   codeql:
     name: CodeQL (${{ matrix.language }})

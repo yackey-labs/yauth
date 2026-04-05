@@ -15,6 +15,23 @@ services:
       timeout: 5s
       retries: 10
 
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: yauth
+      MYSQL_DATABASE: yauth_test
+      MYSQL_USER: yauth
+      MYSQL_PASSWORD: yauth
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysqldata:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uyauth", "-pyauth"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
   redis:
     image: redis:7-alpine
     ports:
@@ -36,3 +53,4 @@ services:
 
 volumes:
   pgdata:
+  mysqldata:

@@ -84,13 +84,16 @@ impl EmailVerificationRepository for DieselEmailVerificationRepo {
         let token_hash = token_hash.to_string();
         Box::pin(async move {
             let mut conn = get_conn(&self.pool).await?;
-            let result = yauth_email_verifications::table
-                .filter(yauth_email_verifications::token_hash.eq(&token_hash))
-                .select(DieselEmailVerification::as_select())
-                .first(&mut conn)
-                .await
-                .optional()
-                .map_err(diesel_err)?;
+            let result =
+                yauth_email_verifications::table
+                    .filter(yauth_email_verifications::token_hash.eq(&token_hash).and(
+                        yauth_email_verifications::expires_at.gt(chrono::Utc::now().naive_utc()),
+                    ))
+                    .select(DieselEmailVerification::as_select())
+                    .first(&mut conn)
+                    .await
+                    .optional()
+                    .map_err(diesel_err)?;
             Ok(result.map(|r| r.into_domain()))
         })
     }
@@ -162,7 +165,8 @@ impl PasswordResetRepository for DieselPasswordResetRepo {
                 .filter(
                     yauth_password_resets::token_hash
                         .eq(&token_hash)
-                        .and(yauth_password_resets::used_at.is_null()),
+                        .and(yauth_password_resets::used_at.is_null())
+                        .and(yauth_password_resets::expires_at.gt(chrono::Utc::now().naive_utc())),
                 )
                 .select(DieselPasswordReset::as_select())
                 .first(&mut conn)

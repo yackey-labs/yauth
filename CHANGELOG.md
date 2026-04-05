@@ -1,3 +1,14 @@
+## 0.6.0 (2026-04-05)
+
+### Breaking Changes
+
+- rename DieselBackend to DieselPgBackend (#35)
+- switch all UUID generation from v4 to v7 (#36)
+
+### Fixes
+
+- remove dead backends/diesel and stores modules, unify pentest suites (#33)
+
 ## 0.5.0 (2026-04-05)
 
 ### Breaking Changes

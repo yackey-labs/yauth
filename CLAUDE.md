@@ -32,10 +32,6 @@ Key internal modules in `yauth`:
 | `@yackey-labs/yauth-ui-vue` | Vue 3 components + composables (LoginForm, useAuth, etc.) |
 | `@yackey-labs/yauth-ui-solidjs` | SolidJS components (LoginForm, RegisterForm, etc.) |
 
-### Pentest Suite (`pentest/`)
-
-`pentest-yauth.sh` — comprehensive OWASP security test suite (255+ cases).
-
 ## Key Commands
 
 ```bash
@@ -59,7 +55,7 @@ bun generate:check                   # Fail if generated client is out of date (
 
 # Integration / Pentest
 docker compose up -d                 # Start PostgreSQL + Mailpit
-bash pentest/pentest-yauth.sh        # Run full pentest suite (255+ cases, 0 FAIL expected)
+cargo test --features full --test pentest -- --test-threads=1  # OWASP pentest (memory + diesel_pg)
 ```
 
 ## Feature Flags

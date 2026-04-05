@@ -102,7 +102,7 @@ async fn handle_login_failed(
         Ok(Some(r)) => r,
         Ok(None) => {
             let new_lock = crate::domain::NewAccountLock {
-                id: Uuid::new_v4(),
+                id: Uuid::now_v7(),
                 user_id,
                 failed_count: 0,
                 locked_until: None,
@@ -397,7 +397,7 @@ async fn request_unlock(
             let expires_at = now + chrono::Duration::hours(1);
 
             let new_token = crate::domain::NewUnlockToken {
-                id: Uuid::new_v4(),
+                id: Uuid::now_v7(),
                 user_id: user.id,
                 token_hash,
                 expires_at: expires_at.naive_utc(),

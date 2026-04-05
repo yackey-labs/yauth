@@ -38,7 +38,7 @@ impl SessionOpsRepository for InMemorySessionOpsRepo {
                 let now = Utc::now().naive_utc();
                 map.retain(|_, s| s.expires_at > now);
             }
-            let id = Uuid::new_v4();
+            let id = Uuid::now_v7();
             let now = Utc::now().naive_utc();
             let expires_at = now
                 + chrono::Duration::from_std(ttl)

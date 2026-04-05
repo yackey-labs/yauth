@@ -130,7 +130,7 @@ fn create_jwt_internal(
     scope: Option<&str>,
 ) -> Result<(String, String), ApiError> {
     let now = Utc::now();
-    let jti = Uuid::new_v4().to_string();
+    let jti = Uuid::now_v7().to_string();
     let exp = (now + config.access_token_ttl).timestamp() as usize;
     let iat = now.timestamp() as usize;
 
@@ -171,7 +171,7 @@ async fn create_refresh_token_repo(
     .naive_utc();
 
     let new_token = crate::domain::NewRefreshToken {
-        id: Uuid::new_v4(),
+        id: Uuid::now_v7(),
         user_id,
         token_hash,
         family_id,
@@ -284,7 +284,7 @@ async fn create_token(
             };
             let (access_token, _jti) = create_jwt_internal(&jwt_user, config, scope_str)?;
 
-            let family_id = Uuid::new_v4();
+            let family_id = Uuid::now_v7();
 
             let refresh_token =
                 create_refresh_token_repo(&state, u.id, family_id, config.refresh_token_ttl)

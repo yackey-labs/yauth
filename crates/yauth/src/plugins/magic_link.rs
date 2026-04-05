@@ -148,7 +148,7 @@ async fn send_magic_link(
     .naive_utc();
 
     let new_link = crate::domain::NewMagicLink {
-        id: Uuid::new_v4(),
+        id: Uuid::now_v7(),
         email: email.clone(),
         token_hash,
         expires_at,
@@ -265,7 +265,7 @@ async fn verify_magic_link(
                 ));
             }
 
-            let user_id = Uuid::new_v4();
+            let user_id = Uuid::now_v7();
             let role = if state.should_auto_admin().await {
                 crate::otel::add_event(
                     "register_auto_admin",

@@ -205,7 +205,7 @@ async fn register(
         api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
     })?;
 
-    let user_id = Uuid::new_v4();
+    let user_id = Uuid::now_v7();
 
     let role = if state.should_auto_admin().await {
         crate::otel::add_event(
@@ -270,7 +270,7 @@ async fn register(
             chrono::Utc::now() + chrono::Duration::hours(VERIFICATION_TOKEN_EXPIRY_HOURS);
 
         let new_verification = crate::domain::NewEmailVerification {
-            id: Uuid::new_v4(),
+            id: Uuid::now_v7(),
             user_id,
             token_hash,
             expires_at: expires_at.naive_utc(),
@@ -684,7 +684,7 @@ async fn resend_verification(
     let expires_at = chrono::Utc::now() + chrono::Duration::hours(VERIFICATION_TOKEN_EXPIRY_HOURS);
 
     let new_verification = crate::domain::NewEmailVerification {
-        id: Uuid::new_v4(),
+        id: Uuid::now_v7(),
         user_id,
         token_hash,
         expires_at: expires_at.naive_utc(),
@@ -765,7 +765,7 @@ async fn forgot_password(
     let expires_at = chrono::Utc::now() + chrono::Duration::hours(RESET_TOKEN_EXPIRY_HOURS);
 
     let new_reset = crate::domain::NewPasswordReset {
-        id: Uuid::new_v4(),
+        id: Uuid::now_v7(),
         user_id,
         token_hash,
         expires_at: expires_at.naive_utc(),

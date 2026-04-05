@@ -91,7 +91,7 @@ async fn diesel_session_create_validate_delete() {
         .await
         .expect("migrations");
 
-    let user_id = Uuid::new_v4();
+    let user_id = Uuid::now_v7();
 
     // Insert a dummy user so the FK (if any) is satisfied.
     {
@@ -211,7 +211,7 @@ async fn diesel_pool_sharing() {
             "INSERT INTO yauth_users (id, display_name, email, role, banned, email_verified, created_at, updated_at) \
              VALUES ($1, 'Shared', 'shared@example.com', 'user', false, true, NOW(), NOW())",
         )
-        .bind::<diesel::sql_types::Uuid, _>(Uuid::new_v4())
+        .bind::<diesel::sql_types::Uuid, _>(Uuid::now_v7())
         .execute(&mut conn)
         .await
         .expect("direct insert via shared pool");

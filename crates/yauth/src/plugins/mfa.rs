@@ -75,7 +75,7 @@ impl YAuthPlugin for MfaPlugin {
 
                         if has_mfa {
                             // User has MFA enabled — create a pending session
-                            let pending_id = Uuid::new_v4();
+                            let pending_id = Uuid::now_v7();
                             let key = format!("mfa_pending:{}", pending_id);
                             let value = serde_json::json!({ "user_id": user_id.to_string() });
 
@@ -233,7 +233,7 @@ async fn store_backup_codes(
         let code_hash = crypto::hash_token(code);
         let now = chrono::Utc::now().naive_utc();
         let new_code = crate::domain::NewBackupCode {
-            id: Uuid::new_v4(),
+            id: Uuid::now_v7(),
             user_id,
             code_hash,
             used: false,
@@ -318,7 +318,7 @@ async fn setup_totp(
     // Store unverified TOTP secret
     let now = chrono::Utc::now().naive_utc();
     let new_secret = crate::domain::NewTotpSecret {
-        id: Uuid::new_v4(),
+        id: Uuid::now_v7(),
         user_id: user.id,
         encrypted_secret: secret_base32.clone(),
         verified: false,

@@ -308,7 +308,7 @@ async fn authorize_post(
             .unwrap_or(chrono::Duration::seconds(60));
 
     let new_code = crate::domain::NewAuthorizationCode {
-        id: Uuid::new_v4(),
+        id: Uuid::now_v7(),
         code_hash,
         client_id: input.client_id.clone(),
         user_id: auth_user.id,
@@ -765,7 +765,7 @@ async fn handle_authorization_code_grant(
             )
         })?;
 
-        let family_id = Uuid::new_v4();
+        let family_id = Uuid::now_v7();
         let refresh_token = create_refresh_token_for_oauth2(
             state,
             user.id,
@@ -1092,7 +1092,7 @@ async fn dynamic_client_registration(
         .as_deref()
         .unwrap_or("none");
 
-    let client_id = Uuid::new_v4().to_string();
+    let client_id = Uuid::now_v7().to_string();
     let (client_secret, client_secret_hash, is_public) = if auth_method == "none" {
         (None, None, true)
     } else {
@@ -1109,7 +1109,7 @@ async fn dynamic_client_registration(
     let now = Utc::now();
 
     let new_client = crate::domain::NewOauth2Client {
-        id: Uuid::new_v4(),
+        id: Uuid::now_v7(),
         client_id: client_id.clone(),
         client_secret_hash,
         redirect_uris: serde_json::json!(input.redirect_uris),
@@ -1245,7 +1245,7 @@ async fn device_authorization(
         .map(|s| serde_json::json!(s.split_whitespace().collect::<Vec<_>>()));
 
     let new_dc = crate::domain::NewDeviceCode {
-        id: Uuid::new_v4(),
+        id: Uuid::now_v7(),
         device_code_hash,
         user_code: user_code.clone(),
         client_id: input.client_id.clone(),
@@ -1687,7 +1687,7 @@ async fn handle_device_code_grant(
             )
         })?;
 
-        let family_id = Uuid::new_v4();
+        let family_id = Uuid::now_v7();
         let refresh_token = create_refresh_token_for_oauth2(
             state,
             user.id,
@@ -2041,7 +2041,7 @@ async fn handle_client_credentials_grant(
         let now = Utc::now();
         let exp = (now + bearer_config.access_token_ttl).timestamp() as usize;
         let iat = now.timestamp() as usize;
-        let jti = Uuid::new_v4().to_string();
+        let jti = Uuid::now_v7().to_string();
 
         #[derive(Serialize)]
         struct ClientCredentialsClaims {
@@ -2346,7 +2346,7 @@ async fn save_consent(
         }
         _ => {
             let new_consent = crate::domain::NewConsent {
-                id: Uuid::new_v4(),
+                id: Uuid::now_v7(),
                 user_id,
                 client_id: client_id.to_string(),
                 scopes,
@@ -2373,7 +2373,7 @@ async fn create_refresh_token_for_oauth2(
     let expires_at = now + chrono::Duration::from_std(ttl).unwrap_or(chrono::Duration::days(7));
 
     let new_token = crate::domain::NewRefreshToken {
-        id: Uuid::new_v4(),
+        id: Uuid::now_v7(),
         user_id,
         token_hash,
         family_id,

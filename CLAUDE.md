@@ -203,6 +203,7 @@ If CI publishes to crates.io/npm but fails before pushing the version commit and
 - **Conventional commits** for all commit messages — this directly drives automated versioning
 - **Biome** for TypeScript linting/formatting (not ESLint)
 - **`cargo fmt` + `cargo clippy`** for Rust
+- **UUIDv7 for all IDs** — use `Uuid::now_v7()` (not v4). Gives time-sortable IDs with better B-tree locality. DB defaults still use `gen_random_uuid()` (v4) as a fallback since PG <18 has no native v7; the Rust side is authoritative.
 - **`yauth_` table prefix** on all database tables
 - **Configurable PG schema** — use `DieselPgBackend::with_schema(url, "auth")` to isolate yauth tables in a separate PostgreSQL schema (default `"public"`).
 - **Timing-safe patterns** — dummy password hash on failed lookups to prevent timing attacks

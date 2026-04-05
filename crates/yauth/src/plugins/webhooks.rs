@@ -180,7 +180,7 @@ async fn dispatch_webhooks(
                     if (200..300).contains(&(status as u16)) {
                         success = true;
                         let new_delivery = crate::domain::NewWebhookDelivery {
-                            id: Uuid::new_v4(),
+                            id: Uuid::now_v7(),
                             webhook_id: webhook.id,
                             event_type: event_type.to_string(),
                             payload: body.clone(),
@@ -234,7 +234,7 @@ async fn dispatch_webhooks(
 
         if !success {
             let new_delivery = crate::domain::NewWebhookDelivery {
-                id: Uuid::new_v4(),
+                id: Uuid::now_v7(),
                 webhook_id: webhook.id,
                 event_type: event_type.to_string(),
                 payload: body.clone(),
@@ -446,7 +446,7 @@ async fn create_webhook(
         .unwrap_or_else(crate::auth::crypto::generate_token);
 
     let now = Utc::now();
-    let id = Uuid::new_v4();
+    let id = Uuid::now_v7();
     let events_json = serde_json::to_value(&input.events).unwrap();
 
     let new_webhook = crate::domain::NewWebhook {
@@ -746,7 +746,7 @@ async fn test_webhook(
 
     // Record delivery
     let new_delivery = crate::domain::NewWebhookDelivery {
-        id: Uuid::new_v4(),
+        id: Uuid::now_v7(),
         webhook_id: webhook.id,
         event_type: "test".to_string(),
         payload: body,
@@ -915,7 +915,7 @@ mod tests {
     #[cfg(feature = "account-lockout")]
     #[test]
     fn event_type_name_account_lockout_variants() {
-        let uid = Uuid::new_v4();
+        let uid = Uuid::now_v7();
         assert_eq!(
             event_type_name(&AuthEvent::AccountLocked {
                 user_id: uid,

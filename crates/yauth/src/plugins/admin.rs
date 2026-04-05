@@ -524,7 +524,7 @@ async fn impersonate_user(
     // Create a temporary session for the target user (max 1 hour)
     let token = crypto::generate_token();
     let token_hash = crypto::hash_token(&token);
-    let session_id = Uuid::new_v4();
+    let session_id = Uuid::now_v7();
     let now = Utc::now();
     let expires_at = now + Duration::hours(1);
 

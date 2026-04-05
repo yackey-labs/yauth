@@ -95,7 +95,7 @@ async fn create_api_key(
 
     let scopes_json = input.scopes.as_ref().map(|s| serde_json::json!(s));
 
-    let api_key_id = Uuid::new_v4();
+    let api_key_id = Uuid::now_v7();
 
     let new_key = crate::domain::NewApiKey {
         id: api_key_id,

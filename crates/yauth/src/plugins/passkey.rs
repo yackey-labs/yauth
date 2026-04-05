@@ -227,7 +227,7 @@ async fn register_finish(
     let passkey_name = input.name;
 
     let new_cred = crate::domain::NewWebauthnCredential {
-        id: Uuid::new_v4(),
+        id: Uuid::now_v7(),
         user_id: auth_user.id,
         name: passkey_name.clone(),
         aaguid: None,
@@ -284,7 +284,7 @@ async fn login_begin(
     Json(input): Json<PasskeyLoginBeginRequest>,
     webauthn: Arc<Webauthn>,
 ) -> Result<Json<PasskeyLoginBeginResponse>, ApiError> {
-    let challenge_id = Uuid::new_v4();
+    let challenge_id = Uuid::now_v7();
 
     let (rcr, challenge_data) = if let Some(ref email_raw) = input.email {
         let email = email_raw.trim().to_lowercase();

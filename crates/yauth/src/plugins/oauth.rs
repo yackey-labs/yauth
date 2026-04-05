@@ -479,7 +479,7 @@ async fn handle_callback(
 
         let now = chrono::Utc::now().naive_utc();
         let new_account = crate::domain::NewOauthAccount {
-            id: Uuid::new_v4(),
+            id: Uuid::now_v7(),
             user_id: link_user_id,
             provider: provider.to_string(),
             provider_user_id: userinfo.id.clone(),
@@ -668,7 +668,7 @@ async fn handle_callback(
                     "Registration is currently disabled",
                 ));
             }
-            let user_id = Uuid::new_v4();
+            let user_id = Uuid::now_v7();
             let now = chrono::Utc::now().naive_utc();
             let new_user = crate::domain::NewUser {
                 id: user_id,
@@ -691,7 +691,7 @@ async fn handle_callback(
 
         let now = chrono::Utc::now().naive_utc();
         let new_account = crate::domain::NewOauthAccount {
-            id: Uuid::new_v4(),
+            id: Uuid::now_v7(),
             user_id: uid,
             provider: provider.to_string(),
             provider_user_id: userinfo.id.clone(),

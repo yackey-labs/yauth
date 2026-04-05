@@ -65,7 +65,7 @@ impl YAuthState {
         ip_address: Option<String>,
     ) {
         let new_log = crate::domain::NewAuditLog {
-            id: Uuid::new_v4(),
+            id: Uuid::now_v7(),
             user_id,
             event_type: event_type.to_string(),
             metadata,

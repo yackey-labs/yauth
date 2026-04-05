@@ -35,7 +35,7 @@ impl SessionOpsRepository for LibsqlSessionOpsRepo {
         Box::pin(async move {
             let mut conn = get_conn(&self.pool).await?;
 
-            let session_id = Uuid::new_v4();
+            let session_id = Uuid::now_v7();
             let now = Utc::now();
             let expires_at =
                 now + chrono::Duration::from_std(ttl).unwrap_or(chrono::Duration::days(7));

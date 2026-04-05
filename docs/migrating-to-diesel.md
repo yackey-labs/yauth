@@ -225,14 +225,14 @@ let mut conn = pool.get().await.map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
 
 ```diff
 -let model = items::ActiveModel {
--    id: Set(Uuid::new_v4()),
+-    id: Set(Uuid::now_v7()),
 -    name: Set(name),
 -    user_id: Set(user_id),
 -    ..Default::default()
 -};
 -let result = model.insert(&db).await?;
 +let new_item = NewItem {
-+    id: Uuid::new_v4(),
++    id: Uuid::now_v7(),
 +    name: &name,
 +    description: None,
 +    user_id,

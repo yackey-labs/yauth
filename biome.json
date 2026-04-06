@@ -15,7 +15,8 @@
 			"!**/*.gen.ts",
 			"!**/generated.ts",
 			"!**/generated.msw.ts",
-			"!openapi.json"
+			"!openapi.json",
+			"!.sqlx/**"
 		]
 	},
 	"formatter": {

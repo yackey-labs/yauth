@@ -130,10 +130,10 @@ jobs:
       - name: Verify generated artifacts are fresh
         run: |
           cargo install --path crates/cargo-yauth
-          cargo yauth generate --check -f yauth-diesel-pg.toml
-          cargo yauth generate --check -f yauth-sqlx-pg.toml
-          cargo yauth generate --check -f yauth-sqlx-mysql.toml
-          cargo yauth generate --check -f yauth-sqlx-sqlite.toml
+          cargo yauth -f yauth-diesel-pg.toml generate --check
+          cargo yauth -f yauth-sqlx-pg.toml generate --check
+          cargo yauth -f yauth-sqlx-mysql.toml generate --check
+          cargo yauth -f yauth-sqlx-sqlite.toml generate --check
 
   codeql:
     name: CodeQL (${{ matrix.language }})

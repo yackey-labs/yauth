@@ -20,6 +20,10 @@ Key internal modules in `yauth`:
 - `backends/diesel_pg/` — PostgreSQL backend (`DieselPgBackend`)
 - `backends/diesel_mysql/` — MySQL/MariaDB backend (`DieselMysqlBackend`)
 - `backends/diesel_libsql/` — SQLite/Turso backend (`DieselLibsqlBackend`)
+- `backends/diesel_sqlite/` — Vanilla SQLite backend (`DieselSqliteBackend`)
+- `backends/sqlx_pg/` — PostgreSQL backend via sqlx (`SqlxPgBackend`)
+- `backends/sqlx_mysql/` — MySQL backend via sqlx (`SqlxMysqlBackend`)
+- `backends/sqlx_sqlite/` — SQLite backend via sqlx (`SqlxSqliteBackend`)
 - `backends/memory/` — In-memory backend (`InMemoryBackend`)
 - `backends/redis/` — Redis caching decorators
 - `repo/` — `DatabaseBackend` trait, repository traits, `Repositories` struct, `RepoError`
@@ -110,6 +114,10 @@ The suite covers three categories:
 | `diesel-pg-backend` | PostgreSQL backend via diesel-async + deadpool | Yes |
 | `diesel-libsql-backend` | SQLite/Turso backend via `diesel-libsql` crate | No |
 | `diesel-mysql-backend` | MySQL/MariaDB backend via diesel-async + deadpool | No |
+| `diesel-sqlite-backend` | Vanilla SQLite backend via libsqlite3-sys | No |
+| `sqlx-pg-backend` | PostgreSQL backend via sqlx | No |
+| `sqlx-mysql-backend` | MySQL backend via sqlx | No |
+| `sqlx-sqlite-backend` | SQLite backend via sqlx | No |
 | `memory-backend` | Fully in-memory backend (no database required) | No |
 
 ### Plugin Features
@@ -126,8 +134,8 @@ The suite covers three categories:
 | `telemetry` | Native OpenTelemetry SDK instrumentation (spans, span events, context propagation) | No |
 | `openapi` | utoipa OpenAPI spec generation (for client codegen) | No |
 | `redis` | Redis caching decorator — wraps repository traits for sub-ms session/rate-limit lookups | No |
-| `full` | All auth plugins (no backends — pick one separately) | No |
-| `all-backends` | Every backend + redis (CI-only, for conformance testing) | No |
+| `full` | All auth plugins only — does NOT include any backend (pick one separately) | No |
+| `all-backends` | Every backend + redis (CI-only, for conformance testing — excludes diesel-libsql due to symbol conflicts) | No |
 
 Real apps use `full` + one backend (e.g., `features = ["full", "diesel-pg-backend"]`). CI uses `full,all-backends`.
 
@@ -144,13 +152,17 @@ Plugins implement the `YAuthPlugin` trait:
 
 ### Database Backends
 
-yauth uses a `DatabaseBackend` trait with four implementations:
+yauth uses a `DatabaseBackend` trait with multiple implementations:
 
 | Backend | Type | Use case |
 |---|---|---|
 | `DieselPgBackend` | `backends::diesel_pg` | Production PostgreSQL (default) |
 | `DieselMysqlBackend` | `backends::diesel_mysql` | MySQL 8.0+ or MariaDB 10.6+ |
 | `DieselLibsqlBackend` | `backends::diesel_libsql` | Local SQLite files or remote Turso databases |
+| `DieselSqliteBackend` | `backends::diesel_sqlite` | Vanilla SQLite via libsqlite3-sys |
+| `SqlxPgBackend` | `backends::sqlx_pg` | PostgreSQL via sqlx |
+| `SqlxMysqlBackend` | `backends::sqlx_mysql` | MySQL via sqlx |
+| `SqlxSqliteBackend` | `backends::sqlx_sqlite` | SQLite via sqlx |
 | `InMemoryBackend` | `backends::memory` | Tests, prototyping, CI — no database required |
 
 Redis (`with_redis()`) is a **caching decorator** that wraps repository traits for sub-millisecond session/rate-limit lookups. The database remains the source of truth. Redis is not a separate store backend.

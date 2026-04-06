@@ -44,6 +44,7 @@ fn init_non_interactive_diesel_postgres() {
     let entries: Vec<_> = std::fs::read_dir(&migrations_dir)
         .unwrap()
         .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().unwrap().is_dir())
         .collect();
     assert!(!entries.is_empty());
 
@@ -58,6 +59,11 @@ fn init_non_interactive_diesel_postgres() {
     // Check down.sql exists
     let down_sql = std::fs::read_to_string(migration_dir.join("down.sql")).unwrap();
     assert!(down_sql.contains("DROP TABLE"));
+
+    // Check schema.rs was generated for diesel
+    let schema_rs = std::fs::read_to_string(migrations_dir.join("schema.rs")).unwrap();
+    assert!(schema_rs.contains("diesel::table!"));
+    assert!(schema_rs.contains("yauth_users (id)"));
 }
 
 #[test]
@@ -129,12 +135,18 @@ fn init_with_custom_prefix() {
     let entries: Vec<_> = std::fs::read_dir(&migrations_dir)
         .unwrap()
         .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().unwrap().is_dir())
         .collect();
     let up_sql = std::fs::read_to_string(entries[0].path().join("up.sql")).unwrap();
     assert!(up_sql.contains("auth_users"));
     assert!(up_sql.contains("auth_passwords"));
     assert!(up_sql.contains("REFERENCES auth_users(id)"));
     assert!(!up_sql.contains("yauth_"));
+
+    // Check schema.rs uses custom prefix
+    let schema_rs = std::fs::read_to_string(migrations_dir.join("schema.rs")).unwrap();
+    assert!(schema_rs.contains("auth_users (id)"));
+    assert!(!schema_rs.contains("yauth_"));
 }
 
 #[test]
@@ -375,9 +387,15 @@ fn init_mysql_produces_correct_ddl() {
     let entries: Vec<_> = std::fs::read_dir(&migrations_dir)
         .unwrap()
         .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().unwrap().is_dir())
         .collect();
     let up_sql = std::fs::read_to_string(entries[0].path().join("up.sql")).unwrap();
     assert!(up_sql.contains("ENGINE=InnoDB"));
     assert!(up_sql.contains("CHAR(36)"));
     assert!(up_sql.contains("TINYINT(1)"));
+
+    // Check schema.rs uses MySQL diesel types
+    let schema_rs = std::fs::read_to_string(migrations_dir.join("schema.rs")).unwrap();
+    assert!(schema_rs.contains("diesel::table!"));
+    assert!(schema_rs.contains("-> Datetime,"));
 }

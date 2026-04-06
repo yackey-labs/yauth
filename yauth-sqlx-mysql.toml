@@ -1,0 +1,21 @@
+[migration]
+orm = "sqlx"
+dialect = "mysql"
+table_prefix = "yauth_"
+migrations_dir = "migrations"
+
+[plugins]
+enabled = [
+    "email-password",
+    "passkey",
+    "mfa",
+    "oauth",
+    "bearer",
+    "api-key",
+    "magic-link",
+    "admin",
+    "oauth2-server",
+    "account-lockout",
+    "webhooks",
+    "oidc",
+]

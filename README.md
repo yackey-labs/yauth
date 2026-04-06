@@ -26,7 +26,11 @@ Every feature is behind a **feature flag** — enable only what you need.
 | `redis` | Redis caching decorator — wraps repository traits for sub-ms lookups | Multi-replica deployments, high-traffic apps |
 | `diesel-pg-backend` | PostgreSQL backend via diesel-async + deadpool | Production Postgres deployments (default) |
 | `diesel-mysql-backend` | MySQL/MariaDB backend via diesel-async + deadpool | MySQL 8.0+ / MariaDB 10.6+ deployments |
-| `diesel-libsql-backend` | SQLite/Turso backend via diesel-libsql | Local dev, embedded apps, Turso edge databases |
+| `diesel-sqlite-backend` | Native SQLite backend via diesel + SyncConnectionWrapper | Embedded apps, local dev (vanilla SQLite) |
+| `diesel-libsql-backend` | SQLite/Turso backend via diesel-libsql | Remote Turso edge databases, libSQL |
+| `sqlx-pg-backend` | PostgreSQL via sqlx with compile-time `query!()` macros | sqlx users who want compile-time SQL checking |
+| `sqlx-mysql-backend` | MySQL via sqlx with compile-time `query!()` macros | sqlx + MySQL deployments |
+| `sqlx-sqlite-backend` | SQLite via sqlx with compile-time `query!()` macros | sqlx + SQLite deployments |
 | `memory-backend` | Fully in-memory backend (no database) | Unit tests, prototyping, CI |
 | `full` | All auth plugins (no backends) | Real apps: `full` + one backend |
 | `all-backends` | Every backend + redis (CI-only) | Conformance testing only |
@@ -126,6 +130,7 @@ No secrets in config -- database URLs come from environment variables only.
 | Crate | Purpose |
 |---|---|
 | `yauth` | Main library -- plugins, middleware, builder, auth logic, backends |
+| `yauth-entity` | Domain types (User, Session, Password, etc.) |
 | `yauth-migration` | Schema types, DDL generation, diff engine, migration file gen (zero ORM deps) |
 | `cargo-yauth` | CLI binary -- `cargo yauth init/add-plugin/remove-plugin/status/generate` |
 
@@ -389,6 +394,64 @@ let backend = DieselLibsqlBackend::new(":memory:")?;
 // Remote Turso (set LIBSQL_AUTH_TOKEN env var)
 let backend = DieselLibsqlBackend::new("libsql://your-db.turso.io")?;
 
+let yauth = YAuthBuilder::new(backend, config).build().await?;
+```
+
+#### Native SQLite (diesel)
+
+```bash
+cargo add yauth --features email-password,diesel-sqlite-backend --no-default-features
+```
+
+```rust
+use yauth::backends::diesel_sqlite::DieselSqliteBackend;
+
+// File-based (uses WAL mode automatically)
+let backend = DieselSqliteBackend::new("path/to/yauth.db")?;
+// In-memory (pool max_size=1)
+let backend = DieselSqliteBackend::new(":memory:")?;
+
+let yauth = YAuthBuilder::new(backend, config).build().await?;
+```
+
+#### PostgreSQL (sqlx)
+
+```bash
+cargo add yauth --features email-password,sqlx-pg-backend --no-default-features
+```
+
+```rust
+use yauth::backends::sqlx_pg::SqlxPgBackend;
+
+let backend = SqlxPgBackend::new("postgres://user:pass@localhost/mydb").await?;
+let yauth = YAuthBuilder::new(backend, config).build().await?;
+```
+
+Uses `query!()` macros for compile-time SQL checking. Compiles offline via `.sqlx/` cache.
+
+#### MySQL (sqlx)
+
+```bash
+cargo add yauth --features email-password,sqlx-mysql-backend --no-default-features
+```
+
+```rust
+use yauth::backends::sqlx_mysql::SqlxMysqlBackend;
+
+let backend = SqlxMysqlBackend::new("mysql://user:pass@localhost/mydb").await?;
+let yauth = YAuthBuilder::new(backend, config).build().await?;
+```
+
+#### SQLite (sqlx)
+
+```bash
+cargo add yauth --features email-password,sqlx-sqlite-backend --no-default-features
+```
+
+```rust
+use yauth::backends::sqlx_sqlite::SqlxSqliteBackend;
+
+let backend = SqlxSqliteBackend::new("sqlite:yauth.db").await?;
 let yauth = YAuthBuilder::new(backend, config).build().await?;
 ```
 
@@ -740,9 +803,13 @@ yauth uses a `DatabaseBackend` trait with pluggable implementations. All persist
 
 | Backend | Feature Flag | Connection | Use case |
 |---|---|---|---|
-| `DieselPgBackend` | `diesel-pg-backend` (default) | PostgreSQL via diesel-async 0.8 + deadpool | Production |
-| `DieselMysqlBackend` | `diesel-mysql-backend` | MySQL 8.0+ / MariaDB 10.6+ via diesel-async 0.8 + deadpool | MySQL/MariaDB production |
-| `DieselLibsqlBackend` | `diesel-libsql-backend` | Local SQLite / remote Turso via diesel-libsql 0.1.4 | Embedded, edge, local dev |
+| `DieselPgBackend` | `diesel-pg-backend` (default) | PostgreSQL via diesel-async 0.8 + deadpool | Production Postgres |
+| `DieselMysqlBackend` | `diesel-mysql-backend` | MySQL 8.0+ / MariaDB 10.6+ via diesel-async 0.8 | MySQL/MariaDB production |
+| `DieselSqliteBackend` | `diesel-sqlite-backend` | Vanilla SQLite via diesel + SyncConnectionWrapper | Embedded, local dev |
+| `DieselLibsqlBackend` | `diesel-libsql-backend` | Local SQLite / remote Turso via diesel-libsql 0.1.4 | Turso edge databases |
+| `SqlxPgBackend` | `sqlx-pg-backend` | PostgreSQL via sqlx 0.8 with `query!()` macros | sqlx users, compile-time SQL |
+| `SqlxMysqlBackend` | `sqlx-mysql-backend` | MySQL via sqlx 0.8 with `query!()` macros | sqlx + MySQL |
+| `SqlxSqliteBackend` | `sqlx-sqlite-backend` | SQLite via sqlx 0.8 with `query!()` macros | sqlx + SQLite |
 | `InMemoryBackend` | `memory-backend` | None (all data in HashMaps) | Tests, prototyping |
 
 Migrations are explicit — call `backend.migrate()` before `build()`. Plugins declare tables as Rust data, and DDL is generated per dialect (Postgres, SQLite, MySQL) via the declarative schema system.
@@ -899,8 +966,8 @@ Plugins without tables: `admin`, `status`, `telemetry`.
 
 ```bash
 # Rust
-cargo test --features full
-cargo clippy --features full -- -D warnings
+cargo test --workspace --features full,all-backends --lib   # Unit tests
+cargo clippy --workspace --features full,all-backends -- -D warnings
 cargo fmt --check
 
 # TypeScript
@@ -909,9 +976,14 @@ bun validate          # lint:fix + typecheck + build
 bun generate          # regenerate TS client from Rust types
 bun generate:check    # CI: fail if client is out of date
 
-# Integration testing
-docker compose up -d                 # PostgreSQL + Mailpit
-cargo test --features full --test pentest  # OWASP pentest (memory + diesel_pg, parallel-safe)
+# Integration testing (requires docker compose up -d for PostgreSQL + MySQL)
+docker compose up -d
+cargo test --features full,all-backends --test repo_conformance  # 65 tests across 7 backends
+cargo test --features full,all-backends --test pentest           # OWASP pentest suite
+cargo test --features full,diesel-libsql-backend,memory-backend --test repo_conformance  # diesel-libsql (tested separately)
+
+# Migration CLI
+cargo yauth generate --check -f yauth-diesel-pg.toml   # Verify generated artifacts are fresh
 ```
 
 ## Versioning

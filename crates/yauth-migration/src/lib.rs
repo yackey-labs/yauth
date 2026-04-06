@@ -30,6 +30,9 @@ pub use sqlite::{generate_sqlite_ddl, generate_sqlite_drop, generate_sqlite_drop
 mod mysql;
 pub use mysql::{generate_mysql_ddl, generate_mysql_drop, generate_mysql_drops};
 
+mod diesel_schema;
+pub use diesel_schema::generate_diesel_schema;
+
 mod tracking;
 pub use tracking::schema_hash;
 

@@ -3,10 +3,6 @@
 //! These types cross the repository trait boundary and have no backend-specific
 //! dependencies. Each backend converts between its internal ORM-annotated models
 //! and these types via private conversion methods.
-//!
-//! Feature flags:
-//! - `diesel` — adds `#[derive(Queryable, Insertable, ...)]` (future use for shared models)
-//! - `sqlx` — adds `#[derive(FromRow)]` (M3, not yet implemented)
 
 mod user;
 pub use user::*;

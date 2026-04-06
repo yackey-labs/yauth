@@ -468,6 +468,159 @@ fn unknown_plugin_returns_error() {
     assert!(result.unwrap_err().to_string().contains("unknown plugin"));
 }
 
+// -- Diff engine: add MFA plugin across all dialects --
+
+#[test]
+fn diff_add_mfa_to_email_password_postgres() {
+    let from = collect_schema_for_plugins(&["email-password".to_string()], "yauth_").unwrap();
+    let to =
+        collect_schema_for_plugins(&["email-password".to_string(), "mfa".to_string()], "yauth_")
+            .unwrap();
+    let changes = diff::schema_diff(&from, &to);
+    let (up, down) = diff::render_changes_sql(&changes, Dialect::Postgres);
+
+    // Up should create exactly the two MFA tables
+    assert!(up.contains("CREATE TABLE IF NOT EXISTS yauth_totp_secrets"));
+    assert!(up.contains("CREATE TABLE IF NOT EXISTS yauth_backup_codes"));
+    assert_eq!(up.matches("CREATE TABLE IF NOT EXISTS").count(), 2);
+    // Down should drop them
+    assert!(down.contains("DROP TABLE IF EXISTS yauth_totp_secrets CASCADE"));
+    assert!(down.contains("DROP TABLE IF EXISTS yauth_backup_codes CASCADE"));
+}
+
+#[test]
+fn diff_add_mfa_to_email_password_mysql() {
+    let from = collect_schema_for_plugins(&["email-password".to_string()], "yauth_").unwrap();
+    let to =
+        collect_schema_for_plugins(&["email-password".to_string(), "mfa".to_string()], "yauth_")
+            .unwrap();
+    let changes = diff::schema_diff(&from, &to);
+    let (up, down) = diff::render_changes_sql(&changes, Dialect::Mysql);
+
+    assert!(up.contains("CREATE TABLE IF NOT EXISTS `yauth_totp_secrets`"));
+    assert!(up.contains("CREATE TABLE IF NOT EXISTS `yauth_backup_codes`"));
+    assert_eq!(up.matches("CREATE TABLE IF NOT EXISTS").count(), 2);
+    assert!(up.contains("ENGINE=InnoDB"));
+    assert!(down.contains("DROP TABLE IF EXISTS `yauth_totp_secrets`"));
+    assert!(down.contains("DROP TABLE IF EXISTS `yauth_backup_codes`"));
+}
+
+#[test]
+fn diff_add_mfa_to_email_password_sqlite() {
+    let from = collect_schema_for_plugins(&["email-password".to_string()], "yauth_").unwrap();
+    let to =
+        collect_schema_for_plugins(&["email-password".to_string(), "mfa".to_string()], "yauth_")
+            .unwrap();
+    let changes = diff::schema_diff(&from, &to);
+    let (up, down) = diff::render_changes_sql(&changes, Dialect::Sqlite);
+
+    assert!(up.contains("CREATE TABLE IF NOT EXISTS yauth_totp_secrets"));
+    assert!(up.contains("CREATE TABLE IF NOT EXISTS yauth_backup_codes"));
+    assert_eq!(up.matches("CREATE TABLE IF NOT EXISTS").count(), 2);
+    assert!(!up.contains("PRAGMA")); // Individual creates shouldn't have PRAGMA
+    assert!(down.contains("DROP TABLE IF EXISTS yauth_totp_secrets"));
+    assert!(down.contains("DROP TABLE IF EXISTS yauth_backup_codes"));
+}
+
+// -- Diff engine: remove passkey plugin across all dialects --
+
+#[test]
+fn diff_remove_passkey_from_email_password_plus_passkey_postgres() {
+    let from = collect_schema_for_plugins(
+        &["email-password".to_string(), "passkey".to_string()],
+        "yauth_",
+    )
+    .unwrap();
+    let to = collect_schema_for_plugins(&["email-password".to_string()], "yauth_").unwrap();
+    let changes = diff::schema_diff(&from, &to);
+    let (up, down) = diff::render_changes_sql(&changes, Dialect::Postgres);
+
+    assert!(up.contains("DROP TABLE IF EXISTS yauth_webauthn_credentials CASCADE"));
+    assert!(!up.contains("CREATE TABLE"));
+    // Down should recreate the table
+    assert!(down.contains("CREATE TABLE IF NOT EXISTS yauth_webauthn_credentials"));
+}
+
+#[test]
+fn diff_remove_passkey_from_email_password_plus_passkey_mysql() {
+    let from = collect_schema_for_plugins(
+        &["email-password".to_string(), "passkey".to_string()],
+        "yauth_",
+    )
+    .unwrap();
+    let to = collect_schema_for_plugins(&["email-password".to_string()], "yauth_").unwrap();
+    let changes = diff::schema_diff(&from, &to);
+    let (up, down) = diff::render_changes_sql(&changes, Dialect::Mysql);
+
+    assert!(up.contains("DROP TABLE IF EXISTS `yauth_webauthn_credentials`"));
+    assert!(!up.contains("CREATE TABLE"));
+    assert!(down.contains("CREATE TABLE IF NOT EXISTS `yauth_webauthn_credentials`"));
+}
+
+#[test]
+fn diff_remove_passkey_from_email_password_plus_passkey_sqlite() {
+    let from = collect_schema_for_plugins(
+        &["email-password".to_string(), "passkey".to_string()],
+        "yauth_",
+    )
+    .unwrap();
+    let to = collect_schema_for_plugins(&["email-password".to_string()], "yauth_").unwrap();
+    let changes = diff::schema_diff(&from, &to);
+    let (up, down) = diff::render_changes_sql(&changes, Dialect::Sqlite);
+
+    assert!(up.contains("DROP TABLE IF EXISTS yauth_webauthn_credentials"));
+    assert!(!up.contains("CREATE TABLE"));
+    assert!(down.contains("CREATE TABLE IF NOT EXISTS yauth_webauthn_credentials"));
+}
+
+// -- Diff engine: custom prefix --
+
+#[test]
+fn diff_custom_prefix_postgres() {
+    let from = collect_schema_for_plugins(&["email-password".to_string()], "auth_").unwrap();
+    let to =
+        collect_schema_for_plugins(&["email-password".to_string(), "mfa".to_string()], "auth_")
+            .unwrap();
+    let changes = diff::schema_diff(&from, &to);
+    let (up, down) = diff::render_changes_sql(&changes, Dialect::Postgres);
+
+    // All references should use auth_ not yauth_
+    assert!(up.contains("auth_totp_secrets"));
+    assert!(up.contains("auth_backup_codes"));
+    assert!(!up.contains("yauth_"));
+    assert!(up.contains("REFERENCES auth_users(id)"));
+    assert!(down.contains("auth_totp_secrets"));
+    assert!(!down.contains("yauth_"));
+}
+
+#[test]
+fn diff_custom_prefix_mysql() {
+    let from = collect_schema_for_plugins(&["email-password".to_string()], "auth_").unwrap();
+    let to =
+        collect_schema_for_plugins(&["email-password".to_string(), "mfa".to_string()], "auth_")
+            .unwrap();
+    let changes = diff::schema_diff(&from, &to);
+    let (up, _down) = diff::render_changes_sql(&changes, Dialect::Mysql);
+
+    assert!(up.contains("`auth_totp_secrets`"));
+    assert!(up.contains("`auth_backup_codes`"));
+    assert!(!up.contains("yauth_"));
+}
+
+#[test]
+fn diff_custom_prefix_sqlite() {
+    let from = collect_schema_for_plugins(&["email-password".to_string()], "auth_").unwrap();
+    let to =
+        collect_schema_for_plugins(&["email-password".to_string(), "mfa".to_string()], "auth_")
+            .unwrap();
+    let changes = diff::schema_diff(&from, &to);
+    let (up, _down) = diff::render_changes_sql(&changes, Dialect::Sqlite);
+
+    assert!(up.contains("auth_totp_secrets"));
+    assert!(up.contains("auth_backup_codes"));
+    assert!(!up.contains("yauth_"));
+}
+
 // -- Config tests --
 
 #[test]

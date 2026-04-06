@@ -43,6 +43,9 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --workspace --features full,all-backends -- -D warnings
 
+      - name: Verify sqlx offline cache is complete
+        run: SQLX_OFFLINE=true cargo check --workspace --features full,all-backends
+
       - name: Biome lint
         run: bun run lint
 

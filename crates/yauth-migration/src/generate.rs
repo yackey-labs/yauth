@@ -65,13 +65,20 @@ pub fn generate_init(config: &YAuthConfig) -> Result<GeneratedMigration, Generat
     let (up_sql, down_sql) = render_changes_sql(&changes, dialect);
 
     let migrations_dir = Path::new(&config.migration.migrations_dir);
-    let files = match config.migration.orm {
+    let mut files = match config.migration.orm {
         crate::Orm::Diesel => {
             generate_diesel_files(migrations_dir, "yauth_init", &up_sql, &down_sql)?
         }
         crate::Orm::Sqlx => generate_sqlx_files(migrations_dir, "yauth_init", &up_sql)?,
         crate::Orm::Raw => generate_raw_files(migrations_dir, "yauth_init", &up_sql, &down_sql)?,
     };
+
+    // For diesel ORM, also generate a schema.rs file
+    if config.migration.orm == crate::Orm::Diesel {
+        let schema_rs = crate::generate_diesel_schema(&schema, dialect);
+        let schema_path = migrations_dir.join("schema.rs");
+        files.push((schema_path, schema_rs));
+    }
 
     Ok(GeneratedMigration {
         files,
@@ -260,11 +267,15 @@ mod tests {
         );
         let result = generate_init(&config).unwrap();
         assert!(!result.files.is_empty());
-        // Should have up.sql and down.sql
-        assert_eq!(result.files.len(), 2);
+        // Should have up.sql, down.sql, and schema.rs
+        assert_eq!(result.files.len(), 3);
         let up_content = &result.files[0].1;
         assert!(up_content.contains("CREATE TABLE IF NOT EXISTS yauth_users"));
         assert!(up_content.contains("CREATE TABLE IF NOT EXISTS yauth_passwords"));
+        // schema.rs should contain diesel table! macros
+        let schema_rs = &result.files[2].1;
+        assert!(schema_rs.contains("diesel::table!"));
+        assert!(schema_rs.contains("yauth_users (id)"));
     }
 
     #[test]

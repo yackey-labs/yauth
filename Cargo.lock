@@ -6420,7 +6420,6 @@ name = "yauth-entity"
 version = "0.7.0"
 dependencies = [
  "chrono",
- "diesel",
  "serde",
  "serde_json",
  "uuid",

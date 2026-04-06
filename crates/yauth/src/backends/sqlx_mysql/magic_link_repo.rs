@@ -2,7 +2,7 @@ use chrono::NaiveDateTime;
 use sqlx::MySqlPool;
 use uuid::Uuid;
 
-use crate::backends::sqlx_common::sqlx_err;
+use crate::backends::sqlx_common::{sqlx_err, str_to_uuid};
 use crate::domain;
 use crate::repo::{MagicLinkRepository, RepoFuture, sealed};
 
@@ -12,7 +12,7 @@ struct MagicLinkRow {
     email: String,
     token_hash: String,
     expires_at: NaiveDateTime,
-    used: bool,
+    used: i8,
     created_at: NaiveDateTime,
 }
 
@@ -33,22 +33,24 @@ impl MagicLinkRepository for SqlxMysqlMagicLinkRepo {
     ) -> RepoFuture<'_, Option<domain::MagicLink>> {
         let token_hash = token_hash.to_string();
         Box::pin(async move {
-            let row = sqlx::query_as::<_, MagicLinkRow>(
+            let now = chrono::Utc::now().naive_utc();
+            let row = sqlx::query_as!(
+                MagicLinkRow,
                 "SELECT id, email, token_hash, expires_at, used, created_at \
                  FROM yauth_magic_links \
                  WHERE token_hash = ? AND used = false AND expires_at > ?",
+                token_hash,
+                now
             )
-            .bind(&token_hash)
-            .bind(chrono::Utc::now().naive_utc())
             .fetch_optional(&self.pool)
             .await
             .map_err(sqlx_err)?;
             Ok(row.map(|r| domain::MagicLink {
-                id: uuid::Uuid::parse_str(&r.id).unwrap_or_default(),
+                id: str_to_uuid(&r.id),
                 email: r.email,
                 token_hash: r.token_hash,
                 expires_at: r.expires_at,
-                used: r.used,
+                used: r.used != 0,
                 created_at: r.created_at,
             }))
         })
@@ -56,15 +58,16 @@ impl MagicLinkRepository for SqlxMysqlMagicLinkRepo {
 
     fn create(&self, input: domain::NewMagicLink) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query(
+            let id_str = input.id.to_string();
+            sqlx::query!(
                 "INSERT INTO yauth_magic_links (id, email, token_hash, expires_at, created_at) \
                  VALUES (?, ?, ?, ?, ?)",
+                id_str,
+                input.email,
+                input.token_hash,
+                input.expires_at,
+                input.created_at,
             )
-            .bind(input.id.to_string())
-            .bind(&input.email)
-            .bind(&input.token_hash)
-            .bind(input.expires_at)
-            .bind(input.created_at)
             .execute(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -74,19 +77,22 @@ impl MagicLinkRepository for SqlxMysqlMagicLinkRepo {
 
     fn mark_used(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query("UPDATE yauth_magic_links SET used = true WHERE id = ?")
-                .bind(id.to_string())
-                .execute(&self.pool)
-                .await
-                .map_err(sqlx_err)?;
+            let id_str = id.to_string();
+            sqlx::query!(
+                "UPDATE yauth_magic_links SET used = true WHERE id = ?",
+                id_str
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(sqlx_err)?;
             Ok(())
         })
     }
 
     fn delete(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query("DELETE FROM yauth_magic_links WHERE id = ?")
-                .bind(id.to_string())
+            let id_str = id.to_string();
+            sqlx::query!("DELETE FROM yauth_magic_links WHERE id = ?", id_str)
                 .execute(&self.pool)
                 .await
                 .map_err(sqlx_err)?;
@@ -97,11 +103,13 @@ impl MagicLinkRepository for SqlxMysqlMagicLinkRepo {
     fn delete_unused_for_email(&self, email: &str) -> RepoFuture<'_, ()> {
         let email = email.to_string();
         Box::pin(async move {
-            sqlx::query("DELETE FROM yauth_magic_links WHERE email = ? AND used = false")
-                .bind(&email)
-                .execute(&self.pool)
-                .await
-                .map_err(sqlx_err)?;
+            sqlx::query!(
+                "DELETE FROM yauth_magic_links WHERE email = ? AND used = false",
+                email
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(sqlx_err)?;
             Ok(())
         })
     }

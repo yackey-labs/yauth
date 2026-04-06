@@ -2,47 +2,47 @@ use chrono::NaiveDateTime;
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
-use crate::backends::sqlx_common::sqlx_err;
+use crate::backends::sqlx_common::{
+    dt_to_str, opt_dt_to_str, opt_str_to_dt, sqlx_err, str_to_dt, str_to_uuid,
+};
 use crate::domain;
 use crate::repo::{AccountLockRepository, RepoFuture, UnlockTokenRepository, sealed};
 
 #[derive(sqlx::FromRow)]
 struct AccountLockRow {
-    id: Uuid,
-    user_id: Uuid,
-    failed_count: i32,
-    locked_until: Option<NaiveDateTime>,
-    lock_count: i32,
+    id: Option<String>,
+    user_id: Option<String>,
+    failed_count: i64,
+    locked_until: Option<String>,
+    lock_count: i64,
     locked_reason: Option<String>,
-    created_at: NaiveDateTime,
-    updated_at: NaiveDateTime,
+    created_at: String,
+    updated_at: String,
 }
 
 impl AccountLockRow {
     fn into_domain(self) -> domain::AccountLock {
         domain::AccountLock {
-            id: self.id,
-            user_id: self.user_id,
-            failed_count: self.failed_count,
-            locked_until: self.locked_until,
-            lock_count: self.lock_count,
+            id: str_to_uuid(&self.id.unwrap_or_default()),
+            user_id: str_to_uuid(&self.user_id.unwrap_or_default()),
+            failed_count: self.failed_count as i32,
+            locked_until: opt_str_to_dt(self.locked_until),
+            lock_count: self.lock_count as i32,
             locked_reason: self.locked_reason,
-            created_at: self.created_at,
-            updated_at: self.updated_at,
+            created_at: str_to_dt(&self.created_at),
+            updated_at: str_to_dt(&self.updated_at),
         }
     }
 }
 
 #[derive(sqlx::FromRow)]
 struct UnlockTokenRow {
-    id: Uuid,
-    user_id: Uuid,
+    id: Option<String>,
+    user_id: Option<String>,
     token_hash: String,
-    expires_at: NaiveDateTime,
-    created_at: NaiveDateTime,
+    expires_at: String,
+    created_at: String,
 }
-
-// ── AccountLock ──
 
 pub(crate) struct SqlxSqliteAccountLockRepo {
     pool: SqlitePool,
@@ -57,11 +57,13 @@ impl sealed::Sealed for SqlxSqliteAccountLockRepo {}
 impl AccountLockRepository for SqlxSqliteAccountLockRepo {
     fn find_by_user_id(&self, user_id: Uuid) -> RepoFuture<'_, Option<domain::AccountLock>> {
         Box::pin(async move {
-            let row = sqlx::query_as::<_, AccountLockRow>(
+            let user_id_str = user_id.to_string();
+            let row = sqlx::query_as!(
+                AccountLockRow,
                 "SELECT id, user_id, failed_count, locked_until, lock_count, locked_reason, created_at, updated_at \
-                 FROM yauth_account_locks WHERE user_id = ?",
+                 FROM yauth_account_locks WHERE user_id = ? /* sqlite */",
+                user_id_str
             )
-            .bind(user_id)
             .fetch_optional(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -71,19 +73,25 @@ impl AccountLockRepository for SqlxSqliteAccountLockRepo {
 
     fn create(&self, input: domain::NewAccountLock) -> RepoFuture<'_, domain::AccountLock> {
         Box::pin(async move {
-            let row = sqlx::query_as::<_, AccountLockRow>(
+            let id_str = input.id.to_string();
+            let user_id_str = input.user_id.to_string();
+            let locked_until_str = opt_dt_to_str(input.locked_until);
+            let created_str = dt_to_str(input.created_at);
+            let updated_str = dt_to_str(input.updated_at);
+            let row = sqlx::query_as!(
+                AccountLockRow,
                 "INSERT INTO yauth_account_locks (id, user_id, failed_count, locked_until, lock_count, locked_reason, created_at, updated_at) \
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
-                 RETURNING id, user_id, failed_count, locked_until, lock_count, locked_reason, created_at, updated_at",
+                 RETURNING id, user_id, failed_count, locked_until, lock_count, locked_reason, created_at, updated_at /* sqlite */",
+                id_str,
+                user_id_str,
+                input.failed_count,
+                locked_until_str,
+                input.lock_count,
+                input.locked_reason,
+                created_str,
+                updated_str,
             )
-            .bind(input.id)
-            .bind(input.user_id)
-            .bind(input.failed_count)
-            .bind(input.locked_until)
-            .bind(input.lock_count)
-            .bind(&input.locked_reason)
-            .bind(input.created_at)
-            .bind(input.updated_at)
             .fetch_one(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -93,11 +101,13 @@ impl AccountLockRepository for SqlxSqliteAccountLockRepo {
 
     fn increment_failed_count(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query(
-                "UPDATE yauth_account_locks SET failed_count = failed_count + 1, updated_at = ? WHERE id = ?",
+            let id_str = id.to_string();
+            let now = dt_to_str(chrono::Utc::now().naive_utc());
+            sqlx::query!(
+                "UPDATE yauth_account_locks SET failed_count = failed_count + 1, updated_at = ? WHERE id = ? /* sqlite */",
+                now,
+                id_str
             )
-            .bind(chrono::Utc::now().naive_utc())
-            .bind(id)
             .execute(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -114,14 +124,17 @@ impl AccountLockRepository for SqlxSqliteAccountLockRepo {
     ) -> RepoFuture<'_, ()> {
         let locked_reason = locked_reason.map(|s| s.to_string());
         Box::pin(async move {
-            sqlx::query(
-                "UPDATE yauth_account_locks SET locked_until = ?, locked_reason = ?, lock_count = ?, updated_at = ? WHERE id = ?",
+            let id_str = id.to_string();
+            let now = dt_to_str(chrono::Utc::now().naive_utc());
+            let locked_until_str = opt_dt_to_str(locked_until);
+            sqlx::query!(
+                "UPDATE yauth_account_locks SET locked_until = ?, locked_reason = ?, lock_count = ?, updated_at = ? WHERE id = ? /* sqlite */",
+                locked_until_str,
+                locked_reason,
+                lock_count,
+                now,
+                id_str,
             )
-            .bind(locked_until)
-            .bind(&locked_reason)
-            .bind(lock_count)
-            .bind(chrono::Utc::now().naive_utc())
-            .bind(id)
             .execute(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -131,11 +144,13 @@ impl AccountLockRepository for SqlxSqliteAccountLockRepo {
 
     fn reset_failed_count(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query(
-                "UPDATE yauth_account_locks SET failed_count = 0, updated_at = ? WHERE id = ?",
+            let id_str = id.to_string();
+            let now = dt_to_str(chrono::Utc::now().naive_utc());
+            sqlx::query!(
+                "UPDATE yauth_account_locks SET failed_count = 0, updated_at = ? WHERE id = ? /* sqlite */",
+                now,
+                id_str
             )
-            .bind(chrono::Utc::now().naive_utc())
-            .bind(id)
             .execute(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -145,11 +160,13 @@ impl AccountLockRepository for SqlxSqliteAccountLockRepo {
 
     fn auto_unlock(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query(
-                "UPDATE yauth_account_locks SET failed_count = 0, locked_until = NULL, locked_reason = NULL, updated_at = ? WHERE id = ?",
+            let id_str = id.to_string();
+            let now = dt_to_str(chrono::Utc::now().naive_utc());
+            sqlx::query!(
+                "UPDATE yauth_account_locks SET failed_count = 0, locked_until = NULL, locked_reason = NULL, updated_at = ? WHERE id = ? /* sqlite */",
+                now,
+                id_str
             )
-            .bind(chrono::Utc::now().naive_utc())
-            .bind(id)
             .execute(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -157,8 +174,6 @@ impl AccountLockRepository for SqlxSqliteAccountLockRepo {
         })
     }
 }
-
-// ── UnlockToken ──
 
 pub(crate) struct SqlxSqliteUnlockTokenRepo {
     pool: SqlitePool,
@@ -174,36 +189,42 @@ impl UnlockTokenRepository for SqlxSqliteUnlockTokenRepo {
     fn find_by_token_hash(&self, token_hash: &str) -> RepoFuture<'_, Option<domain::UnlockToken>> {
         let token_hash = token_hash.to_string();
         Box::pin(async move {
-            let row = sqlx::query_as::<_, UnlockTokenRow>(
+            let now = dt_to_str(chrono::Utc::now().naive_utc());
+            let row = sqlx::query_as!(
+                UnlockTokenRow,
                 "SELECT id, user_id, token_hash, expires_at, created_at \
-                 FROM yauth_unlock_tokens WHERE token_hash = ? AND expires_at > ?",
+                 FROM yauth_unlock_tokens WHERE token_hash = ? AND expires_at > ? /* sqlite */",
+                token_hash,
+                now
             )
-            .bind(&token_hash)
-            .bind(chrono::Utc::now().naive_utc())
             .fetch_optional(&self.pool)
             .await
             .map_err(sqlx_err)?;
             Ok(row.map(|r| domain::UnlockToken {
-                id: r.id,
-                user_id: r.user_id,
+                id: str_to_uuid(&r.id.unwrap_or_default()),
+                user_id: str_to_uuid(&r.user_id.unwrap_or_default()),
                 token_hash: r.token_hash,
-                expires_at: r.expires_at,
-                created_at: r.created_at,
+                expires_at: str_to_dt(&r.expires_at),
+                created_at: str_to_dt(&r.created_at),
             }))
         })
     }
 
     fn create(&self, input: domain::NewUnlockToken) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query(
+            let id_str = input.id.to_string();
+            let user_id_str = input.user_id.to_string();
+            let expires_str = dt_to_str(input.expires_at);
+            let created_str = dt_to_str(input.created_at);
+            sqlx::query!(
                 "INSERT INTO yauth_unlock_tokens (id, user_id, token_hash, expires_at, created_at) \
-                 VALUES (?, ?, ?, ?, ?)",
+                 VALUES (?, ?, ?, ?, ?) /* sqlite */",
+                id_str,
+                user_id_str,
+                input.token_hash,
+                expires_str,
+                created_str,
             )
-            .bind(input.id)
-            .bind(input.user_id)
-            .bind(&input.token_hash)
-            .bind(input.expires_at)
-            .bind(input.created_at)
             .execute(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -213,22 +234,28 @@ impl UnlockTokenRepository for SqlxSqliteUnlockTokenRepo {
 
     fn delete(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query("DELETE FROM yauth_unlock_tokens WHERE id = ?")
-                .bind(id)
-                .execute(&self.pool)
-                .await
-                .map_err(sqlx_err)?;
+            let id_str = id.to_string();
+            sqlx::query!(
+                "DELETE FROM yauth_unlock_tokens WHERE id = ? /* sqlite */",
+                id_str
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(sqlx_err)?;
             Ok(())
         })
     }
 
     fn delete_all_for_user(&self, user_id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query("DELETE FROM yauth_unlock_tokens WHERE user_id = ?")
-                .bind(user_id)
-                .execute(&self.pool)
-                .await
-                .map_err(sqlx_err)?;
+            let user_id_str = user_id.to_string();
+            sqlx::query!(
+                "DELETE FROM yauth_unlock_tokens WHERE user_id = ? /* sqlite */",
+                user_id_str
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(sqlx_err)?;
             Ok(())
         })
     }

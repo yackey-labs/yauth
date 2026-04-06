@@ -1,34 +1,33 @@
-use chrono::NaiveDateTime;
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
-use crate::backends::sqlx_common::sqlx_err;
+use crate::backends::sqlx_common::{dt_to_str, opt_str_to_dt, sqlx_err, str_to_dt, str_to_uuid};
 use crate::domain;
 use crate::repo::{PasskeyRepository, RepoFuture, sealed};
 
 #[derive(sqlx::FromRow)]
 struct PasskeyRow {
-    id: Uuid,
-    user_id: Uuid,
+    id: Option<String>,
+    user_id: Option<String>,
     name: String,
     aaguid: Option<String>,
     device_name: Option<String>,
-    credential: serde_json::Value,
-    created_at: NaiveDateTime,
-    last_used_at: Option<NaiveDateTime>,
+    credential: String,
+    created_at: String,
+    last_used_at: Option<String>,
 }
 
 impl PasskeyRow {
     fn into_domain(self) -> domain::WebauthnCredential {
         domain::WebauthnCredential {
-            id: self.id,
-            user_id: self.user_id,
+            id: str_to_uuid(&self.id.unwrap_or_default()),
+            user_id: str_to_uuid(&self.user_id.unwrap_or_default()),
             name: self.name,
             aaguid: self.aaguid,
             device_name: self.device_name,
-            credential: self.credential,
-            created_at: self.created_at,
-            last_used_at: self.last_used_at,
+            credential: serde_json::from_str(&self.credential).unwrap_or_default(),
+            created_at: str_to_dt(&self.created_at),
+            last_used_at: opt_str_to_dt(self.last_used_at),
         }
     }
 }
@@ -46,11 +45,13 @@ impl sealed::Sealed for SqlxSqlitePasskeyRepo {}
 impl PasskeyRepository for SqlxSqlitePasskeyRepo {
     fn find_by_user_id(&self, user_id: Uuid) -> RepoFuture<'_, Vec<domain::WebauthnCredential>> {
         Box::pin(async move {
-            let rows: Vec<PasskeyRow> = sqlx::query_as(
+            let user_id_str = user_id.to_string();
+            let rows = sqlx::query_as!(
+                PasskeyRow,
                 "SELECT id, user_id, name, aaguid, device_name, credential, created_at, last_used_at \
-                 FROM yauth_webauthn_credentials WHERE user_id = ?",
+                 FROM yauth_webauthn_credentials WHERE user_id = ? /* sqlite */",
+                user_id_str
             )
-            .bind(user_id)
             .fetch_all(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -64,12 +65,15 @@ impl PasskeyRepository for SqlxSqlitePasskeyRepo {
         user_id: Uuid,
     ) -> RepoFuture<'_, Option<domain::WebauthnCredential>> {
         Box::pin(async move {
-            let row = sqlx::query_as::<_, PasskeyRow>(
+            let id_str = id.to_string();
+            let user_id_str = user_id.to_string();
+            let row = sqlx::query_as!(
+                PasskeyRow,
                 "SELECT id, user_id, name, aaguid, device_name, credential, created_at, last_used_at \
-                 FROM yauth_webauthn_credentials WHERE id = ? AND user_id = ?",
+                 FROM yauth_webauthn_credentials WHERE id = ? AND user_id = ? /* sqlite */",
+                id_str,
+                user_id_str
             )
-            .bind(id)
-            .bind(user_id)
             .fetch_optional(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -79,17 +83,21 @@ impl PasskeyRepository for SqlxSqlitePasskeyRepo {
 
     fn create(&self, input: domain::NewWebauthnCredential) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query(
+            let id_str = input.id.to_string();
+            let user_id_str = input.user_id.to_string();
+            let credential_str = input.credential.to_string();
+            let created_str = dt_to_str(input.created_at);
+            sqlx::query!(
                 "INSERT INTO yauth_webauthn_credentials (id, user_id, name, aaguid, device_name, credential, created_at) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+                 VALUES (?, ?, ?, ?, ?, ?, ?) /* sqlite */",
+                id_str,
+                user_id_str,
+                input.name,
+                input.aaguid,
+                input.device_name,
+                credential_str,
+                created_str,
             )
-            .bind(input.id)
-            .bind(input.user_id)
-            .bind(&input.name)
-            .bind(&input.aaguid)
-            .bind(&input.device_name)
-            .bind(&input.credential)
-            .bind(input.created_at)
             .execute(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -99,23 +107,30 @@ impl PasskeyRepository for SqlxSqlitePasskeyRepo {
 
     fn update_last_used(&self, user_id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query("UPDATE yauth_webauthn_credentials SET last_used_at = ? WHERE user_id = ?")
-                .bind(chrono::Utc::now().naive_utc())
-                .bind(user_id)
-                .execute(&self.pool)
-                .await
-                .map_err(sqlx_err)?;
+            let user_id_str = user_id.to_string();
+            let now = dt_to_str(chrono::Utc::now().naive_utc());
+            sqlx::query!(
+                "UPDATE yauth_webauthn_credentials SET last_used_at = ? WHERE user_id = ? /* sqlite */",
+                now,
+                user_id_str
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(sqlx_err)?;
             Ok(())
         })
     }
 
     fn delete(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query("DELETE FROM yauth_webauthn_credentials WHERE id = ?")
-                .bind(id)
-                .execute(&self.pool)
-                .await
-                .map_err(sqlx_err)?;
+            let id_str = id.to_string();
+            sqlx::query!(
+                "DELETE FROM yauth_webauthn_credentials WHERE id = ? /* sqlite */",
+                id_str
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(sqlx_err)?;
             Ok(())
         })
     }

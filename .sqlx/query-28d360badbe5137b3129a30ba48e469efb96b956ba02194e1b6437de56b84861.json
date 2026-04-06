@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE yauth_device_codes SET last_polled_at = ? WHERE id = ? /* sqlite */",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "28d360badbe5137b3129a30ba48e469efb96b956ba02194e1b6437de56b84861"
+}

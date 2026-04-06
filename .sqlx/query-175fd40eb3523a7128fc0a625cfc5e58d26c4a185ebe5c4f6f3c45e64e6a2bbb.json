@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE yauth_totp_secrets SET verified = true WHERE id = ? /* sqlite */",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "175fd40eb3523a7128fc0a625cfc5e58d26c4a185ebe5c4f6f3c45e64e6a2bbb"
+}

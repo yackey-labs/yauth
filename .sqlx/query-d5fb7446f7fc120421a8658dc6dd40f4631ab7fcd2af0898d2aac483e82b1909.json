@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE yauth_refresh_tokens SET revoked = true WHERE id = ? /* sqlite */",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "d5fb7446f7fc120421a8658dc6dd40f4631ab7fcd2af0898d2aac483e82b1909"
+}

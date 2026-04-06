@@ -51,11 +51,13 @@ impl ChallengeRepository for SqlxMysqlChallengeRepo {
         Box::pin(async move {
             self.ensure_init().await?;
 
+            // Cleanup expired — keep as runtime query since table may not exist at compile time
             sqlx::query("DELETE FROM yauth_challenges WHERE expires_at < NOW()")
                 .execute(&self.pool)
                 .await
                 .ok();
 
+            // Dynamic INTERVAL — keep as runtime query
             sqlx::query(
                 "INSERT INTO yauth_challenges (`key`, value, expires_at) \
                  VALUES (?, ?, DATE_ADD(NOW(), INTERVAL ? SECOND)) \
@@ -76,6 +78,7 @@ impl ChallengeRepository for SqlxMysqlChallengeRepo {
         Box::pin(async move {
             self.ensure_init().await?;
 
+            // Runtime query — table created dynamically
             let row: Option<(serde_json::Value,)> = sqlx::query_as(
                 "SELECT value FROM yauth_challenges WHERE `key` = ? AND expires_at > NOW()",
             )
@@ -92,6 +95,7 @@ impl ChallengeRepository for SqlxMysqlChallengeRepo {
         Box::pin(async move {
             self.ensure_init().await?;
 
+            // Runtime query — table created dynamically
             sqlx::query("DELETE FROM yauth_challenges WHERE `key` = ?")
                 .bind(&key)
                 .execute(&self.pool)

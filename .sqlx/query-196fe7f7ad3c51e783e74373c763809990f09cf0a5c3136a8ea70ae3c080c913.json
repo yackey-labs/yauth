@@ -1,0 +1,44 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT state, provider, redirect_url, expires_at, created_at FROM yauth_oauth_states WHERE state = ? /* sqlite */",
+  "describe": {
+    "columns": [
+      {
+        "name": "state",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "provider",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "redirect_url",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "expires_at",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "created_at",
+        "ordinal": 4,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "196fe7f7ad3c51e783e74373c763809990f09cf0a5c3136a8ea70ae3c080c913"
+}

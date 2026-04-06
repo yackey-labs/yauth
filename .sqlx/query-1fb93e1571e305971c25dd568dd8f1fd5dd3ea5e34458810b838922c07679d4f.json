@@ -1,0 +1,12 @@
+{
+  "db_name": "MySQL",
+  "query": "INSERT INTO yauth_backup_codes (id, user_id, code_hash, used, created_at) VALUES (?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "1fb93e1571e305971c25dd568dd8f1fd5dd3ea5e34458810b838922c07679d4f"
+}

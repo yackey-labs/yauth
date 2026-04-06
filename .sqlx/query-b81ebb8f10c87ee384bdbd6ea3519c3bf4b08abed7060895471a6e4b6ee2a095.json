@@ -1,0 +1,12 @@
+{
+  "db_name": "MySQL",
+  "query": "DELETE FROM yauth_oauth_states WHERE state = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "b81ebb8f10c87ee384bdbd6ea3519c3bf4b08abed7060895471a6e4b6ee2a095"
+}

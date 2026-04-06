@@ -2,7 +2,7 @@ use chrono::NaiveDateTime;
 use sqlx::MySqlPool;
 use uuid::Uuid;
 
-use crate::backends::sqlx_common::{sqlx_conflict, sqlx_err};
+use crate::backends::sqlx_common::{sqlx_conflict, sqlx_err, str_to_uuid};
 use crate::domain;
 use crate::repo::{RepoFuture, SessionRepository, UserRepository, sealed};
 
@@ -11,9 +11,9 @@ struct UserRow {
     id: String,
     email: String,
     display_name: Option<String>,
-    email_verified: bool,
+    email_verified: i8,
     role: String,
-    banned: bool,
+    banned: i8,
     banned_reason: Option<String>,
     banned_until: Option<NaiveDateTime>,
     created_at: NaiveDateTime,
@@ -23,12 +23,12 @@ struct UserRow {
 impl UserRow {
     fn into_domain(self) -> domain::User {
         domain::User {
-            id: uuid::Uuid::parse_str(&self.id).unwrap_or_default(),
+            id: str_to_uuid(&self.id),
             email: self.email,
             display_name: self.display_name,
-            email_verified: self.email_verified,
+            email_verified: self.email_verified != 0,
             role: self.role,
-            banned: self.banned,
+            banned: self.banned != 0,
             banned_reason: self.banned_reason,
             banned_until: self.banned_until,
             created_at: self.created_at,
@@ -51,8 +51,8 @@ struct SessionRow {
 impl SessionRow {
     fn into_domain(self) -> domain::Session {
         domain::Session {
-            id: uuid::Uuid::parse_str(&self.id).unwrap_or_default(),
-            user_id: uuid::Uuid::parse_str(&self.user_id).unwrap_or_default(),
+            id: str_to_uuid(&self.id),
+            user_id: str_to_uuid(&self.user_id),
             token_hash: self.token_hash,
             ip_address: self.ip_address,
             user_agent: self.user_agent,
@@ -77,11 +77,13 @@ impl sealed::Sealed for SqlxMysqlUserRepo {}
 impl UserRepository for SqlxMysqlUserRepo {
     fn find_by_id(&self, id: Uuid) -> RepoFuture<'_, Option<domain::User>> {
         Box::pin(async move {
-            let row = sqlx::query_as::<_, UserRow>(
+            let id_str = id.to_string();
+            let row = sqlx::query_as!(
+                UserRow,
                 "SELECT id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at \
                  FROM yauth_users WHERE id = ?",
+                id_str
             )
-            .bind(id.to_string())
             .fetch_optional(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -93,11 +95,12 @@ impl UserRepository for SqlxMysqlUserRepo {
         let email = email.to_string();
         Box::pin(async move {
             // MySQL LIKE is case-insensitive with default collation
-            let row = sqlx::query_as::<_, UserRow>(
+            let row = sqlx::query_as!(
+                UserRow,
                 "SELECT id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at \
                  FROM yauth_users WHERE email LIKE ?",
+                email
             )
-            .bind(&email)
             .fetch_optional(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -107,31 +110,32 @@ impl UserRepository for SqlxMysqlUserRepo {
 
     fn create(&self, input: domain::NewUser) -> RepoFuture<'_, domain::User> {
         Box::pin(async move {
-            let id = input.id;
+            let id_str = input.id.to_string();
             // MySQL: no RETURNING — INSERT then SELECT
-            sqlx::query(
+            sqlx::query!(
                 "INSERT INTO yauth_users (id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at) \
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                id_str,
+                input.email,
+                input.display_name,
+                input.email_verified,
+                input.role,
+                input.banned,
+                input.banned_reason,
+                input.banned_until,
+                input.created_at,
+                input.updated_at,
             )
-            .bind(input.id.to_string())
-            .bind(&input.email)
-            .bind(&input.display_name)
-            .bind(input.email_verified)
-            .bind(&input.role)
-            .bind(input.banned)
-            .bind(&input.banned_reason)
-            .bind(input.banned_until)
-            .bind(input.created_at)
-            .bind(input.updated_at)
             .execute(&self.pool)
             .await
             .map_err(sqlx_conflict)?;
 
-            let row = sqlx::query_as::<_, UserRow>(
+            let row = sqlx::query_as!(
+                UserRow,
                 "SELECT id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at \
                  FROM yauth_users WHERE id = ?",
+                id_str
             )
-            .bind(id.to_string())
             .fetch_one(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -140,8 +144,8 @@ impl UserRepository for SqlxMysqlUserRepo {
     }
 
     fn update(&self, id: Uuid, changes: domain::UpdateUser) -> RepoFuture<'_, domain::User> {
+        // Dynamic SET clause — must stay as runtime query()
         Box::pin(async move {
-            // Build dynamic SET clause with ? placeholders
             let mut sets = Vec::new();
 
             macro_rules! push_set {
@@ -211,8 +215,8 @@ impl UserRepository for SqlxMysqlUserRepo {
 
     fn delete(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query("DELETE FROM yauth_users WHERE id = ?")
-                .bind(id.to_string())
+            let id_str = id.to_string();
+            sqlx::query!("DELETE FROM yauth_users WHERE id = ?", id_str)
                 .execute(&self.pool)
                 .await
                 .map_err(sqlx_err)?;
@@ -222,7 +226,7 @@ impl UserRepository for SqlxMysqlUserRepo {
 
     fn any_exists(&self) -> RepoFuture<'_, bool> {
         Box::pin(async move {
-            let row: Option<(String,)> = sqlx::query_as("SELECT id FROM yauth_users LIMIT 1")
+            let row = sqlx::query!("SELECT id FROM yauth_users LIMIT 1 /* mysql */")
                 .fetch_optional(&self.pool)
                 .await
                 .map_err(sqlx_err)?;
@@ -240,42 +244,45 @@ impl UserRepository for SqlxMysqlUserRepo {
         Box::pin(async move {
             let (total, users) = if let Some(ref s) = search {
                 let pattern = format!("%{}%", s.to_lowercase());
-                let total: (i64,) =
-                    sqlx::query_as("SELECT COUNT(*) FROM yauth_users WHERE email LIKE ?")
-                        .bind(&pattern)
-                        .fetch_one(&self.pool)
-                        .await
-                        .map_err(sqlx_err)?;
+                let total = sqlx::query!(
+                    "SELECT COUNT(*) as count FROM yauth_users WHERE email LIKE ?",
+                    pattern
+                )
+                .fetch_one(&self.pool)
+                .await
+                .map_err(sqlx_err)?;
 
-                let rows: Vec<UserRow> = sqlx::query_as(
+                let rows = sqlx::query_as!(
+                    UserRow,
                     "SELECT id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at \
                      FROM yauth_users WHERE email LIKE ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                    pattern,
+                    limit,
+                    offset
                 )
-                .bind(&pattern)
-                .bind(limit)
-                .bind(offset)
                 .fetch_all(&self.pool)
                 .await
                 .map_err(sqlx_err)?;
 
-                (total.0, rows)
+                (total.count, rows)
             } else {
-                let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM yauth_users")
+                let total = sqlx::query!("SELECT COUNT(*) as count FROM yauth_users /* mysql */")
                     .fetch_one(&self.pool)
                     .await
                     .map_err(sqlx_err)?;
 
-                let rows: Vec<UserRow> = sqlx::query_as(
+                let rows = sqlx::query_as!(
+                    UserRow,
                     "SELECT id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at \
                      FROM yauth_users ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                    limit,
+                    offset
                 )
-                .bind(limit)
-                .bind(offset)
                 .fetch_all(&self.pool)
                 .await
                 .map_err(sqlx_err)?;
 
-                (total.0, rows)
+                (total.count, rows)
             };
 
             Ok((users.into_iter().map(|u| u.into_domain()).collect(), total))
@@ -300,11 +307,13 @@ impl sealed::Sealed for SqlxMysqlSessionRepo {}
 impl SessionRepository for SqlxMysqlSessionRepo {
     fn find_by_id(&self, id: Uuid) -> RepoFuture<'_, Option<domain::Session>> {
         Box::pin(async move {
-            let row = sqlx::query_as::<_, SessionRow>(
+            let id_str = id.to_string();
+            let row = sqlx::query_as!(
+                SessionRow,
                 "SELECT id, user_id, token_hash, ip_address, user_agent, expires_at, created_at \
                  FROM yauth_sessions WHERE id = ?",
+                id_str
             )
-            .bind(id.to_string())
             .fetch_optional(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -314,17 +323,19 @@ impl SessionRepository for SqlxMysqlSessionRepo {
 
     fn create(&self, input: domain::NewSession) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query(
+            let id_str = input.id.to_string();
+            let user_id_str = input.user_id.to_string();
+            sqlx::query!(
                 "INSERT INTO yauth_sessions (id, user_id, token_hash, ip_address, user_agent, expires_at, created_at) \
                  VALUES (?, ?, ?, ?, ?, ?, ?)",
+                id_str,
+                user_id_str,
+                input.token_hash,
+                input.ip_address,
+                input.user_agent,
+                input.expires_at,
+                input.created_at,
             )
-            .bind(input.id.to_string())
-            .bind(input.user_id.to_string())
-            .bind(&input.token_hash)
-            .bind(&input.ip_address)
-            .bind(&input.user_agent)
-            .bind(input.expires_at)
-            .bind(input.created_at)
             .execute(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -334,8 +345,8 @@ impl SessionRepository for SqlxMysqlSessionRepo {
 
     fn delete(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query("DELETE FROM yauth_sessions WHERE id = ?")
-                .bind(id.to_string())
+            let id_str = id.to_string();
+            sqlx::query!("DELETE FROM yauth_sessions WHERE id = ?", id_str)
                 .execute(&self.pool)
                 .await
                 .map_err(sqlx_err)?;
@@ -345,22 +356,26 @@ impl SessionRepository for SqlxMysqlSessionRepo {
 
     fn list(&self, limit: i64, offset: i64) -> RepoFuture<'_, (Vec<domain::Session>, i64)> {
         Box::pin(async move {
-            let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM yauth_sessions")
+            let total = sqlx::query!("SELECT COUNT(*) as count FROM yauth_sessions /* mysql */")
                 .fetch_one(&self.pool)
                 .await
                 .map_err(sqlx_err)?;
 
-            let rows: Vec<SessionRow> = sqlx::query_as(
+            let rows = sqlx::query_as!(
+                SessionRow,
                 "SELECT id, user_id, token_hash, ip_address, user_agent, expires_at, created_at \
                  FROM yauth_sessions ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                limit,
+                offset
             )
-            .bind(limit)
-            .bind(offset)
             .fetch_all(&self.pool)
             .await
             .map_err(sqlx_err)?;
 
-            Ok((rows.into_iter().map(|s| s.into_domain()).collect(), total.0))
+            Ok((
+                rows.into_iter().map(|s| s.into_domain()).collect(),
+                total.count,
+            ))
         })
     }
 }

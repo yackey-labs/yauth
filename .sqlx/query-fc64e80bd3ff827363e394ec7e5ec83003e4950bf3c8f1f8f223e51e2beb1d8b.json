@@ -1,0 +1,12 @@
+{
+  "db_name": "MySQL",
+  "query": "UPDATE yauth_device_codes SET last_polled_at = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "fc64e80bd3ff827363e394ec7e5ec83003e4950bf3c8f1f8f223e51e2beb1d8b"
+}

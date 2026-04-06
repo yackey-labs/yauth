@@ -1,0 +1,12 @@
+{
+  "db_name": "MySQL",
+  "query": "DELETE FROM yauth_unlock_tokens WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "eb75cbbca2e0821859a63f63d24fd61bd0bd331db877a7ba3d8b92fe543113b4"
+}

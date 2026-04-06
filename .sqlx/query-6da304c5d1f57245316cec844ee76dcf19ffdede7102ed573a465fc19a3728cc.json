@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO yauth_device_codes (id, device_code_hash, user_code, client_id, scopes, user_id, status, interval, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) /* sqlite */",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 10
+    },
+    "nullable": []
+  },
+  "hash": "6da304c5d1f57245316cec844ee76dcf19ffdede7102ed573a465fc19a3728cc"
+}

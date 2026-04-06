@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO yauth_refresh_tokens (id, user_id, token_hash, family_id, expires_at, revoked, created_at) VALUES (?, ?, ?, ?, ?, ?, ?) /* sqlite */",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "9c2fbdf4dce92551ad2b2de77b7361807ba784a8ac43c2f8046c46cae2f01bee"
+}

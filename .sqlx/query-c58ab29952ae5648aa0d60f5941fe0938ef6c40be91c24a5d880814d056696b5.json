@@ -1,0 +1,12 @@
+{
+  "db_name": "MySQL",
+  "query": "INSERT INTO yauth_oauth_states (state, provider, redirect_url, expires_at, created_at) VALUES (?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "c58ab29952ae5648aa0d60f5941fe0938ef6c40be91c24a5d880814d056696b5"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE yauth_webauthn_credentials SET last_used_at = ? WHERE user_id = ? /* sqlite */",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "4bb83a0692f9a92f7152a69a117d280f97340bd6b228fbe3018101e7e58fd70b"
+}

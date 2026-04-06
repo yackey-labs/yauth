@@ -1,0 +1,12 @@
+{
+  "db_name": "MySQL",
+  "query": "INSERT INTO yauth_consents (id, user_id, client_id, scopes, created_at) VALUES (?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "b5414a0f6cc177018e672a85cad0c701af6249e4fa8226d803f1a103d6e3507b"
+}

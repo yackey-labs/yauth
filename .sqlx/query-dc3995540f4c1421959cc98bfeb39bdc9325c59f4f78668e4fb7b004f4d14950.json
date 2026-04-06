@@ -1,0 +1,80 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id, device_code_hash, user_code, client_id, scopes, user_id, status, interval, expires_at, last_polled_at, created_at FROM yauth_device_codes WHERE device_code_hash = ? /* sqlite */",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "device_code_hash",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "user_code",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "client_id",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "scopes",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "user_id",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "status",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "interval",
+        "ordinal": 7,
+        "type_info": "Integer"
+      },
+      {
+        "name": "expires_at",
+        "ordinal": 8,
+        "type_info": "Text"
+      },
+      {
+        "name": "last_polled_at",
+        "ordinal": 9,
+        "type_info": "Text"
+      },
+      {
+        "name": "created_at",
+        "ordinal": 10,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "dc3995540f4c1421959cc98bfeb39bdc9325c59f4f78668e4fb7b004f4d14950"
+}

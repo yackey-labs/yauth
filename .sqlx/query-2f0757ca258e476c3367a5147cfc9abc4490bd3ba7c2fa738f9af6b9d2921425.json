@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO yauth_audit_log (id, user_id, event_type, metadata, ip_address, created_at) VALUES (?, ?, ?, ?, ?, ?) /* sqlite */",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "2f0757ca258e476c3367a5147cfc9abc4490bd3ba7c2fa738f9af6b9d2921425"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "MySQL",
+  "query": "UPDATE yauth_device_codes SET status = ?, user_id = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "16011f5fe45b97041b9cb620d81edcfc25aae9d4f1d026e7294a17bbcbed2ae3"
+}

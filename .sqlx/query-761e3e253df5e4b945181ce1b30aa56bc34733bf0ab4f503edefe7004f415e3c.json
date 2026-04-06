@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO yauth_email_verifications (id, user_id, token_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?) /* sqlite */",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "761e3e253df5e4b945181ce1b30aa56bc34733bf0ab4f503edefe7004f415e3c"
+}

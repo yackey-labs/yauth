@@ -1,0 +1,12 @@
+{
+  "db_name": "MySQL",
+  "query": "UPDATE yauth_magic_links SET used = true WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "2cc83bd2e9b6c9d402d46cb74e2c91953d60db6860565a6c4692136a4bbf6bbd"
+}

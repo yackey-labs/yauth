@@ -45,6 +45,7 @@ impl RevocationRepository for SqlxMysqlRevocationRepo {
         Box::pin(async move {
             self.ensure_init().await?;
 
+            // Dynamic INTERVAL — keep as runtime query
             sqlx::query(
                 "INSERT INTO yauth_revocations (`key`, expires_at) \
                  VALUES (?, DATE_ADD(NOW(), INTERVAL ? SECOND)) \
@@ -64,6 +65,7 @@ impl RevocationRepository for SqlxMysqlRevocationRepo {
         Box::pin(async move {
             self.ensure_init().await?;
 
+            // Runtime query — table created dynamically
             let row: Option<(i32,)> = sqlx::query_as(
                 "SELECT 1 as found FROM yauth_revocations WHERE `key` = ? AND expires_at > NOW()",
             )

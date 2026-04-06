@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE yauth_consents SET scopes = ? WHERE id = ? /* sqlite */",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "e0e6eee8bb8b1755245dbbf8348ea130de6fdf38e94ae818c45fcb39c71c289e"
+}

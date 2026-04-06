@@ -69,4 +69,4 @@ utoipa = { version = "5", features = ["axum_extras", "uuid", "chrono"] }
 async-trait = "0.1"
 
 # sqlx (optional — pulled in by sqlx-*-backend features)
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "chrono", "uuid", "json", "derive"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "chrono", "uuid", "json", "derive", "macros"] }

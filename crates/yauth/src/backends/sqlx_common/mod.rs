@@ -124,3 +124,42 @@ pub(crate) fn opt_json_to_str(v: Option<serde_json::Value>) -> Option<String> {
 pub(crate) fn opt_str_to_json(s: Option<String>) -> Option<serde_json::Value> {
     s.map(|s| str_to_json(&s))
 }
+
+// ── DateTime ↔ String helpers (SQLite) ──
+// SQLite stores datetimes as TEXT. We use ISO 8601 with `T` separator for
+// consistency and parse back with multiple-format fallbacks.
+
+#[cfg(feature = "sqlx-sqlite-backend")]
+#[allow(dead_code)]
+pub(crate) fn dt_to_str(dt: chrono::NaiveDateTime) -> String {
+    dt.format("%Y-%m-%dT%H:%M:%S%.f").to_string()
+}
+
+#[cfg(feature = "sqlx-sqlite-backend")]
+#[allow(dead_code)]
+pub(crate) fn str_to_dt(s: &str) -> chrono::NaiveDateTime {
+    chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.f")
+        .or_else(|_| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f"))
+        .or_else(|_| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S"))
+        .or_else(|_| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S"))
+        .unwrap_or_else(|e| {
+            log::error!(
+                "Failed to parse NaiveDateTime from stored value '{}': {}",
+                s,
+                e
+            );
+            chrono::NaiveDateTime::default()
+        })
+}
+
+#[cfg(feature = "sqlx-sqlite-backend")]
+#[allow(dead_code)]
+pub(crate) fn opt_dt_to_str(dt: Option<chrono::NaiveDateTime>) -> Option<String> {
+    dt.map(dt_to_str)
+}
+
+#[cfg(feature = "sqlx-sqlite-backend")]
+#[allow(dead_code)]
+pub(crate) fn opt_str_to_dt(s: Option<String>) -> Option<chrono::NaiveDateTime> {
+    s.map(|s| str_to_dt(&s))
+}

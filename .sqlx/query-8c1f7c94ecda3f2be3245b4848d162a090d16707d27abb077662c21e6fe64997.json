@@ -1,0 +1,12 @@
+{
+  "db_name": "MySQL",
+  "query": "UPDATE yauth_account_locks SET failed_count = failed_count + 1, updated_at = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "8c1f7c94ecda3f2be3245b4848d162a090d16707d27abb077662c21e6fe64997"
+}

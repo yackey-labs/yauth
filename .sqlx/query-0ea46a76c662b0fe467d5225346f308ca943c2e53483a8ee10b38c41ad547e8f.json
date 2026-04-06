@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO yauth_unlock_tokens (id, user_id, token_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?) /* sqlite */",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "0ea46a76c662b0fe467d5225346f308ca943c2e53483a8ee10b38c41ad547e8f"
+}

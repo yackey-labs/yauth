@@ -2,7 +2,7 @@ use chrono::{NaiveDateTime, Utc};
 use sqlx::MySqlPool;
 use uuid::Uuid;
 
-use crate::backends::sqlx_common::sqlx_err;
+use crate::backends::sqlx_common::{sqlx_err, str_to_uuid};
 use crate::domain;
 use crate::repo::{RepoFuture, SessionOpsRepository, sealed};
 
@@ -43,17 +43,21 @@ impl SessionOpsRepository for SqlxMysqlSessionOpsRepo {
             let expires_at =
                 now + chrono::Duration::from_std(ttl).unwrap_or(chrono::Duration::days(7));
 
-            sqlx::query(
+            let session_id_str = session_id.to_string();
+            let user_id_str = user_id.to_string();
+            let expires_naive = expires_at.naive_utc();
+            let now_naive = now.naive_utc();
+            sqlx::query!(
                 "INSERT INTO yauth_sessions (id, user_id, token_hash, ip_address, user_agent, expires_at, created_at) \
                  VALUES (?, ?, ?, ?, ?, ?, ?)",
+                session_id_str,
+                user_id_str,
+                token_hash,
+                ip_address,
+                user_agent,
+                expires_naive,
+                now_naive,
             )
-            .bind(session_id.to_string())
-            .bind(user_id.to_string())
-            .bind(&token_hash)
-            .bind(&ip_address)
-            .bind(&user_agent)
-            .bind(expires_at.naive_utc())
-            .bind(now.naive_utc())
             .execute(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -65,11 +69,12 @@ impl SessionOpsRepository for SqlxMysqlSessionOpsRepo {
     fn validate_session(&self, token_hash: &str) -> RepoFuture<'_, Option<domain::StoredSession>> {
         let token_hash = token_hash.to_string();
         Box::pin(async move {
-            let row = sqlx::query_as::<_, StoredSessionRow>(
+            let row = sqlx::query_as!(
+                StoredSessionRow,
                 "SELECT id, user_id, ip_address, user_agent, expires_at, created_at \
                  FROM yauth_sessions WHERE token_hash = ?",
+                token_hash
             )
-            .bind(&token_hash)
             .fetch_optional(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -79,16 +84,15 @@ impl SessionOpsRepository for SqlxMysqlSessionOpsRepo {
                     let now = Utc::now().naive_utc();
                     if s.expires_at < now {
                         // Expired — clean up
-                        sqlx::query("DELETE FROM yauth_sessions WHERE id = ?")
-                            .bind(s.id)
+                        sqlx::query!("DELETE FROM yauth_sessions WHERE id = ?", s.id)
                             .execute(&self.pool)
                             .await
                             .map_err(sqlx_err)?;
                         Ok(None)
                     } else {
                         Ok(Some(domain::StoredSession {
-                            id: uuid::Uuid::parse_str(&s.id).unwrap_or_default(),
-                            user_id: uuid::Uuid::parse_str(&s.user_id).unwrap_or_default(),
+                            id: str_to_uuid(&s.id),
+                            user_id: str_to_uuid(&s.user_id),
                             ip_address: s.ip_address,
                             user_agent: s.user_agent,
                             expires_at: s.expires_at,
@@ -104,19 +108,21 @@ impl SessionOpsRepository for SqlxMysqlSessionOpsRepo {
     fn delete_session(&self, token_hash: &str) -> RepoFuture<'_, bool> {
         let token_hash = token_hash.to_string();
         Box::pin(async move {
-            let result = sqlx::query("DELETE FROM yauth_sessions WHERE token_hash = ?")
-                .bind(&token_hash)
-                .execute(&self.pool)
-                .await
-                .map_err(sqlx_err)?;
+            let result = sqlx::query!(
+                "DELETE FROM yauth_sessions WHERE token_hash = ?",
+                token_hash
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(sqlx_err)?;
             Ok(result.rows_affected() > 0)
         })
     }
 
     fn delete_all_sessions_for_user(&self, user_id: Uuid) -> RepoFuture<'_, u64> {
         Box::pin(async move {
-            let result = sqlx::query("DELETE FROM yauth_sessions WHERE user_id = ?")
-                .bind(user_id.to_string())
+            let user_id_str = user_id.to_string();
+            let result = sqlx::query!("DELETE FROM yauth_sessions WHERE user_id = ?", user_id_str)
                 .execute(&self.pool)
                 .await
                 .map_err(sqlx_err)?;
@@ -131,13 +137,15 @@ impl SessionOpsRepository for SqlxMysqlSessionOpsRepo {
     ) -> RepoFuture<'_, u64> {
         let keep_hash = keep_hash.to_string();
         Box::pin(async move {
-            let result =
-                sqlx::query("DELETE FROM yauth_sessions WHERE user_id = ? AND token_hash != ?")
-                    .bind(user_id.to_string())
-                    .bind(&keep_hash)
-                    .execute(&self.pool)
-                    .await
-                    .map_err(sqlx_err)?;
+            let user_id_str = user_id.to_string();
+            let result = sqlx::query!(
+                "DELETE FROM yauth_sessions WHERE user_id = ? AND token_hash != ?",
+                user_id_str,
+                keep_hash
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(sqlx_err)?;
             Ok(result.rows_affected())
         })
     }

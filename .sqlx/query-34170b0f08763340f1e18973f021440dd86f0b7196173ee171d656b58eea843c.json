@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM yauth_password_resets WHERE user_id = ? AND used_at IS NULL /* sqlite */",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "34170b0f08763340f1e18973f021440dd86f0b7196173ee171d656b58eea843c"
+}

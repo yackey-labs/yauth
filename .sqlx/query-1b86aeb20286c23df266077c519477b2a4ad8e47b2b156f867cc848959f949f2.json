@@ -1,0 +1,86 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id, code_hash, client_id, user_id, scopes, redirect_uri, code_challenge, code_challenge_method, expires_at, used, nonce, created_at FROM yauth_authorization_codes WHERE code_hash = ? AND used = false AND expires_at > ? /* sqlite */",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "code_hash",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "client_id",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "user_id",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "scopes",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "redirect_uri",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "code_challenge",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "code_challenge_method",
+        "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "expires_at",
+        "ordinal": 8,
+        "type_info": "Text"
+      },
+      {
+        "name": "used",
+        "ordinal": 9,
+        "type_info": "Integer"
+      },
+      {
+        "name": "nonce",
+        "ordinal": 10,
+        "type_info": "Text"
+      },
+      {
+        "name": "created_at",
+        "ordinal": 11,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "1b86aeb20286c23df266077c519477b2a4ad8e47b2b156f867cc848959f949f2"
+}

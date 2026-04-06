@@ -2,7 +2,7 @@ use chrono::NaiveDateTime;
 use sqlx::MySqlPool;
 use uuid::Uuid;
 
-use crate::backends::sqlx_common::sqlx_err;
+use crate::backends::sqlx_common::{sqlx_err, str_to_uuid};
 use crate::domain;
 use crate::repo::{RepoFuture, WebhookDeliveryRepository, WebhookRepository, sealed};
 
@@ -12,7 +12,7 @@ struct WebhookRow {
     url: String,
     secret: String,
     events: serde_json::Value,
-    active: bool,
+    active: i8,
     created_at: NaiveDateTime,
     updated_at: NaiveDateTime,
 }
@@ -20,11 +20,11 @@ struct WebhookRow {
 impl WebhookRow {
     fn into_domain(self) -> domain::Webhook {
         domain::Webhook {
-            id: uuid::Uuid::parse_str(&self.id).unwrap_or_default(),
+            id: str_to_uuid(&self.id),
             url: self.url,
             secret: self.secret,
             events: self.events,
-            active: self.active,
+            active: self.active != 0,
             created_at: self.created_at,
             updated_at: self.updated_at,
         }
@@ -34,12 +34,12 @@ impl WebhookRow {
 #[derive(sqlx::FromRow)]
 struct WebhookDeliveryRow {
     id: String,
-    webhook_id: String,
+    webhook_id: Option<String>,
     event_type: String,
     payload: serde_json::Value,
     status_code: Option<i16>,
     response_body: Option<String>,
-    success: bool,
+    success: i8,
     attempt: i32,
     created_at: NaiveDateTime,
 }
@@ -59,11 +59,13 @@ impl sealed::Sealed for SqlxMysqlWebhookRepo {}
 impl WebhookRepository for SqlxMysqlWebhookRepo {
     fn find_by_id(&self, id: Uuid) -> RepoFuture<'_, Option<domain::Webhook>> {
         Box::pin(async move {
-            let row = sqlx::query_as::<_, WebhookRow>(
+            let id_str = id.to_string();
+            let row = sqlx::query_as!(
+                WebhookRow,
                 "SELECT id, url, secret, events, active, created_at, updated_at \
                  FROM yauth_webhooks WHERE id = ?",
+                id_str
             )
-            .bind(id.to_string())
             .fetch_optional(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -73,9 +75,10 @@ impl WebhookRepository for SqlxMysqlWebhookRepo {
 
     fn find_active(&self) -> RepoFuture<'_, Vec<domain::Webhook>> {
         Box::pin(async move {
-            let rows: Vec<WebhookRow> = sqlx::query_as(
+            let rows = sqlx::query_as!(
+                WebhookRow,
                 "SELECT id, url, secret, events, active, created_at, updated_at \
-                 FROM yauth_webhooks WHERE active = true",
+                 FROM yauth_webhooks WHERE active = true /* mysql */"
             )
             .fetch_all(&self.pool)
             .await
@@ -86,8 +89,9 @@ impl WebhookRepository for SqlxMysqlWebhookRepo {
 
     fn find_all(&self) -> RepoFuture<'_, Vec<domain::Webhook>> {
         Box::pin(async move {
-            let rows: Vec<WebhookRow> = sqlx::query_as(
-                "SELECT id, url, secret, events, active, created_at, updated_at FROM yauth_webhooks",
+            let rows = sqlx::query_as!(
+                WebhookRow,
+                "SELECT id, url, secret, events, active, created_at, updated_at FROM yauth_webhooks /* mysql */"
             )
             .fetch_all(&self.pool)
             .await
@@ -98,17 +102,18 @@ impl WebhookRepository for SqlxMysqlWebhookRepo {
 
     fn create(&self, input: domain::NewWebhook) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query(
+            let id_str = input.id.to_string();
+            sqlx::query!(
                 "INSERT INTO yauth_webhooks (id, url, secret, events, active, created_at, updated_at) \
                  VALUES (?, ?, ?, ?, ?, ?, ?)",
+                id_str,
+                input.url,
+                input.secret,
+                input.events,
+                input.active,
+                input.created_at,
+                input.updated_at,
             )
-            .bind(input.id.to_string())
-            .bind(&input.url)
-            .bind(&input.secret)
-            .bind(&input.events)
-            .bind(input.active)
-            .bind(input.created_at)
-            .bind(input.updated_at)
             .execute(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -118,7 +123,9 @@ impl WebhookRepository for SqlxMysqlWebhookRepo {
 
     fn update(&self, id: Uuid, changes: domain::UpdateWebhook) -> RepoFuture<'_, domain::Webhook> {
         Box::pin(async move {
-            // Build dynamic update
+            let id_str = id.to_string();
+
+            // Build dynamic update — must stay as runtime query()
             let mut sets = Vec::new();
 
             macro_rules! push_set {
@@ -136,11 +143,12 @@ impl WebhookRepository for SqlxMysqlWebhookRepo {
             push_set!(changes.updated_at, "updated_at");
 
             if sets.is_empty() {
-                let row = sqlx::query_as::<_, WebhookRow>(
+                let row = sqlx::query_as!(
+                    WebhookRow,
                     "SELECT id, url, secret, events, active, created_at, updated_at \
                      FROM yauth_webhooks WHERE id = ?",
+                    id_str
                 )
-                .bind(id.to_string())
                 .fetch_one(&self.pool)
                 .await
                 .map_err(sqlx_err)?;
@@ -169,16 +177,17 @@ impl WebhookRepository for SqlxMysqlWebhookRepo {
             }
 
             query
-                .bind(id.to_string())
+                .bind(&id_str)
                 .execute(&self.pool)
                 .await
                 .map_err(sqlx_err)?;
 
-            let row = sqlx::query_as::<_, WebhookRow>(
+            let row = sqlx::query_as!(
+                WebhookRow,
                 "SELECT id, url, secret, events, active, created_at, updated_at \
                  FROM yauth_webhooks WHERE id = ?",
+                id_str
             )
-            .bind(id.to_string())
             .fetch_one(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -188,8 +197,8 @@ impl WebhookRepository for SqlxMysqlWebhookRepo {
 
     fn delete(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query("DELETE FROM yauth_webhooks WHERE id = ?")
-                .bind(id.to_string())
+            let id_str = id.to_string();
+            sqlx::query!("DELETE FROM yauth_webhooks WHERE id = ?", id_str)
                 .execute(&self.pool)
                 .await
                 .map_err(sqlx_err)?;
@@ -217,25 +226,27 @@ impl WebhookDeliveryRepository for SqlxMysqlWebhookDeliveryRepo {
         limit: i64,
     ) -> RepoFuture<'_, Vec<domain::WebhookDelivery>> {
         Box::pin(async move {
-            let rows: Vec<WebhookDeliveryRow> = sqlx::query_as(
+            let webhook_id_str = webhook_id.to_string();
+            let rows = sqlx::query_as!(
+                WebhookDeliveryRow,
                 "SELECT id, webhook_id, event_type, payload, status_code, response_body, success, attempt, created_at \
                  FROM yauth_webhook_deliveries WHERE webhook_id = ? ORDER BY created_at DESC LIMIT ?",
+                webhook_id_str,
+                limit
             )
-            .bind(webhook_id.to_string())
-            .bind(limit)
             .fetch_all(&self.pool)
             .await
             .map_err(sqlx_err)?;
             Ok(rows
                 .into_iter()
                 .map(|r| domain::WebhookDelivery {
-                    id: uuid::Uuid::parse_str(&r.id).unwrap_or_default(),
-                    webhook_id: uuid::Uuid::parse_str(&r.webhook_id).unwrap_or_default(),
+                    id: str_to_uuid(&r.id),
+                    webhook_id: str_to_uuid(&r.webhook_id.unwrap_or_default()),
                     event_type: r.event_type,
                     payload: r.payload,
                     status_code: r.status_code,
                     response_body: r.response_body,
-                    success: r.success,
+                    success: r.success != 0,
                     attempt: r.attempt,
                     created_at: r.created_at,
                 })
@@ -245,19 +256,21 @@ impl WebhookDeliveryRepository for SqlxMysqlWebhookDeliveryRepo {
 
     fn create(&self, input: domain::NewWebhookDelivery) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query(
+            let id_str = input.id.to_string();
+            let webhook_id_str = input.webhook_id.to_string();
+            sqlx::query!(
                 "INSERT INTO yauth_webhook_deliveries (id, webhook_id, event_type, payload, status_code, response_body, success, attempt, created_at) \
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                id_str,
+                webhook_id_str,
+                input.event_type,
+                input.payload,
+                input.status_code,
+                input.response_body,
+                input.success,
+                input.attempt,
+                input.created_at,
             )
-            .bind(input.id.to_string())
-            .bind(input.webhook_id.to_string())
-            .bind(&input.event_type)
-            .bind(&input.payload)
-            .bind(input.status_code)
-            .bind(&input.response_body)
-            .bind(input.success)
-            .bind(input.attempt)
-            .bind(input.created_at)
             .execute(&self.pool)
             .await
             .map_err(sqlx_err)?;

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO yauth_magic_links (id, email, token_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?) /* sqlite */",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "d877215e5acc665df4db0e0fb63d463439df97f6c0bfe2ba9c122b05ea8c56ad"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "MySQL",
+  "query": "DELETE FROM yauth_webauthn_credentials WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "66d4dbb5ed5d9ac6688863432accf52274b9b90cdc35b12e5157a62f0e8d5409"
+}

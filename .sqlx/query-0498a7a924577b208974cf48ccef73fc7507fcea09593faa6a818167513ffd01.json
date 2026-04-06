@@ -1,0 +1,12 @@
+{
+  "db_name": "MySQL",
+  "query": "UPDATE yauth_refresh_tokens SET revoked = true WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "0498a7a924577b208974cf48ccef73fc7507fcea09593faa6a818167513ffd01"
+}

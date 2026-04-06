@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE yauth_api_keys SET last_used_at = ? WHERE id = ? /* sqlite */",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "6a1e051808e9f7af9a081fa64b5f9266aebe7ee5361a744a57d6dbcd50345f6b"
+}

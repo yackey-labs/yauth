@@ -1,67 +1,66 @@
-use chrono::NaiveDateTime;
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
-use crate::backends::sqlx_common::sqlx_err;
+use crate::backends::sqlx_common::{
+    dt_to_str, opt_str_to_dt, opt_str_to_json, opt_str_to_uuid, sqlx_err, str_to_dt, str_to_uuid,
+};
 use crate::domain;
 use crate::repo::{
     AuthorizationCodeRepository, ConsentRepository, DeviceCodeRepository, Oauth2ClientRepository,
     RepoFuture, sealed,
 };
 
-// ── Row types ──
-
 #[derive(sqlx::FromRow)]
 struct Oauth2ClientRow {
-    id: Uuid,
+    id: Option<String>,
     client_id: String,
     client_secret_hash: Option<String>,
-    redirect_uris: serde_json::Value,
+    redirect_uris: String,
     client_name: Option<String>,
-    grant_types: serde_json::Value,
-    scopes: Option<serde_json::Value>,
-    is_public: bool,
-    created_at: NaiveDateTime,
+    grant_types: String,
+    scopes: Option<String>,
+    is_public: i64,
+    created_at: String,
 }
 
 #[derive(sqlx::FromRow)]
 struct AuthorizationCodeRow {
-    id: Uuid,
+    id: Option<String>,
     code_hash: String,
     client_id: String,
-    user_id: Uuid,
-    scopes: Option<serde_json::Value>,
+    user_id: Option<String>,
+    scopes: Option<String>,
     redirect_uri: String,
     code_challenge: String,
     code_challenge_method: String,
-    expires_at: NaiveDateTime,
-    used: bool,
+    expires_at: String,
+    used: i64,
     nonce: Option<String>,
-    created_at: NaiveDateTime,
+    created_at: String,
 }
 
 #[derive(sqlx::FromRow)]
 struct ConsentRow {
-    id: Uuid,
-    user_id: Uuid,
+    id: Option<String>,
+    user_id: Option<String>,
     client_id: String,
-    scopes: Option<serde_json::Value>,
-    created_at: NaiveDateTime,
+    scopes: Option<String>,
+    created_at: String,
 }
 
 #[derive(sqlx::FromRow)]
 struct DeviceCodeRow {
-    id: Uuid,
+    id: Option<String>,
     device_code_hash: String,
     user_code: String,
     client_id: String,
-    scopes: Option<serde_json::Value>,
-    user_id: Option<Uuid>,
+    scopes: Option<String>,
+    user_id: Option<String>,
     status: String,
-    interval: i32,
-    expires_at: NaiveDateTime,
-    last_polled_at: Option<NaiveDateTime>,
-    created_at: NaiveDateTime,
+    interval: i64,
+    expires_at: String,
+    last_polled_at: Option<String>,
+    created_at: String,
 }
 
 // ── Oauth2Client ──
@@ -80,43 +79,49 @@ impl Oauth2ClientRepository for SqlxSqliteOauth2ClientRepo {
     fn find_by_client_id(&self, client_id: &str) -> RepoFuture<'_, Option<domain::Oauth2Client>> {
         let client_id = client_id.to_string();
         Box::pin(async move {
-            let row = sqlx::query_as::<_, Oauth2ClientRow>(
+            let row = sqlx::query_as!(
+                Oauth2ClientRow,
                 "SELECT id, client_id, client_secret_hash, redirect_uris, client_name, grant_types, scopes, is_public, created_at \
-                 FROM yauth_oauth2_clients WHERE client_id = ?",
+                 FROM yauth_oauth2_clients WHERE client_id = ? /* sqlite */",
+                client_id
             )
-            .bind(&client_id)
             .fetch_optional(&self.pool)
             .await
             .map_err(sqlx_err)?;
             Ok(row.map(|r| domain::Oauth2Client {
-                id: r.id,
+                id: str_to_uuid(&r.id.unwrap_or_default()),
                 client_id: r.client_id,
                 client_secret_hash: r.client_secret_hash,
-                redirect_uris: r.redirect_uris,
+                redirect_uris: serde_json::from_str(&r.redirect_uris).unwrap_or_default(),
                 client_name: r.client_name,
-                grant_types: r.grant_types,
-                scopes: r.scopes,
-                is_public: r.is_public,
-                created_at: r.created_at,
+                grant_types: serde_json::from_str(&r.grant_types).unwrap_or_default(),
+                scopes: opt_str_to_json(r.scopes),
+                is_public: r.is_public != 0,
+                created_at: str_to_dt(&r.created_at),
             }))
         })
     }
 
     fn create(&self, input: domain::NewOauth2Client) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query(
+            let id_str = input.id.to_string();
+            let redirect_uris_str = input.redirect_uris.to_string();
+            let grant_types_str = input.grant_types.to_string();
+            let scopes_str = input.scopes.map(|v| v.to_string());
+            let created_str = dt_to_str(input.created_at);
+            sqlx::query!(
                 "INSERT INTO yauth_oauth2_clients (id, client_id, client_secret_hash, redirect_uris, client_name, grant_types, scopes, is_public, created_at) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) /* sqlite */",
+                id_str,
+                input.client_id,
+                input.client_secret_hash,
+                redirect_uris_str,
+                input.client_name,
+                grant_types_str,
+                scopes_str,
+                input.is_public,
+                created_str,
             )
-            .bind(input.id)
-            .bind(&input.client_id)
-            .bind(&input.client_secret_hash)
-            .bind(&input.redirect_uris)
-            .bind(&input.client_name)
-            .bind(&input.grant_types)
-            .bind(&input.scopes)
-            .bind(input.is_public)
-            .bind(input.created_at)
             .execute(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -144,51 +149,58 @@ impl AuthorizationCodeRepository for SqlxSqliteAuthorizationCodeRepo {
     ) -> RepoFuture<'_, Option<domain::AuthorizationCode>> {
         let code_hash = code_hash.to_string();
         Box::pin(async move {
-            let row = sqlx::query_as::<_, AuthorizationCodeRow>(
+            let now = dt_to_str(chrono::Utc::now().naive_utc());
+            let row = sqlx::query_as!(
+                AuthorizationCodeRow,
                 "SELECT id, code_hash, client_id, user_id, scopes, redirect_uri, code_challenge, code_challenge_method, expires_at, used, nonce, created_at \
                  FROM yauth_authorization_codes \
-                 WHERE code_hash = ? AND used = false AND expires_at > ?",
+                 WHERE code_hash = ? AND used = false AND expires_at > ? /* sqlite */",
+                code_hash,
+                now
             )
-            .bind(&code_hash)
-            .bind(chrono::Utc::now().naive_utc())
             .fetch_optional(&self.pool)
             .await
             .map_err(sqlx_err)?;
             Ok(row.map(|r| domain::AuthorizationCode {
-                id: r.id,
+                id: str_to_uuid(&r.id.unwrap_or_default()),
                 code_hash: r.code_hash,
                 client_id: r.client_id,
-                user_id: r.user_id,
-                scopes: r.scopes,
+                user_id: str_to_uuid(&r.user_id.unwrap_or_default()),
+                scopes: opt_str_to_json(r.scopes),
                 redirect_uri: r.redirect_uri,
                 code_challenge: r.code_challenge,
                 code_challenge_method: r.code_challenge_method,
-                expires_at: r.expires_at,
-                used: r.used,
+                expires_at: str_to_dt(&r.expires_at),
+                used: r.used != 0,
                 nonce: r.nonce,
-                created_at: r.created_at,
+                created_at: str_to_dt(&r.created_at),
             }))
         })
     }
 
     fn create(&self, input: domain::NewAuthorizationCode) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query(
+            let id_str = input.id.to_string();
+            let user_id_str = input.user_id.to_string();
+            let scopes_str = input.scopes.map(|v| v.to_string());
+            let expires_str = dt_to_str(input.expires_at);
+            let created_str = dt_to_str(input.created_at);
+            sqlx::query!(
                 "INSERT INTO yauth_authorization_codes (id, code_hash, client_id, user_id, scopes, redirect_uri, code_challenge, code_challenge_method, expires_at, used, nonce, created_at) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) /* sqlite */",
+                id_str,
+                input.code_hash,
+                input.client_id,
+                user_id_str,
+                scopes_str,
+                input.redirect_uri,
+                input.code_challenge,
+                input.code_challenge_method,
+                expires_str,
+                input.used,
+                input.nonce,
+                created_str,
             )
-            .bind(input.id)
-            .bind(&input.code_hash)
-            .bind(&input.client_id)
-            .bind(input.user_id)
-            .bind(&input.scopes)
-            .bind(&input.redirect_uri)
-            .bind(&input.code_challenge)
-            .bind(&input.code_challenge_method)
-            .bind(input.expires_at)
-            .bind(input.used)
-            .bind(&input.nonce)
-            .bind(input.created_at)
             .execute(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -198,11 +210,14 @@ impl AuthorizationCodeRepository for SqlxSqliteAuthorizationCodeRepo {
 
     fn mark_used(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query("UPDATE yauth_authorization_codes SET used = true WHERE id = ?")
-                .bind(id)
-                .execute(&self.pool)
-                .await
-                .map_err(sqlx_err)?;
+            let id_str = id.to_string();
+            sqlx::query!(
+                "UPDATE yauth_authorization_codes SET used = true WHERE id = ? /* sqlite */",
+                id_str
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(sqlx_err)?;
             Ok(())
         })
     }
@@ -228,36 +243,42 @@ impl ConsentRepository for SqlxSqliteConsentRepo {
     ) -> RepoFuture<'_, Option<domain::Consent>> {
         let client_id = client_id.to_string();
         Box::pin(async move {
-            let row = sqlx::query_as::<_, ConsentRow>(
+            let user_id_str = user_id.to_string();
+            let row = sqlx::query_as!(
+                ConsentRow,
                 "SELECT id, user_id, client_id, scopes, created_at \
-                 FROM yauth_consents WHERE user_id = ? AND client_id = ?",
+                 FROM yauth_consents WHERE user_id = ? AND client_id = ? /* sqlite */",
+                user_id_str,
+                client_id
             )
-            .bind(user_id)
-            .bind(&client_id)
             .fetch_optional(&self.pool)
             .await
             .map_err(sqlx_err)?;
             Ok(row.map(|r| domain::Consent {
-                id: r.id,
-                user_id: r.user_id,
+                id: str_to_uuid(&r.id.unwrap_or_default()),
+                user_id: str_to_uuid(&r.user_id.unwrap_or_default()),
                 client_id: r.client_id,
-                scopes: r.scopes,
-                created_at: r.created_at,
+                scopes: opt_str_to_json(r.scopes),
+                created_at: str_to_dt(&r.created_at),
             }))
         })
     }
 
     fn create(&self, input: domain::NewConsent) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query(
+            let id_str = input.id.to_string();
+            let user_id_str = input.user_id.to_string();
+            let scopes_str = input.scopes.map(|v| v.to_string());
+            let created_str = dt_to_str(input.created_at);
+            sqlx::query!(
                 "INSERT INTO yauth_consents (id, user_id, client_id, scopes, created_at) \
-                 VALUES (?, ?, ?, ?, ?)",
+                 VALUES (?, ?, ?, ?, ?) /* sqlite */",
+                id_str,
+                user_id_str,
+                input.client_id,
+                scopes_str,
+                created_str,
             )
-            .bind(input.id)
-            .bind(input.user_id)
-            .bind(&input.client_id)
-            .bind(&input.scopes)
-            .bind(input.created_at)
             .execute(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -267,12 +288,16 @@ impl ConsentRepository for SqlxSqliteConsentRepo {
 
     fn update_scopes(&self, id: Uuid, scopes: Option<serde_json::Value>) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query("UPDATE yauth_consents SET scopes = ? WHERE id = ?")
-                .bind(&scopes)
-                .bind(id)
-                .execute(&self.pool)
-                .await
-                .map_err(sqlx_err)?;
+            let id_str = id.to_string();
+            let scopes_str = scopes.map(|v| v.to_string());
+            sqlx::query!(
+                "UPDATE yauth_consents SET scopes = ? WHERE id = ? /* sqlite */",
+                scopes_str,
+                id_str
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(sqlx_err)?;
             Ok(())
         })
     }
@@ -297,28 +322,30 @@ impl DeviceCodeRepository for SqlxSqliteDeviceCodeRepo {
     ) -> RepoFuture<'_, Option<domain::DeviceCode>> {
         let user_code = user_code.to_string();
         Box::pin(async move {
-            let row = sqlx::query_as::<_, DeviceCodeRow>(
+            let now = dt_to_str(chrono::Utc::now().naive_utc());
+            let row = sqlx::query_as!(
+                DeviceCodeRow,
                 "SELECT id, device_code_hash, user_code, client_id, scopes, user_id, status, interval, expires_at, last_polled_at, created_at \
                  FROM yauth_device_codes \
-                 WHERE user_code = ? AND status = 'pending' AND expires_at > ?",
+                 WHERE user_code = ? AND status = 'pending' AND expires_at > ? /* sqlite */",
+                user_code,
+                now
             )
-            .bind(&user_code)
-            .bind(chrono::Utc::now().naive_utc())
             .fetch_optional(&self.pool)
             .await
             .map_err(sqlx_err)?;
             Ok(row.map(|r| domain::DeviceCode {
-                id: r.id,
+                id: str_to_uuid(&r.id.unwrap_or_default()),
                 device_code_hash: r.device_code_hash,
                 user_code: r.user_code,
                 client_id: r.client_id,
-                scopes: r.scopes,
-                user_id: r.user_id,
+                scopes: opt_str_to_json(r.scopes),
+                user_id: opt_str_to_uuid(r.user_id),
                 status: r.status,
-                interval: r.interval,
-                expires_at: r.expires_at,
-                last_polled_at: r.last_polled_at,
-                created_at: r.created_at,
+                interval: r.interval as i32,
+                expires_at: str_to_dt(&r.expires_at),
+                last_polled_at: opt_str_to_dt(r.last_polled_at),
+                created_at: str_to_dt(&r.created_at),
             }))
         })
     }
@@ -329,46 +356,52 @@ impl DeviceCodeRepository for SqlxSqliteDeviceCodeRepo {
     ) -> RepoFuture<'_, Option<domain::DeviceCode>> {
         let device_code_hash = device_code_hash.to_string();
         Box::pin(async move {
-            let row = sqlx::query_as::<_, DeviceCodeRow>(
+            let row = sqlx::query_as!(
+                DeviceCodeRow,
                 "SELECT id, device_code_hash, user_code, client_id, scopes, user_id, status, interval, expires_at, last_polled_at, created_at \
-                 FROM yauth_device_codes WHERE device_code_hash = ?",
+                 FROM yauth_device_codes WHERE device_code_hash = ? /* sqlite */",
+                device_code_hash
             )
-            .bind(&device_code_hash)
             .fetch_optional(&self.pool)
             .await
             .map_err(sqlx_err)?;
             Ok(row.map(|r| domain::DeviceCode {
-                id: r.id,
+                id: str_to_uuid(&r.id.unwrap_or_default()),
                 device_code_hash: r.device_code_hash,
                 user_code: r.user_code,
                 client_id: r.client_id,
-                scopes: r.scopes,
-                user_id: r.user_id,
+                scopes: opt_str_to_json(r.scopes),
+                user_id: opt_str_to_uuid(r.user_id),
                 status: r.status,
-                interval: r.interval,
-                expires_at: r.expires_at,
-                last_polled_at: r.last_polled_at,
-                created_at: r.created_at,
+                interval: r.interval as i32,
+                expires_at: str_to_dt(&r.expires_at),
+                last_polled_at: opt_str_to_dt(r.last_polled_at),
+                created_at: str_to_dt(&r.created_at),
             }))
         })
     }
 
     fn create(&self, input: domain::NewDeviceCode) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query(
+            let id_str = input.id.to_string();
+            let user_id_str = input.user_id.map(|u| u.to_string());
+            let scopes_str = input.scopes.map(|v| v.to_string());
+            let expires_str = dt_to_str(input.expires_at);
+            let created_str = dt_to_str(input.created_at);
+            sqlx::query!(
                 "INSERT INTO yauth_device_codes (id, device_code_hash, user_code, client_id, scopes, user_id, status, interval, expires_at, created_at) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) /* sqlite */",
+                id_str,
+                input.device_code_hash,
+                input.user_code,
+                input.client_id,
+                scopes_str,
+                user_id_str,
+                input.status,
+                input.interval,
+                expires_str,
+                created_str,
             )
-            .bind(input.id)
-            .bind(&input.device_code_hash)
-            .bind(&input.user_code)
-            .bind(&input.client_id)
-            .bind(&input.scopes)
-            .bind(input.user_id)
-            .bind(&input.status)
-            .bind(input.interval)
-            .bind(input.expires_at)
-            .bind(input.created_at)
             .execute(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -379,37 +412,48 @@ impl DeviceCodeRepository for SqlxSqliteDeviceCodeRepo {
     fn update_status(&self, id: Uuid, status: &str, user_id: Option<Uuid>) -> RepoFuture<'_, ()> {
         let status = status.to_string();
         Box::pin(async move {
-            sqlx::query("UPDATE yauth_device_codes SET status = ?, user_id = ? WHERE id = ?")
-                .bind(&status)
-                .bind(user_id)
-                .bind(id)
-                .execute(&self.pool)
-                .await
-                .map_err(sqlx_err)?;
+            let id_str = id.to_string();
+            let user_id_str = user_id.map(|u| u.to_string());
+            sqlx::query!(
+                "UPDATE yauth_device_codes SET status = ?, user_id = ? WHERE id = ? /* sqlite */",
+                status,
+                user_id_str,
+                id_str
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(sqlx_err)?;
             Ok(())
         })
     }
 
     fn update_last_polled(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query("UPDATE yauth_device_codes SET last_polled_at = ? WHERE id = ?")
-                .bind(chrono::Utc::now().naive_utc())
-                .bind(id)
-                .execute(&self.pool)
-                .await
-                .map_err(sqlx_err)?;
+            let id_str = id.to_string();
+            let now = dt_to_str(chrono::Utc::now().naive_utc());
+            sqlx::query!(
+                "UPDATE yauth_device_codes SET last_polled_at = ? WHERE id = ? /* sqlite */",
+                now,
+                id_str
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(sqlx_err)?;
             Ok(())
         })
     }
 
     fn update_interval(&self, id: Uuid, interval: i32) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query("UPDATE yauth_device_codes SET interval = ? WHERE id = ?")
-                .bind(interval)
-                .bind(id)
-                .execute(&self.pool)
-                .await
-                .map_err(sqlx_err)?;
+            let id_str = id.to_string();
+            sqlx::query!(
+                "UPDATE yauth_device_codes SET interval = ? WHERE id = ? /* sqlite */",
+                interval,
+                id_str
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(sqlx_err)?;
             Ok(())
         })
     }

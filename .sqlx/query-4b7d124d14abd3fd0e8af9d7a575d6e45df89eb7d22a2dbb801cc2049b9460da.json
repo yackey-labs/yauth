@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO yauth_webhooks (id, url, secret, events, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) /* sqlite */",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "4b7d124d14abd3fd0e8af9d7a575d6e45df89eb7d22a2dbb801cc2049b9460da"
+}

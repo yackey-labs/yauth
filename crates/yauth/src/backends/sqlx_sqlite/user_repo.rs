@@ -1,65 +1,69 @@
-use chrono::NaiveDateTime;
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
-use crate::backends::sqlx_common::{sqlx_conflict, sqlx_err};
+use crate::backends::sqlx_common::{
+    dt_to_str, opt_dt_to_str, opt_str_to_dt, sqlx_conflict, sqlx_err, str_to_dt, str_to_uuid,
+};
 use crate::domain;
 use crate::repo::{RepoFuture, SessionRepository, UserRepository, sealed};
 
-// ── Row types for sqlx ──
+// ── Row types ──
+// SQLite stores UUIDs as TEXT and datetimes as TEXT (ISO 8601).
+// query_as!() macro infers these as String, so row types use String
+// and into_domain() parses them.
 
 #[derive(sqlx::FromRow)]
 struct UserRow {
-    id: Uuid,
+    id: Option<String>,
     email: String,
     display_name: Option<String>,
-    email_verified: bool,
+    email_verified: i64,
     role: String,
-    banned: bool,
+    banned: i64,
     banned_reason: Option<String>,
-    banned_until: Option<NaiveDateTime>,
-    created_at: NaiveDateTime,
-    updated_at: NaiveDateTime,
+    banned_until: Option<String>,
+    created_at: String,
+    updated_at: String,
 }
 
 impl UserRow {
     fn into_domain(self) -> domain::User {
         domain::User {
-            id: self.id,
+            id: str_to_uuid(&self.id.unwrap_or_default()),
             email: self.email,
             display_name: self.display_name,
-            email_verified: self.email_verified,
+            email_verified: self.email_verified != 0,
             role: self.role,
-            banned: self.banned,
+            banned: self.banned != 0,
             banned_reason: self.banned_reason,
-            banned_until: self.banned_until,
-            created_at: self.created_at,
-            updated_at: self.updated_at,
+            banned_until: opt_str_to_dt(self.banned_until),
+            created_at: str_to_dt(&self.created_at),
+            updated_at: str_to_dt(&self.updated_at),
         }
     }
 }
 
 #[derive(sqlx::FromRow)]
 struct SessionRow {
-    id: Uuid,
-    user_id: Uuid,
+    id: Option<String>,
+    user_id: String,
     token_hash: String,
     ip_address: Option<String>,
     user_agent: Option<String>,
-    expires_at: NaiveDateTime,
-    created_at: NaiveDateTime,
+    expires_at: String,
+    created_at: String,
 }
 
 impl SessionRow {
     fn into_domain(self) -> domain::Session {
         domain::Session {
-            id: self.id,
-            user_id: self.user_id,
+            id: str_to_uuid(&self.id.unwrap_or_default()),
+            user_id: str_to_uuid(&self.user_id),
             token_hash: self.token_hash,
             ip_address: self.ip_address,
             user_agent: self.user_agent,
-            expires_at: self.expires_at,
-            created_at: self.created_at,
+            expires_at: str_to_dt(&self.expires_at),
+            created_at: str_to_dt(&self.created_at),
         }
     }
 }
@@ -81,11 +85,13 @@ impl sealed::Sealed for SqlxSqliteUserRepo {}
 impl UserRepository for SqlxSqliteUserRepo {
     fn find_by_id(&self, id: Uuid) -> RepoFuture<'_, Option<domain::User>> {
         Box::pin(async move {
-            let row = sqlx::query_as::<_, UserRow>(
+            let id_str = id.to_string();
+            let row = sqlx::query_as!(
+                UserRow,
                 "SELECT id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at \
-                 FROM yauth_users WHERE id = ?",
+                 FROM yauth_users WHERE id = ? /* sqlite */",
+                id_str
             )
-            .bind(id)
             .fetch_optional(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -96,11 +102,12 @@ impl UserRepository for SqlxSqliteUserRepo {
     fn find_by_email(&self, email: &str) -> RepoFuture<'_, Option<domain::User>> {
         let email = email.to_string();
         Box::pin(async move {
-            let row = sqlx::query_as::<_, UserRow>(
+            let row = sqlx::query_as!(
+                UserRow,
                 "SELECT id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at \
-                 FROM yauth_users WHERE email LIKE ?",
+                 FROM yauth_users WHERE email LIKE ? /* sqlite */",
+                email
             )
-            .bind(&email)
             .fetch_optional(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -110,21 +117,26 @@ impl UserRepository for SqlxSqliteUserRepo {
 
     fn create(&self, input: domain::NewUser) -> RepoFuture<'_, domain::User> {
         Box::pin(async move {
-            let row = sqlx::query_as::<_, UserRow>(
+            let id_str = input.id.to_string();
+            let created_str = dt_to_str(input.created_at);
+            let updated_str = dt_to_str(input.updated_at);
+            let banned_until_str = opt_dt_to_str(input.banned_until);
+            let row = sqlx::query_as!(
+                UserRow,
                 "INSERT INTO yauth_users (id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at) \
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
-                 RETURNING id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at",
+                 RETURNING id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at /* sqlite */",
+                id_str,
+                input.email,
+                input.display_name,
+                input.email_verified,
+                input.role,
+                input.banned,
+                input.banned_reason,
+                banned_until_str,
+                created_str,
+                updated_str,
             )
-            .bind(input.id)
-            .bind(&input.email)
-            .bind(&input.display_name)
-            .bind(input.email_verified)
-            .bind(&input.role)
-            .bind(input.banned)
-            .bind(&input.banned_reason)
-            .bind(input.banned_until)
-            .bind(input.created_at)
-            .bind(input.updated_at)
             .fetch_one(&self.pool)
             .await
             .map_err(sqlx_conflict)?;
@@ -133,8 +145,8 @@ impl UserRepository for SqlxSqliteUserRepo {
     }
 
     fn update(&self, id: Uuid, changes: domain::UpdateUser) -> RepoFuture<'_, domain::User> {
+        // Dynamic SET clause — must stay as runtime query()
         Box::pin(async move {
-            // Build dynamic SET clause
             let mut sets = Vec::new();
 
             macro_rules! push_set {
@@ -155,7 +167,6 @@ impl UserRepository for SqlxSqliteUserRepo {
             push_set!(changes.updated_at, "updated_at");
 
             if sets.is_empty() {
-                // Nothing to update — just fetch current
                 return self
                     .find_by_id(id)
                     .await?
@@ -168,7 +179,6 @@ impl UserRepository for SqlxSqliteUserRepo {
                 sets.join(", ")
             );
 
-            // Build query dynamically — SET columns first, then WHERE id last
             let mut query = sqlx::query_as::<_, UserRow>(&sql);
 
             if let Some(ref email) = changes.email {
@@ -178,27 +188,26 @@ impl UserRepository for SqlxSqliteUserRepo {
                 query = query.bind(display_name.clone());
             }
             if let Some(email_verified) = changes.email_verified {
-                query = query.bind(email_verified);
+                query = query.bind(email_verified as i64);
             }
             if let Some(ref role) = changes.role {
                 query = query.bind(role.clone());
             }
             if let Some(banned) = changes.banned {
-                query = query.bind(banned);
+                query = query.bind(banned as i64);
             }
             if let Some(ref banned_reason) = changes.banned_reason {
                 query = query.bind(banned_reason.clone());
             }
             if let Some(ref banned_until) = changes.banned_until {
-                query = query.bind(*banned_until);
+                query = query.bind(opt_dt_to_str(*banned_until));
             }
             if let Some(updated_at) = changes.updated_at {
-                query = query.bind(updated_at);
+                query = query.bind(dt_to_str(updated_at));
             }
 
-            // WHERE id = ? — id bound last
             let row = query
-                .bind(id)
+                .bind(id.to_string())
                 .fetch_one(&self.pool)
                 .await
                 .map_err(sqlx_err)?;
@@ -208,8 +217,8 @@ impl UserRepository for SqlxSqliteUserRepo {
 
     fn delete(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query("DELETE FROM yauth_users WHERE id = ?")
-                .bind(id)
+            let id_str = id.to_string();
+            sqlx::query!("DELETE FROM yauth_users WHERE id = ? /* sqlite */", id_str)
                 .execute(&self.pool)
                 .await
                 .map_err(sqlx_err)?;
@@ -219,7 +228,7 @@ impl UserRepository for SqlxSqliteUserRepo {
 
     fn any_exists(&self) -> RepoFuture<'_, bool> {
         Box::pin(async move {
-            let row: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM yauth_users LIMIT 1")
+            let row = sqlx::query!("SELECT id FROM yauth_users LIMIT 1 /* sqlite */")
                 .fetch_optional(&self.pool)
                 .await
                 .map_err(sqlx_err)?;
@@ -237,42 +246,45 @@ impl UserRepository for SqlxSqliteUserRepo {
         Box::pin(async move {
             let (total, users) = if let Some(ref s) = search {
                 let pattern = format!("%{}%", s.to_lowercase());
-                let total: (i64,) =
-                    sqlx::query_as("SELECT COUNT(*) FROM yauth_users WHERE email LIKE ?")
-                        .bind(&pattern)
-                        .fetch_one(&self.pool)
-                        .await
-                        .map_err(sqlx_err)?;
-
-                let rows: Vec<UserRow> = sqlx::query_as(
-                    "SELECT id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at \
-                     FROM yauth_users WHERE email LIKE ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                let total = sqlx::query!(
+                    "SELECT COUNT(*) as count FROM yauth_users WHERE email LIKE ? /* sqlite */",
+                    pattern
                 )
-                .bind(&pattern)
-                .bind(limit)
-                .bind(offset)
+                .fetch_one(&self.pool)
+                .await
+                .map_err(sqlx_err)?;
+
+                let rows = sqlx::query_as!(
+                    UserRow,
+                    "SELECT id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at \
+                     FROM yauth_users WHERE email LIKE ? ORDER BY created_at DESC LIMIT ? OFFSET ? /* sqlite */",
+                    pattern,
+                    limit,
+                    offset
+                )
                 .fetch_all(&self.pool)
                 .await
                 .map_err(sqlx_err)?;
 
-                (total.0, rows)
+                (total.count, rows)
             } else {
-                let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM yauth_users")
+                let total = sqlx::query!("SELECT COUNT(*) as count FROM yauth_users /* sqlite */")
                     .fetch_one(&self.pool)
                     .await
                     .map_err(sqlx_err)?;
 
-                let rows: Vec<UserRow> = sqlx::query_as(
+                let rows = sqlx::query_as!(
+                    UserRow,
                     "SELECT id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at \
-                     FROM yauth_users ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                     FROM yauth_users ORDER BY created_at DESC LIMIT ? OFFSET ? /* sqlite */",
+                    limit,
+                    offset
                 )
-                .bind(limit)
-                .bind(offset)
                 .fetch_all(&self.pool)
                 .await
                 .map_err(sqlx_err)?;
 
-                (total.0, rows)
+                (total.count, rows)
             };
 
             Ok((users.into_iter().map(|u| u.into_domain()).collect(), total))
@@ -297,11 +309,13 @@ impl sealed::Sealed for SqlxSqliteSessionRepo {}
 impl SessionRepository for SqlxSqliteSessionRepo {
     fn find_by_id(&self, id: Uuid) -> RepoFuture<'_, Option<domain::Session>> {
         Box::pin(async move {
-            let row = sqlx::query_as::<_, SessionRow>(
+            let id_str = id.to_string();
+            let row = sqlx::query_as!(
+                SessionRow,
                 "SELECT id, user_id, token_hash, ip_address, user_agent, expires_at, created_at \
-                 FROM yauth_sessions WHERE id = ?",
+                 FROM yauth_sessions WHERE id = ? /* sqlite */",
+                id_str
             )
-            .bind(id)
             .fetch_optional(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -311,17 +325,21 @@ impl SessionRepository for SqlxSqliteSessionRepo {
 
     fn create(&self, input: domain::NewSession) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query(
+            let id_str = input.id.to_string();
+            let user_id_str = input.user_id.to_string();
+            let expires_str = dt_to_str(input.expires_at);
+            let created_str = dt_to_str(input.created_at);
+            sqlx::query!(
                 "INSERT INTO yauth_sessions (id, user_id, token_hash, ip_address, user_agent, expires_at, created_at) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+                 VALUES (?, ?, ?, ?, ?, ?, ?) /* sqlite */",
+                id_str,
+                user_id_str,
+                input.token_hash,
+                input.ip_address,
+                input.user_agent,
+                expires_str,
+                created_str,
             )
-            .bind(input.id)
-            .bind(input.user_id)
-            .bind(&input.token_hash)
-            .bind(&input.ip_address)
-            .bind(&input.user_agent)
-            .bind(input.expires_at)
-            .bind(input.created_at)
             .execute(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -331,33 +349,40 @@ impl SessionRepository for SqlxSqliteSessionRepo {
 
     fn delete(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query("DELETE FROM yauth_sessions WHERE id = ?")
-                .bind(id)
-                .execute(&self.pool)
-                .await
-                .map_err(sqlx_err)?;
+            let id_str = id.to_string();
+            sqlx::query!(
+                "DELETE FROM yauth_sessions WHERE id = ? /* sqlite */",
+                id_str
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(sqlx_err)?;
             Ok(())
         })
     }
 
     fn list(&self, limit: i64, offset: i64) -> RepoFuture<'_, (Vec<domain::Session>, i64)> {
         Box::pin(async move {
-            let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM yauth_sessions")
+            let total = sqlx::query!("SELECT COUNT(*) as count FROM yauth_sessions /* sqlite */")
                 .fetch_one(&self.pool)
                 .await
                 .map_err(sqlx_err)?;
 
-            let rows: Vec<SessionRow> = sqlx::query_as(
+            let rows = sqlx::query_as!(
+                SessionRow,
                 "SELECT id, user_id, token_hash, ip_address, user_agent, expires_at, created_at \
-                 FROM yauth_sessions ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                 FROM yauth_sessions ORDER BY created_at DESC LIMIT ? OFFSET ? /* sqlite */",
+                limit,
+                offset
             )
-            .bind(limit)
-            .bind(offset)
             .fetch_all(&self.pool)
             .await
             .map_err(sqlx_err)?;
 
-            Ok((rows.into_iter().map(|s| s.into_domain()).collect(), total.0))
+            Ok((
+                rows.into_iter().map(|s| s.into_domain()).collect(),
+                total.count,
+            ))
         })
     }
 }

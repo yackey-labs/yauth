@@ -1,20 +1,19 @@
-use chrono::NaiveDateTime;
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
-use crate::backends::sqlx_common::sqlx_err;
+use crate::backends::sqlx_common::{dt_to_str, sqlx_err, str_to_dt, str_to_uuid};
 use crate::domain;
 use crate::repo::{RefreshTokenRepository, RepoFuture, sealed};
 
 #[derive(sqlx::FromRow)]
 struct RefreshTokenRow {
-    id: Uuid,
-    user_id: Uuid,
+    id: Option<String>,
+    user_id: Option<String>,
     token_hash: String,
-    family_id: Uuid,
-    expires_at: NaiveDateTime,
-    revoked: bool,
-    created_at: NaiveDateTime,
+    family_id: String,
+    expires_at: String,
+    revoked: i64,
+    created_at: String,
 }
 
 pub(crate) struct SqlxSqliteRefreshTokenRepo {
@@ -31,39 +30,45 @@ impl RefreshTokenRepository for SqlxSqliteRefreshTokenRepo {
     fn find_by_token_hash(&self, token_hash: &str) -> RepoFuture<'_, Option<domain::RefreshToken>> {
         let token_hash = token_hash.to_string();
         Box::pin(async move {
-            let row = sqlx::query_as::<_, RefreshTokenRow>(
+            let row = sqlx::query_as!(
+                RefreshTokenRow,
                 "SELECT id, user_id, token_hash, family_id, expires_at, revoked, created_at \
-                 FROM yauth_refresh_tokens WHERE token_hash = ?",
+                 FROM yauth_refresh_tokens WHERE token_hash = ? /* sqlite */",
+                token_hash
             )
-            .bind(&token_hash)
             .fetch_optional(&self.pool)
             .await
             .map_err(sqlx_err)?;
             Ok(row.map(|r| domain::RefreshToken {
-                id: r.id,
-                user_id: r.user_id,
+                id: str_to_uuid(&r.id.unwrap_or_default()),
+                user_id: str_to_uuid(&r.user_id.unwrap_or_default()),
                 token_hash: r.token_hash,
-                family_id: r.family_id,
-                expires_at: r.expires_at,
-                revoked: r.revoked,
-                created_at: r.created_at,
+                family_id: str_to_uuid(&r.family_id),
+                expires_at: str_to_dt(&r.expires_at),
+                revoked: r.revoked != 0,
+                created_at: str_to_dt(&r.created_at),
             }))
         })
     }
 
     fn create(&self, input: domain::NewRefreshToken) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query(
+            let id_str = input.id.to_string();
+            let user_id_str = input.user_id.to_string();
+            let family_id_str = input.family_id.to_string();
+            let expires_str = dt_to_str(input.expires_at);
+            let created_str = dt_to_str(input.created_at);
+            sqlx::query!(
                 "INSERT INTO yauth_refresh_tokens (id, user_id, token_hash, family_id, expires_at, revoked, created_at) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+                 VALUES (?, ?, ?, ?, ?, ?, ?) /* sqlite */",
+                id_str,
+                user_id_str,
+                input.token_hash,
+                family_id_str,
+                expires_str,
+                input.revoked,
+                created_str,
             )
-            .bind(input.id)
-            .bind(input.user_id)
-            .bind(&input.token_hash)
-            .bind(input.family_id)
-            .bind(input.expires_at)
-            .bind(input.revoked)
-            .bind(input.created_at)
             .execute(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -73,22 +78,28 @@ impl RefreshTokenRepository for SqlxSqliteRefreshTokenRepo {
 
     fn revoke(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query("UPDATE yauth_refresh_tokens SET revoked = true WHERE id = ?")
-                .bind(id)
-                .execute(&self.pool)
-                .await
-                .map_err(sqlx_err)?;
+            let id_str = id.to_string();
+            sqlx::query!(
+                "UPDATE yauth_refresh_tokens SET revoked = true WHERE id = ? /* sqlite */",
+                id_str
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(sqlx_err)?;
             Ok(())
         })
     }
 
     fn revoke_family(&self, family_id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query("UPDATE yauth_refresh_tokens SET revoked = true WHERE family_id = ?")
-                .bind(family_id)
-                .execute(&self.pool)
-                .await
-                .map_err(sqlx_err)?;
+            let family_id_str = family_id.to_string();
+            sqlx::query!(
+                "UPDATE yauth_refresh_tokens SET revoked = true WHERE family_id = ? /* sqlite */",
+                family_id_str
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(sqlx_err)?;
             Ok(())
         })
     }
@@ -97,13 +108,15 @@ impl RefreshTokenRepository for SqlxSqliteRefreshTokenRepo {
         Box::pin(async move {
             #[cfg(feature = "email-password")]
             {
-                let row: Option<(String,)> =
-                    sqlx::query_as("SELECT password_hash FROM yauth_passwords WHERE user_id = ?")
-                        .bind(user_id)
-                        .fetch_optional(&self.pool)
-                        .await
-                        .map_err(sqlx_err)?;
-                Ok(row.map(|r| r.0))
+                let user_id_str = user_id.to_string();
+                let row = sqlx::query!(
+                    "SELECT password_hash FROM yauth_passwords WHERE user_id = ? /* sqlite */",
+                    user_id_str
+                )
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(sqlx_err)?;
+                Ok(row.map(|r| r.password_hash))
             }
             #[cfg(not(feature = "email-password"))]
             {

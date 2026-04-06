@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM yauth_email_verifications WHERE user_id = ? /* sqlite */",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "0326356ee306fe71718662adf97c597eb553f35c62c2918ec2a7b2f61ef6b2de"
+}

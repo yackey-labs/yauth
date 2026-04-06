@@ -2,14 +2,14 @@ use chrono::NaiveDateTime;
 use sqlx::MySqlPool;
 use uuid::Uuid;
 
-use crate::backends::sqlx_common::sqlx_err;
+use crate::backends::sqlx_common::{sqlx_err, str_to_uuid};
 use crate::domain;
 use crate::repo::{ApiKeyRepository, RepoFuture, sealed};
 
 #[derive(sqlx::FromRow)]
 struct ApiKeyRow {
     id: String,
-    user_id: String,
+    user_id: Option<String>,
     key_prefix: String,
     key_hash: String,
     name: String,
@@ -22,8 +22,8 @@ struct ApiKeyRow {
 impl ApiKeyRow {
     fn into_domain(self) -> domain::ApiKey {
         domain::ApiKey {
-            id: uuid::Uuid::parse_str(&self.id).unwrap_or_default(),
-            user_id: uuid::Uuid::parse_str(&self.user_id).unwrap_or_default(),
+            id: str_to_uuid(&self.id),
+            user_id: str_to_uuid(&self.user_id.unwrap_or_default()),
             key_prefix: self.key_prefix,
             key_hash: self.key_hash,
             name: self.name,
@@ -49,11 +49,12 @@ impl ApiKeyRepository for SqlxMysqlApiKeyRepo {
     fn find_by_prefix(&self, prefix: &str) -> RepoFuture<'_, Option<domain::ApiKey>> {
         let prefix = prefix.to_string();
         Box::pin(async move {
-            let row = sqlx::query_as::<_, ApiKeyRow>(
+            let row = sqlx::query_as!(
+                ApiKeyRow,
                 "SELECT id, user_id, key_prefix, key_hash, name, scopes, last_used_at, expires_at, created_at \
                  FROM yauth_api_keys WHERE key_prefix = ?",
+                prefix
             )
-            .bind(&prefix)
             .fetch_optional(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -67,12 +68,15 @@ impl ApiKeyRepository for SqlxMysqlApiKeyRepo {
         user_id: Uuid,
     ) -> RepoFuture<'_, Option<domain::ApiKey>> {
         Box::pin(async move {
-            let row = sqlx::query_as::<_, ApiKeyRow>(
+            let id_str = id.to_string();
+            let user_id_str = user_id.to_string();
+            let row = sqlx::query_as!(
+                ApiKeyRow,
                 "SELECT id, user_id, key_prefix, key_hash, name, scopes, last_used_at, expires_at, created_at \
                  FROM yauth_api_keys WHERE id = ? AND user_id = ?",
+                id_str,
+                user_id_str
             )
-            .bind(id.to_string())
-            .bind(user_id.to_string())
             .fetch_optional(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -82,11 +86,13 @@ impl ApiKeyRepository for SqlxMysqlApiKeyRepo {
 
     fn list_by_user_id(&self, user_id: Uuid) -> RepoFuture<'_, Vec<domain::ApiKey>> {
         Box::pin(async move {
-            let rows: Vec<ApiKeyRow> = sqlx::query_as(
+            let user_id_str = user_id.to_string();
+            let rows = sqlx::query_as!(
+                ApiKeyRow,
                 "SELECT id, user_id, key_prefix, key_hash, name, scopes, last_used_at, expires_at, created_at \
                  FROM yauth_api_keys WHERE user_id = ? ORDER BY created_at DESC",
+                user_id_str
             )
-            .bind(user_id.to_string())
             .fetch_all(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -96,18 +102,20 @@ impl ApiKeyRepository for SqlxMysqlApiKeyRepo {
 
     fn create(&self, input: domain::NewApiKey) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query(
+            let id_str = input.id.to_string();
+            let user_id_str = input.user_id.to_string();
+            sqlx::query!(
                 "INSERT INTO yauth_api_keys (id, user_id, key_prefix, key_hash, name, scopes, expires_at, created_at) \
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                id_str,
+                user_id_str,
+                input.key_prefix,
+                input.key_hash,
+                input.name,
+                input.scopes,
+                input.expires_at,
+                input.created_at,
             )
-            .bind(input.id.to_string())
-            .bind(input.user_id.to_string())
-            .bind(&input.key_prefix)
-            .bind(&input.key_hash)
-            .bind(&input.name)
-            .bind(&input.scopes)
-            .bind(input.expires_at)
-            .bind(input.created_at)
             .execute(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -117,8 +125,8 @@ impl ApiKeyRepository for SqlxMysqlApiKeyRepo {
 
     fn delete(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query("DELETE FROM yauth_api_keys WHERE id = ?")
-                .bind(id.to_string())
+            let id_str = id.to_string();
+            sqlx::query!("DELETE FROM yauth_api_keys WHERE id = ?", id_str)
                 .execute(&self.pool)
                 .await
                 .map_err(sqlx_err)?;
@@ -128,12 +136,16 @@ impl ApiKeyRepository for SqlxMysqlApiKeyRepo {
 
     fn update_last_used(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query("UPDATE yauth_api_keys SET last_used_at = ? WHERE id = ?")
-                .bind(chrono::Utc::now().naive_utc())
-                .bind(id.to_string())
-                .execute(&self.pool)
-                .await
-                .map_err(sqlx_err)?;
+            let id_str = id.to_string();
+            let now = chrono::Utc::now().naive_utc();
+            sqlx::query!(
+                "UPDATE yauth_api_keys SET last_used_at = ? WHERE id = ?",
+                now,
+                id_str
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(sqlx_err)?;
             Ok(())
         })
     }

@@ -1,0 +1,12 @@
+{
+  "db_name": "MySQL",
+  "query": "UPDATE yauth_authorization_codes SET used = true WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "eb4b06a0481e3370c8de9bbc99e0e998e7ee21a2fb03b24312a498b72154245c"
+}

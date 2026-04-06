@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM yauth_backup_codes WHERE user_id = ? /* sqlite */",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "5eab934d9642d8be82b6d1faa6a46d974285f447fec7bcc8246839ad4335e9b7"
+}

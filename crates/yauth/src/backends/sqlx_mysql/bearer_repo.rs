@@ -2,18 +2,18 @@ use chrono::NaiveDateTime;
 use sqlx::MySqlPool;
 use uuid::Uuid;
 
-use crate::backends::sqlx_common::sqlx_err;
+use crate::backends::sqlx_common::{sqlx_err, str_to_uuid};
 use crate::domain;
 use crate::repo::{RefreshTokenRepository, RepoFuture, sealed};
 
 #[derive(sqlx::FromRow)]
 struct RefreshTokenRow {
     id: String,
-    user_id: String,
+    user_id: Option<String>,
     token_hash: String,
     family_id: String,
     expires_at: NaiveDateTime,
-    revoked: bool,
+    revoked: i8,
     created_at: NaiveDateTime,
 }
 
@@ -31,21 +31,22 @@ impl RefreshTokenRepository for SqlxMysqlRefreshTokenRepo {
     fn find_by_token_hash(&self, token_hash: &str) -> RepoFuture<'_, Option<domain::RefreshToken>> {
         let token_hash = token_hash.to_string();
         Box::pin(async move {
-            let row = sqlx::query_as::<_, RefreshTokenRow>(
+            let row = sqlx::query_as!(
+                RefreshTokenRow,
                 "SELECT id, user_id, token_hash, family_id, expires_at, revoked, created_at \
                  FROM yauth_refresh_tokens WHERE token_hash = ?",
+                token_hash
             )
-            .bind(&token_hash)
             .fetch_optional(&self.pool)
             .await
             .map_err(sqlx_err)?;
             Ok(row.map(|r| domain::RefreshToken {
-                id: uuid::Uuid::parse_str(&r.id).unwrap_or_default(),
-                user_id: uuid::Uuid::parse_str(&r.user_id).unwrap_or_default(),
+                id: str_to_uuid(&r.id),
+                user_id: str_to_uuid(&r.user_id.unwrap_or_default()),
                 token_hash: r.token_hash,
-                family_id: uuid::Uuid::parse_str(&r.family_id).unwrap_or_default(),
+                family_id: str_to_uuid(&r.family_id),
                 expires_at: r.expires_at,
-                revoked: r.revoked,
+                revoked: r.revoked != 0,
                 created_at: r.created_at,
             }))
         })
@@ -53,17 +54,20 @@ impl RefreshTokenRepository for SqlxMysqlRefreshTokenRepo {
 
     fn create(&self, input: domain::NewRefreshToken) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query(
+            let id_str = input.id.to_string();
+            let user_id_str = input.user_id.to_string();
+            let family_id_str = input.family_id.to_string();
+            sqlx::query!(
                 "INSERT INTO yauth_refresh_tokens (id, user_id, token_hash, family_id, expires_at, revoked, created_at) \
                  VALUES (?, ?, ?, ?, ?, ?, ?)",
+                id_str,
+                user_id_str,
+                input.token_hash,
+                family_id_str,
+                input.expires_at,
+                input.revoked,
+                input.created_at,
             )
-            .bind(input.id.to_string())
-            .bind(input.user_id.to_string())
-            .bind(&input.token_hash)
-            .bind(input.family_id.to_string())
-            .bind(input.expires_at)
-            .bind(input.revoked)
-            .bind(input.created_at)
             .execute(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -73,22 +77,28 @@ impl RefreshTokenRepository for SqlxMysqlRefreshTokenRepo {
 
     fn revoke(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query("UPDATE yauth_refresh_tokens SET revoked = true WHERE id = ?")
-                .bind(id.to_string())
-                .execute(&self.pool)
-                .await
-                .map_err(sqlx_err)?;
+            let id_str = id.to_string();
+            sqlx::query!(
+                "UPDATE yauth_refresh_tokens SET revoked = true WHERE id = ?",
+                id_str
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(sqlx_err)?;
             Ok(())
         })
     }
 
     fn revoke_family(&self, family_id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query("UPDATE yauth_refresh_tokens SET revoked = true WHERE family_id = ?")
-                .bind(family_id.to_string())
-                .execute(&self.pool)
-                .await
-                .map_err(sqlx_err)?;
+            let family_id_str = family_id.to_string();
+            sqlx::query!(
+                "UPDATE yauth_refresh_tokens SET revoked = true WHERE family_id = ?",
+                family_id_str
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(sqlx_err)?;
             Ok(())
         })
     }
@@ -97,13 +107,15 @@ impl RefreshTokenRepository for SqlxMysqlRefreshTokenRepo {
         Box::pin(async move {
             #[cfg(feature = "email-password")]
             {
-                let row: Option<(String,)> =
-                    sqlx::query_as("SELECT password_hash FROM yauth_passwords WHERE user_id = ?")
-                        .bind(user_id.to_string())
-                        .fetch_optional(&self.pool)
-                        .await
-                        .map_err(sqlx_err)?;
-                Ok(row.map(|r| r.0))
+                let user_id_str = user_id.to_string();
+                let row = sqlx::query!(
+                    "SELECT password_hash FROM yauth_passwords WHERE user_id = ?",
+                    user_id_str
+                )
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(sqlx_err)?;
+                Ok(row.map(|r| r.password_hash))
             }
             #[cfg(not(feature = "email-password"))]
             {

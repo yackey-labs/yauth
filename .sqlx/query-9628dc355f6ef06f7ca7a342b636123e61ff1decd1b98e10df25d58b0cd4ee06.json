@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO yauth_passwords (user_id, password_hash) VALUES (?, ?) ON CONFLICT (user_id) DO UPDATE SET password_hash = EXCLUDED.password_hash /* sqlite */",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "9628dc355f6ef06f7ca7a342b636123e61ff1decd1b98e10df25d58b0cd4ee06"
+}

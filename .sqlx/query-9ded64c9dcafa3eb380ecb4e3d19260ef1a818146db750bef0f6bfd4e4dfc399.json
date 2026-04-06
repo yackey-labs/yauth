@@ -1,0 +1,68 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id, webhook_id, event_type, payload, status_code, response_body, success, attempt, created_at FROM yauth_webhook_deliveries WHERE webhook_id = ? ORDER BY created_at DESC LIMIT ? /* sqlite */",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "webhook_id",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "event_type",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "payload",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "status_code",
+        "ordinal": 4,
+        "type_info": "Integer"
+      },
+      {
+        "name": "response_body",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "success",
+        "ordinal": 6,
+        "type_info": "Integer"
+      },
+      {
+        "name": "attempt",
+        "ordinal": 7,
+        "type_info": "Integer"
+      },
+      {
+        "name": "created_at",
+        "ordinal": 8,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true,
+      true,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "9ded64c9dcafa3eb380ecb4e3d19260ef1a818146db750bef0f6bfd4e4dfc399"
+}

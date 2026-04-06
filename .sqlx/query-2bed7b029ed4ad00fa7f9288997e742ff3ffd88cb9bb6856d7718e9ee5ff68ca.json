@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE yauth_totp_secrets SET verified = true WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2bed7b029ed4ad00fa7f9288997e742ff3ffd88cb9bb6856d7718e9ee5ff68ca"
+}

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE yauth_backup_codes SET used = true WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a5948069228ffe0911b524a9ac4e960a37d21e79df4c7cfe99a55fd5e6be31db"
+}

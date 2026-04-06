@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::backends::sqlx_common::sqlx_err;
+use crate::backends::sqlx_common::{naive_to_utc, sqlx_err};
 use crate::domain;
 use crate::repo::{BackupCodeRepository, RepoFuture, TotpRepository, sealed};
 
@@ -44,20 +44,22 @@ impl TotpRepository for SqlxPgTotpRepo {
     ) -> RepoFuture<'_, Option<domain::TotpSecret>> {
         Box::pin(async move {
             let row = match verified {
-                Some(v) => sqlx::query_as::<_, TotpRow>(
-                    "SELECT id, user_id, encrypted_secret, verified, created_at \
-                         FROM yauth_totp_secrets WHERE user_id = $1 AND verified = $2",
+                Some(v) => sqlx::query_as!(
+                    TotpRow,
+                    r#"SELECT id, user_id as "user_id!", encrypted_secret, verified, created_at
+                       FROM yauth_totp_secrets WHERE user_id = $1 AND verified = $2"#,
+                    user_id,
+                    v
                 )
-                .bind(user_id)
-                .bind(v)
                 .fetch_optional(&self.pool)
                 .await
                 .map_err(sqlx_err)?,
-                None => sqlx::query_as::<_, TotpRow>(
-                    "SELECT id, user_id, encrypted_secret, verified, created_at \
-                         FROM yauth_totp_secrets WHERE user_id = $1",
+                None => sqlx::query_as!(
+                    TotpRow,
+                    r#"SELECT id, user_id as "user_id!", encrypted_secret, verified, created_at
+                       FROM yauth_totp_secrets WHERE user_id = $1"#,
+                    user_id
                 )
-                .bind(user_id)
                 .fetch_optional(&self.pool)
                 .await
                 .map_err(sqlx_err)?,
@@ -74,15 +76,14 @@ impl TotpRepository for SqlxPgTotpRepo {
 
     fn create(&self, input: domain::NewTotpSecret) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query(
-                "INSERT INTO yauth_totp_secrets (id, user_id, encrypted_secret, verified, created_at) \
-                 VALUES ($1, $2, $3, $4, $5)",
+            sqlx::query!(
+                "INSERT INTO yauth_totp_secrets (id, user_id, encrypted_secret, verified, created_at) VALUES ($1, $2, $3, $4, $5)",
+                input.id,
+                input.user_id,
+                input.encrypted_secret,
+                input.verified,
+                naive_to_utc(input.created_at),
             )
-            .bind(input.id)
-            .bind(input.user_id)
-            .bind(&input.encrypted_secret)
-            .bind(input.verified)
-            .bind(input.created_at)
             .execute(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -94,18 +95,17 @@ impl TotpRepository for SqlxPgTotpRepo {
         Box::pin(async move {
             match verified_only {
                 Some(v) => {
-                    sqlx::query(
+                    sqlx::query!(
                         "DELETE FROM yauth_totp_secrets WHERE user_id = $1 AND verified = $2",
+                        user_id,
+                        v
                     )
-                    .bind(user_id)
-                    .bind(v)
                     .execute(&self.pool)
                     .await
                     .map_err(sqlx_err)?;
                 }
                 None => {
-                    sqlx::query("DELETE FROM yauth_totp_secrets WHERE user_id = $1")
-                        .bind(user_id)
+                    sqlx::query!("DELETE FROM yauth_totp_secrets WHERE user_id = $1", user_id)
                         .execute(&self.pool)
                         .await
                         .map_err(sqlx_err)?;
@@ -117,11 +117,13 @@ impl TotpRepository for SqlxPgTotpRepo {
 
     fn mark_verified(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query("UPDATE yauth_totp_secrets SET verified = true WHERE id = $1")
-                .bind(id)
-                .execute(&self.pool)
-                .await
-                .map_err(sqlx_err)?;
+            sqlx::query!(
+                "UPDATE yauth_totp_secrets SET verified = true WHERE id = $1",
+                id
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(sqlx_err)?;
             Ok(())
         })
     }
@@ -142,11 +144,12 @@ impl sealed::Sealed for SqlxPgBackupCodeRepo {}
 impl BackupCodeRepository for SqlxPgBackupCodeRepo {
     fn find_unused_by_user_id(&self, user_id: Uuid) -> RepoFuture<'_, Vec<domain::BackupCode>> {
         Box::pin(async move {
-            let rows: Vec<BackupCodeRow> = sqlx::query_as(
-                "SELECT id, user_id, code_hash, used, created_at \
-                 FROM yauth_backup_codes WHERE user_id = $1 AND used = false",
+            let rows = sqlx::query_as!(
+                BackupCodeRow,
+                r#"SELECT id, user_id as "user_id!", code_hash, used, created_at
+                   FROM yauth_backup_codes WHERE user_id = $1 AND used = false"#,
+                user_id
             )
-            .bind(user_id)
             .fetch_all(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -165,15 +168,14 @@ impl BackupCodeRepository for SqlxPgBackupCodeRepo {
 
     fn create(&self, input: domain::NewBackupCode) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query(
-                "INSERT INTO yauth_backup_codes (id, user_id, code_hash, used, created_at) \
-                 VALUES ($1, $2, $3, $4, $5)",
+            sqlx::query!(
+                "INSERT INTO yauth_backup_codes (id, user_id, code_hash, used, created_at) VALUES ($1, $2, $3, $4, $5)",
+                input.id,
+                input.user_id,
+                input.code_hash,
+                input.used,
+                naive_to_utc(input.created_at),
             )
-            .bind(input.id)
-            .bind(input.user_id)
-            .bind(&input.code_hash)
-            .bind(input.used)
-            .bind(input.created_at)
             .execute(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -183,8 +185,7 @@ impl BackupCodeRepository for SqlxPgBackupCodeRepo {
 
     fn delete_all_for_user(&self, user_id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query("DELETE FROM yauth_backup_codes WHERE user_id = $1")
-                .bind(user_id)
+            sqlx::query!("DELETE FROM yauth_backup_codes WHERE user_id = $1", user_id)
                 .execute(&self.pool)
                 .await
                 .map_err(sqlx_err)?;
@@ -194,11 +195,13 @@ impl BackupCodeRepository for SqlxPgBackupCodeRepo {
 
     fn mark_used(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query("UPDATE yauth_backup_codes SET used = true WHERE id = $1")
-                .bind(id)
-                .execute(&self.pool)
-                .await
-                .map_err(sqlx_err)?;
+            sqlx::query!(
+                "UPDATE yauth_backup_codes SET used = true WHERE id = $1",
+                id
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(sqlx_err)?;
             Ok(())
         })
     }

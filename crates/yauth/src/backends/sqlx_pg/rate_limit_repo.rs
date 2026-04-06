@@ -59,7 +59,10 @@ impl RateLimitRepository for SqlxPgRateLimitRepo {
                 window_start: DateTime<Utc>,
             }
 
-            let sql = r#"
+            let window = window_secs as f64;
+            match sqlx::query_as!(
+                RateLimitRow,
+                r#"
                 INSERT INTO yauth_rate_limits (key, count, window_start)
                 VALUES ($1, 1, now())
                 ON CONFLICT (key) DO UPDATE
@@ -76,13 +79,12 @@ impl RateLimitRepository for SqlxPgRateLimitRepo {
                             ELSE yauth_rate_limits.window_start
                         END
                 RETURNING count, window_start
-            "#;
-
-            match sqlx::query_as::<_, RateLimitRow>(sql)
-                .bind(&key)
-                .bind(window_secs as f64)
-                .fetch_one(&self.pool)
-                .await
+                "#,
+                key,
+                window,
+            )
+            .fetch_one(&self.pool)
+            .await
             {
                 Ok(row) => {
                     let count = row.count as u32;

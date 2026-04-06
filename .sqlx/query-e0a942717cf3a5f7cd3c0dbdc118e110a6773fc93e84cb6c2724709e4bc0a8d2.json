@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE yauth_webauthn_credentials SET last_used_at = $1 WHERE user_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e0a942717cf3a5f7cd3c0dbdc118e110a6773fc93e84cb6c2724709e4bc0a8d2"
+}

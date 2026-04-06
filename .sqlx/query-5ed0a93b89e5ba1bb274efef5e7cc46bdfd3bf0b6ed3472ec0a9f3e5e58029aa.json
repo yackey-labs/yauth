@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT state, provider, redirect_url, expires_at, created_at FROM yauth_oauth_states WHERE state = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "state",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "provider",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "redirect_url",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "expires_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 4,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "5ed0a93b89e5ba1bb274efef5e7cc46bdfd3bf0b6ed3472ec0a9f3e5e58029aa"
+}

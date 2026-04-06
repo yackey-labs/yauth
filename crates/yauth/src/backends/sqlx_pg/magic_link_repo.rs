@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::backends::sqlx_common::sqlx_err;
+use crate::backends::sqlx_common::{naive_to_utc, sqlx_err};
 use crate::domain;
 use crate::repo::{MagicLinkRepository, RepoFuture, sealed};
 
@@ -33,13 +33,15 @@ impl MagicLinkRepository for SqlxPgMagicLinkRepo {
     ) -> RepoFuture<'_, Option<domain::MagicLink>> {
         let token_hash = token_hash.to_string();
         Box::pin(async move {
-            let row = sqlx::query_as::<_, MagicLinkRow>(
+            let now = naive_to_utc(chrono::Utc::now().naive_utc());
+            let row = sqlx::query_as!(
+                MagicLinkRow,
                 "SELECT id, email, token_hash, expires_at, used, created_at \
                  FROM yauth_magic_links \
                  WHERE token_hash = $1 AND used = false AND expires_at > $2",
+                token_hash,
+                now,
             )
-            .bind(&token_hash)
-            .bind(chrono::Utc::now().naive_utc())
             .fetch_optional(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -56,15 +58,15 @@ impl MagicLinkRepository for SqlxPgMagicLinkRepo {
 
     fn create(&self, input: domain::NewMagicLink) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query(
+            sqlx::query!(
                 "INSERT INTO yauth_magic_links (id, email, token_hash, expires_at, created_at) \
                  VALUES ($1, $2, $3, $4, $5)",
+                input.id,
+                input.email,
+                input.token_hash,
+                naive_to_utc(input.expires_at),
+                naive_to_utc(input.created_at),
             )
-            .bind(input.id)
-            .bind(&input.email)
-            .bind(&input.token_hash)
-            .bind(input.expires_at)
-            .bind(input.created_at)
             .execute(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -74,8 +76,7 @@ impl MagicLinkRepository for SqlxPgMagicLinkRepo {
 
     fn mark_used(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query("UPDATE yauth_magic_links SET used = true WHERE id = $1")
-                .bind(id)
+            sqlx::query!("UPDATE yauth_magic_links SET used = true WHERE id = $1", id)
                 .execute(&self.pool)
                 .await
                 .map_err(sqlx_err)?;
@@ -85,8 +86,7 @@ impl MagicLinkRepository for SqlxPgMagicLinkRepo {
 
     fn delete(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query("DELETE FROM yauth_magic_links WHERE id = $1")
-                .bind(id)
+            sqlx::query!("DELETE FROM yauth_magic_links WHERE id = $1", id)
                 .execute(&self.pool)
                 .await
                 .map_err(sqlx_err)?;
@@ -97,11 +97,13 @@ impl MagicLinkRepository for SqlxPgMagicLinkRepo {
     fn delete_unused_for_email(&self, email: &str) -> RepoFuture<'_, ()> {
         let email = email.to_string();
         Box::pin(async move {
-            sqlx::query("DELETE FROM yauth_magic_links WHERE email = $1 AND used = false")
-                .bind(&email)
-                .execute(&self.pool)
-                .await
-                .map_err(sqlx_err)?;
+            sqlx::query!(
+                "DELETE FROM yauth_magic_links WHERE email = $1 AND used = false",
+                email
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(sqlx_err)?;
             Ok(())
         })
     }

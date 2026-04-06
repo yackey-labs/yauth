@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE yauth_account_locks SET failed_count = 0, updated_at = $1 WHERE id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "cdbdc6e223c4f3299ff795f74532bd3ff55f56f8542dc6361e57148550e9d11f"
+}

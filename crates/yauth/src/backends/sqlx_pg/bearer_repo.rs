@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::backends::sqlx_common::sqlx_err;
+use crate::backends::sqlx_common::{naive_to_utc, sqlx_err};
 use crate::domain;
 use crate::repo::{RefreshTokenRepository, RepoFuture, sealed};
 
@@ -31,11 +31,12 @@ impl RefreshTokenRepository for SqlxPgRefreshTokenRepo {
     fn find_by_token_hash(&self, token_hash: &str) -> RepoFuture<'_, Option<domain::RefreshToken>> {
         let token_hash = token_hash.to_string();
         Box::pin(async move {
-            let row = sqlx::query_as::<_, RefreshTokenRow>(
-                "SELECT id, user_id, token_hash, family_id, expires_at, revoked, created_at \
-                 FROM yauth_refresh_tokens WHERE token_hash = $1",
+            let row = sqlx::query_as!(
+                RefreshTokenRow,
+                r#"SELECT id, user_id as "user_id!", token_hash, family_id, expires_at, revoked, created_at
+                   FROM yauth_refresh_tokens WHERE token_hash = $1"#,
+                token_hash
             )
-            .bind(&token_hash)
             .fetch_optional(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -53,17 +54,16 @@ impl RefreshTokenRepository for SqlxPgRefreshTokenRepo {
 
     fn create(&self, input: domain::NewRefreshToken) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query(
-                "INSERT INTO yauth_refresh_tokens (id, user_id, token_hash, family_id, expires_at, revoked, created_at) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            sqlx::query!(
+                "INSERT INTO yauth_refresh_tokens (id, user_id, token_hash, family_id, expires_at, revoked, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                input.id,
+                input.user_id,
+                input.token_hash,
+                input.family_id,
+                naive_to_utc(input.expires_at),
+                input.revoked,
+                naive_to_utc(input.created_at),
             )
-            .bind(input.id)
-            .bind(input.user_id)
-            .bind(&input.token_hash)
-            .bind(input.family_id)
-            .bind(input.expires_at)
-            .bind(input.revoked)
-            .bind(input.created_at)
             .execute(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -73,22 +73,26 @@ impl RefreshTokenRepository for SqlxPgRefreshTokenRepo {
 
     fn revoke(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query("UPDATE yauth_refresh_tokens SET revoked = true WHERE id = $1")
-                .bind(id)
-                .execute(&self.pool)
-                .await
-                .map_err(sqlx_err)?;
+            sqlx::query!(
+                "UPDATE yauth_refresh_tokens SET revoked = true WHERE id = $1",
+                id
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(sqlx_err)?;
             Ok(())
         })
     }
 
     fn revoke_family(&self, family_id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query("UPDATE yauth_refresh_tokens SET revoked = true WHERE family_id = $1")
-                .bind(family_id)
-                .execute(&self.pool)
-                .await
-                .map_err(sqlx_err)?;
+            sqlx::query!(
+                "UPDATE yauth_refresh_tokens SET revoked = true WHERE family_id = $1",
+                family_id
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(sqlx_err)?;
             Ok(())
         })
     }
@@ -97,13 +101,14 @@ impl RefreshTokenRepository for SqlxPgRefreshTokenRepo {
         Box::pin(async move {
             #[cfg(feature = "email-password")]
             {
-                let row: Option<(String,)> =
-                    sqlx::query_as("SELECT password_hash FROM yauth_passwords WHERE user_id = $1")
-                        .bind(user_id)
-                        .fetch_optional(&self.pool)
-                        .await
-                        .map_err(sqlx_err)?;
-                Ok(row.map(|r| r.0))
+                let row = sqlx::query!(
+                    "SELECT password_hash FROM yauth_passwords WHERE user_id = $1",
+                    user_id
+                )
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(sqlx_err)?;
+                Ok(row.map(|r| r.password_hash))
             }
             #[cfg(not(feature = "email-password"))]
             {

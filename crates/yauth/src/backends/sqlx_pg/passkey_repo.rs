@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::backends::sqlx_common::sqlx_err;
+use crate::backends::sqlx_common::{naive_to_utc, sqlx_err};
 use crate::domain;
 use crate::repo::{PasskeyRepository, RepoFuture, sealed};
 
@@ -46,11 +46,12 @@ impl sealed::Sealed for SqlxPgPasskeyRepo {}
 impl PasskeyRepository for SqlxPgPasskeyRepo {
     fn find_by_user_id(&self, user_id: Uuid) -> RepoFuture<'_, Vec<domain::WebauthnCredential>> {
         Box::pin(async move {
-            let rows: Vec<PasskeyRow> = sqlx::query_as(
-                "SELECT id, user_id, name, aaguid, device_name, credential, created_at, last_used_at \
-                 FROM yauth_webauthn_credentials WHERE user_id = $1",
+            let rows = sqlx::query_as!(
+                PasskeyRow,
+                r#"SELECT id, user_id as "user_id!", name, aaguid, device_name, credential, created_at, last_used_at
+                   FROM yauth_webauthn_credentials WHERE user_id = $1"#,
+                user_id
             )
-            .bind(user_id)
             .fetch_all(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -64,12 +65,13 @@ impl PasskeyRepository for SqlxPgPasskeyRepo {
         user_id: Uuid,
     ) -> RepoFuture<'_, Option<domain::WebauthnCredential>> {
         Box::pin(async move {
-            let row = sqlx::query_as::<_, PasskeyRow>(
-                "SELECT id, user_id, name, aaguid, device_name, credential, created_at, last_used_at \
-                 FROM yauth_webauthn_credentials WHERE id = $1 AND user_id = $2",
+            let row = sqlx::query_as!(
+                PasskeyRow,
+                r#"SELECT id, user_id as "user_id!", name, aaguid, device_name, credential, created_at, last_used_at
+                   FROM yauth_webauthn_credentials WHERE id = $1 AND user_id = $2"#,
+                id,
+                user_id
             )
-            .bind(id)
-            .bind(user_id)
             .fetch_optional(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -79,17 +81,16 @@ impl PasskeyRepository for SqlxPgPasskeyRepo {
 
     fn create(&self, input: domain::NewWebauthnCredential) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query(
-                "INSERT INTO yauth_webauthn_credentials (id, user_id, name, aaguid, device_name, credential, created_at) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            sqlx::query!(
+                "INSERT INTO yauth_webauthn_credentials (id, user_id, name, aaguid, device_name, credential, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                input.id,
+                input.user_id,
+                input.name,
+                input.aaguid as Option<String>,
+                input.device_name as Option<String>,
+                input.credential,
+                naive_to_utc(input.created_at),
             )
-            .bind(input.id)
-            .bind(input.user_id)
-            .bind(&input.name)
-            .bind(&input.aaguid)
-            .bind(&input.device_name)
-            .bind(&input.credential)
-            .bind(input.created_at)
             .execute(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -99,11 +100,12 @@ impl PasskeyRepository for SqlxPgPasskeyRepo {
 
     fn update_last_used(&self, user_id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query(
+            let now = naive_to_utc(chrono::Utc::now().naive_utc());
+            sqlx::query!(
                 "UPDATE yauth_webauthn_credentials SET last_used_at = $1 WHERE user_id = $2",
+                now,
+                user_id
             )
-            .bind(chrono::Utc::now().naive_utc())
-            .bind(user_id)
             .execute(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -113,8 +115,7 @@ impl PasskeyRepository for SqlxPgPasskeyRepo {
 
     fn delete(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query("DELETE FROM yauth_webauthn_credentials WHERE id = $1")
-                .bind(id)
+            sqlx::query!("DELETE FROM yauth_webauthn_credentials WHERE id = $1", id)
                 .execute(&self.pool)
                 .await
                 .map_err(sqlx_err)?;

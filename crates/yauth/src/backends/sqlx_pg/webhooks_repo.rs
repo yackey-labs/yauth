@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::backends::sqlx_common::sqlx_err;
+use crate::backends::sqlx_common::{naive_to_utc, sqlx_err};
 use crate::domain;
 use crate::repo::{RepoFuture, WebhookDeliveryRepository, WebhookRepository, sealed};
 
@@ -59,11 +59,12 @@ impl sealed::Sealed for SqlxPgWebhookRepo {}
 impl WebhookRepository for SqlxPgWebhookRepo {
     fn find_by_id(&self, id: Uuid) -> RepoFuture<'_, Option<domain::Webhook>> {
         Box::pin(async move {
-            let row = sqlx::query_as::<_, WebhookRow>(
+            let row = sqlx::query_as!(
+                WebhookRow,
                 "SELECT id, url, secret, events, active, created_at, updated_at \
                  FROM yauth_webhooks WHERE id = $1",
+                id
             )
-            .bind(id)
             .fetch_optional(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -73,9 +74,10 @@ impl WebhookRepository for SqlxPgWebhookRepo {
 
     fn find_active(&self) -> RepoFuture<'_, Vec<domain::Webhook>> {
         Box::pin(async move {
-            let rows: Vec<WebhookRow> = sqlx::query_as(
+            let rows = sqlx::query_as!(
+                WebhookRow,
                 "SELECT id, url, secret, events, active, created_at, updated_at \
-                 FROM yauth_webhooks WHERE active = true",
+                 FROM yauth_webhooks WHERE active = true"
             )
             .fetch_all(&self.pool)
             .await
@@ -86,8 +88,9 @@ impl WebhookRepository for SqlxPgWebhookRepo {
 
     fn find_all(&self) -> RepoFuture<'_, Vec<domain::Webhook>> {
         Box::pin(async move {
-            let rows: Vec<WebhookRow> = sqlx::query_as(
-                "SELECT id, url, secret, events, active, created_at, updated_at FROM yauth_webhooks",
+            let rows = sqlx::query_as!(
+                WebhookRow,
+                "SELECT id, url, secret, events, active, created_at, updated_at FROM yauth_webhooks"
             )
             .fetch_all(&self.pool)
             .await
@@ -98,17 +101,17 @@ impl WebhookRepository for SqlxPgWebhookRepo {
 
     fn create(&self, input: domain::NewWebhook) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query(
+            sqlx::query!(
                 "INSERT INTO yauth_webhooks (id, url, secret, events, active, created_at, updated_at) \
                  VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                input.id,
+                input.url,
+                input.secret,
+                input.events,
+                input.active,
+                naive_to_utc(input.created_at),
+                naive_to_utc(input.updated_at),
             )
-            .bind(input.id)
-            .bind(&input.url)
-            .bind(&input.secret)
-            .bind(&input.events)
-            .bind(input.active)
-            .bind(input.created_at)
-            .bind(input.updated_at)
             .execute(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -117,8 +120,8 @@ impl WebhookRepository for SqlxPgWebhookRepo {
     }
 
     fn update(&self, id: Uuid, changes: domain::UpdateWebhook) -> RepoFuture<'_, domain::Webhook> {
+        // Dynamic SET clause — must stay as runtime query()
         Box::pin(async move {
-            // Build dynamic update
             let mut sets = Vec::new();
             let mut param_idx = 1u32;
 
@@ -138,11 +141,12 @@ impl WebhookRepository for SqlxPgWebhookRepo {
             push_set!(changes.updated_at, "updated_at");
 
             if sets.is_empty() {
-                let row = sqlx::query_as::<_, WebhookRow>(
+                let row = sqlx::query_as!(
+                    WebhookRow,
                     "SELECT id, url, secret, events, active, created_at, updated_at \
                      FROM yauth_webhooks WHERE id = $1",
+                    id
                 )
-                .bind(id)
                 .fetch_one(&self.pool)
                 .await
                 .map_err(sqlx_err)?;
@@ -180,8 +184,7 @@ impl WebhookRepository for SqlxPgWebhookRepo {
 
     fn delete(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query("DELETE FROM yauth_webhooks WHERE id = $1")
-                .bind(id)
+            sqlx::query!("DELETE FROM yauth_webhooks WHERE id = $1", id)
                 .execute(&self.pool)
                 .await
                 .map_err(sqlx_err)?;
@@ -209,12 +212,13 @@ impl WebhookDeliveryRepository for SqlxPgWebhookDeliveryRepo {
         limit: i64,
     ) -> RepoFuture<'_, Vec<domain::WebhookDelivery>> {
         Box::pin(async move {
-            let rows: Vec<WebhookDeliveryRow> = sqlx::query_as(
-                "SELECT id, webhook_id, event_type, payload, status_code, response_body, success, attempt, created_at \
-                 FROM yauth_webhook_deliveries WHERE webhook_id = $1 ORDER BY created_at DESC LIMIT $2",
+            let rows = sqlx::query_as!(
+                WebhookDeliveryRow,
+                r#"SELECT id, webhook_id as "webhook_id!", event_type, payload, status_code, response_body, success, attempt, created_at
+                   FROM yauth_webhook_deliveries WHERE webhook_id = $1 ORDER BY created_at DESC LIMIT $2"#,
+                webhook_id,
+                limit,
             )
-            .bind(webhook_id)
-            .bind(limit)
             .fetch_all(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -237,19 +241,19 @@ impl WebhookDeliveryRepository for SqlxPgWebhookDeliveryRepo {
 
     fn create(&self, input: domain::NewWebhookDelivery) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query(
+            sqlx::query!(
                 "INSERT INTO yauth_webhook_deliveries (id, webhook_id, event_type, payload, status_code, response_body, success, attempt, created_at) \
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+                input.id,
+                input.webhook_id,
+                input.event_type,
+                input.payload,
+                input.status_code,
+                input.response_body as Option<String>,
+                input.success,
+                input.attempt,
+                naive_to_utc(input.created_at),
             )
-            .bind(input.id)
-            .bind(input.webhook_id)
-            .bind(&input.event_type)
-            .bind(&input.payload)
-            .bind(input.status_code)
-            .bind(&input.response_body)
-            .bind(input.success)
-            .bind(input.attempt)
-            .bind(input.created_at)
             .execute(&self.pool)
             .await
             .map_err(sqlx_err)?;

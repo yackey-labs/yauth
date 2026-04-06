@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE yauth_oauth_accounts SET access_token_enc = $1, refresh_token_enc = $2, expires_at = $3, updated_at = $4 WHERE id = $5",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Varchar",
+        "Timestamptz",
+        "Timestamptz",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6edbfe0a7b090f510b74f872c53ca3ef02ccaed5a09dd5e648e566111efde938"
+}

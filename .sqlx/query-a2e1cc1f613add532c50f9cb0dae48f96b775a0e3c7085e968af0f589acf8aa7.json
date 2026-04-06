@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE yauth_device_codes SET last_polled_at = $1 WHERE id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a2e1cc1f613add532c50f9cb0dae48f96b775a0e3c7085e968af0f589acf8aa7"
+}

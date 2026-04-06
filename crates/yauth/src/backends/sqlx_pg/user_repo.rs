@@ -2,11 +2,13 @@ use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::backends::sqlx_common::{sqlx_conflict, sqlx_err};
+use crate::backends::sqlx_common::{naive_to_utc, opt_naive_to_utc, sqlx_conflict, sqlx_err};
 use crate::domain;
 use crate::repo::{RepoFuture, SessionRepository, UserRepository, sealed};
 
 // ── Row types for sqlx ──
+// query_as!() constructs these directly — no FromRow derive needed,
+// but we keep it for the dynamic-query fallback in update().
 
 #[derive(sqlx::FromRow)]
 struct UserRow {
@@ -81,11 +83,12 @@ impl sealed::Sealed for SqlxPgUserRepo {}
 impl UserRepository for SqlxPgUserRepo {
     fn find_by_id(&self, id: Uuid) -> RepoFuture<'_, Option<domain::User>> {
         Box::pin(async move {
-            let row = sqlx::query_as::<_, UserRow>(
+            let row = sqlx::query_as!(
+                UserRow,
                 "SELECT id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at \
                  FROM yauth_users WHERE id = $1",
+                id
             )
-            .bind(id)
             .fetch_optional(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -96,11 +99,12 @@ impl UserRepository for SqlxPgUserRepo {
     fn find_by_email(&self, email: &str) -> RepoFuture<'_, Option<domain::User>> {
         let email = email.to_string();
         Box::pin(async move {
-            let row = sqlx::query_as::<_, UserRow>(
+            let row = sqlx::query_as!(
+                UserRow,
                 "SELECT id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at \
                  FROM yauth_users WHERE email ILIKE $1",
+                email
             )
-            .bind(&email)
             .fetch_optional(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -110,21 +114,22 @@ impl UserRepository for SqlxPgUserRepo {
 
     fn create(&self, input: domain::NewUser) -> RepoFuture<'_, domain::User> {
         Box::pin(async move {
-            let row = sqlx::query_as::<_, UserRow>(
+            let row = sqlx::query_as!(
+                UserRow,
                 "INSERT INTO yauth_users (id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at) \
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
                  RETURNING id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at",
+                input.id,
+                input.email,
+                input.display_name as Option<String>,
+                input.email_verified,
+                input.role,
+                input.banned,
+                input.banned_reason as Option<String>,
+                opt_naive_to_utc(input.banned_until) as Option<DateTime<Utc>>,
+                naive_to_utc(input.created_at),
+                naive_to_utc(input.updated_at),
             )
-            .bind(input.id)
-            .bind(&input.email)
-            .bind(&input.display_name)
-            .bind(input.email_verified)
-            .bind(&input.role)
-            .bind(input.banned)
-            .bind(&input.banned_reason)
-            .bind(input.banned_until)
-            .bind(input.created_at)
-            .bind(input.updated_at)
             .fetch_one(&self.pool)
             .await
             .map_err(sqlx_conflict)?;
@@ -133,8 +138,8 @@ impl UserRepository for SqlxPgUserRepo {
     }
 
     fn update(&self, id: Uuid, changes: domain::UpdateUser) -> RepoFuture<'_, domain::User> {
+        // Dynamic SET clause — must stay as runtime query()
         Box::pin(async move {
-            // Build dynamic SET clause
             let mut sets = Vec::new();
             let mut param_idx = 1u32;
 
@@ -157,7 +162,6 @@ impl UserRepository for SqlxPgUserRepo {
             push_set!(changes.updated_at, "updated_at");
 
             if sets.is_empty() {
-                // Nothing to update — just fetch current
                 return self
                     .find_by_id(id)
                     .await?
@@ -170,7 +174,6 @@ impl UserRepository for SqlxPgUserRepo {
                 sets.join(", ")
             );
 
-            // Build query dynamically with binds
             let mut query = sqlx::query_as::<_, UserRow>(&sql).bind(id);
 
             if let Some(ref email) = changes.email {
@@ -205,8 +208,7 @@ impl UserRepository for SqlxPgUserRepo {
 
     fn delete(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query("DELETE FROM yauth_users WHERE id = $1")
-                .bind(id)
+            sqlx::query!("DELETE FROM yauth_users WHERE id = $1", id)
                 .execute(&self.pool)
                 .await
                 .map_err(sqlx_err)?;
@@ -216,7 +218,7 @@ impl UserRepository for SqlxPgUserRepo {
 
     fn any_exists(&self) -> RepoFuture<'_, bool> {
         Box::pin(async move {
-            let row: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM yauth_users LIMIT 1")
+            let row = sqlx::query!("SELECT id FROM yauth_users LIMIT 1")
                 .fetch_optional(&self.pool)
                 .await
                 .map_err(sqlx_err)?;
@@ -234,42 +236,45 @@ impl UserRepository for SqlxPgUserRepo {
         Box::pin(async move {
             let (total, users) = if let Some(ref s) = search {
                 let pattern = format!("%{}%", s.to_lowercase());
-                let total: (i64,) =
-                    sqlx::query_as("SELECT COUNT(*) FROM yauth_users WHERE email ILIKE $1")
-                        .bind(&pattern)
-                        .fetch_one(&self.pool)
-                        .await
-                        .map_err(sqlx_err)?;
+                let total = sqlx::query!(
+                    "SELECT COUNT(*) as count FROM yauth_users WHERE email ILIKE $1",
+                    pattern
+                )
+                .fetch_one(&self.pool)
+                .await
+                .map_err(sqlx_err)?;
 
-                let rows: Vec<UserRow> = sqlx::query_as(
+                let rows = sqlx::query_as!(
+                    UserRow,
                     "SELECT id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at \
                      FROM yauth_users WHERE email ILIKE $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
+                    pattern,
+                    limit,
+                    offset
                 )
-                .bind(&pattern)
-                .bind(limit)
-                .bind(offset)
                 .fetch_all(&self.pool)
                 .await
                 .map_err(sqlx_err)?;
 
-                (total.0, rows)
+                (total.count.unwrap_or(0), rows)
             } else {
-                let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM yauth_users")
+                let total = sqlx::query!("SELECT COUNT(*) as count FROM yauth_users")
                     .fetch_one(&self.pool)
                     .await
                     .map_err(sqlx_err)?;
 
-                let rows: Vec<UserRow> = sqlx::query_as(
+                let rows = sqlx::query_as!(
+                    UserRow,
                     "SELECT id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at \
                      FROM yauth_users ORDER BY created_at DESC LIMIT $1 OFFSET $2",
+                    limit,
+                    offset
                 )
-                .bind(limit)
-                .bind(offset)
                 .fetch_all(&self.pool)
                 .await
                 .map_err(sqlx_err)?;
 
-                (total.0, rows)
+                (total.count.unwrap_or(0), rows)
             };
 
             Ok((users.into_iter().map(|u| u.into_domain()).collect(), total))
@@ -294,11 +299,12 @@ impl sealed::Sealed for SqlxPgSessionRepo {}
 impl SessionRepository for SqlxPgSessionRepo {
     fn find_by_id(&self, id: Uuid) -> RepoFuture<'_, Option<domain::Session>> {
         Box::pin(async move {
-            let row = sqlx::query_as::<_, SessionRow>(
+            let row = sqlx::query_as!(
+                SessionRow,
                 "SELECT id, user_id, token_hash, ip_address, user_agent, expires_at, created_at \
                  FROM yauth_sessions WHERE id = $1",
+                id
             )
-            .bind(id)
             .fetch_optional(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -308,17 +314,17 @@ impl SessionRepository for SqlxPgSessionRepo {
 
     fn create(&self, input: domain::NewSession) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query(
+            sqlx::query!(
                 "INSERT INTO yauth_sessions (id, user_id, token_hash, ip_address, user_agent, expires_at, created_at) \
                  VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                input.id,
+                input.user_id,
+                input.token_hash,
+                input.ip_address as Option<String>,
+                input.user_agent as Option<String>,
+                naive_to_utc(input.expires_at),
+                naive_to_utc(input.created_at),
             )
-            .bind(input.id)
-            .bind(input.user_id)
-            .bind(&input.token_hash)
-            .bind(&input.ip_address)
-            .bind(&input.user_agent)
-            .bind(input.expires_at)
-            .bind(input.created_at)
             .execute(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -328,8 +334,7 @@ impl SessionRepository for SqlxPgSessionRepo {
 
     fn delete(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query("DELETE FROM yauth_sessions WHERE id = $1")
-                .bind(id)
+            sqlx::query!("DELETE FROM yauth_sessions WHERE id = $1", id)
                 .execute(&self.pool)
                 .await
                 .map_err(sqlx_err)?;
@@ -339,22 +344,26 @@ impl SessionRepository for SqlxPgSessionRepo {
 
     fn list(&self, limit: i64, offset: i64) -> RepoFuture<'_, (Vec<domain::Session>, i64)> {
         Box::pin(async move {
-            let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM yauth_sessions")
+            let total = sqlx::query!("SELECT COUNT(*) as count FROM yauth_sessions")
                 .fetch_one(&self.pool)
                 .await
                 .map_err(sqlx_err)?;
 
-            let rows: Vec<SessionRow> = sqlx::query_as(
+            let rows = sqlx::query_as!(
+                SessionRow,
                 "SELECT id, user_id, token_hash, ip_address, user_agent, expires_at, created_at \
                  FROM yauth_sessions ORDER BY created_at DESC LIMIT $1 OFFSET $2",
+                limit,
+                offset
             )
-            .bind(limit)
-            .bind(offset)
             .fetch_all(&self.pool)
             .await
             .map_err(sqlx_err)?;
 
-            Ok((rows.into_iter().map(|s| s.into_domain()).collect(), total.0))
+            Ok((
+                rows.into_iter().map(|s| s.into_domain()).collect(),
+                total.count.unwrap_or(0),
+            ))
         })
     }
 }

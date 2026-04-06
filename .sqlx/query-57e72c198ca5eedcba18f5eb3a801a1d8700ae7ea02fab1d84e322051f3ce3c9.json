@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM yauth_magic_links WHERE email = $1 AND used = false",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "57e72c198ca5eedcba18f5eb3a801a1d8700ae7ea02fab1d84e322051f3ce3c9"
+}

@@ -45,13 +45,14 @@ impl RevocationRepository for SqlxPgRevocationRepo {
         Box::pin(async move {
             self.ensure_init().await?;
 
-            sqlx::query(
+            let secs = ttl.as_secs_f64();
+            sqlx::query!(
                 "INSERT INTO yauth_revocations (key, expires_at) \
                  VALUES ($1, now() + make_interval(secs => $2)) \
                  ON CONFLICT (key) DO UPDATE SET expires_at = EXCLUDED.expires_at",
+                jti,
+                secs,
             )
-            .bind(&jti)
-            .bind(ttl.as_secs_f64())
             .execute(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -64,10 +65,10 @@ impl RevocationRepository for SqlxPgRevocationRepo {
         Box::pin(async move {
             self.ensure_init().await?;
 
-            let row: Option<(i32,)> = sqlx::query_as(
+            let row = sqlx::query!(
                 "SELECT 1 as found FROM yauth_revocations WHERE key = $1 AND expires_at > now()",
+                jti
             )
-            .bind(&jti)
             .fetch_optional(&self.pool)
             .await
             .map_err(sqlx_err)?;

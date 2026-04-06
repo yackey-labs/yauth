@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::backends::sqlx_common::sqlx_err;
+use crate::backends::sqlx_common::{naive_to_utc, sqlx_err};
 use crate::domain;
 use crate::repo::{
     EmailVerificationRepository, PasswordRepository, PasswordResetRepository, RepoFuture, sealed,
@@ -23,28 +23,27 @@ impl sealed::Sealed for SqlxPgPasswordRepo {}
 impl PasswordRepository for SqlxPgPasswordRepo {
     fn find_by_user_id(&self, user_id: Uuid) -> RepoFuture<'_, Option<domain::Password>> {
         Box::pin(async move {
-            let row: Option<(Uuid, String)> = sqlx::query_as(
+            let row = sqlx::query!(
                 "SELECT user_id, password_hash FROM yauth_passwords WHERE user_id = $1",
+                user_id
             )
-            .bind(user_id)
             .fetch_optional(&self.pool)
             .await
             .map_err(sqlx_err)?;
-            Ok(row.map(|(user_id, password_hash)| domain::Password {
-                user_id,
-                password_hash,
+            Ok(row.map(|r| domain::Password {
+                user_id: r.user_id,
+                password_hash: r.password_hash,
             }))
         })
     }
 
     fn upsert(&self, input: domain::NewPassword) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query(
-                "INSERT INTO yauth_passwords (user_id, password_hash) VALUES ($1, $2) \
-                 ON CONFLICT (user_id) DO UPDATE SET password_hash = EXCLUDED.password_hash",
+            sqlx::query!(
+                "INSERT INTO yauth_passwords (user_id, password_hash) VALUES ($1, $2) ON CONFLICT (user_id) DO UPDATE SET password_hash = EXCLUDED.password_hash",
+                input.user_id,
+                input.password_hash,
             )
-            .bind(input.user_id)
-            .bind(&input.password_hash)
             .execute(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -81,13 +80,15 @@ impl EmailVerificationRepository for SqlxPgEmailVerificationRepo {
     ) -> RepoFuture<'_, Option<domain::EmailVerification>> {
         let token_hash = token_hash.to_string();
         Box::pin(async move {
-            let row = sqlx::query_as::<_, EmailVerificationRow>(
-                "SELECT id, user_id, token_hash, expires_at, created_at \
-                 FROM yauth_email_verifications \
-                 WHERE token_hash = $1 AND expires_at > $2",
+            let now = naive_to_utc(chrono::Utc::now().naive_utc());
+            let row = sqlx::query_as!(
+                EmailVerificationRow,
+                r#"SELECT id, user_id as "user_id!", token_hash, expires_at, created_at
+                   FROM yauth_email_verifications
+                   WHERE token_hash = $1 AND expires_at > $2"#,
+                token_hash,
+                now,
             )
-            .bind(&token_hash)
-            .bind(chrono::Utc::now().naive_utc())
             .fetch_optional(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -103,15 +104,14 @@ impl EmailVerificationRepository for SqlxPgEmailVerificationRepo {
 
     fn create(&self, input: domain::NewEmailVerification) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query(
-                "INSERT INTO yauth_email_verifications (id, user_id, token_hash, expires_at, created_at) \
-                 VALUES ($1, $2, $3, $4, $5)",
+            sqlx::query!(
+                "INSERT INTO yauth_email_verifications (id, user_id, token_hash, expires_at, created_at) VALUES ($1, $2, $3, $4, $5)",
+                input.id,
+                input.user_id,
+                input.token_hash,
+                naive_to_utc(input.expires_at),
+                naive_to_utc(input.created_at),
             )
-            .bind(input.id)
-            .bind(input.user_id)
-            .bind(&input.token_hash)
-            .bind(input.expires_at)
-            .bind(input.created_at)
             .execute(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -121,8 +121,7 @@ impl EmailVerificationRepository for SqlxPgEmailVerificationRepo {
 
     fn delete(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query("DELETE FROM yauth_email_verifications WHERE id = $1")
-                .bind(id)
+            sqlx::query!("DELETE FROM yauth_email_verifications WHERE id = $1", id)
                 .execute(&self.pool)
                 .await
                 .map_err(sqlx_err)?;
@@ -132,11 +131,13 @@ impl EmailVerificationRepository for SqlxPgEmailVerificationRepo {
 
     fn delete_all_for_user(&self, user_id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query("DELETE FROM yauth_email_verifications WHERE user_id = $1")
-                .bind(user_id)
-                .execute(&self.pool)
-                .await
-                .map_err(sqlx_err)?;
+            sqlx::query!(
+                "DELETE FROM yauth_email_verifications WHERE user_id = $1",
+                user_id
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(sqlx_err)?;
             Ok(())
         })
     }
@@ -171,13 +172,15 @@ impl PasswordResetRepository for SqlxPgPasswordResetRepo {
     ) -> RepoFuture<'_, Option<domain::PasswordReset>> {
         let token_hash = token_hash.to_string();
         Box::pin(async move {
-            let row = sqlx::query_as::<_, PasswordResetRow>(
-                "SELECT id, user_id, token_hash, expires_at, used_at, created_at \
-                 FROM yauth_password_resets \
-                 WHERE token_hash = $1 AND used_at IS NULL AND expires_at > $2",
+            let now = naive_to_utc(chrono::Utc::now().naive_utc());
+            let row = sqlx::query_as!(
+                PasswordResetRow,
+                r#"SELECT id, user_id as "user_id!", token_hash, expires_at, used_at, created_at
+                   FROM yauth_password_resets
+                   WHERE token_hash = $1 AND used_at IS NULL AND expires_at > $2"#,
+                token_hash,
+                now,
             )
-            .bind(&token_hash)
-            .bind(chrono::Utc::now().naive_utc())
             .fetch_optional(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -194,15 +197,14 @@ impl PasswordResetRepository for SqlxPgPasswordResetRepo {
 
     fn create(&self, input: domain::NewPasswordReset) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query(
-                "INSERT INTO yauth_password_resets (id, user_id, token_hash, expires_at, created_at) \
-                 VALUES ($1, $2, $3, $4, $5)",
+            sqlx::query!(
+                "INSERT INTO yauth_password_resets (id, user_id, token_hash, expires_at, created_at) VALUES ($1, $2, $3, $4, $5)",
+                input.id,
+                input.user_id,
+                input.token_hash,
+                naive_to_utc(input.expires_at),
+                naive_to_utc(input.created_at),
             )
-            .bind(input.id)
-            .bind(input.user_id)
-            .bind(&input.token_hash)
-            .bind(input.expires_at)
-            .bind(input.created_at)
             .execute(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -212,11 +214,13 @@ impl PasswordResetRepository for SqlxPgPasswordResetRepo {
 
     fn delete_unused_for_user(&self, user_id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query("DELETE FROM yauth_password_resets WHERE user_id = $1 AND used_at IS NULL")
-                .bind(user_id)
-                .execute(&self.pool)
-                .await
-                .map_err(sqlx_err)?;
+            sqlx::query!(
+                "DELETE FROM yauth_password_resets WHERE user_id = $1 AND used_at IS NULL",
+                user_id
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(sqlx_err)?;
             Ok(())
         })
     }

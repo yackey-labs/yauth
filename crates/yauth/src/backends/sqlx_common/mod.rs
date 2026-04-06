@@ -59,6 +59,22 @@ pub(crate) fn rate_limit_result(
     }
 }
 
+// ── NaiveDateTime → DateTime<Utc> converters ──
+// The query!() macro infers TIMESTAMPTZ columns as DateTime<Utc>, but domain
+// types use NaiveDateTime. These helpers bridge the gap at bind sites.
+
+#[cfg(feature = "sqlx-pg-backend")]
+pub(crate) fn naive_to_utc(dt: chrono::NaiveDateTime) -> chrono::DateTime<chrono::Utc> {
+    dt.and_utc()
+}
+
+#[cfg(feature = "sqlx-pg-backend")]
+pub(crate) fn opt_naive_to_utc(
+    dt: Option<chrono::NaiveDateTime>,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    dt.map(|d| d.and_utc())
+}
+
 // ── UUID / JSON string converters ──
 // Used by MySQL and SQLite sqlx backends where UUIDs and JSON are stored as TEXT/CHAR(36).
 // Currently unused — these will be needed when sqlx_mysql/sqlx_sqlite repos do inline

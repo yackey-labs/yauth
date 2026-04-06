@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::backends::sqlx_common::sqlx_err;
+use crate::backends::sqlx_common::{naive_to_utc, sqlx_err};
 use crate::domain;
 use crate::repo::{RepoFuture, SessionOpsRepository, sealed};
 
@@ -43,17 +43,17 @@ impl SessionOpsRepository for SqlxPgSessionOpsRepo {
             let expires_at =
                 now + chrono::Duration::from_std(ttl).unwrap_or(chrono::Duration::days(7));
 
-            sqlx::query(
+            sqlx::query!(
                 "INSERT INTO yauth_sessions (id, user_id, token_hash, ip_address, user_agent, expires_at, created_at) \
                  VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                session_id,
+                user_id,
+                token_hash,
+                ip_address as Option<String>,
+                user_agent as Option<String>,
+                naive_to_utc(expires_at.naive_utc()),
+                naive_to_utc(now.naive_utc()),
             )
-            .bind(session_id)
-            .bind(user_id)
-            .bind(&token_hash)
-            .bind(&ip_address)
-            .bind(&user_agent)
-            .bind(expires_at.naive_utc())
-            .bind(now.naive_utc())
             .execute(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -65,11 +65,12 @@ impl SessionOpsRepository for SqlxPgSessionOpsRepo {
     fn validate_session(&self, token_hash: &str) -> RepoFuture<'_, Option<domain::StoredSession>> {
         let token_hash = token_hash.to_string();
         Box::pin(async move {
-            let row = sqlx::query_as::<_, StoredSessionRow>(
+            let row = sqlx::query_as!(
+                StoredSessionRow,
                 "SELECT id, user_id, ip_address, user_agent, expires_at, created_at \
                  FROM yauth_sessions WHERE token_hash = $1",
+                token_hash
             )
-            .bind(&token_hash)
             .fetch_optional(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -79,8 +80,7 @@ impl SessionOpsRepository for SqlxPgSessionOpsRepo {
                     let now = Utc::now().naive_utc();
                     if s.expires_at.naive_utc() < now {
                         // Expired — clean up
-                        sqlx::query("DELETE FROM yauth_sessions WHERE id = $1")
-                            .bind(s.id)
+                        sqlx::query!("DELETE FROM yauth_sessions WHERE id = $1", s.id)
                             .execute(&self.pool)
                             .await
                             .map_err(sqlx_err)?;
@@ -104,19 +104,20 @@ impl SessionOpsRepository for SqlxPgSessionOpsRepo {
     fn delete_session(&self, token_hash: &str) -> RepoFuture<'_, bool> {
         let token_hash = token_hash.to_string();
         Box::pin(async move {
-            let result = sqlx::query("DELETE FROM yauth_sessions WHERE token_hash = $1")
-                .bind(&token_hash)
-                .execute(&self.pool)
-                .await
-                .map_err(sqlx_err)?;
+            let result = sqlx::query!(
+                "DELETE FROM yauth_sessions WHERE token_hash = $1",
+                token_hash
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(sqlx_err)?;
             Ok(result.rows_affected() > 0)
         })
     }
 
     fn delete_all_sessions_for_user(&self, user_id: Uuid) -> RepoFuture<'_, u64> {
         Box::pin(async move {
-            let result = sqlx::query("DELETE FROM yauth_sessions WHERE user_id = $1")
-                .bind(user_id)
+            let result = sqlx::query!("DELETE FROM yauth_sessions WHERE user_id = $1", user_id)
                 .execute(&self.pool)
                 .await
                 .map_err(sqlx_err)?;
@@ -131,13 +132,14 @@ impl SessionOpsRepository for SqlxPgSessionOpsRepo {
     ) -> RepoFuture<'_, u64> {
         let keep_hash = keep_hash.to_string();
         Box::pin(async move {
-            let result =
-                sqlx::query("DELETE FROM yauth_sessions WHERE user_id = $1 AND token_hash != $2")
-                    .bind(user_id)
-                    .bind(&keep_hash)
-                    .execute(&self.pool)
-                    .await
-                    .map_err(sqlx_err)?;
+            let result = sqlx::query!(
+                "DELETE FROM yauth_sessions WHERE user_id = $1 AND token_hash != $2",
+                user_id,
+                keep_hash
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(sqlx_err)?;
             Ok(result.rows_affected())
         })
     }

@@ -1,0 +1,70 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, client_id, client_secret_hash, redirect_uris, client_name, grant_types, scopes, is_public, created_at FROM yauth_oauth2_clients WHERE client_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "client_id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "client_secret_hash",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "redirect_uris",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 4,
+        "name": "client_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "grant_types",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 6,
+        "name": "scopes",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 7,
+        "name": "is_public",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 8,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      true,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "65e4969135d946e1c427dc47075d86f9eac446eb673a12b751ae5d95904392dd"
+}

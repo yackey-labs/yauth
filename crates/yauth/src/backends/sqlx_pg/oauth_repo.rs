@@ -2,7 +2,7 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::backends::sqlx_common::sqlx_err;
+use crate::backends::sqlx_common::{naive_to_utc, opt_naive_to_utc, sqlx_err};
 use crate::domain;
 use crate::repo::{OauthAccountRepository, OauthStateRepository, RepoFuture, sealed};
 
@@ -65,12 +65,13 @@ impl OauthAccountRepository for SqlxPgOauthAccountRepo {
         let provider = provider.to_string();
         let provider_user_id = provider_user_id.to_string();
         Box::pin(async move {
-            let row = sqlx::query_as::<_, OauthAccountRow>(
-                "SELECT id, user_id, provider, provider_user_id, access_token_enc, refresh_token_enc, created_at, expires_at, updated_at \
-                 FROM yauth_oauth_accounts WHERE provider = $1 AND provider_user_id = $2",
+            let row = sqlx::query_as!(
+                OauthAccountRow,
+                r#"SELECT id, user_id as "user_id!", provider, provider_user_id, access_token_enc, refresh_token_enc, created_at, expires_at, updated_at
+                   FROM yauth_oauth_accounts WHERE provider = $1 AND provider_user_id = $2"#,
+                provider,
+                provider_user_id,
             )
-            .bind(&provider)
-            .bind(&provider_user_id)
             .fetch_optional(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -80,11 +81,12 @@ impl OauthAccountRepository for SqlxPgOauthAccountRepo {
 
     fn find_by_user_id(&self, user_id: Uuid) -> RepoFuture<'_, Vec<domain::OauthAccount>> {
         Box::pin(async move {
-            let rows: Vec<OauthAccountRow> = sqlx::query_as(
-                "SELECT id, user_id, provider, provider_user_id, access_token_enc, refresh_token_enc, created_at, expires_at, updated_at \
-                 FROM yauth_oauth_accounts WHERE user_id = $1",
+            let rows = sqlx::query_as!(
+                OauthAccountRow,
+                r#"SELECT id, user_id as "user_id!", provider, provider_user_id, access_token_enc, refresh_token_enc, created_at, expires_at, updated_at
+                   FROM yauth_oauth_accounts WHERE user_id = $1"#,
+                user_id
             )
-            .bind(user_id)
             .fetch_all(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -99,12 +101,13 @@ impl OauthAccountRepository for SqlxPgOauthAccountRepo {
     ) -> RepoFuture<'_, Option<domain::OauthAccount>> {
         let provider = provider.to_string();
         Box::pin(async move {
-            let row = sqlx::query_as::<_, OauthAccountRow>(
-                "SELECT id, user_id, provider, provider_user_id, access_token_enc, refresh_token_enc, created_at, expires_at, updated_at \
-                 FROM yauth_oauth_accounts WHERE user_id = $1 AND provider = $2",
+            let row = sqlx::query_as!(
+                OauthAccountRow,
+                r#"SELECT id, user_id as "user_id!", provider, provider_user_id, access_token_enc, refresh_token_enc, created_at, expires_at, updated_at
+                   FROM yauth_oauth_accounts WHERE user_id = $1 AND provider = $2"#,
+                user_id,
+                provider,
             )
-            .bind(user_id)
-            .bind(&provider)
             .fetch_optional(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -114,19 +117,19 @@ impl OauthAccountRepository for SqlxPgOauthAccountRepo {
 
     fn create(&self, input: domain::NewOauthAccount) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query(
+            sqlx::query!(
                 "INSERT INTO yauth_oauth_accounts (id, user_id, provider, provider_user_id, access_token_enc, refresh_token_enc, created_at, expires_at, updated_at) \
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+                input.id,
+                input.user_id,
+                input.provider,
+                input.provider_user_id,
+                input.access_token_enc as Option<String>,
+                input.refresh_token_enc as Option<String>,
+                naive_to_utc(input.created_at),
+                opt_naive_to_utc(input.expires_at) as Option<DateTime<Utc>>,
+                naive_to_utc(input.updated_at),
             )
-            .bind(input.id)
-            .bind(input.user_id)
-            .bind(&input.provider)
-            .bind(&input.provider_user_id)
-            .bind(&input.access_token_enc)
-            .bind(&input.refresh_token_enc)
-            .bind(input.created_at)
-            .bind(input.expires_at)
-            .bind(input.updated_at)
             .execute(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -144,14 +147,15 @@ impl OauthAccountRepository for SqlxPgOauthAccountRepo {
         let access_token_enc = access_token_enc.map(|s| s.to_string());
         let refresh_token_enc = refresh_token_enc.map(|s| s.to_string());
         Box::pin(async move {
-            sqlx::query(
+            let now = naive_to_utc(chrono::Utc::now().naive_utc());
+            sqlx::query!(
                 "UPDATE yauth_oauth_accounts SET access_token_enc = $1, refresh_token_enc = $2, expires_at = $3, updated_at = $4 WHERE id = $5",
+                access_token_enc as Option<String>,
+                refresh_token_enc as Option<String>,
+                opt_naive_to_utc(expires_at) as Option<DateTime<Utc>>,
+                now,
+                id,
             )
-            .bind(&access_token_enc)
-            .bind(&refresh_token_enc)
-            .bind(expires_at)
-            .bind(chrono::Utc::now().naive_utc())
-            .bind(id)
             .execute(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -161,8 +165,7 @@ impl OauthAccountRepository for SqlxPgOauthAccountRepo {
 
     fn delete(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query("DELETE FROM yauth_oauth_accounts WHERE id = $1")
-                .bind(id)
+            sqlx::query!("DELETE FROM yauth_oauth_accounts WHERE id = $1", id)
                 .execute(&self.pool)
                 .await
                 .map_err(sqlx_err)?;
@@ -186,15 +189,15 @@ impl sealed::Sealed for SqlxPgOauthStateRepo {}
 impl OauthStateRepository for SqlxPgOauthStateRepo {
     fn create(&self, input: domain::NewOauthState) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query(
+            sqlx::query!(
                 "INSERT INTO yauth_oauth_states (state, provider, redirect_url, expires_at, created_at) \
                  VALUES ($1, $2, $3, $4, $5)",
+                input.state,
+                input.provider,
+                input.redirect_url as Option<String>,
+                naive_to_utc(input.expires_at),
+                naive_to_utc(input.created_at),
             )
-            .bind(&input.state)
-            .bind(&input.provider)
-            .bind(&input.redirect_url)
-            .bind(input.expires_at)
-            .bind(input.created_at)
             .execute(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -205,18 +208,18 @@ impl OauthStateRepository for SqlxPgOauthStateRepo {
     fn find_and_delete(&self, state: &str) -> RepoFuture<'_, Option<domain::OauthState>> {
         let state = state.to_string();
         Box::pin(async move {
-            let row = sqlx::query_as::<_, OauthStateRow>(
+            let row = sqlx::query_as!(
+                OauthStateRow,
                 "SELECT state, provider, redirect_url, expires_at, created_at \
                  FROM yauth_oauth_states WHERE state = $1",
+                state
             )
-            .bind(&state)
             .fetch_optional(&self.pool)
             .await
             .map_err(sqlx_err)?;
 
             if row.is_some() {
-                sqlx::query("DELETE FROM yauth_oauth_states WHERE state = $1")
-                    .bind(&state)
+                sqlx::query!("DELETE FROM yauth_oauth_states WHERE state = $1", state)
                     .execute(&self.pool)
                     .await
                     .map_err(sqlx_err)?;

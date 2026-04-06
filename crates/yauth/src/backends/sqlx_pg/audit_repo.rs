@@ -1,6 +1,7 @@
 use sqlx::PgPool;
+use uuid::Uuid;
 
-use crate::backends::sqlx_common::sqlx_err;
+use crate::backends::sqlx_common::{naive_to_utc, sqlx_err};
 use crate::domain;
 use crate::repo::{AuditLogRepository, RepoFuture, sealed};
 
@@ -19,16 +20,16 @@ impl sealed::Sealed for SqlxPgAuditLogRepo {}
 impl AuditLogRepository for SqlxPgAuditLogRepo {
     fn create(&self, input: domain::NewAuditLog) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query(
+            sqlx::query!(
                 "INSERT INTO yauth_audit_log (id, user_id, event_type, metadata, ip_address, created_at) \
                  VALUES ($1, $2, $3, $4, $5, $6)",
+                input.id,
+                input.user_id as Option<Uuid>,
+                input.event_type,
+                input.metadata as Option<serde_json::Value>,
+                input.ip_address as Option<String>,
+                naive_to_utc(input.created_at),
             )
-            .bind(input.id)
-            .bind(input.user_id)
-            .bind(&input.event_type)
-            .bind(&input.metadata)
-            .bind(&input.ip_address)
-            .bind(input.created_at)
             .execute(&self.pool)
             .await
             .map_err(sqlx_err)?;

@@ -52,20 +52,21 @@ impl ChallengeRepository for SqlxPgChallengeRepo {
             self.ensure_init().await?;
 
             // Cleanup expired
-            sqlx::query("DELETE FROM yauth_challenges WHERE expires_at < now()")
+            sqlx::query!("DELETE FROM yauth_challenges WHERE expires_at < now()")
                 .execute(&self.pool)
                 .await
                 .ok();
 
-            sqlx::query(
+            let ttl = ttl_secs as f64;
+            sqlx::query!(
                 "INSERT INTO yauth_challenges (key, value, expires_at) \
                  VALUES ($1, $2, now() + make_interval(secs => $3)) \
                  ON CONFLICT (key) DO UPDATE \
                  SET value = EXCLUDED.value, expires_at = EXCLUDED.expires_at",
+                key,
+                value,
+                ttl,
             )
-            .bind(&key)
-            .bind(&value)
-            .bind(ttl_secs as f64)
             .execute(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -78,14 +79,14 @@ impl ChallengeRepository for SqlxPgChallengeRepo {
         Box::pin(async move {
             self.ensure_init().await?;
 
-            let row: Option<(serde_json::Value,)> = sqlx::query_as(
+            let row = sqlx::query!(
                 "SELECT value FROM yauth_challenges WHERE key = $1 AND expires_at > now()",
+                key
             )
-            .bind(&key)
             .fetch_optional(&self.pool)
             .await
             .map_err(sqlx_err)?;
-            Ok(row.map(|r| r.0))
+            Ok(row.map(|r| r.value))
         })
     }
 
@@ -94,8 +95,7 @@ impl ChallengeRepository for SqlxPgChallengeRepo {
         Box::pin(async move {
             self.ensure_init().await?;
 
-            sqlx::query("DELETE FROM yauth_challenges WHERE key = $1")
-                .bind(&key)
+            sqlx::query!("DELETE FROM yauth_challenges WHERE key = $1", key)
                 .execute(&self.pool)
                 .await
                 .map_err(sqlx_err)?;

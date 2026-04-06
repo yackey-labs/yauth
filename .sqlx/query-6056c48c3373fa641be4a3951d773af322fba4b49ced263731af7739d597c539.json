@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM yauth_sessions WHERE user_id = $1 AND token_hash != $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6056c48c3373fa641be4a3951d773af322fba4b49ced263731af7739d597c539"
+}

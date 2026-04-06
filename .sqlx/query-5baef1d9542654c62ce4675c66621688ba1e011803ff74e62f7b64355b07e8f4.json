@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO yauth_revocations (key, expires_at) VALUES ($1, now() + make_interval(secs => $2)) ON CONFLICT (key) DO UPDATE SET expires_at = EXCLUDED.expires_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Float8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5baef1d9542654c62ce4675c66621688ba1e011803ff74e62f7b64355b07e8f4"
+}

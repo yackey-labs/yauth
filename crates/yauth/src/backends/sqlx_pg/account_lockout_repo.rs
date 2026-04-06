@@ -2,7 +2,7 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::backends::sqlx_common::sqlx_err;
+use crate::backends::sqlx_common::{naive_to_utc, opt_naive_to_utc, sqlx_err};
 use crate::domain;
 use crate::repo::{AccountLockRepository, RepoFuture, UnlockTokenRepository, sealed};
 
@@ -57,11 +57,12 @@ impl sealed::Sealed for SqlxPgAccountLockRepo {}
 impl AccountLockRepository for SqlxPgAccountLockRepo {
     fn find_by_user_id(&self, user_id: Uuid) -> RepoFuture<'_, Option<domain::AccountLock>> {
         Box::pin(async move {
-            let row = sqlx::query_as::<_, AccountLockRow>(
-                "SELECT id, user_id, failed_count, locked_until, lock_count, locked_reason, created_at, updated_at \
-                 FROM yauth_account_locks WHERE user_id = $1",
+            let row = sqlx::query_as!(
+                AccountLockRow,
+                r#"SELECT id, user_id as "user_id!", failed_count, locked_until, lock_count, locked_reason, created_at, updated_at
+                 FROM yauth_account_locks WHERE user_id = $1"#,
+                user_id
             )
-            .bind(user_id)
             .fetch_optional(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -71,19 +72,20 @@ impl AccountLockRepository for SqlxPgAccountLockRepo {
 
     fn create(&self, input: domain::NewAccountLock) -> RepoFuture<'_, domain::AccountLock> {
         Box::pin(async move {
-            let row = sqlx::query_as::<_, AccountLockRow>(
-                "INSERT INTO yauth_account_locks (id, user_id, failed_count, locked_until, lock_count, locked_reason, created_at, updated_at) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
-                 RETURNING id, user_id, failed_count, locked_until, lock_count, locked_reason, created_at, updated_at",
+            let row = sqlx::query_as!(
+                AccountLockRow,
+                r#"INSERT INTO yauth_account_locks (id, user_id, failed_count, locked_until, lock_count, locked_reason, created_at, updated_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                 RETURNING id, user_id as "user_id!", failed_count, locked_until, lock_count, locked_reason, created_at, updated_at"#,
+                input.id,
+                input.user_id,
+                input.failed_count,
+                opt_naive_to_utc(input.locked_until) as Option<DateTime<Utc>>,
+                input.lock_count,
+                input.locked_reason as Option<String>,
+                naive_to_utc(input.created_at),
+                naive_to_utc(input.updated_at),
             )
-            .bind(input.id)
-            .bind(input.user_id)
-            .bind(input.failed_count)
-            .bind(input.locked_until)
-            .bind(input.lock_count)
-            .bind(&input.locked_reason)
-            .bind(input.created_at)
-            .bind(input.updated_at)
             .fetch_one(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -93,11 +95,12 @@ impl AccountLockRepository for SqlxPgAccountLockRepo {
 
     fn increment_failed_count(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query(
+            let now = naive_to_utc(chrono::Utc::now().naive_utc());
+            sqlx::query!(
                 "UPDATE yauth_account_locks SET failed_count = failed_count + 1, updated_at = $1 WHERE id = $2",
+                now,
+                id
             )
-            .bind(chrono::Utc::now().naive_utc())
-            .bind(id)
             .execute(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -114,14 +117,15 @@ impl AccountLockRepository for SqlxPgAccountLockRepo {
     ) -> RepoFuture<'_, ()> {
         let locked_reason = locked_reason.map(|s| s.to_string());
         Box::pin(async move {
-            sqlx::query(
+            let now = naive_to_utc(chrono::Utc::now().naive_utc());
+            sqlx::query!(
                 "UPDATE yauth_account_locks SET locked_until = $1, locked_reason = $2, lock_count = $3, updated_at = $4 WHERE id = $5",
+                opt_naive_to_utc(locked_until) as Option<DateTime<Utc>>,
+                locked_reason as Option<String>,
+                lock_count,
+                now,
+                id,
             )
-            .bind(locked_until)
-            .bind(&locked_reason)
-            .bind(lock_count)
-            .bind(chrono::Utc::now().naive_utc())
-            .bind(id)
             .execute(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -131,11 +135,12 @@ impl AccountLockRepository for SqlxPgAccountLockRepo {
 
     fn reset_failed_count(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query(
+            let now = naive_to_utc(chrono::Utc::now().naive_utc());
+            sqlx::query!(
                 "UPDATE yauth_account_locks SET failed_count = 0, updated_at = $1 WHERE id = $2",
+                now,
+                id
             )
-            .bind(chrono::Utc::now().naive_utc())
-            .bind(id)
             .execute(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -145,11 +150,12 @@ impl AccountLockRepository for SqlxPgAccountLockRepo {
 
     fn auto_unlock(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query(
+            let now = naive_to_utc(chrono::Utc::now().naive_utc());
+            sqlx::query!(
                 "UPDATE yauth_account_locks SET failed_count = 0, locked_until = NULL, locked_reason = NULL, updated_at = $1 WHERE id = $2",
+                now,
+                id
             )
-            .bind(chrono::Utc::now().naive_utc())
-            .bind(id)
             .execute(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -174,12 +180,14 @@ impl UnlockTokenRepository for SqlxPgUnlockTokenRepo {
     fn find_by_token_hash(&self, token_hash: &str) -> RepoFuture<'_, Option<domain::UnlockToken>> {
         let token_hash = token_hash.to_string();
         Box::pin(async move {
-            let row = sqlx::query_as::<_, UnlockTokenRow>(
-                "SELECT id, user_id, token_hash, expires_at, created_at \
-                 FROM yauth_unlock_tokens WHERE token_hash = $1 AND expires_at > $2",
+            let now = naive_to_utc(chrono::Utc::now().naive_utc());
+            let row = sqlx::query_as!(
+                UnlockTokenRow,
+                r#"SELECT id, user_id as "user_id!", token_hash, expires_at, created_at
+                   FROM yauth_unlock_tokens WHERE token_hash = $1 AND expires_at > $2"#,
+                token_hash,
+                now,
             )
-            .bind(&token_hash)
-            .bind(chrono::Utc::now().naive_utc())
             .fetch_optional(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -195,15 +203,15 @@ impl UnlockTokenRepository for SqlxPgUnlockTokenRepo {
 
     fn create(&self, input: domain::NewUnlockToken) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query(
+            sqlx::query!(
                 "INSERT INTO yauth_unlock_tokens (id, user_id, token_hash, expires_at, created_at) \
                  VALUES ($1, $2, $3, $4, $5)",
+                input.id,
+                input.user_id,
+                input.token_hash,
+                naive_to_utc(input.expires_at),
+                naive_to_utc(input.created_at),
             )
-            .bind(input.id)
-            .bind(input.user_id)
-            .bind(&input.token_hash)
-            .bind(input.expires_at)
-            .bind(input.created_at)
             .execute(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -213,8 +221,7 @@ impl UnlockTokenRepository for SqlxPgUnlockTokenRepo {
 
     fn delete(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query("DELETE FROM yauth_unlock_tokens WHERE id = $1")
-                .bind(id)
+            sqlx::query!("DELETE FROM yauth_unlock_tokens WHERE id = $1", id)
                 .execute(&self.pool)
                 .await
                 .map_err(sqlx_err)?;
@@ -224,11 +231,13 @@ impl UnlockTokenRepository for SqlxPgUnlockTokenRepo {
 
     fn delete_all_for_user(&self, user_id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query("DELETE FROM yauth_unlock_tokens WHERE user_id = $1")
-                .bind(user_id)
-                .execute(&self.pool)
-                .await
-                .map_err(sqlx_err)?;
+            sqlx::query!(
+                "DELETE FROM yauth_unlock_tokens WHERE user_id = $1",
+                user_id
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(sqlx_err)?;
             Ok(())
         })
     }

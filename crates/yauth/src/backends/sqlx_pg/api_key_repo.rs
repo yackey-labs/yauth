@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::backends::sqlx_common::sqlx_err;
+use crate::backends::sqlx_common::{naive_to_utc, opt_naive_to_utc, sqlx_err};
 use crate::domain;
 use crate::repo::{ApiKeyRepository, RepoFuture, sealed};
 
@@ -49,11 +49,12 @@ impl ApiKeyRepository for SqlxPgApiKeyRepo {
     fn find_by_prefix(&self, prefix: &str) -> RepoFuture<'_, Option<domain::ApiKey>> {
         let prefix = prefix.to_string();
         Box::pin(async move {
-            let row = sqlx::query_as::<_, ApiKeyRow>(
-                "SELECT id, user_id, key_prefix, key_hash, name, scopes, last_used_at, expires_at, created_at \
-                 FROM yauth_api_keys WHERE key_prefix = $1",
+            let row = sqlx::query_as!(
+                ApiKeyRow,
+                r#"SELECT id, user_id as "user_id!", key_prefix, key_hash, name, scopes, last_used_at, expires_at, created_at
+                   FROM yauth_api_keys WHERE key_prefix = $1"#,
+                prefix
             )
-            .bind(&prefix)
             .fetch_optional(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -67,12 +68,13 @@ impl ApiKeyRepository for SqlxPgApiKeyRepo {
         user_id: Uuid,
     ) -> RepoFuture<'_, Option<domain::ApiKey>> {
         Box::pin(async move {
-            let row = sqlx::query_as::<_, ApiKeyRow>(
-                "SELECT id, user_id, key_prefix, key_hash, name, scopes, last_used_at, expires_at, created_at \
-                 FROM yauth_api_keys WHERE id = $1 AND user_id = $2",
+            let row = sqlx::query_as!(
+                ApiKeyRow,
+                r#"SELECT id, user_id as "user_id!", key_prefix, key_hash, name, scopes, last_used_at, expires_at, created_at
+                   FROM yauth_api_keys WHERE id = $1 AND user_id = $2"#,
+                id,
+                user_id
             )
-            .bind(id)
-            .bind(user_id)
             .fetch_optional(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -82,11 +84,12 @@ impl ApiKeyRepository for SqlxPgApiKeyRepo {
 
     fn list_by_user_id(&self, user_id: Uuid) -> RepoFuture<'_, Vec<domain::ApiKey>> {
         Box::pin(async move {
-            let rows: Vec<ApiKeyRow> = sqlx::query_as(
-                "SELECT id, user_id, key_prefix, key_hash, name, scopes, last_used_at, expires_at, created_at \
-                 FROM yauth_api_keys WHERE user_id = $1 ORDER BY created_at DESC",
+            let rows = sqlx::query_as!(
+                ApiKeyRow,
+                r#"SELECT id, user_id as "user_id!", key_prefix, key_hash, name, scopes, last_used_at, expires_at, created_at
+                   FROM yauth_api_keys WHERE user_id = $1 ORDER BY created_at DESC"#,
+                user_id
             )
-            .bind(user_id)
             .fetch_all(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -96,18 +99,17 @@ impl ApiKeyRepository for SqlxPgApiKeyRepo {
 
     fn create(&self, input: domain::NewApiKey) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query(
-                "INSERT INTO yauth_api_keys (id, user_id, key_prefix, key_hash, name, scopes, expires_at, created_at) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            sqlx::query!(
+                "INSERT INTO yauth_api_keys (id, user_id, key_prefix, key_hash, name, scopes, expires_at, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                input.id,
+                input.user_id,
+                input.key_prefix,
+                input.key_hash,
+                input.name,
+                input.scopes as Option<serde_json::Value>,
+                opt_naive_to_utc(input.expires_at) as Option<DateTime<Utc>>,
+                naive_to_utc(input.created_at),
             )
-            .bind(input.id)
-            .bind(input.user_id)
-            .bind(&input.key_prefix)
-            .bind(&input.key_hash)
-            .bind(&input.name)
-            .bind(&input.scopes)
-            .bind(input.expires_at)
-            .bind(input.created_at)
             .execute(&self.pool)
             .await
             .map_err(sqlx_err)?;
@@ -117,8 +119,7 @@ impl ApiKeyRepository for SqlxPgApiKeyRepo {
 
     fn delete(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query("DELETE FROM yauth_api_keys WHERE id = $1")
-                .bind(id)
+            sqlx::query!("DELETE FROM yauth_api_keys WHERE id = $1", id)
                 .execute(&self.pool)
                 .await
                 .map_err(sqlx_err)?;
@@ -128,12 +129,15 @@ impl ApiKeyRepository for SqlxPgApiKeyRepo {
 
     fn update_last_used(&self, id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query("UPDATE yauth_api_keys SET last_used_at = $1 WHERE id = $2")
-                .bind(chrono::Utc::now().naive_utc())
-                .bind(id)
-                .execute(&self.pool)
-                .await
-                .map_err(sqlx_err)?;
+            let now = naive_to_utc(chrono::Utc::now().naive_utc());
+            sqlx::query!(
+                "UPDATE yauth_api_keys SET last_used_at = $1 WHERE id = $2",
+                now,
+                id
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(sqlx_err)?;
             Ok(())
         })
     }

@@ -40,12 +40,10 @@ redis = ["dep:redis"]
 # Real apps use `full` + one backend (e.g., `yauth = { features = ["full", "diesel-pg-backend"] }`).
 full = ["email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link", "admin", "status", "oauth2-server", "account-lockout", "webhooks", "oidc", "telemetry", "openapi"]
 # CI-only — every backend + redis, for conformance testing. Never recommended for production.
-# CI-only — every backend + redis, for conformance testing. Never recommended for production.
-# NOTE: sqlx-sqlite-backend is excluded because it conflicts with diesel-sqlite-backend
-# (different libsqlite3-sys versions). Test sqlx-sqlite separately with --features full,sqlx-sqlite-backend.
-all-backends = ["diesel-pg-backend", "diesel-libsql-backend", "diesel-mysql-backend", "diesel-sqlite-backend", "sqlx-pg-backend", "sqlx-mysql-backend", "memory-backend", "redis"]
-# All sqlx backends only (no diesel) — use when testing sqlx-sqlite
-all-sqlx-backends = ["sqlx-pg-backend", "sqlx-mysql-backend", "sqlx-sqlite-backend", "memory-backend"]
+# NOTE: diesel-libsql-backend is excluded because libsql-ffi bundles its own sqlite3.c,
+# which produces duplicate symbols with libsqlite3-sys (used by diesel-sqlite + sqlx-sqlite).
+# Test diesel-libsql separately: --features full,diesel-libsql-backend
+all-backends = ["diesel-pg-backend", "diesel-mysql-backend", "diesel-sqlite-backend", "sqlx-pg-backend", "sqlx-mysql-backend", "sqlx-sqlite-backend", "memory-backend", "redis"]
 
 [dependencies]
 axum = { workspace = true }

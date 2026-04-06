@@ -3,11 +3,15 @@
 //! Runs identical assertions against every available backend:
 //! - memory: always available
 //! - diesel_pg: if DATABASE_URL env var is set
-//! - diesel_libsql: always available (in-memory SQLite)
 //! - diesel_mysql: if MYSQL_DATABASE_URL env var is set
+//! - diesel_sqlite: if SQLITE_DATABASE_URL env var is set (defaults to :memory:)
+//! - diesel_libsql: always available (in-memory) — test separately due to libsql-ffi symbol conflict
+//! - sqlx_pg: if SQLX_PG_DATABASE_URL (or DATABASE_URL) env var is set
+//! - sqlx_mysql: if SQLX_MYSQL_DATABASE_URL (or MYSQL_DATABASE_URL) env var is set
+//! - sqlx_sqlite: if SQLX_SQLITE_DATABASE_URL env var is set (defaults to sqlite::memory:)
 //!
 //! ```text
-//! cargo test --features full --test repo_conformance
+//! cargo test --features full,all-backends --test repo_conformance
 //! ```
 
 #![cfg(feature = "full")]

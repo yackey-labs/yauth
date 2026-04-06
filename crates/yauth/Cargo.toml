@@ -15,7 +15,10 @@ default = ["email-password", "diesel-pg-backend"]
 diesel-pg-backend = ["dep:diesel", "dep:diesel-async-crate", "diesel-async-crate/postgres", "diesel-async-crate/deadpool", "dep:futures-util"]
 diesel-libsql-backend = ["dep:diesel", "dep:diesel-async-crate", "dep:diesel-libsql", "dep:futures-util"]
 diesel-mysql-backend = ["dep:diesel", "diesel/mysql_backend", "dep:diesel-async-crate", "diesel-async-crate/mysql", "diesel-async-crate/deadpool", "dep:futures-util"]
-diesel-sqlite-backend = ["dep:diesel", "diesel/sqlite", "dep:diesel-async-crate", "diesel-async-crate/sqlite", "diesel-async-crate/deadpool", "dep:futures-util", "dep:libsqlite3-sys"]
+diesel-sqlite-backend = ["dep:diesel", "diesel/sqlite", "dep:diesel-async-crate", "diesel-async-crate/sqlite", "diesel-async-crate/deadpool", "dep:futures-util"]
+sqlx-pg-backend = ["dep:sqlx", "sqlx/postgres"]
+sqlx-mysql-backend = ["dep:sqlx", "sqlx/mysql"]
+sqlx-sqlite-backend = ["dep:sqlx", "sqlx/sqlite"]
 memory-backend = []
 email-password = []
 passkey = ["dep:webauthn-rs"]
@@ -37,7 +40,12 @@ redis = ["dep:redis"]
 # Real apps use `full` + one backend (e.g., `yauth = { features = ["full", "diesel-pg-backend"] }`).
 full = ["email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link", "admin", "status", "oauth2-server", "account-lockout", "webhooks", "oidc", "telemetry", "openapi"]
 # CI-only — every backend + redis, for conformance testing. Never recommended for production.
-all-backends = ["diesel-pg-backend", "diesel-libsql-backend", "diesel-mysql-backend", "diesel-sqlite-backend", "memory-backend", "redis"]
+# CI-only — every backend + redis, for conformance testing. Never recommended for production.
+# NOTE: sqlx-sqlite-backend is excluded because it conflicts with diesel-sqlite-backend
+# (different libsqlite3-sys versions). Test sqlx-sqlite separately with --features full,sqlx-sqlite-backend.
+all-backends = ["diesel-pg-backend", "diesel-libsql-backend", "diesel-mysql-backend", "diesel-sqlite-backend", "sqlx-pg-backend", "sqlx-mysql-backend", "memory-backend", "redis"]
+# All sqlx backends only (no diesel) — use when testing sqlx-sqlite
+all-sqlx-backends = ["sqlx-pg-backend", "sqlx-mysql-backend", "sqlx-sqlite-backend", "memory-backend"]
 
 [dependencies]
 axum = { workspace = true }
@@ -49,7 +57,13 @@ diesel = { workspace = true, optional = true }
 diesel-async-crate = { version = "0.8", features = ["deadpool"], package = "diesel-async", optional = true }
 diesel-libsql = { version = "0.1.4", features = ["async", "deadpool"], optional = true }
 futures-util = { version = "0.3", optional = true }
-libsqlite3-sys = { version = "0.36", features = ["bundled"], optional = true }
+# libsqlite3-sys bundled feature: diesel/sqlite pulls this in transitively.
+# We don't need it as a direct dep — diesel's `sqlite` feature handles it.
+# NOTE: sqlx-sqlite-backend and diesel-sqlite-backend CANNOT be enabled simultaneously
+# due to libsqlite3-sys version conflicts (sqlx 0.8 uses 0.28, diesel 2.3 uses 0.36).
+
+# sqlx (optional — pulled in by sqlx-*-backend features)
+sqlx = { workspace = true, optional = true }
 
 yauth-migration = { path = "../yauth-migration" }
 yauth-entity = { path = "../yauth-entity" }

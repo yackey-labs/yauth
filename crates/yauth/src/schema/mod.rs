@@ -28,7 +28,9 @@ pub use postgres_runtime::generate_migration_diff;
 #[cfg(any(
     feature = "diesel-mysql-backend",
     feature = "diesel-libsql-backend",
-    feature = "diesel-sqlite-backend"
+    feature = "diesel-sqlite-backend",
+    feature = "sqlx-mysql-backend",
+    feature = "sqlx-sqlite-backend"
 ))]
 pub(crate) fn collect_feature_gated_schemas() -> Vec<Vec<TableDef>> {
     #[allow(unused_mut)]

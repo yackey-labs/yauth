@@ -226,19 +226,37 @@ pub fn generate(config_path: &Path, check: bool) -> Result<(), Box<dyn std::erro
     let migration = generate::generate_init(&config)?;
 
     if check {
-        // Verify that existing files match what would be generated
+        // In --check mode, generated paths contain a fresh timestamp/sequence number
+        // that won't match existing files. Instead, find existing files by filename
+        // pattern and compare content only.
+        let migrations_dir = Path::new(&config.migration.migrations_dir);
         let mut stale = false;
-        for (path, expected_content) in &migration.files {
-            if path.exists() {
-                let actual = std::fs::read_to_string(path)?;
-                if actual != *expected_content {
-                    eprintln!("STALE: {} does not match generated content", path.display());
-                    eprintln!("{}", format_sql_diff(&actual, expected_content));
+
+        for (generated_path, expected_content) in &migration.files {
+            match find_existing_file(migrations_dir, generated_path, &config) {
+                Some(existing_path) => {
+                    let actual = std::fs::read_to_string(&existing_path)?;
+                    if actual != *expected_content {
+                        eprintln!(
+                            "STALE: {} does not match generated content",
+                            existing_path.display()
+                        );
+                        eprintln!("{}", format_sql_diff(&actual, expected_content));
+                        stale = true;
+                    }
+                }
+                None => {
+                    // Show the filename portion for clarity (not the timestamped path)
+                    let filename = generated_path
+                        .file_name()
+                        .map(|f| f.to_string_lossy().to_string())
+                        .unwrap_or_else(|| generated_path.display().to_string());
+                    eprintln!(
+                        "MISSING: no existing file matches expected '{filename}' in {}",
+                        migrations_dir.display()
+                    );
                     stale = true;
                 }
-            } else {
-                eprintln!("MISSING: {}", path.display());
-                stale = true;
             }
         }
 
@@ -257,6 +275,90 @@ pub fn generate(config_path: &Path, check: bool) -> Result<(), Box<dyn std::erro
     }
 
     Ok(())
+}
+
+/// Find an existing file on disk that corresponds to a generated file path.
+///
+/// Generated paths contain timestamps or sequence numbers that won't match
+/// existing files. This function searches the migrations directory for files
+/// that match the expected pattern, ignoring the timestamp/number prefix.
+///
+/// Matching strategies by ORM:
+/// - **Diesel:** generated path is `<migrations_dir>/<timestamp>_<name>/up.sql` or `down.sql`.
+///   We scan for any subdirectory ending in `_<name>` and check for the file inside.
+///   For `schema.rs`, it lives directly in `<migrations_dir>/schema.rs`.
+/// - **Sqlx:** generated path is `<migrations_dir>/<number>_<name>.sql`.
+///   We scan for any file ending in `_<name>.sql`.
+/// - **Raw:** generated path is `<migrations_dir>/<name>_up.sql` or `<name>_down.sql`.
+///   These have no timestamp prefix, so we check exact paths.
+fn find_existing_file(
+    migrations_dir: &Path,
+    generated_path: &Path,
+    config: &YAuthConfig,
+) -> Option<std::path::PathBuf> {
+    // If the file exists at the exact path, use it (handles schema.rs, raw files, etc.)
+    if generated_path.exists() {
+        return Some(generated_path.to_path_buf());
+    }
+
+    if !migrations_dir.exists() {
+        return None;
+    }
+
+    match config.migration.orm {
+        yauth_migration::Orm::Diesel => {
+            // Generated: <migrations_dir>/<timestamp>_<name>/<file>
+            // Extract the migration name suffix (e.g., "yauth_init") and the filename (e.g., "up.sql")
+            let file_name = generated_path.file_name()?;
+            let parent = generated_path.parent()?;
+            let dir_name = parent.file_name()?.to_string_lossy();
+            // Strip the timestamp prefix: "20260406223506_yauth_init" -> "yauth_init"
+            let suffix = dir_name
+                .find('_')
+                .map(|i| &dir_name[i + 1..])
+                .unwrap_or(&dir_name);
+
+            // Scan for a directory ending with _<suffix>
+            for entry in std::fs::read_dir(migrations_dir).ok()? {
+                let entry = entry.ok()?;
+                if entry.file_type().ok()?.is_dir() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if name.ends_with(&format!("_{suffix}")) {
+                        let candidate = entry.path().join(file_name);
+                        if candidate.exists() {
+                            return Some(candidate);
+                        }
+                    }
+                }
+            }
+            None
+        }
+        yauth_migration::Orm::Sqlx => {
+            // Generated: <migrations_dir>/<number>_<name>.sql
+            // Extract the name suffix (e.g., "yauth_init.sql")
+            let file_name = generated_path.file_name()?.to_string_lossy();
+            // Strip the number prefix: "00000001_yauth_init.sql" -> "yauth_init.sql"
+            let suffix = file_name
+                .find('_')
+                .map(|i| &file_name[i + 1..])
+                .unwrap_or(&file_name);
+
+            for entry in std::fs::read_dir(migrations_dir).ok()? {
+                let entry = entry.ok()?;
+                if entry.file_type().ok()?.is_file() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if name.ends_with(&format!("_{suffix}")) {
+                        return Some(entry.path());
+                    }
+                }
+            }
+            None
+        }
+        yauth_migration::Orm::Raw => {
+            // Raw files have no timestamp prefix, so the exact path should have matched above
+            None
+        }
+    }
 }
 
 // -- Interactive prompt helpers --

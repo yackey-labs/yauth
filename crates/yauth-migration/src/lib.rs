@@ -77,6 +77,29 @@ pub fn plugin_schema_by_name(name: &str) -> Option<Vec<TableDef>> {
     }
 }
 
+/// Check if a plugin name is valid (even if it has no database tables).
+/// Plugins like `admin`, `status`, `telemetry`, and `openapi` are code-only.
+pub fn is_known_plugin(name: &str) -> bool {
+    matches!(
+        name,
+        "email-password"
+            | "passkey"
+            | "mfa"
+            | "oauth"
+            | "bearer"
+            | "api-key"
+            | "magic-link"
+            | "admin"
+            | "status"
+            | "oauth2-server"
+            | "account-lockout"
+            | "webhooks"
+            | "oidc"
+            | "telemetry"
+            | "openapi"
+    )
+}
+
 /// Collect a schema from a list of plugin names plus core tables.
 ///
 /// The `table_prefix` replaces the default `yauth_` prefix on all table names
@@ -89,6 +112,9 @@ pub fn collect_schema_for_plugins(
     for plugin in plugins {
         match plugin_schema_by_name(plugin) {
             Some(tables) => table_lists.push(tables),
+            None if is_known_plugin(plugin) => {
+                // Plugin exists but has no tables (e.g., admin, status, telemetry, openapi)
+            }
             None => {
                 return Err(SchemaError::UnknownPlugin(plugin.clone()));
             }

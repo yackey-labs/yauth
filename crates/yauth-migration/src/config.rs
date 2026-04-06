@@ -78,7 +78,7 @@ impl YAuthConfig {
 
         // Validate plugins
         for plugin in &self.plugins.enabled {
-            if crate::plugin_schema_by_name(plugin).is_none() {
+            if !crate::is_known_plugin(plugin) {
                 return Err(ConfigError::InvalidValue(format!(
                     "unknown plugin: '{plugin}'"
                 )));

@@ -2,7 +2,7 @@
 orm = "diesel"
 dialect = "postgres"
 table_prefix = "yauth_"
-migrations_dir = "migrations"
+migrations_dir = "migrations/diesel-pg"
 
 [plugins]
 enabled = [

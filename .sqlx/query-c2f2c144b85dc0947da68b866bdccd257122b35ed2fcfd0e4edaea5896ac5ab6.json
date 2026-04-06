@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE yauth_authorization_codes SET used = true WHERE id = ? /* sqlite */",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "c2f2c144b85dc0947da68b866bdccd257122b35ed2fcfd0e4edaea5896ac5ab6"
+}

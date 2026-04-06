@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO yauth_totp_secrets (id, user_id, encrypted_secret, verified, created_at) VALUES (?, ?, ?, ?, ?) /* sqlite */",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "8b90df7f0e77a9d9db5643f3121cc2fa9ac634587208875477a8d64431099730"
+}

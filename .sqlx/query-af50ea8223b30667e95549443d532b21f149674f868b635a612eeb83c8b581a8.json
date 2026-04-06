@@ -1,0 +1,12 @@
+{
+  "db_name": "MySQL",
+  "query": "INSERT INTO yauth_audit_log (id, user_id, event_type, metadata, ip_address, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "af50ea8223b30667e95549443d532b21f149674f868b635a612eeb83c8b581a8"
+}

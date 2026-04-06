@@ -1,0 +1,12 @@
+{
+  "db_name": "MySQL",
+  "query": "DELETE FROM yauth_email_verifications WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "8c51fdf2ff65cf5c7ae782d33d2d072ab4cd6d5db515db8c1fe9a7d7ed8d8b4e"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "MySQL",
+  "query": "DELETE FROM yauth_magic_links WHERE email = ? AND used = false",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "de2d44c92c162105116de1691f4942c29f78e88f5fd51f3311d6515193a3f617"
+}

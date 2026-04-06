@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE yauth_refresh_tokens SET revoked = true WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4869f4b8227625581d4945d2f6bf1e0d4d533112cff7f1eab9855318ec3cbb93"
+}

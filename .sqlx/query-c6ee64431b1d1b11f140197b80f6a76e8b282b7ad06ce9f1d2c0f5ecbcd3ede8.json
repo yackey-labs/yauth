@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO yauth_account_locks (id, user_id, failed_count, locked_until, lock_count, locked_reason, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id, user_id, failed_count, locked_until, lock_count, locked_reason, created_at, updated_at /* sqlite */",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "user_id",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "failed_count",
+        "ordinal": 2,
+        "type_info": "Integer"
+      },
+      {
+        "name": "locked_until",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "lock_count",
+        "ordinal": 4,
+        "type_info": "Integer"
+      },
+      {
+        "name": "locked_reason",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "created_at",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "updated_at",
+        "ordinal": 7,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 8
+    },
+    "nullable": [
+      true,
+      true,
+      false,
+      true,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "c6ee64431b1d1b11f140197b80f6a76e8b282b7ad06ce9f1d2c0f5ecbcd3ede8"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM yauth_sessions WHERE user_id = ? AND token_hash != ? /* sqlite */",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "d0a71daafaaea0613e97f88165b9da227e86240d9d02d6a60b46db87a55e0f04"
+}

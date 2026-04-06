@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM yauth_challenges WHERE expires_at < now()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "97158a1b9888fe906d2e2f0e5da5751f0ccea02c342451fd914dc11a92d59b29"
+}

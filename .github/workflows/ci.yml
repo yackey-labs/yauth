@@ -41,7 +41,10 @@ jobs:
         run: cargo fmt --check
 
       - name: cargo clippy
-        run: cargo clippy --workspace --features full -- -D warnings
+        run: cargo clippy --workspace --features full,all-backends -- -D warnings
+
+      - name: Verify sqlx offline cache is complete
+        run: SQLX_OFFLINE=true cargo check --workspace --features full,all-backends
 
       - name: Biome lint
         run: bun run lint
@@ -97,19 +100,40 @@ jobs:
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
       - name: Run unit tests
-        run: cargo test --workspace --features full --lib
-
-      - name: Run conformance tests
         env:
+          SQLX_OFFLINE: "true"
+        run: cargo test --workspace --features full,all-backends --lib
+
+      - name: Run conformance tests (7 backends)
+        env:
+          SQLX_OFFLINE: "true"
           DATABASE_URL: postgres://yauth:yauth@127.0.0.1:5433/yauth_test
           MYSQL_DATABASE_URL: mysql://yauth:yauth@127.0.0.1:3307/yauth_test
-        run: cargo test --workspace --features full --test repo_conformance
+          SQLITE_DATABASE_URL: ":memory:"
+          SQLX_PG_DATABASE_URL: postgres://yauth:yauth@127.0.0.1:5433/yauth_test
+          SQLX_MYSQL_DATABASE_URL: mysql://yauth:yauth@127.0.0.1:3307/yauth_test
+          SQLX_SQLITE_DATABASE_URL: "sqlite::memory:"
+        run: cargo test --workspace --features full,all-backends --test repo_conformance
+
+      - name: Run conformance tests (diesel-libsql, tested separately)
+        env:
+          SQLX_OFFLINE: "true"
+        run: cargo test --workspace --features full,diesel-libsql-backend,memory-backend --test repo_conformance
 
       - name: Run integration tests (parallel-safe)
         env:
+          SQLX_OFFLINE: "true"
           DATABASE_URL: postgres://yauth:yauth@127.0.0.1:5433/yauth_test
           MYSQL_DATABASE_URL: mysql://yauth:yauth@127.0.0.1:3307/yauth_test
-        run: cargo test --workspace --features full --test diesel_integration --test diesel_mysql_integration --test pentest
+        run: cargo test --workspace --features full,all-backends --test diesel_integration --test diesel_mysql_integration --test pentest
+
+      - name: Verify generated artifacts are fresh
+        run: |
+          cargo install --path crates/cargo-yauth
+          cargo yauth -f yauth-diesel-pg.toml generate --check
+          cargo yauth -f yauth-sqlx-pg.toml generate --check
+          cargo yauth -f yauth-sqlx-mysql.toml generate --check
+          cargo yauth -f yauth-sqlx-sqlite.toml generate --check
 
   codeql:
     name: CodeQL (${{ matrix.language }})

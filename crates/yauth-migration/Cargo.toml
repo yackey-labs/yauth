@@ -1,0 +1,21 @@
+[package]
+name = "yauth-migration"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Schema types, DDL generation, and migration file generation for yauth — zero ORM dependencies"
+keywords = ["yauth", "migration", "schema", "ddl"]
+categories = ["database"]
+publish = true
+
+[dependencies]
+sha2 = "0.10"
+hex = "0.4"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+similar = "2"
+
+[dev-dependencies]
+tempfile = "3"

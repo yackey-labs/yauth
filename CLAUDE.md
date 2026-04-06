@@ -12,16 +12,35 @@
 
 | Crate | Purpose |
 |---|---|
-| `yauth` | Main library — plugins, middleware, builder, auth logic, backends, repository traits, declarative schema |
+| `yauth` | Main library — plugins, middleware, builder, auth logic, backends, repository traits |
+| `yauth-entity` | Domain types (User, Session, Password, etc.) — ORM-agnostic, no migration dependency |
+| `yauth-migration` | Schema types, DDL generation, diff engine, migration file gen — **zero ORM deps** |
+| `cargo-yauth` | CLI binary — `cargo yauth init/add-plugin/remove-plugin/status/generate` |
 
 Key internal modules in `yauth`:
 - `backends/diesel_pg/` — PostgreSQL backend (`DieselPgBackend`)
+- `backends/diesel_mysql/` — MySQL/MariaDB backend (`DieselMysqlBackend`)
 - `backends/diesel_libsql/` — SQLite/Turso backend (`DieselLibsqlBackend`)
+- `backends/diesel_sqlite/` — Vanilla SQLite backend (`DieselSqliteBackend`)
+- `backends/sqlx_pg/` — PostgreSQL backend via sqlx (`SqlxPgBackend`)
+- `backends/sqlx_mysql/` — MySQL backend via sqlx (`SqlxMysqlBackend`)
+- `backends/sqlx_sqlite/` — SQLite backend via sqlx (`SqlxSqliteBackend`)
 - `backends/memory/` — In-memory backend (`InMemoryBackend`)
 - `backends/redis/` — Redis caching decorators
 - `repo/` — `DatabaseBackend` trait, repository traits, `Repositories` struct, `RepoError`
 - `domain/` — ORM-agnostic domain types (always compiled, no backend deps)
-- `schema/` — Declarative schema definitions, DDL generation per dialect (Postgres, SQLite, MySQL)
+- `schema/` — Re-exports from `yauth-migration` + ORM-specific runtime migration functions
+
+Key modules in `yauth-migration`:
+- `types` — `TableDef`, `ColumnDef`, `ColumnType`, `ForeignKey`, `Dialect`
+- `core` — Core table definitions (users, sessions, audit_log)
+- `plugin_schemas` — Schema definitions for each plugin
+- `collector` — Schema collection + topological sort by FK deps
+- `postgres/sqlite/mysql` — Dialect-specific DDL generators
+- `diff` — Schema diff engine (CREATE TABLE, DROP TABLE, ALTER TABLE)
+- `generate` — Migration file generators (diesel up.sql/down.sql, sqlx numbered .sql, raw)
+- `config` — `yauth.toml` config file support
+- `tracking` — Schema hash computation
 
 ### TypeScript Packages (`packages/`)
 
@@ -36,9 +55,9 @@ Key internal modules in `yauth`:
 
 ```bash
 # Rust
-cargo test --features full          # Run all unit tests
-cargo fmt --check                    # Format check
-cargo clippy --features full -- -D warnings  # Lint
+cargo test --features full,all-backends          # Run all unit tests
+cargo fmt --check                                 # Format check
+cargo clippy --features full,all-backends -- -D warnings  # Lint
 
 # TypeScript
 bun install                          # Install dependencies
@@ -55,20 +74,27 @@ bun generate:check                   # Fail if generated client is out of date (
 
 # Integration / Pentest (all parallel-safe — no --test-threads=1 needed)
 docker compose up -d                 # Start PostgreSQL + MySQL + Redis + Mailpit
-cargo test --features full --test pentest                      # OWASP pentest (memory + diesel_pg + diesel_mysql)
-cargo test --features full --test diesel_integration           # Diesel PG integration tests
-cargo test --features full --test diesel_mysql_integration     # Diesel MySQL integration tests
+cargo test --features full,all-backends --test pentest                      # OWASP pentest (memory + diesel_pg + diesel_mysql)
+cargo test --features full,all-backends --test diesel_integration           # Diesel PG integration tests
+cargo test --features full,all-backends --test diesel_mysql_integration     # Diesel MySQL integration tests
 
 # Conformance tests (cross-backend repository trait verification)
 # All tests share a single tokio runtime via OnceLock, so connection pools survive across tests.
 DATABASE_URL=postgres://yauth:yauth@127.0.0.1:5433/yauth_test \
 MYSQL_DATABASE_URL=mysql://yauth:yauth@127.0.0.1:3307/yauth_test \
-  cargo test --features full --test repo_conformance
+  cargo test --features full,all-backends --test repo_conformance
+
+# Migration CLI
+cargo yauth init --orm diesel --dialect postgres --plugins email-password,passkey
+cargo yauth add-plugin mfa
+cargo yauth remove-plugin passkey
+cargo yauth status
+cargo yauth generate --check -f yauth.toml
 ```
 
 ### Conformance Test Suite
 
-`tests/repo_conformance.rs` contains 64 tests that verify every repository trait method behaves identically across all backends (memory, diesel_pg, diesel_libsql, diesel_mysql). Tests are parameterized via `test_backends()` — backends are skipped if their database URL env var is unset.
+`tests/repo_conformance.rs` contains 65 tests that verify every repository trait method behaves identically across all 8 backends (memory, diesel_pg, diesel_mysql, diesel_sqlite, diesel_libsql, sqlx_pg, sqlx_mysql, sqlx_sqlite). Tests are parameterized via `test_backends()` — backends are skipped if their database URL env var is unset.
 
 The suite covers three categories:
 
@@ -76,7 +102,7 @@ The suite covers three categories:
 2. **Behavioral contracts** — semantic invariants the type system can't enforce: expired tokens return `None`, used tokens return `None`, `user.delete()` cascades to all related entities, rate limiting is fail-open on error.
 3. **Type edge cases** — UUID round-trip (CHAR(36) ↔ Uuid), NULL vs empty string, large text (no silent truncation), unicode/emoji, datetime precision, JSON structural equality, case-insensitive email.
 
-**When adding a new backend:** implement `DatabaseBackend` + all repository traits, add the backend to `test_backends()`, and run the suite. If all 64 tests pass, the backend is correct.
+**When adding a new backend:** implement `DatabaseBackend` + all repository traits, add the backend to `test_backends()`, and run the suite. If all 65 tests pass, the backend is correct.
 
 **Shared runtime pattern:** All conformance tests use `#[test]` (not `#[tokio::test]`) with a shared `OnceLock<Runtime>`. This is critical — each `#[tokio::test]` creates its own tokio runtime, and connection pools are bound to the runtime that created them. When one test's runtime shuts down, shared pool connections die for other tests. The shared runtime ensures all pools and connections live on one runtime that outlives all tests. This enables safe parallel execution (`--test-threads=N`).
 
@@ -89,6 +115,10 @@ The suite covers three categories:
 | `diesel-pg-backend` | PostgreSQL backend via diesel-async + deadpool | Yes |
 | `diesel-libsql-backend` | SQLite/Turso backend via `diesel-libsql` crate | No |
 | `diesel-mysql-backend` | MySQL/MariaDB backend via diesel-async + deadpool | No |
+| `diesel-sqlite-backend` | Vanilla SQLite backend via libsqlite3-sys | No |
+| `sqlx-pg-backend` | PostgreSQL backend via sqlx | No |
+| `sqlx-mysql-backend` | MySQL backend via sqlx | No |
+| `sqlx-sqlite-backend` | SQLite backend via sqlx | No |
 | `memory-backend` | Fully in-memory backend (no database required) | No |
 
 ### Plugin Features
@@ -105,7 +135,10 @@ The suite covers three categories:
 | `telemetry` | Native OpenTelemetry SDK instrumentation (spans, span events, context propagation) | No |
 | `openapi` | utoipa OpenAPI spec generation (for client codegen) | No |
 | `redis` | Redis caching decorator — wraps repository traits for sub-ms session/rate-limit lookups | No |
-| `full` | All of the above (all backends + all plugins) | No |
+| `full` | All auth plugins only — does NOT include any backend (pick one separately) | No |
+| `all-backends` | Every backend + redis (CI-only, for conformance testing — excludes diesel-libsql due to symbol conflicts) | No |
+
+Real apps use `full` + one backend (e.g., `features = ["full", "diesel-pg-backend"]`). CI uses `full,all-backends`.
 
 Feature flags gate code across all Rust crates in the workspace.
 
@@ -120,13 +153,17 @@ Plugins implement the `YAuthPlugin` trait:
 
 ### Database Backends
 
-yauth uses a `DatabaseBackend` trait with four implementations:
+yauth uses a `DatabaseBackend` trait with multiple implementations:
 
 | Backend | Type | Use case |
 |---|---|---|
 | `DieselPgBackend` | `backends::diesel_pg` | Production PostgreSQL (default) |
 | `DieselMysqlBackend` | `backends::diesel_mysql` | MySQL 8.0+ or MariaDB 10.6+ |
 | `DieselLibsqlBackend` | `backends::diesel_libsql` | Local SQLite files or remote Turso databases |
+| `DieselSqliteBackend` | `backends::diesel_sqlite` | Vanilla SQLite via libsqlite3-sys |
+| `SqlxPgBackend` | `backends::sqlx_pg` | PostgreSQL via sqlx |
+| `SqlxMysqlBackend` | `backends::sqlx_mysql` | MySQL via sqlx |
+| `SqlxSqliteBackend` | `backends::sqlx_sqlite` | SQLite via sqlx |
 | `InMemoryBackend` | `backends::memory` | Tests, prototyping, CI — no database required |
 
 Redis (`with_redis()`) is a **caching decorator** that wraps repository traits for sub-millisecond session/rate-limit lookups. The database remains the source of truth. Redis is not a separate store backend.

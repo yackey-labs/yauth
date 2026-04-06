@@ -3,11 +3,15 @@
 //! Runs identical assertions against every available backend:
 //! - memory: always available
 //! - diesel_pg: if DATABASE_URL env var is set
-//! - diesel_libsql: always available (in-memory SQLite)
 //! - diesel_mysql: if MYSQL_DATABASE_URL env var is set
+//! - diesel_sqlite: if SQLITE_DATABASE_URL env var is set (defaults to :memory:)
+//! - diesel_libsql: always available (in-memory) — test separately due to libsql-ffi symbol conflict
+//! - sqlx_pg: if SQLX_PG_DATABASE_URL (or DATABASE_URL) env var is set
+//! - sqlx_mysql: if SQLX_MYSQL_DATABASE_URL (or MYSQL_DATABASE_URL) env var is set
+//! - sqlx_sqlite: if SQLX_SQLITE_DATABASE_URL env var is set (defaults to sqlite::memory:)
 //!
 //! ```text
-//! cargo test --features full --test repo_conformance
+//! cargo test --features full,all-backends --test repo_conformance
 //! ```
 
 #![cfg(feature = "full")]
@@ -16,8 +20,8 @@ use chrono::{Duration, Utc};
 use serde_json::json;
 use std::sync::atomic::{AtomicU64, Ordering};
 use uuid::Uuid;
-use yauth::domain;
 use yauth::repo::{DatabaseBackend, EnabledFeatures, RepoError, Repositories};
+use yauth_entity as domain;
 
 use std::sync::OnceLock;
 static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
@@ -70,6 +74,18 @@ static LIBSQL_REPOS: OnceCell<Option<Repositories>> = OnceCell::const_new();
 
 #[cfg(feature = "diesel-mysql-backend")]
 static MYSQL_REPOS: OnceCell<Option<Repositories>> = OnceCell::const_new();
+
+#[cfg(feature = "diesel-sqlite-backend")]
+static SQLITE_REPOS: OnceCell<Option<Repositories>> = OnceCell::const_new();
+
+#[cfg(feature = "sqlx-pg-backend")]
+static SQLX_PG_REPOS: OnceCell<Option<Repositories>> = OnceCell::const_new();
+
+#[cfg(feature = "sqlx-mysql-backend")]
+static SQLX_MYSQL_REPOS: OnceCell<Option<Repositories>> = OnceCell::const_new();
+
+#[cfg(feature = "sqlx-sqlite-backend")]
+static SQLX_SQLITE_REPOS: OnceCell<Option<Repositories>> = OnceCell::const_new();
 
 #[cfg(feature = "diesel-pg-backend")]
 async fn shared_pg_repos() -> Option<Repositories> {
@@ -138,6 +154,134 @@ async fn shared_mysql_repos() -> Option<Repositories> {
         .clone()
 }
 
+#[cfg(feature = "diesel-sqlite-backend")]
+async fn shared_sqlite_repos() -> Option<Repositories> {
+    SQLITE_REPOS
+        .get_or_init(|| async {
+            use yauth::backends::diesel_sqlite::DieselSqliteBackend;
+            let url =
+                std::env::var("SQLITE_DATABASE_URL").unwrap_or_else(|_| ":memory:".to_string());
+            match DieselSqliteBackend::new(&url) {
+                Ok(backend) => {
+                    if backend
+                        .migrate(&EnabledFeatures::from_compile_flags())
+                        .await
+                        .is_ok()
+                    {
+                        Some(backend.repositories())
+                    } else {
+                        eprintln!("SQLite migration failed, skipping");
+                        None
+                    }
+                }
+                Err(e) => {
+                    eprintln!("SQLite backend creation failed: {e}, skipping");
+                    None
+                }
+            }
+        })
+        .await
+        .clone()
+}
+
+#[cfg(feature = "sqlx-pg-backend")]
+async fn shared_sqlx_pg_repos() -> Option<Repositories> {
+    SQLX_PG_REPOS
+        .get_or_init(|| async {
+            let url = match std::env::var("SQLX_PG_DATABASE_URL")
+                .or_else(|_| std::env::var("DATABASE_URL"))
+            {
+                Ok(u) => u,
+                Err(_) => return None,
+            };
+            use yauth::backends::sqlx_pg::SqlxPgBackend;
+            match SqlxPgBackend::new(&url).await {
+                Ok(backend) => {
+                    if backend
+                        .migrate(&EnabledFeatures::from_compile_flags())
+                        .await
+                        .is_ok()
+                    {
+                        Some(backend.repositories())
+                    } else {
+                        eprintln!("sqlx-pg migration failed, skipping");
+                        None
+                    }
+                }
+                Err(e) => {
+                    eprintln!("sqlx-pg backend creation failed: {e}, skipping");
+                    None
+                }
+            }
+        })
+        .await
+        .clone()
+}
+
+#[cfg(feature = "sqlx-mysql-backend")]
+async fn shared_sqlx_mysql_repos() -> Option<Repositories> {
+    SQLX_MYSQL_REPOS
+        .get_or_init(|| async {
+            let url = match std::env::var("SQLX_MYSQL_DATABASE_URL")
+                .or_else(|_| std::env::var("MYSQL_DATABASE_URL"))
+            {
+                Ok(u) => u,
+                Err(_) => return None,
+            };
+            use yauth::backends::sqlx_mysql::SqlxMysqlBackend;
+            match SqlxMysqlBackend::new(&url).await {
+                Ok(backend) => {
+                    if backend
+                        .migrate(&EnabledFeatures::from_compile_flags())
+                        .await
+                        .is_ok()
+                    {
+                        Some(backend.repositories())
+                    } else {
+                        eprintln!("sqlx-mysql migration failed, skipping");
+                        None
+                    }
+                }
+                Err(e) => {
+                    eprintln!("sqlx-mysql backend creation failed: {e}, skipping");
+                    None
+                }
+            }
+        })
+        .await
+        .clone()
+}
+
+#[cfg(feature = "sqlx-sqlite-backend")]
+async fn shared_sqlx_sqlite_repos() -> Option<Repositories> {
+    SQLX_SQLITE_REPOS
+        .get_or_init(|| async {
+            let url = std::env::var("SQLX_SQLITE_DATABASE_URL")
+                .unwrap_or_else(|_| "sqlite::memory:".to_string());
+            use yauth::backends::sqlx_sqlite::SqlxSqliteBackend;
+            match SqlxSqliteBackend::new(&url).await {
+                Ok(backend) => {
+                    if backend
+                        .migrate(&EnabledFeatures::from_compile_flags())
+                        .await
+                        .is_ok()
+                    {
+                        Some(backend.repositories())
+                    } else {
+                        eprintln!("sqlx-sqlite migration failed, skipping");
+                        None
+                    }
+                }
+                Err(e) => {
+                    eprintln!("sqlx-sqlite backend creation failed: {e}, skipping");
+                    None
+                }
+            }
+        })
+        .await
+        .clone()
+}
+
 async fn test_backends() -> Vec<(&'static str, Repositories)> {
     helpers::otel::ensure_init();
     let _span = helpers::otel::HelperSpan::new("test_backends");
@@ -187,6 +331,31 @@ async fn test_backends() -> Vec<(&'static str, Repositories)> {
     #[cfg(feature = "diesel-mysql-backend")]
     if let Some(repos) = shared_mysql_repos().await {
         backends.push(("diesel_mysql", repos));
+    }
+
+    // Diesel native SQLite -- shared, migrated once.
+    // Uses SyncConnectionWrapper<SqliteConnection> via deadpool.
+    #[cfg(feature = "diesel-sqlite-backend")]
+    if let Some(repos) = shared_sqlite_repos().await {
+        backends.push(("diesel_sqlite", repos));
+    }
+
+    // sqlx PostgreSQL -- shared, migrated once
+    #[cfg(feature = "sqlx-pg-backend")]
+    if let Some(repos) = shared_sqlx_pg_repos().await {
+        backends.push(("sqlx_pg", repos));
+    }
+
+    // sqlx MySQL -- shared, migrated once
+    #[cfg(feature = "sqlx-mysql-backend")]
+    if let Some(repos) = shared_sqlx_mysql_repos().await {
+        backends.push(("sqlx_mysql", repos));
+    }
+
+    // sqlx SQLite -- shared, migrated once
+    #[cfg(feature = "sqlx-sqlite-backend")]
+    if let Some(repos) = shared_sqlx_sqlite_repos().await {
+        backends.push(("sqlx_sqlite", repos));
     }
 
     backends

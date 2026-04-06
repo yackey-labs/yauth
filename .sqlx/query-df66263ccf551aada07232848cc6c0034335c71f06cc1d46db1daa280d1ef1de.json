@@ -1,0 +1,12 @@
+{
+  "db_name": "MySQL",
+  "query": "DELETE FROM yauth_totp_secrets WHERE user_id = ? AND verified = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "df66263ccf551aada07232848cc6c0034335c71f06cc1d46db1daa280d1ef1de"
+}

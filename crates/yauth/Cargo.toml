@@ -15,6 +15,10 @@ default = ["email-password", "diesel-pg-backend"]
 diesel-pg-backend = ["dep:diesel", "dep:diesel-async-crate", "diesel-async-crate/postgres", "diesel-async-crate/deadpool", "dep:futures-util"]
 diesel-libsql-backend = ["dep:diesel", "dep:diesel-async-crate", "dep:diesel-libsql", "dep:futures-util"]
 diesel-mysql-backend = ["dep:diesel", "diesel/mysql_backend", "dep:diesel-async-crate", "diesel-async-crate/mysql", "diesel-async-crate/deadpool", "dep:futures-util"]
+diesel-sqlite-backend = ["dep:diesel", "diesel/sqlite", "dep:diesel-async-crate", "diesel-async-crate/sqlite", "diesel-async-crate/deadpool", "dep:futures-util"]
+sqlx-pg-backend = ["dep:sqlx", "sqlx/postgres"]
+sqlx-mysql-backend = ["dep:sqlx", "sqlx/mysql"]
+sqlx-sqlite-backend = ["dep:sqlx", "sqlx/sqlite"]
 memory-backend = []
 email-password = []
 passkey = ["dep:webauthn-rs"]
@@ -32,7 +36,14 @@ oidc = ["bearer", "oauth2-server"]
 telemetry = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:opentelemetry-semantic-conventions", "dep:opentelemetry-http"]
 openapi = ["dep:utoipa"]
 redis = ["dep:redis"]
-full = ["email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link", "admin", "status", "oauth2-server", "account-lockout", "webhooks", "oidc", "telemetry", "openapi", "diesel-pg-backend", "diesel-libsql-backend", "diesel-mysql-backend", "memory-backend"]
+# All auth plugins — this is what "full" means to users.
+# Real apps use `full` + one backend (e.g., `yauth = { features = ["full", "diesel-pg-backend"] }`).
+full = ["email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link", "admin", "status", "oauth2-server", "account-lockout", "webhooks", "oidc", "telemetry", "openapi"]
+# CI-only — every backend + redis, for conformance testing. Never recommended for production.
+# NOTE: diesel-libsql-backend is excluded because libsql-ffi bundles its own sqlite3.c,
+# which produces duplicate symbols with libsqlite3-sys (used by diesel-sqlite + sqlx-sqlite).
+# Test diesel-libsql separately: --features full,diesel-libsql-backend
+all-backends = ["diesel-pg-backend", "diesel-mysql-backend", "diesel-sqlite-backend", "sqlx-pg-backend", "sqlx-mysql-backend", "sqlx-sqlite-backend", "memory-backend", "redis"]
 
 [dependencies]
 axum = { workspace = true }
@@ -44,6 +55,16 @@ diesel = { workspace = true, optional = true }
 diesel-async-crate = { version = "0.8", features = ["deadpool"], package = "diesel-async", optional = true }
 diesel-libsql = { version = "0.1.4", features = ["async", "deadpool"], optional = true }
 futures-util = { version = "0.3", optional = true }
+# libsqlite3-sys bundled feature: diesel/sqlite pulls this in transitively.
+# We don't need it as a direct dep — diesel's `sqlite` feature handles it.
+# NOTE: sqlx-sqlite-backend and diesel-sqlite-backend CANNOT be enabled simultaneously
+# due to libsqlite3-sys version conflicts (sqlx 0.8 uses 0.28, diesel 2.3 uses 0.36).
+
+# sqlx (optional — pulled in by sqlx-*-backend features)
+sqlx = { workspace = true, optional = true }
+
+yauth-migration = { path = "../yauth-migration" }
+yauth-entity = { path = "../yauth-entity" }
 
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -90,6 +111,7 @@ opentelemetry-http = { workspace = true, optional = true }
 log = "0.4"
 
 [dev-dependencies]
+yauth-entity = { path = "../yauth-entity" }
 env_logger = "0.11"
 totp-rs = { workspace = true }
 uuid = { workspace = true }
@@ -111,8 +133,8 @@ tracing-opentelemetry = "0.32"
 
 [[example]]
 name = "server"
-required-features = ["full"]
+required-features = ["full", "diesel-pg-backend"]
 
 [[example]]
 name = "e2e_test"
-required-features = ["full"]
+required-features = ["full", "diesel-pg-backend"]

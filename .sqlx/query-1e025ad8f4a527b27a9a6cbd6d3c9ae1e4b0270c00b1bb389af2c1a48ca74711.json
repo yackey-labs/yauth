@@ -1,0 +1,12 @@
+{
+  "db_name": "MySQL",
+  "query": "UPDATE yauth_totp_secrets SET verified = true WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "1e025ad8f4a527b27a9a6cbd6d3c9ae1e4b0270c00b1bb389af2c1a48ca74711"
+}

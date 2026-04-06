@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM yauth_magic_links WHERE email = ? AND used = false /* sqlite */",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "239539494d7ba08c750d1f9d1176ab826966037e79d22092c3d29c6b18d032e0"
+}

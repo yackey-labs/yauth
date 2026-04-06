@@ -1,0 +1,12 @@
+{
+  "db_name": "MySQL",
+  "query": "INSERT INTO yauth_totp_secrets (id, user_id, encrypted_secret, verified, created_at) VALUES (?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "ce61714be84bba6c78a2adf31f021780842d92cb701512bce688e010b7354e0f"
+}

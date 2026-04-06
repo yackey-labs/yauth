@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO yauth_consents (id, user_id, client_id, scopes, created_at) VALUES (?, ?, ?, ?, ?) /* sqlite */",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "84a3e5f521b9954f6750f6429c0399c7cfc9e9af7837ac5820810c9a166c8ce5"
+}

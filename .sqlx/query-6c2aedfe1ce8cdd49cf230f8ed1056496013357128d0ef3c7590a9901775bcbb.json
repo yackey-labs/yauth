@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id, user_id, name, aaguid, device_name, credential, created_at, last_used_at FROM yauth_webauthn_credentials WHERE user_id = ? /* sqlite */",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "user_id",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "name",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "aaguid",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "device_name",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "credential",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "created_at",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "last_used_at",
+        "ordinal": 7,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      true,
+      false,
+      true,
+      true,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "6c2aedfe1ce8cdd49cf230f8ed1056496013357128d0ef3c7590a9901775bcbb"
+}

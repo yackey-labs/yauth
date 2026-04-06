@@ -1,0 +1,12 @@
+{
+  "db_name": "MySQL",
+  "query": "UPDATE yauth_webauthn_credentials SET last_used_at = ? WHERE user_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "a25a97ede56d35e155d1a32fb4e5055932ae734dd5d03804b25c968559932806"
+}

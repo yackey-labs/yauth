@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO yauth_oauth_states (state, provider, redirect_url, expires_at, created_at) VALUES (?, ?, ?, ?, ?) /* sqlite */",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "68744bfa031a546fe3028a9f9fac0990e02bd9fac73ad56072d6f36058111fda"
+}

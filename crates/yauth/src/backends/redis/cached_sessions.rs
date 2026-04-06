@@ -144,20 +144,20 @@ impl SessionOpsRepository for RedisCachedSessionOps {
             let result = self.inner.validate_session(&token_hash).await?;
 
             // Cache the result on miss (best-effort, background)
-            if let Some(ref session) = result {
-                if let Ok(json) = serde_json::to_string(session) {
-                    let now = chrono::Utc::now().naive_utc();
-                    let remaining_secs = (session.expires_at - now).num_seconds().max(1) as u64;
-                    let session_key = self.session_key(&token_hash);
-                    let mut conn = self.redis.clone();
-                    tokio::spawn(async move {
-                        let r: Result<(), redis::RedisError> =
-                            conn.set_ex(session_key, json, remaining_secs).await;
-                        if let Err(e) = r {
-                            log::warn!("Redis cache backfill failed for session validate: {e}");
-                        }
-                    });
-                }
+            if let Some(ref session) = result
+                && let Ok(json) = serde_json::to_string(session)
+            {
+                let now = chrono::Utc::now().naive_utc();
+                let remaining_secs = (session.expires_at - now).num_seconds().max(1) as u64;
+                let session_key = self.session_key(&token_hash);
+                let mut conn = self.redis.clone();
+                tokio::spawn(async move {
+                    let r: Result<(), redis::RedisError> =
+                        conn.set_ex(session_key, json, remaining_secs).await;
+                    if let Err(e) = r {
+                        log::warn!("Redis cache backfill failed for session validate: {e}");
+                    }
+                });
             }
 
             Ok(result)
@@ -176,22 +176,22 @@ impl SessionOpsRepository for RedisCachedSessionOps {
             let deleted = self.inner.delete_session(&token_hash).await?;
 
             // Clean up Redis best-effort
-            if let Ok(Some(json)) = cached {
-                if let Ok(session) = serde_json::from_str::<domain::StoredSession>(&json) {
-                    let user_sessions_key = self.user_sessions_key(session.user_id);
-                    let r: Result<(), redis::RedisError> = redis::pipe()
-                        .atomic()
-                        .del(&session_key)
-                        .cmd("SREM")
-                        .arg(&user_sessions_key)
-                        .arg(&token_hash)
-                        .query_async(&mut conn)
-                        .await;
-                    if let Err(e) = r {
-                        log::warn!("Redis cache cleanup failed for session delete: {e}");
-                    }
-                    return Ok(deleted);
+            if let Ok(Some(json)) = cached
+                && let Ok(session) = serde_json::from_str::<domain::StoredSession>(&json)
+            {
+                let user_sessions_key = self.user_sessions_key(session.user_id);
+                let r: Result<(), redis::RedisError> = redis::pipe()
+                    .atomic()
+                    .del(&session_key)
+                    .cmd("SREM")
+                    .arg(&user_sessions_key)
+                    .arg(&token_hash)
+                    .query_async(&mut conn)
+                    .await;
+                if let Err(e) = r {
+                    log::warn!("Redis cache cleanup failed for session delete: {e}");
                 }
+                return Ok(deleted);
             }
             // Couldn't get session info — just delete the key
             let r: Result<(), redis::RedisError> = conn.del(&session_key).await;

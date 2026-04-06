@@ -1,0 +1,12 @@
+{
+  "db_name": "MySQL",
+  "query": "INSERT INTO yauth_device_codes (id, device_code_hash, user_code, client_id, scopes, user_id, status, `interval`, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 10
+    },
+    "nullable": []
+  },
+  "hash": "54c7e9c085a259cf35d69befbb1b54b2e85a62b17b0b33ab10af2dfdd9454417"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM yauth_totp_secrets WHERE user_id = ? AND verified = ? /* sqlite */",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "6f64f1dafa36d48085c6685f0ed995b65e16c8728702c07109fc725199818dcb"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE yauth_account_locks SET failed_count = failed_count + 1, updated_at = ? WHERE id = ? /* sqlite */",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "746a5fc6780f241b932ae6a7191adaef4adf8a7155b98711aa98d3da80306808"
+}

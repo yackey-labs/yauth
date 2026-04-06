@@ -1,0 +1,12 @@
+{
+  "db_name": "MySQL",
+  "query": "UPDATE yauth_device_codes SET `interval` = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "a4f060c9fb3c004fc47fb345c442ff65edc7e54ca67d75aba5a10a13b91e2f9b"
+}

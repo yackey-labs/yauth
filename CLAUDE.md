@@ -93,7 +93,7 @@ cargo yauth generate --check -f yauth.toml
 
 ### Conformance Test Suite
 
-`tests/repo_conformance.rs` contains 64 tests that verify every repository trait method behaves identically across all backends (memory, diesel_pg, diesel_libsql, diesel_mysql). Tests are parameterized via `test_backends()` — backends are skipped if their database URL env var is unset.
+`tests/repo_conformance.rs` contains 65 tests that verify every repository trait method behaves identically across all 8 backends (memory, diesel_pg, diesel_mysql, diesel_sqlite, diesel_libsql, sqlx_pg, sqlx_mysql, sqlx_sqlite). Tests are parameterized via `test_backends()` — backends are skipped if their database URL env var is unset.
 
 The suite covers three categories:
 
@@ -101,7 +101,7 @@ The suite covers three categories:
 2. **Behavioral contracts** — semantic invariants the type system can't enforce: expired tokens return `None`, used tokens return `None`, `user.delete()` cascades to all related entities, rate limiting is fail-open on error.
 3. **Type edge cases** — UUID round-trip (CHAR(36) ↔ Uuid), NULL vs empty string, large text (no silent truncation), unicode/emoji, datetime precision, JSON structural equality, case-insensitive email.
 
-**When adding a new backend:** implement `DatabaseBackend` + all repository traits, add the backend to `test_backends()`, and run the suite. If all 64 tests pass, the backend is correct.
+**When adding a new backend:** implement `DatabaseBackend` + all repository traits, add the backend to `test_backends()`, and run the suite. If all 65 tests pass, the backend is correct.
 
 **Shared runtime pattern:** All conformance tests use `#[test]` (not `#[tokio::test]`) with a shared `OnceLock<Runtime>`. This is critical — each `#[tokio::test]` creates its own tokio runtime, and connection pools are bound to the runtime that created them. When one test's runtime shuts down, shared pool connections die for other tests. The shared runtime ensures all pools and connections live on one runtime that outlives all tests. This enables safe parallel execution (`--test-threads=N`).
 

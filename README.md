@@ -33,7 +33,7 @@ Every feature is behind a **feature flag** — enable only what you need.
 | `sqlx-sqlite-backend` | SQLite via sqlx with compile-time `query!()` macros | sqlx + SQLite deployments |
 | `memory-backend` | Fully in-memory backend (no database) | Unit tests, prototyping, CI |
 | `full` | All auth plugins (no backends) | Real apps: `full` + one backend |
-| `all-backends` | Every backend + redis (CI-only) | Conformance testing only |
+| `all-backends` | Every backend + redis, except diesel-libsql (CI-only) | Conformance testing only (diesel-libsql tested separately due to bundled sqlite3.c symbol conflict) |
 
 `email-password` + `diesel-pg-backend` are enabled by default. Real apps use `full` + one backend (e.g., `features = ["full", "diesel-pg-backend"]`). CI uses `full,all-backends`.
 

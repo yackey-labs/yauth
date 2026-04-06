@@ -102,17 +102,32 @@ jobs:
       - name: Run unit tests
         run: cargo test --workspace --features full,all-backends --lib
 
-      - name: Run conformance tests
+      - name: Run conformance tests (7 backends)
         env:
           DATABASE_URL: postgres://yauth:yauth@127.0.0.1:5433/yauth_test
           MYSQL_DATABASE_URL: mysql://yauth:yauth@127.0.0.1:3307/yauth_test
+          SQLITE_DATABASE_URL: ":memory:"
+          SQLX_PG_DATABASE_URL: postgres://yauth:yauth@127.0.0.1:5433/yauth_test
+          SQLX_MYSQL_DATABASE_URL: mysql://yauth:yauth@127.0.0.1:3307/yauth_test
+          SQLX_SQLITE_DATABASE_URL: "sqlite::memory:"
         run: cargo test --workspace --features full,all-backends --test repo_conformance
+
+      - name: Run conformance tests (diesel-libsql, tested separately)
+        run: cargo test --workspace --features full,diesel-libsql-backend,memory-backend --test repo_conformance
 
       - name: Run integration tests (parallel-safe)
         env:
           DATABASE_URL: postgres://yauth:yauth@127.0.0.1:5433/yauth_test
           MYSQL_DATABASE_URL: mysql://yauth:yauth@127.0.0.1:3307/yauth_test
         run: cargo test --workspace --features full,all-backends --test diesel_integration --test diesel_mysql_integration --test pentest
+
+      - name: Verify generated artifacts are fresh
+        run: |
+          cargo install --path crates/cargo-yauth
+          cargo yauth generate --check -f yauth-diesel-pg.toml
+          cargo yauth generate --check -f yauth-sqlx-pg.toml
+          cargo yauth generate --check -f yauth-sqlx-mysql.toml
+          cargo yauth generate --check -f yauth-sqlx-sqlite.toml
 
   codeql:
     name: CodeQL (${{ matrix.language }})

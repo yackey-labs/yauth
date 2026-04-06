@@ -16,10 +16,10 @@ pub(crate) fn sqlx_conflict(e: sqlx::Error) -> RepoError {
     match &e {
         sqlx::Error::Database(db_err) => {
             // Postgres: 23505, MySQL: 1062, SQLite: "UNIQUE constraint failed"
-            if let Some(code) = db_err.code() {
-                if code == "23505" || code == "1062" {
-                    return RepoError::Conflict(db_err.message().to_string());
-                }
+            if let Some(code) = db_err.code()
+                && (code == "23505" || code == "1062")
+            {
+                return RepoError::Conflict(db_err.message().to_string());
             }
             let msg = db_err.message();
             if msg.contains("UNIQUE constraint failed")
@@ -60,14 +60,18 @@ pub(crate) fn rate_limit_result(
 }
 
 // ── UUID / JSON string converters ──
-// Used by MySQL and SQLite backends where UUIDs and JSON are stored as TEXT/CHAR(36).
+// Used by MySQL and SQLite sqlx backends where UUIDs and JSON are stored as TEXT/CHAR(36).
+// Currently unused — these will be needed when sqlx_mysql/sqlx_sqlite repos do inline
+// UUID↔String and JSON↔String conversion instead of relying on sqlx's native mapping.
 
 #[cfg(any(feature = "sqlx-mysql-backend", feature = "sqlx-sqlite-backend"))]
+#[allow(dead_code)]
 pub(crate) fn uuid_to_str(u: uuid::Uuid) -> String {
     u.to_string()
 }
 
 #[cfg(any(feature = "sqlx-mysql-backend", feature = "sqlx-sqlite-backend"))]
+#[allow(dead_code)]
 pub(crate) fn str_to_uuid(s: &str) -> uuid::Uuid {
     uuid::Uuid::parse_str(s).unwrap_or_else(|e| {
         log::error!("Failed to parse UUID from stored value '{}': {}", s, e);
@@ -76,26 +80,31 @@ pub(crate) fn str_to_uuid(s: &str) -> uuid::Uuid {
 }
 
 #[cfg(any(feature = "sqlx-mysql-backend", feature = "sqlx-sqlite-backend"))]
+#[allow(dead_code)]
 pub(crate) fn opt_str_to_uuid(s: Option<String>) -> Option<uuid::Uuid> {
     s.map(|s| str_to_uuid(&s))
 }
 
 #[cfg(any(feature = "sqlx-mysql-backend", feature = "sqlx-sqlite-backend"))]
+#[allow(dead_code)]
 pub(crate) fn json_to_str(v: serde_json::Value) -> String {
     serde_json::to_string(&v).unwrap_or_else(|_| "null".to_string())
 }
 
 #[cfg(any(feature = "sqlx-mysql-backend", feature = "sqlx-sqlite-backend"))]
+#[allow(dead_code)]
 pub(crate) fn str_to_json(s: &str) -> serde_json::Value {
     serde_json::from_str(s).unwrap_or(serde_json::Value::Null)
 }
 
 #[cfg(any(feature = "sqlx-mysql-backend", feature = "sqlx-sqlite-backend"))]
+#[allow(dead_code)]
 pub(crate) fn opt_json_to_str(v: Option<serde_json::Value>) -> Option<String> {
     v.map(json_to_str)
 }
 
 #[cfg(any(feature = "sqlx-mysql-backend", feature = "sqlx-sqlite-backend"))]
+#[allow(dead_code)]
 pub(crate) fn opt_str_to_json(s: Option<String>) -> Option<serde_json::Value> {
     s.map(|s| str_to_json(&s))
 }

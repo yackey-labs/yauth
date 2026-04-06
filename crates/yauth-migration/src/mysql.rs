@@ -17,7 +17,7 @@ use super::collector::YAuthSchema;
 use super::types::*;
 
 /// Map abstract column type to MySQL type string.
-fn mysql_type(col_type: &ColumnType) -> Cow<'static, str> {
+pub(crate) fn mysql_type(col_type: &ColumnType) -> Cow<'static, str> {
     match col_type {
         ColumnType::Uuid => Cow::Borrowed("CHAR(36)"),
         ColumnType::Varchar => Cow::Borrowed("VARCHAR(255)"),
@@ -42,11 +42,7 @@ fn mysql_on_delete(action: &OnDelete) -> &'static str {
 }
 
 /// Map a Postgres default expression to its MySQL equivalent.
-///
-/// - `gen_random_uuid()` -> no default (UUIDs generated in application code)
-/// - `now()` -> `NOW()`
-/// - Everything else passed through as-is.
-fn mysql_default(pg_default: &str) -> Option<Cow<'static, str>> {
+pub(crate) fn mysql_default(pg_default: &str) -> Option<Cow<'static, str>> {
     match pg_default {
         "gen_random_uuid()" => None,
         "now()" => Some(Cow::Borrowed("CURRENT_TIMESTAMP")),
@@ -58,8 +54,7 @@ fn mysql_default(pg_default: &str) -> Option<Cow<'static, str>> {
 ///
 /// MySQL silently ignores inline `REFERENCES` on columns; foreign key constraints
 /// must be declared as separate `FOREIGN KEY (col) REFERENCES table(col)` lines
-/// after all column definitions. This function collects FK constraints during
-/// column iteration and emits them as table-level constraints at the end.
+/// after all column definitions.
 fn generate_create_table(table: &TableDef) -> String {
     let mut sql = format!("CREATE TABLE IF NOT EXISTS `{}` (\n", table.name);
 
@@ -69,13 +64,13 @@ fn generate_create_table(table: &TableDef) -> String {
     let col_count = table.columns.len();
     for (i, col) in table.columns.iter().enumerate() {
         sql.push_str("    `");
-        sql.push_str(col.name);
+        sql.push_str(&col.name);
         sql.push_str("` ");
         sql.push_str(&mysql_type(&col.col_type));
 
         if col.primary_key {
             sql.push_str(" PRIMARY KEY");
-            if let Some(default) = col.default
+            if let Some(ref default) = col.default
                 && let Some(mapped) = mysql_default(default)
             {
                 sql.push_str(" DEFAULT ");
@@ -88,7 +83,7 @@ fn generate_create_table(table: &TableDef) -> String {
             if col.unique {
                 sql.push_str(" UNIQUE");
             }
-            if let Some(default) = col.default
+            if let Some(ref default) = col.default
                 && let Some(mapped) = mysql_default(default)
             {
                 sql.push_str(" DEFAULT ");
@@ -107,7 +102,7 @@ fn generate_create_table(table: &TableDef) -> String {
             ));
         }
 
-        // Always add comma after columns — FK constraints or closing paren follow.
+        // Always add comma after columns -- FK constraints or closing paren follow.
         if i < col_count - 1 || !fk_constraints.is_empty() {
             sql.push(',');
         }
@@ -128,9 +123,6 @@ fn generate_create_table(table: &TableDef) -> String {
 }
 
 /// Generate complete MySQL DDL for the entire schema.
-///
-/// Returns one string with all `CREATE TABLE IF NOT EXISTS` statements
-/// in topological order, each with `ENGINE=InnoDB`.
 pub fn generate_mysql_ddl(schema: &YAuthSchema) -> String {
     let mut ddl = String::new();
     for (i, table) in schema.tables.iter().enumerate() {
@@ -138,6 +130,23 @@ pub fn generate_mysql_ddl(schema: &YAuthSchema) -> String {
             ddl.push('\n');
         }
         ddl.push_str(&generate_create_table(table));
+    }
+    ddl
+}
+
+/// Generate DROP TABLE IF EXISTS statement for a single table (MySQL).
+pub fn generate_mysql_drop(table: &TableDef) -> String {
+    format!("DROP TABLE IF EXISTS `{}`;\n", table.name)
+}
+
+/// Generate DROP TABLE statements for a list of tables in reverse order (MySQL).
+pub fn generate_mysql_drops(tables: &[TableDef]) -> String {
+    let mut ddl = String::new();
+    for (i, table) in tables.iter().rev().enumerate() {
+        if i > 0 {
+            ddl.push('\n');
+        }
+        ddl.push_str(&generate_mysql_drop(table));
     }
     ddl
 }

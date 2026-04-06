@@ -28,9 +28,10 @@ Every feature is behind a **feature flag** — enable only what you need.
 | `diesel-mysql-backend` | MySQL/MariaDB backend via diesel-async + deadpool | MySQL 8.0+ / MariaDB 10.6+ deployments |
 | `diesel-libsql-backend` | SQLite/Turso backend via diesel-libsql | Local dev, embedded apps, Turso edge databases |
 | `memory-backend` | Fully in-memory backend (no database) | Unit tests, prototyping, CI |
-| `full` | All of the above | Development/testing |
+| `full` | All auth plugins (no backends) | Real apps: `full` + one backend |
+| `all-backends` | Every backend + redis (CI-only) | Conformance testing only |
 
-`email-password` is enabled by default.
+`email-password` + `diesel-pg-backend` are enabled by default. Real apps use `full` + one backend (e.g., `features = ["full", "diesel-pg-backend"]`). CI uses `full,all-backends`.
 
 ## Try It in 30 Seconds
 
@@ -77,6 +78,56 @@ curl -X POST http://localhost:3000/api/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"email":"test@example.com","password":"MyPassword123!"}'
 ```
+
+## Migration CLI
+
+`cargo-yauth` generates migration files for your ORM from a declarative schema:
+
+```bash
+# Install the CLI
+cargo install cargo-yauth
+
+# Initialize yauth in your project (creates yauth.toml + migration files)
+cargo yauth init --orm diesel --dialect postgres --plugins email-password,passkey
+
+# Add a plugin later
+cargo yauth add-plugin mfa
+
+# Remove a plugin
+cargo yauth remove-plugin passkey
+
+# Show status
+cargo yauth status
+
+# Regenerate migration SQL (CI: --check verifies freshness)
+cargo yauth generate
+cargo yauth generate --check
+```
+
+All commands accept `-f <path>` to specify a config file (default: `yauth.toml`).
+
+### yauth.toml
+
+```toml
+[migration]
+orm = "diesel"           # "diesel" | "sqlx" | "raw"
+dialect = "postgres"     # "postgres" | "mysql" | "sqlite"
+migrations_dir = "migrations"
+table_prefix = "yauth_"
+
+[plugins]
+enabled = ["email-password", "passkey", "mfa"]
+```
+
+No secrets in config -- database URLs come from environment variables only.
+
+## Workspace Crates
+
+| Crate | Purpose |
+|---|---|
+| `yauth` | Main library -- plugins, middleware, builder, auth logic, backends |
+| `yauth-migration` | Schema types, DDL generation, diff engine, migration file gen (zero ORM deps) |
+| `cargo-yauth` | CLI binary -- `cargo yauth init/add-plugin/remove-plugin/status/generate` |
 
 ## Quick Start
 

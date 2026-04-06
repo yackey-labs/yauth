@@ -1,35 +1,25 @@
 //! Declarative schema system for yauth.
 //!
-//! Plugins and core tables declare their schema as Rust data structures.
-//! The schema collector merges everything, topologically sorts by FK deps,
-//! and dialect-specific DDL generators produce the actual SQL.
+//! This module re-exports types from `yauth-migration` and provides
+//! backend-specific runtime migration functionality that requires ORM deps.
 
-mod types;
-pub use types::*;
+// Re-export all public types from yauth-migration
+pub use yauth_migration::{
+    ALL_PLUGINS, ColumnDef, ColumnType, Dialect, ForeignKey, IndexDef, OnDelete, SchemaError,
+    TableDef, YAuthSchema, collect_schema, collect_schema_for_plugins, core_schema, generate_ddl,
+    generate_mysql_ddl, generate_postgres_ddl, generate_sqlite_ddl, plugin_schema_by_name,
+    plugin_schemas, schema_hash,
+};
 
-mod core;
-pub use core::core_schema;
-
-mod collector;
-pub use collector::{SchemaError, YAuthSchema, collect_schema};
-
-mod postgres;
-#[cfg(feature = "diesel-pg-backend")]
-pub use postgres::generate_migration_diff;
-pub use postgres::generate_postgres_ddl;
-
-mod sqlite;
-pub use sqlite::generate_sqlite_ddl;
-
-mod mysql;
-pub use mysql::generate_mysql_ddl;
-
+// Keep the tracking functions that depend on diesel (ORM-specific)
 mod tracking;
-pub use tracking::schema_hash;
 #[cfg(feature = "diesel-pg-backend")]
 pub use tracking::{ensure_tracking_table, is_schema_applied, record_schema_applied};
 
-pub mod plugin_schemas;
+// Keep the runtime migration diff that depends on diesel
+mod postgres_runtime;
+#[cfg(feature = "diesel-pg-backend")]
+pub use postgres_runtime::generate_migration_diff;
 
 /// Collect all table definitions based on compile-time feature flags.
 ///
@@ -65,6 +55,3 @@ pub(crate) fn collect_feature_gated_schemas() -> Vec<Vec<TableDef>> {
 
     lists
 }
-
-#[cfg(test)]
-mod tests;

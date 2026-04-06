@@ -41,7 +41,7 @@ jobs:
         run: cargo fmt --check
 
       - name: cargo clippy
-        run: cargo clippy --workspace --features full -- -D warnings
+        run: cargo clippy --workspace --features full,all-backends -- -D warnings
 
       - name: Biome lint
         run: bun run lint
@@ -97,19 +97,19 @@ jobs:
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
       - name: Run unit tests
-        run: cargo test --workspace --features full --lib
+        run: cargo test --workspace --features full,all-backends --lib
 
       - name: Run conformance tests
         env:
           DATABASE_URL: postgres://yauth:yauth@127.0.0.1:5433/yauth_test
           MYSQL_DATABASE_URL: mysql://yauth:yauth@127.0.0.1:3307/yauth_test
-        run: cargo test --workspace --features full --test repo_conformance
+        run: cargo test --workspace --features full,all-backends --test repo_conformance
 
       - name: Run integration tests (parallel-safe)
         env:
           DATABASE_URL: postgres://yauth:yauth@127.0.0.1:5433/yauth_test
           MYSQL_DATABASE_URL: mysql://yauth:yauth@127.0.0.1:3307/yauth_test
-        run: cargo test --workspace --features full --test diesel_integration --test diesel_mysql_integration --test pentest
+        run: cargo test --workspace --features full,all-backends --test diesel_integration --test diesel_mysql_integration --test pentest
 
   codeql:
     name: CodeQL (${{ matrix.language }})

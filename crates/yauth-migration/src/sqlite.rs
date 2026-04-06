@@ -16,7 +16,7 @@ use super::collector::YAuthSchema;
 use super::types::*;
 
 /// Map abstract column type to SQLite type string.
-fn sqlite_type(col_type: &ColumnType) -> Cow<'static, str> {
+pub(crate) fn sqlite_type(col_type: &ColumnType) -> Cow<'static, str> {
     match col_type {
         ColumnType::Uuid => Cow::Borrowed("TEXT"),
         ColumnType::Varchar => Cow::Borrowed("TEXT"),
@@ -41,11 +41,7 @@ fn sqlite_on_delete(action: &OnDelete) -> &'static str {
 }
 
 /// Map a Postgres default expression to its SQLite equivalent.
-///
-/// - `gen_random_uuid()` -> no default (UUIDs generated in application code)
-/// - `now()` -> `CURRENT_TIMESTAMP`
-/// - Everything else passed through as-is.
-fn sqlite_default(pg_default: &str) -> Option<Cow<'static, str>> {
+pub(crate) fn sqlite_default(pg_default: &str) -> Option<Cow<'static, str>> {
     match pg_default {
         "gen_random_uuid()" => None,
         "now()" => Some(Cow::Borrowed("CURRENT_TIMESTAMP")),
@@ -60,13 +56,13 @@ fn generate_create_table(table: &TableDef) -> String {
     let col_count = table.columns.len();
     for (i, col) in table.columns.iter().enumerate() {
         sql.push_str("    ");
-        sql.push_str(col.name);
+        sql.push_str(&col.name);
         sql.push(' ');
         sql.push_str(&sqlite_type(&col.col_type));
 
         if col.primary_key {
             sql.push_str(" PRIMARY KEY");
-            if let Some(default) = col.default
+            if let Some(ref default) = col.default
                 && let Some(mapped) = sqlite_default(default)
             {
                 sql.push_str(" DEFAULT ");
@@ -80,11 +76,10 @@ fn generate_create_table(table: &TableDef) -> String {
                     sqlite_on_delete(&fk.on_delete)
                 ));
             }
-        } else if col.foreign_key.is_some() {
+        } else if let Some(ref fk) = col.foreign_key {
             if !col.nullable {
                 sql.push_str(" NOT NULL");
             }
-            let fk = col.foreign_key.as_ref().unwrap();
             sql.push_str(&format!(
                 " REFERENCES {}({}) {}",
                 fk.references_table,
@@ -101,7 +96,7 @@ fn generate_create_table(table: &TableDef) -> String {
             if col.unique {
                 sql.push_str(" UNIQUE");
             }
-            if let Some(default) = col.default
+            if let Some(ref default) = col.default
                 && let Some(mapped) = sqlite_default(default)
             {
                 sql.push_str(" DEFAULT ");
@@ -130,6 +125,23 @@ pub fn generate_sqlite_ddl(schema: &YAuthSchema) -> String {
             ddl.push('\n');
         }
         ddl.push_str(&generate_create_table(table));
+    }
+    ddl
+}
+
+/// Generate DROP TABLE IF EXISTS statement for a single table (SQLite).
+pub fn generate_sqlite_drop(table: &TableDef) -> String {
+    format!("DROP TABLE IF EXISTS {};\n", table.name)
+}
+
+/// Generate DROP TABLE statements for a list of tables in reverse order (SQLite).
+pub fn generate_sqlite_drops(tables: &[TableDef]) -> String {
+    let mut ddl = String::new();
+    for (i, table) in tables.iter().rev().enumerate() {
+        if i > 0 {
+            ddl.push('\n');
+        }
+        ddl.push_str(&generate_sqlite_drop(table));
     }
     ddl
 }

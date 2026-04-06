@@ -2,6 +2,8 @@
 versioned_files = [
     "Cargo.toml",
     { path = "Cargo.lock", dependency = "yauth" },
+    { path = "Cargo.lock", dependency = "yauth-migration" },
+    { path = "Cargo.lock", dependency = "cargo-yauth" },
     "packages/shared/package.json",
     "packages/client/package.json",
     "packages/ui-solidjs/package.json",
@@ -54,10 +56,18 @@ type = "Command"
 command = "bun run build"
 shell = true
 
-# Publish Rust crate to crates.io
+# Publish Rust crates to crates.io (dependency order: yauth-migration -> yauth -> cargo-yauth)
+[[workflows.steps]]
+type = "Command"
+command = "cargo publish -p yauth-migration"
+
 [[workflows.steps]]
 type = "Command"
 command = "cargo publish -p yauth"
+
+[[workflows.steps]]
+type = "Command"
+command = "cargo publish -p cargo-yauth"
 
 # Publish npm packages to npmjs.com
 [[workflows.steps]]

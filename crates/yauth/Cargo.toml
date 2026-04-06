@@ -32,7 +32,11 @@ oidc = ["bearer", "oauth2-server"]
 telemetry = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:opentelemetry-semantic-conventions", "dep:opentelemetry-http"]
 openapi = ["dep:utoipa"]
 redis = ["dep:redis"]
-full = ["email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link", "admin", "status", "oauth2-server", "account-lockout", "webhooks", "oidc", "telemetry", "openapi", "diesel-pg-backend", "diesel-libsql-backend", "diesel-mysql-backend", "memory-backend"]
+# All auth plugins — this is what "full" means to users.
+# Real apps use `full` + one backend (e.g., `yauth = { features = ["full", "diesel-pg-backend"] }`).
+full = ["email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link", "admin", "status", "oauth2-server", "account-lockout", "webhooks", "oidc", "telemetry", "openapi"]
+# CI-only — every backend + redis, for conformance testing. Never recommended for production.
+all-backends = ["diesel-pg-backend", "diesel-libsql-backend", "diesel-mysql-backend", "memory-backend", "redis"]
 
 [dependencies]
 axum = { workspace = true }
@@ -44,6 +48,8 @@ diesel = { workspace = true, optional = true }
 diesel-async-crate = { version = "0.8", features = ["deadpool"], package = "diesel-async", optional = true }
 diesel-libsql = { version = "0.1.4", features = ["async", "deadpool"], optional = true }
 futures-util = { version = "0.3", optional = true }
+
+yauth-migration = { path = "../yauth-migration" }
 
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -111,8 +117,8 @@ tracing-opentelemetry = "0.32"
 
 [[example]]
 name = "server"
-required-features = ["full"]
+required-features = ["full", "diesel-pg-backend"]
 
 [[example]]
 name = "e2e_test"
-required-features = ["full"]
+required-features = ["full", "diesel-pg-backend"]

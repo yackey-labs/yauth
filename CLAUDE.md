@@ -12,16 +12,30 @@
 
 | Crate | Purpose |
 |---|---|
-| `yauth` | Main library — plugins, middleware, builder, auth logic, backends, repository traits, declarative schema |
+| `yauth` | Main library — plugins, middleware, builder, auth logic, backends, repository traits |
+| `yauth-migration` | Schema types, DDL generation, diff engine, migration file gen — **zero ORM deps** |
+| `cargo-yauth` | CLI binary — `cargo yauth init/add-plugin/remove-plugin/status/generate` |
 
 Key internal modules in `yauth`:
 - `backends/diesel_pg/` — PostgreSQL backend (`DieselPgBackend`)
+- `backends/diesel_mysql/` — MySQL/MariaDB backend (`DieselMysqlBackend`)
 - `backends/diesel_libsql/` — SQLite/Turso backend (`DieselLibsqlBackend`)
 - `backends/memory/` — In-memory backend (`InMemoryBackend`)
 - `backends/redis/` — Redis caching decorators
 - `repo/` — `DatabaseBackend` trait, repository traits, `Repositories` struct, `RepoError`
 - `domain/` — ORM-agnostic domain types (always compiled, no backend deps)
-- `schema/` — Declarative schema definitions, DDL generation per dialect (Postgres, SQLite, MySQL)
+- `schema/` — Re-exports from `yauth-migration` + ORM-specific runtime migration functions
+
+Key modules in `yauth-migration`:
+- `types` — `TableDef`, `ColumnDef`, `ColumnType`, `ForeignKey`, `Dialect`
+- `core` — Core table definitions (users, sessions, audit_log)
+- `plugin_schemas` — Schema definitions for each plugin
+- `collector` — Schema collection + topological sort by FK deps
+- `postgres/sqlite/mysql` — Dialect-specific DDL generators
+- `diff` — Schema diff engine (CREATE TABLE, DROP TABLE, ALTER TABLE)
+- `generate` — Migration file generators (diesel up.sql/down.sql, sqlx numbered .sql, raw)
+- `config` — `yauth.toml` config file support
+- `tracking` — Schema hash computation
 
 ### TypeScript Packages (`packages/`)
 
@@ -36,9 +50,9 @@ Key internal modules in `yauth`:
 
 ```bash
 # Rust
-cargo test --features full          # Run all unit tests
-cargo fmt --check                    # Format check
-cargo clippy --features full -- -D warnings  # Lint
+cargo test --features full,all-backends          # Run all unit tests
+cargo fmt --check                                 # Format check
+cargo clippy --features full,all-backends -- -D warnings  # Lint
 
 # TypeScript
 bun install                          # Install dependencies
@@ -55,15 +69,22 @@ bun generate:check                   # Fail if generated client is out of date (
 
 # Integration / Pentest (all parallel-safe — no --test-threads=1 needed)
 docker compose up -d                 # Start PostgreSQL + MySQL + Redis + Mailpit
-cargo test --features full --test pentest                      # OWASP pentest (memory + diesel_pg + diesel_mysql)
-cargo test --features full --test diesel_integration           # Diesel PG integration tests
-cargo test --features full --test diesel_mysql_integration     # Diesel MySQL integration tests
+cargo test --features full,all-backends --test pentest                      # OWASP pentest (memory + diesel_pg + diesel_mysql)
+cargo test --features full,all-backends --test diesel_integration           # Diesel PG integration tests
+cargo test --features full,all-backends --test diesel_mysql_integration     # Diesel MySQL integration tests
 
 # Conformance tests (cross-backend repository trait verification)
 # All tests share a single tokio runtime via OnceLock, so connection pools survive across tests.
 DATABASE_URL=postgres://yauth:yauth@127.0.0.1:5433/yauth_test \
 MYSQL_DATABASE_URL=mysql://yauth:yauth@127.0.0.1:3307/yauth_test \
-  cargo test --features full --test repo_conformance
+  cargo test --features full,all-backends --test repo_conformance
+
+# Migration CLI
+cargo yauth init --orm diesel --dialect postgres --plugins email-password,passkey
+cargo yauth add-plugin mfa
+cargo yauth remove-plugin passkey
+cargo yauth status
+cargo yauth generate --check -f yauth.toml
 ```
 
 ### Conformance Test Suite
@@ -105,7 +126,10 @@ The suite covers three categories:
 | `telemetry` | Native OpenTelemetry SDK instrumentation (spans, span events, context propagation) | No |
 | `openapi` | utoipa OpenAPI spec generation (for client codegen) | No |
 | `redis` | Redis caching decorator — wraps repository traits for sub-ms session/rate-limit lookups | No |
-| `full` | All of the above (all backends + all plugins) | No |
+| `full` | All auth plugins (no backends — pick one separately) | No |
+| `all-backends` | Every backend + redis (CI-only, for conformance testing) | No |
+
+Real apps use `full` + one backend (e.g., `features = ["full", "diesel-pg-backend"]`). CI uses `full,all-backends`.
 
 Feature flags gate code across all Rust crates in the workspace.
 

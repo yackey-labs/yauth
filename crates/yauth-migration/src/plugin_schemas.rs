@@ -1,7 +1,7 @@
 //! Schema definitions for each built-in plugin.
 //!
-//! These functions are called by each plugin's `schema()` method.
-//! Centralizing them here makes it easy to verify they match the existing SQL.
+//! These functions are called by name from the CLI and from the yauth library.
+//! They are always compiled (no feature gates) since this crate is a code generator.
 
 use super::types::*;
 
@@ -106,7 +106,6 @@ pub fn mfa_schema() -> Vec<TableDef> {
 }
 
 /// OAuth plugin: oauth_accounts, oauth_states.
-/// Includes the oauth_token_refresh columns (expires_at, updated_at) merged in.
 pub fn oauth_schema() -> Vec<TableDef> {
     vec![
         TableDef::new("yauth_oauth_accounts")
@@ -125,7 +124,6 @@ pub fn oauth_schema() -> Vec<TableDef> {
             .column(ColumnDef::new("access_token_enc", ColumnType::Varchar).nullable())
             .column(ColumnDef::new("refresh_token_enc", ColumnType::Varchar).nullable())
             .column(ColumnDef::new("created_at", ColumnType::DateTime).default("now()"))
-            // From migration 009 (oauth_token_refresh)
             .column(ColumnDef::new("expires_at", ColumnType::DateTime).nullable())
             .column(ColumnDef::new("updated_at", ColumnType::DateTime).default("now()")),
         TableDef::new("yauth_oauth_states")

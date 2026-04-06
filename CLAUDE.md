@@ -13,6 +13,7 @@
 | Crate | Purpose |
 |---|---|
 | `yauth` | Main library — plugins, middleware, builder, auth logic, backends, repository traits |
+| `yauth-entity` | Domain types (User, Session, Password, etc.) — ORM-agnostic, no migration dependency |
 | `yauth-migration` | Schema types, DDL generation, diff engine, migration file gen — **zero ORM deps** |
 | `cargo-yauth` | CLI binary — `cargo yauth init/add-plugin/remove-plugin/status/generate` |
 

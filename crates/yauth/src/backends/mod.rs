@@ -1,7 +1,8 @@
 #[cfg(any(
     feature = "diesel-pg-backend",
     feature = "diesel-libsql-backend",
-    feature = "diesel-mysql-backend"
+    feature = "diesel-mysql-backend",
+    feature = "diesel-sqlite-backend"
 ))]
 pub(crate) mod diesel_common;
 
@@ -13,6 +14,9 @@ pub mod diesel_libsql;
 
 #[cfg(feature = "diesel-mysql-backend")]
 pub mod diesel_mysql;
+
+#[cfg(feature = "diesel-sqlite-backend")]
+pub mod diesel_sqlite;
 
 #[cfg(feature = "memory-backend")]
 pub mod memory;

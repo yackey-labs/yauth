@@ -25,7 +25,11 @@ pub use postgres_runtime::generate_migration_diff;
 ///
 /// Shared by MySQL and libSQL backends to avoid duplicating the feature-flag
 /// schema collection logic.
-#[cfg(any(feature = "diesel-mysql-backend", feature = "diesel-libsql-backend"))]
+#[cfg(any(
+    feature = "diesel-mysql-backend",
+    feature = "diesel-libsql-backend",
+    feature = "diesel-sqlite-backend"
+))]
 pub(crate) fn collect_feature_gated_schemas() -> Vec<Vec<TableDef>> {
     #[allow(unused_mut)]
     let mut lists = vec![core_schema()];

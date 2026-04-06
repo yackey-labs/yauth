@@ -15,6 +15,7 @@ default = ["email-password", "diesel-pg-backend"]
 diesel-pg-backend = ["dep:diesel", "dep:diesel-async-crate", "diesel-async-crate/postgres", "diesel-async-crate/deadpool", "dep:futures-util"]
 diesel-libsql-backend = ["dep:diesel", "dep:diesel-async-crate", "dep:diesel-libsql", "dep:futures-util"]
 diesel-mysql-backend = ["dep:diesel", "diesel/mysql_backend", "dep:diesel-async-crate", "diesel-async-crate/mysql", "diesel-async-crate/deadpool", "dep:futures-util"]
+diesel-sqlite-backend = ["dep:diesel", "diesel/sqlite", "dep:diesel-async-crate", "diesel-async-crate/sqlite", "diesel-async-crate/deadpool", "dep:futures-util", "dep:libsqlite3-sys"]
 memory-backend = []
 email-password = []
 passkey = ["dep:webauthn-rs"]
@@ -36,7 +37,7 @@ redis = ["dep:redis"]
 # Real apps use `full` + one backend (e.g., `yauth = { features = ["full", "diesel-pg-backend"] }`).
 full = ["email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link", "admin", "status", "oauth2-server", "account-lockout", "webhooks", "oidc", "telemetry", "openapi"]
 # CI-only — every backend + redis, for conformance testing. Never recommended for production.
-all-backends = ["diesel-pg-backend", "diesel-libsql-backend", "diesel-mysql-backend", "memory-backend", "redis"]
+all-backends = ["diesel-pg-backend", "diesel-libsql-backend", "diesel-mysql-backend", "diesel-sqlite-backend", "memory-backend", "redis"]
 
 [dependencies]
 axum = { workspace = true }
@@ -48,8 +49,10 @@ diesel = { workspace = true, optional = true }
 diesel-async-crate = { version = "0.8", features = ["deadpool"], package = "diesel-async", optional = true }
 diesel-libsql = { version = "0.1.4", features = ["async", "deadpool"], optional = true }
 futures-util = { version = "0.3", optional = true }
+libsqlite3-sys = { version = "0.36", features = ["bundled"], optional = true }
 
 yauth-migration = { path = "../yauth-migration" }
+yauth-entity = { path = "../yauth-entity" }
 
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -96,6 +99,7 @@ opentelemetry-http = { workspace = true, optional = true }
 log = "0.4"
 
 [dev-dependencies]
+yauth-entity = { path = "../yauth-entity" }
 env_logger = "0.11"
 totp-rs = { workspace = true }
 uuid = { workspace = true }

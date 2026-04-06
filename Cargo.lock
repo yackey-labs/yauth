@@ -5989,6 +5989,7 @@ dependencies = [
  "http-body-util",
  "jsonwebtoken",
  "lettre",
+ "libsqlite3-sys",
  "log",
  "oauth2",
  "opentelemetry",
@@ -6018,7 +6019,19 @@ dependencies = [
  "utoipa",
  "uuid",
  "webauthn-rs",
+ "yauth-entity",
  "yauth-migration",
+]
+
+[[package]]
+name = "yauth-entity"
+version = "0.7.0"
+dependencies = [
+ "chrono",
+ "diesel",
+ "serde",
+ "serde_json",
+ "uuid",
 ]
 
 [[package]]

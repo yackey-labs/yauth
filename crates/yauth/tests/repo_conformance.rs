@@ -16,8 +16,8 @@ use chrono::{Duration, Utc};
 use serde_json::json;
 use std::sync::atomic::{AtomicU64, Ordering};
 use uuid::Uuid;
-use yauth::domain;
 use yauth::repo::{DatabaseBackend, EnabledFeatures, RepoError, Repositories};
+use yauth_entity as domain;
 
 use std::sync::OnceLock;
 static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
@@ -70,6 +70,9 @@ static LIBSQL_REPOS: OnceCell<Option<Repositories>> = OnceCell::const_new();
 
 #[cfg(feature = "diesel-mysql-backend")]
 static MYSQL_REPOS: OnceCell<Option<Repositories>> = OnceCell::const_new();
+
+#[cfg(feature = "diesel-sqlite-backend")]
+static SQLITE_REPOS: OnceCell<Option<Repositories>> = OnceCell::const_new();
 
 #[cfg(feature = "diesel-pg-backend")]
 async fn shared_pg_repos() -> Option<Repositories> {
@@ -138,6 +141,36 @@ async fn shared_mysql_repos() -> Option<Repositories> {
         .clone()
 }
 
+#[cfg(feature = "diesel-sqlite-backend")]
+async fn shared_sqlite_repos() -> Option<Repositories> {
+    SQLITE_REPOS
+        .get_or_init(|| async {
+            use yauth::backends::diesel_sqlite::DieselSqliteBackend;
+            let url =
+                std::env::var("SQLITE_DATABASE_URL").unwrap_or_else(|_| ":memory:".to_string());
+            match DieselSqliteBackend::new(&url) {
+                Ok(backend) => {
+                    if backend
+                        .migrate(&EnabledFeatures::from_compile_flags())
+                        .await
+                        .is_ok()
+                    {
+                        Some(backend.repositories())
+                    } else {
+                        eprintln!("SQLite migration failed, skipping");
+                        None
+                    }
+                }
+                Err(e) => {
+                    eprintln!("SQLite backend creation failed: {e}, skipping");
+                    None
+                }
+            }
+        })
+        .await
+        .clone()
+}
+
 async fn test_backends() -> Vec<(&'static str, Repositories)> {
     helpers::otel::ensure_init();
     let _span = helpers::otel::HelperSpan::new("test_backends");
@@ -187,6 +220,13 @@ async fn test_backends() -> Vec<(&'static str, Repositories)> {
     #[cfg(feature = "diesel-mysql-backend")]
     if let Some(repos) = shared_mysql_repos().await {
         backends.push(("diesel_mysql", repos));
+    }
+
+    // Diesel native SQLite -- shared, migrated once.
+    // Uses SyncConnectionWrapper<SqliteConnection> via deadpool.
+    #[cfg(feature = "diesel-sqlite-backend")]
+    if let Some(repos) = shared_sqlite_repos().await {
+        backends.push(("diesel_sqlite", repos));
     }
 
     backends

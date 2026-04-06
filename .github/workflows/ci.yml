@@ -100,10 +100,13 @@ jobs:
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
       - name: Run unit tests
+        env:
+          SQLX_OFFLINE: "true"
         run: cargo test --workspace --features full,all-backends --lib
 
       - name: Run conformance tests (7 backends)
         env:
+          SQLX_OFFLINE: "true"
           DATABASE_URL: postgres://yauth:yauth@127.0.0.1:5433/yauth_test
           MYSQL_DATABASE_URL: mysql://yauth:yauth@127.0.0.1:3307/yauth_test
           SQLITE_DATABASE_URL: ":memory:"
@@ -113,10 +116,13 @@ jobs:
         run: cargo test --workspace --features full,all-backends --test repo_conformance
 
       - name: Run conformance tests (diesel-libsql, tested separately)
+        env:
+          SQLX_OFFLINE: "true"
         run: cargo test --workspace --features full,diesel-libsql-backend,memory-backend --test repo_conformance
 
       - name: Run integration tests (parallel-safe)
         env:
+          SQLX_OFFLINE: "true"
           DATABASE_URL: postgres://yauth:yauth@127.0.0.1:5433/yauth_test
           MYSQL_DATABASE_URL: mysql://yauth:yauth@127.0.0.1:3307/yauth_test
         run: cargo test --workspace --features full,all-backends --test diesel_integration --test diesel_mysql_integration --test pentest

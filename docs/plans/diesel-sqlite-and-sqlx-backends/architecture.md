@@ -59,7 +59,7 @@ No schema changes — same tables, same columns. The change is WHERE schema defi
 ### yauth.toml config file
 ```toml
 [migration]
-orm = "diesel"                  # "diesel" | "sqlx" | "raw"
+orm = "diesel"                  # "diesel" | "sqlx"
 dialect = "postgres"            # "postgres" | "mysql" | "sqlite"
 migrations_dir = "migrations"
 schema = "public"               # PG schema (optional)
@@ -98,7 +98,6 @@ Compares two `YAuthSchema` snapshots (previous plugins vs current) and produces:
 Same diff, different output formats:
 - **diesel**: `up.sql` / `down.sql` pairs in timestamped directories
 - **sqlx**: sequentially numbered `.sql` files
-- **raw**: plain SQL files for manual use
 
 ### SyncConnectionWrapper for diesel SQLite
 `diesel-async` has no native async SQLite. `SyncConnectionWrapper<SqliteConnection>` wraps diesel's sync `SqliteConnection` and runs queries via `spawn_blocking`. All query building must happen inside the blocking closure. Pool via `deadpool`.

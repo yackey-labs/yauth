@@ -1,0 +1,31 @@
+{
+	"eval_id": 2,
+	"eval_name": "vue-frontend",
+	"prompt": "I have a Vue 3 app (Vite + Vue Router) and I just added yauth to my backend. I need a login page, register page, and a dashboard that shows the user's email and role. The auth API is at /api/auth. Also need to handle the MFA challenge flow if the user has MFA enabled.",
+	"assertions": [
+		{
+			"text": "main.ts installs YAuthPlugin with baseUrl '/api/auth'",
+			"type": "content_check"
+		},
+		{
+			"text": "LoginPage uses LoginForm component with onMfaRequired handler",
+			"type": "content_check"
+		},
+		{
+			"text": "MfaChallenge component is shown when MFA is required during login",
+			"type": "content_check"
+		},
+		{
+			"text": "RegisterPage uses RegisterForm component",
+			"type": "content_check"
+		},
+		{
+			"text": "DashboardPage uses useSession or useYAuth to display user info",
+			"type": "content_check"
+		},
+		{
+			"text": "Vue Router is configured with routes for login, register, and dashboard",
+			"type": "content_check"
+		}
+	]
+}

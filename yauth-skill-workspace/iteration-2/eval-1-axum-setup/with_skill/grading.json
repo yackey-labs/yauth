@@ -1,0 +1,35 @@
+{
+	"expectations": [
+		{
+			"text": "Cargo.toml includes yauth with email-password, passkey, and mfa features",
+			"passed": true,
+			"evidence": "Line 14: yauth = { version = \"0.3\", features = [\"email-password\", \"passkey\", \"mfa\"] }"
+		},
+		{
+			"text": "Code creates a database pool and runs migrations",
+			"passed": true,
+			"evidence": "Uses AsyncDieselConnectionManager, DieselPool::builder, run_migrations()"
+		},
+		{
+			"text": "YAuthBuilder is configured with EmailPasswordConfig, PasskeyConfig, and MfaConfig",
+			"passed": true,
+			"evidence": "Builder chain with all three with_* methods"
+		},
+		{
+			"text": "Auth routes are nested under /api/auth using .nest()",
+			"passed": true,
+			"evidence": ".nest(\"/api/auth\", auth.router())"
+		},
+		{
+			"text": "A protected /api/me route uses auth_middleware and extracts Extension<AuthUser>",
+			"passed": true,
+			"evidence": "auth_middleware layer + Extension<AuthUser> extraction"
+		},
+		{
+			"text": "YAuthConfig includes base_url, session settings, and trusted_origins",
+			"passed": true,
+			"evidence": "All config fields present with correct types"
+		}
+	],
+	"summary": { "passed": 6, "failed": 0, "total": 6, "pass_rate": 1.0 }
+}

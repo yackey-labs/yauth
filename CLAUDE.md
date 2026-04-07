@@ -38,7 +38,7 @@ Key modules in `yauth-migration`:
 - `collector` — Schema collection + topological sort by FK deps
 - `postgres/sqlite/mysql` — Dialect-specific DDL generators
 - `diff` — Schema diff engine (CREATE TABLE, DROP TABLE, ALTER TABLE)
-- `generate` — Migration file generators (diesel up.sql/down.sql, sqlx numbered .sql, raw)
+- `generate` — Migration file generators (diesel up.sql/down.sql, sqlx numbered .sql)
 - `config` — `yauth.toml` config file support
 - `tracking` — Schema hash computation
 

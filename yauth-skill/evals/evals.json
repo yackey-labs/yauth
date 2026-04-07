@@ -1,0 +1,46 @@
+{
+	"skill_name": "yauth",
+	"evals": [
+		{
+			"id": 1,
+			"prompt": "I'm building a new Axum web app and I want to add authentication. I need email/password login, passkeys, and MFA. My database is at postgres://myapp:secret@db.internal:5432/myapp. Can you set up yauth for me? I want the auth routes at /api/auth and I need a protected /api/me endpoint that returns the current user.",
+			"expected_output": "Complete Rust code with Cargo.toml dependencies, pool creation, migration running, YAuthBuilder with email-password + passkey + mfa plugins configured, router with /api/auth nest and protected /api/me endpoint using auth middleware",
+			"files": [],
+			"expectations": [
+				"Cargo.toml includes yauth with email-password, passkey, and mfa features",
+				"Code creates a database pool and runs migrations",
+				"YAuthBuilder is configured with EmailPasswordConfig, PasskeyConfig, and MfaConfig",
+				"Auth routes are nested under /api/auth",
+				"A protected /api/me route uses auth_middleware and extracts Extension<AuthUser>",
+				"YAuthConfig includes base_url, session settings, and trusted_origins"
+			]
+		},
+		{
+			"id": 2,
+			"prompt": "I have a Vue 3 app (Vite + Vue Router) and I just added yauth to my backend. I need a login page, register page, and a dashboard that shows the user's email and role. The auth API is at /api/auth. Also need to handle the MFA challenge flow if the user has MFA enabled.",
+			"expected_output": "Vue 3 setup with YAuthPlugin installed, LoginPage with MFA challenge handling, RegisterPage, and DashboardPage using useSession composable, plus vue-router configuration",
+			"files": [],
+			"expectations": [
+				"main.ts installs YAuthPlugin with baseUrl '/api/auth'",
+				"LoginPage uses LoginForm component with onMfaRequired handler",
+				"MfaChallenge component is shown when MFA is required during login",
+				"RegisterPage uses RegisterForm component",
+				"DashboardPage uses useSession or useYAuth to display user info",
+				"Vue Router is configured with routes for login, register, and dashboard"
+			]
+		},
+		{
+			"id": 3,
+			"prompt": "My Axum app already uses utoipa to generate an openapi.json and orval to generate a TypeScript client from it. I want to add yauth for authentication but I don't want to break my existing client generation pipeline. How should I set this up? I also need my app's API calls to automatically carry the session cookie.",
+			"expected_output": "Explanation of keeping specs separate, using @yackey-labs/yauth-client alongside the app's own orval-generated client, and ensuring credentials: include for session cookies",
+			"files": [],
+			"expectations": [
+				"Recommends keeping yauth's OpenAPI spec separate from the app's spec",
+				"Shows how to use @yackey-labs/yauth-client alongside the app's orval-generated client",
+				"Explains that credentials: include on fetch requests automatically carries the session cookie",
+				"Does NOT suggest merging yauth routes into the app's openapi.json",
+				"Mentions that both clients coexist since yauth routes are under /api/auth"
+			]
+		}
+	]
+}

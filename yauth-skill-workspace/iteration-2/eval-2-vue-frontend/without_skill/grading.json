@@ -1,0 +1,35 @@
+{
+	"expectations": [
+		{
+			"text": "main.ts installs YAuthPlugin with baseUrl '/api/auth'",
+			"passed": false,
+			"evidence": "Does NOT use YAuthPlugin at all. main.ts just creates app with Vue Router (lines 13-19). Instead creates a manual auth.ts with createYAuthClient({ baseURL: '/api/auth' }) — note wrong property name 'baseURL' vs correct 'baseUrl'."
+		},
+		{
+			"text": "LoginPage uses LoginForm component with onMfaRequired handler",
+			"passed": false,
+			"evidence": "Does NOT use the pre-built LoginForm component. Writes an entirely custom login form from scratch with manual HTML/CSS (lines 211-437). The custom useAuth composable has wrong API calls: authClient.login() and authClient.verifyMfa() don't match actual client API (should be client.emailPassword.login() and client.mfa.verify())."
+		},
+		{
+			"text": "MfaChallenge component is shown when MFA is required during login",
+			"passed": false,
+			"evidence": "Does NOT use the pre-built MfaChallenge component. Has custom MFA code input inline in LoginPage.vue. Also guesses at MFA response shape (mfa_token, mfaToken) which doesn't match actual API (pendingSessionId)."
+		},
+		{
+			"text": "RegisterPage uses RegisterForm component",
+			"passed": false,
+			"evidence": "Does NOT use the pre-built RegisterForm component. Writes custom registration form from scratch with manual HTML/CSS."
+		},
+		{
+			"text": "DashboardPage uses useSession or useYAuth to display user info",
+			"passed": false,
+			"evidence": "Does NOT use useSession or useYAuth composables from @yackey-labs/yauth-ui-vue. Uses custom useAuth() composable with manually managed state. References fabricated user.mfa_enabled field not present in AuthUser."
+		},
+		{
+			"text": "Vue Router is configured with routes for login, register, and dashboard",
+			"passed": true,
+			"evidence": "Routes correctly configured for login, register, dashboard with redirect (lines 145-168)"
+		}
+	],
+	"summary": { "passed": 1, "failed": 5, "total": 6, "pass_rate": 0.17 }
+}

@@ -1,0 +1,40 @@
+{
+	"expectations": [
+		{
+			"text": "Uses createYAuthClient({ baseUrl: '/api/auth' }) from @yackey-labs/yauth-client",
+			"passed": false,
+			"evidence": "Uses createYAuthClient but with wrong property name: baseURL (capital URL) instead of baseUrl. Also uses full URL 'http://localhost:3000/auth' instead of relative path."
+		},
+		{
+			"text": "Shows credentials: include for the user's own fetch calls",
+			"passed": true,
+			"evidence": "Three good options shown (direct fetch, wrapper, axios) all with credentials: include"
+		},
+		{
+			"text": "Uses Vue UI components (YAuthPlugin, LoginForm, etc.)",
+			"passed": false,
+			"evidence": "Uses LoginForm/RegisterForm but does NOT use YAuthPlugin. Passes :client prop directly to components instead of using the plugin provider. Also 'likely provides composables' — guessing rather than knowing."
+		},
+		{
+			"text": "Does NOT suggest utoipa/orval/OpenAPI setup",
+			"passed": true,
+			"evidence": "Correctly avoids OpenAPI — says 'You don't need OpenAPI or code generation'"
+		},
+		{
+			"text": "Correct API method paths (client.emailPassword.login() etc.)",
+			"passed": false,
+			"evidence": "Uses authClient.session.get() and authClient.session.logout() — actual API is client.getSession() and client.logout() (top-level, not grouped under session)"
+		},
+		{
+			"text": "Does NOT recommend yauth-entity or yauth-migration crates",
+			"passed": false,
+			"evidence": "Lines 16-17: Still adds yauth-entity and yauth-migration as separate crates. Also imports AuthUser from yauth_entity (line 103) — wrong path."
+		},
+		{
+			"text": "Correct import paths (yauth::config::, yauth::middleware::AuthUser)",
+			"passed": false,
+			"evidence": "Uses yauth_entity::AuthUser (line 103) and yauth::{YAuthBuilder, YAuthConfig, EmailPasswordConfig} (line 26) — wrong import paths"
+		}
+	],
+	"summary": { "passed": 2, "failed": 5, "total": 7, "pass_rate": 0.29 }
+}

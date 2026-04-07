@@ -8,7 +8,7 @@
 //! - Schema collector with topological sort by FK dependencies
 //! - Dialect-specific DDL generators (Postgres, SQLite, MySQL)
 //! - Schema diff engine for incremental migrations
-//! - Migration file generators (diesel up.sql/down.sql, sqlx numbered .sql, raw SQL)
+//! - Migration file generators (diesel up.sql/down.sql, sqlx numbered .sql)
 //! - `yauth.toml` config file support
 //! - Schema hash for tracking
 

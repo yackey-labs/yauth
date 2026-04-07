@@ -28,7 +28,7 @@ pub fn init(
     // Resolve values: use flags if provided, otherwise prompt interactively
     let orm_value = match orm {
         Some(v) => v,
-        None => prompt_select("ORM", &["diesel", "sqlx", "raw"])?,
+        None => prompt_select("ORM", &["diesel", "sqlx"])?,
     };
 
     let dialect_value = match dialect {
@@ -289,8 +289,6 @@ pub fn generate(config_path: &Path, check: bool) -> Result<(), Box<dyn std::erro
 ///   For `schema.rs`, it lives directly in `<migrations_dir>/schema.rs`.
 /// - **Sqlx:** generated path is `<migrations_dir>/<number>_<name>.sql`.
 ///   We scan for any file ending in `_<name>.sql`.
-/// - **Raw:** generated path is `<migrations_dir>/<name>_up.sql` or `<name>_down.sql`.
-///   These have no timestamp prefix, so we check exact paths.
 fn find_existing_file(
     migrations_dir: &Path,
     generated_path: &Path,
@@ -352,10 +350,6 @@ fn find_existing_file(
                     }
                 }
             }
-            None
-        }
-        yauth_migration::Orm::Raw => {
-            // Raw files have no timestamp prefix, so the exact path should have matched above
             None
         }
     }

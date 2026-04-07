@@ -114,7 +114,7 @@ All commands accept `-f <path>` to specify a config file (default: `yauth.toml`)
 
 ```toml
 [migration]
-orm = "diesel"           # "diesel" | "sqlx" | "raw"
+orm = "diesel"           # "diesel" | "sqlx"
 dialect = "postgres"     # "postgres" | "mysql" | "sqlite"
 migrations_dir = "migrations"
 table_prefix = "yauth_"

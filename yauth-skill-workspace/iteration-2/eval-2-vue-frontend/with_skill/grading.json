@@ -1,0 +1,35 @@
+{
+	"expectations": [
+		{
+			"text": "main.ts installs YAuthPlugin with baseUrl '/api/auth'",
+			"passed": true,
+			"evidence": "Line 22: app.use(YAuthPlugin, { baseUrl: '/api/auth' })"
+		},
+		{
+			"text": "LoginPage uses LoginForm component with onMfaRequired handler",
+			"passed": true,
+			"evidence": "LoginForm component with onMfaRequired callback"
+		},
+		{
+			"text": "MfaChallenge component is shown when MFA is required during login",
+			"passed": true,
+			"evidence": "MfaChallenge conditionally rendered"
+		},
+		{
+			"text": "RegisterPage uses RegisterForm component",
+			"passed": true,
+			"evidence": "RegisterForm component used"
+		},
+		{
+			"text": "DashboardPage uses useSession or useYAuth to display user info",
+			"passed": true,
+			"evidence": "Uses useSession() or useAuth() composable"
+		},
+		{
+			"text": "Vue Router is configured with routes for login, register, and dashboard",
+			"passed": true,
+			"evidence": "Three routes configured"
+		}
+	],
+	"summary": { "passed": 6, "failed": 0, "total": 6, "pass_rate": 1.0 }
+}

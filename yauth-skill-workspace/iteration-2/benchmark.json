@@ -1,0 +1,315 @@
+{
+	"metadata": {
+		"skill_name": "yauth",
+		"skill_path": "/home/steve/fj/yauth/yauth-skill",
+		"executor_model": "claude-opus-4-6",
+		"timestamp": "2026-04-02T00:00:00Z",
+		"evals_run": [1, 2, 3],
+		"runs_per_configuration": 1
+	},
+	"runs": [
+		{
+			"eval_id": 1,
+			"eval_name": "axum-setup",
+			"configuration": "with_skill",
+			"run_number": 1,
+			"result": {
+				"pass_rate": 1.0,
+				"passed": 6,
+				"failed": 0,
+				"total": 6,
+				"time_seconds": 60.1,
+				"tokens": 32168,
+				"tool_calls": 4,
+				"errors": 0
+			},
+			"expectations": [
+				{
+					"text": "Cargo.toml includes yauth with correct features",
+					"passed": true,
+					"evidence": "Correct features"
+				},
+				{
+					"text": "Creates database pool and runs migrations",
+					"passed": true,
+					"evidence": "Correct API calls"
+				},
+				{
+					"text": "YAuthBuilder with all three plugin configs",
+					"passed": true,
+					"evidence": "All three with_* methods"
+				},
+				{
+					"text": "Auth routes nested under /api/auth",
+					"passed": true,
+					"evidence": ".nest() correct"
+				},
+				{
+					"text": "Protected /api/me with auth_middleware + Extension<AuthUser>",
+					"passed": true,
+					"evidence": "Correct middleware and extraction"
+				},
+				{
+					"text": "YAuthConfig with base_url, session settings, trusted_origins",
+					"passed": true,
+					"evidence": "All fields correct"
+				}
+			]
+		},
+		{
+			"eval_id": 1,
+			"eval_name": "axum-setup",
+			"configuration": "without_skill",
+			"run_number": 1,
+			"result": {
+				"pass_rate": 0.33,
+				"passed": 2,
+				"failed": 4,
+				"total": 6,
+				"time_seconds": 57.5,
+				"tokens": 19229,
+				"tool_calls": 2,
+				"errors": 0
+			},
+			"expectations": [
+				{
+					"text": "Cargo.toml includes yauth with correct features",
+					"passed": false,
+					"evidence": "Adds nonexistent yauth-entity and yauth-migration crates"
+				},
+				{
+					"text": "Creates database pool and runs migrations",
+					"passed": false,
+					"evidence": "Fabricated API: yauth::create_pool(&config), yauth_migration::run_migrations()"
+				},
+				{
+					"text": "YAuthBuilder with all three plugin configs",
+					"passed": true,
+					"evidence": "Builder pattern roughly correct"
+				},
+				{
+					"text": "Auth routes nested under /api/auth",
+					"passed": true,
+					"evidence": ".nest() correct"
+				},
+				{
+					"text": "Protected /api/me with auth_middleware + Extension<AuthUser>",
+					"passed": false,
+					"evidence": "No auth_middleware applied, wrong import path for AuthUser"
+				},
+				{
+					"text": "YAuthConfig with base_url, session settings, trusted_origins",
+					"passed": false,
+					"evidence": "Fabricated config with database_url field, missing actual fields"
+				}
+			]
+		},
+		{
+			"eval_id": 2,
+			"eval_name": "vue-frontend",
+			"configuration": "with_skill",
+			"run_number": 1,
+			"result": {
+				"pass_rate": 1.0,
+				"passed": 6,
+				"failed": 0,
+				"total": 6,
+				"time_seconds": 51.2,
+				"tokens": 29682,
+				"tool_calls": 4,
+				"errors": 0
+			},
+			"expectations": [
+				{
+					"text": "main.ts installs YAuthPlugin with baseUrl",
+					"passed": true,
+					"evidence": "YAuthPlugin installed correctly"
+				},
+				{
+					"text": "LoginPage uses LoginForm with onMfaRequired",
+					"passed": true,
+					"evidence": "LoginForm component used"
+				},
+				{
+					"text": "MfaChallenge shown when MFA required",
+					"passed": true,
+					"evidence": "MfaChallenge conditionally rendered"
+				},
+				{
+					"text": "RegisterPage uses RegisterForm",
+					"passed": true,
+					"evidence": "RegisterForm used"
+				},
+				{
+					"text": "DashboardPage uses useSession/useYAuth",
+					"passed": true,
+					"evidence": "useSession() composable used"
+				},
+				{
+					"text": "Vue Router configured",
+					"passed": true,
+					"evidence": "Routes correct"
+				}
+			]
+		},
+		{
+			"eval_id": 2,
+			"eval_name": "vue-frontend",
+			"configuration": "without_skill",
+			"run_number": 1,
+			"result": {
+				"pass_rate": 0.17,
+				"passed": 1,
+				"failed": 5,
+				"total": 6,
+				"time_seconds": 79.1,
+				"tokens": 23140,
+				"tool_calls": 2,
+				"errors": 0
+			},
+			"expectations": [
+				{
+					"text": "main.ts installs YAuthPlugin with baseUrl",
+					"passed": false,
+					"evidence": "No YAuthPlugin — manual client setup with wrong property name (baseURL vs baseUrl)"
+				},
+				{
+					"text": "LoginPage uses LoginForm with onMfaRequired",
+					"passed": false,
+					"evidence": "Custom form from scratch, wrong API calls"
+				},
+				{
+					"text": "MfaChallenge shown when MFA required",
+					"passed": false,
+					"evidence": "Custom inline MFA, wrong response shape (mfa_token vs pendingSessionId)"
+				},
+				{
+					"text": "RegisterPage uses RegisterForm",
+					"passed": false,
+					"evidence": "Custom form, no RegisterForm component"
+				},
+				{
+					"text": "DashboardPage uses useSession/useYAuth",
+					"passed": false,
+					"evidence": "Custom composable, references nonexistent user.mfa_enabled field"
+				},
+				{
+					"text": "Vue Router configured",
+					"passed": true,
+					"evidence": "Routes correct"
+				}
+			]
+		},
+		{
+			"eval_id": 3,
+			"eval_name": "utoipa-orval",
+			"configuration": "with_skill",
+			"run_number": 1,
+			"result": {
+				"pass_rate": 1.0,
+				"passed": 5,
+				"failed": 0,
+				"total": 5,
+				"time_seconds": 70.9,
+				"tokens": 30143,
+				"tool_calls": 4,
+				"errors": 0
+			},
+			"expectations": [
+				{
+					"text": "Recommends keeping specs separate",
+					"passed": true,
+					"evidence": "Explicitly recommends separate specs"
+				},
+				{
+					"text": "Shows @yackey-labs/yauth-client alongside orval client",
+					"passed": true,
+					"evidence": "Side-by-side usage"
+				},
+				{
+					"text": "Explains credentials: include for session cookies",
+					"passed": true,
+					"evidence": "Full mutator example"
+				},
+				{
+					"text": "Does NOT suggest merging specs",
+					"passed": true,
+					"evidence": "Recommends separate"
+				},
+				{
+					"text": "Both clients coexist under /api/auth",
+					"passed": true,
+					"evidence": "Route separation explained"
+				}
+			]
+		},
+		{
+			"eval_id": 3,
+			"eval_name": "utoipa-orval",
+			"configuration": "without_skill",
+			"run_number": 1,
+			"result": {
+				"pass_rate": 0.2,
+				"passed": 1,
+				"failed": 4,
+				"total": 5,
+				"time_seconds": 65.4,
+				"tokens": 19667,
+				"tool_calls": 2,
+				"errors": 0
+			},
+			"expectations": [
+				{
+					"text": "Recommends keeping specs separate",
+					"passed": false,
+					"evidence": "OPPOSITE — recommends merging specs"
+				},
+				{
+					"text": "Shows @yackey-labs/yauth-client alongside orval client",
+					"passed": false,
+					"evidence": "Never mentions @yackey-labs/yauth-client"
+				},
+				{
+					"text": "Explains credentials: include for session cookies",
+					"passed": true,
+					"evidence": "Correct credentials: include"
+				},
+				{
+					"text": "Does NOT suggest merging specs",
+					"passed": false,
+					"evidence": "Explicitly suggests merging, fabricates yauth::openapi_spec()"
+				},
+				{
+					"text": "Both clients coexist under /api/auth",
+					"passed": false,
+					"evidence": "Single merged client approach"
+				}
+			]
+		}
+	],
+	"run_summary": {
+		"with_skill": {
+			"pass_rate": { "mean": 1.0, "stddev": 0.0, "min": 1.0, "max": 1.0 },
+			"time_seconds": { "mean": 60.7, "stddev": 8.1, "min": 51.2, "max": 70.9 },
+			"tokens": { "mean": 30664, "stddev": 1030, "min": 29682, "max": 32168 }
+		},
+		"without_skill": {
+			"pass_rate": { "mean": 0.23, "stddev": 0.07, "min": 0.17, "max": 0.33 },
+			"time_seconds": { "mean": 67.3, "stddev": 8.9, "min": 57.5, "max": 79.1 },
+			"tokens": { "mean": 20679, "stddev": 1730, "min": 19229, "max": 23140 }
+		},
+		"delta": {
+			"pass_rate": "+0.77",
+			"time_seconds": "-6.6",
+			"tokens": "+9985"
+		}
+	},
+	"notes": [
+		"MASSIVE correctness gap: with-skill 100% vs without-skill 23% pass rate",
+		"Without-skill agents fabricate APIs that don't exist (yauth-entity crate, yauth::create_pool(&config), yauth_migration::run_migrations)",
+		"Without-skill Vue eval doesn't use ANY pre-built components — writes everything from scratch with wrong API calls",
+		"Without-skill utoipa/orval eval recommends the OPPOSITE approach (merging specs) and fabricates yauth::openapi_spec()",
+		"With-skill agents use fewer tokens on average but produce correct output — baseline uses less tokens but all wrong",
+		"The skill is essential for correctness when the source code is not locally available (the typical consumer scenario)"
+	]
+}

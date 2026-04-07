@@ -1,0 +1,35 @@
+{
+	"expectations": [
+		{
+			"text": "Recommends keeping yauth's OpenAPI spec separate from the app's spec",
+			"passed": true,
+			"evidence": "Lines 87-91: 'Do not merge yauth's openapi.json into your app's spec. They are separate concerns.'"
+		},
+		{
+			"text": "Shows how to use @yackey-labs/yauth-client alongside the app's orval-generated client",
+			"passed": true,
+			"evidence": "Lines 109-122: createYAuthClient alongside app's generated client"
+		},
+		{
+			"text": "Explains that credentials: include on fetch requests automatically carries the session cookie",
+			"passed": true,
+			"evidence": "Lines 131-149: Custom mutator with credentials: 'include' and detailed explanation"
+		},
+		{
+			"text": "Does NOT suggest merging yauth routes into the app's openapi.json",
+			"passed": true,
+			"evidence": "Explicitly says 'Do not merge' and 'Your existing utoipa + orval pipeline stays exactly as-is. No changes needed.'"
+		},
+		{
+			"text": "Mentions that both clients coexist since yauth routes are under /api/auth",
+			"passed": true,
+			"evidence": "Line 265: 'The two clients coexist naturally. They share the same session cookie because they hit the same origin.'"
+		}
+	],
+	"summary": {
+		"passed": 5,
+		"failed": 0,
+		"total": 5,
+		"pass_rate": 1.0
+	}
+}

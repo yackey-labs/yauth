@@ -1,0 +1,27 @@
+{
+	"eval_id": 3,
+	"eval_name": "utoipa-orval",
+	"prompt": "My Axum app already uses utoipa to generate an openapi.json and orval to generate a TypeScript client from it. I want to add yauth for authentication but I don't want to break my existing client generation pipeline. How should I set this up? I also need my app's API calls to automatically carry the session cookie.",
+	"assertions": [
+		{
+			"text": "Recommends keeping yauth's OpenAPI spec separate from the app's spec",
+			"type": "content_check"
+		},
+		{
+			"text": "Shows how to use @yackey-labs/yauth-client alongside the app's orval-generated client",
+			"type": "content_check"
+		},
+		{
+			"text": "Explains that credentials: include on fetch requests automatically carries the session cookie",
+			"type": "content_check"
+		},
+		{
+			"text": "Does NOT suggest merging yauth routes into the app's openapi.json",
+			"type": "negative_check"
+		},
+		{
+			"text": "Mentions that both clients coexist since yauth routes are under /api/auth",
+			"type": "content_check"
+		}
+	]
+}

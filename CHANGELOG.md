@@ -1,3 +1,9 @@
+## 0.8.6 (2026-04-07)
+
+### Fixes
+
+- add missing core tables to migration generator + README improvements
+
 ## 0.8.5 (2026-04-07)
 
 ### Fixes

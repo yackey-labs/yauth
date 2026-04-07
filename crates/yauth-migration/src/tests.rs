@@ -5,12 +5,15 @@ use super::*;
 // -- Basic structure tests --
 
 #[test]
-fn core_schema_has_three_tables() {
+fn core_schema_has_six_tables() {
     let tables = core_schema();
-    assert_eq!(tables.len(), 3);
+    assert_eq!(tables.len(), 6);
     assert_eq!(tables[0].name, "yauth_users");
     assert_eq!(tables[1].name, "yauth_sessions");
     assert_eq!(tables[2].name, "yauth_audit_log");
+    assert_eq!(tables[3].name, "yauth_challenges");
+    assert_eq!(tables[4].name, "yauth_rate_limits");
+    assert_eq!(tables[5].name, "yauth_revocations");
 }
 
 #[test]
@@ -172,6 +175,9 @@ fn generated_ddl_has_all_tables() {
         "yauth_users",
         "yauth_sessions",
         "yauth_audit_log",
+        "yauth_challenges",
+        "yauth_rate_limits",
+        "yauth_revocations",
         "yauth_passwords",
         "yauth_email_verifications",
         "yauth_password_resets",
@@ -289,7 +295,7 @@ fn sqlite_ddl_has_all_tables() {
     let ddl = generate_sqlite_ddl(&schema);
 
     let create_count = ddl.matches("CREATE TABLE IF NOT EXISTS").count();
-    assert_eq!(create_count, 23);
+    assert_eq!(create_count, 26);
 }
 
 #[test]
@@ -322,6 +328,9 @@ fn mysql_ddl_core_tables() {
     assert!(ddl.contains("CREATE TABLE IF NOT EXISTS `yauth_users`"));
     assert!(ddl.contains("CREATE TABLE IF NOT EXISTS `yauth_sessions`"));
     assert!(ddl.contains("CREATE TABLE IF NOT EXISTS `yauth_audit_log`"));
+    assert!(ddl.contains("CREATE TABLE IF NOT EXISTS `yauth_challenges`"));
+    assert!(ddl.contains("CREATE TABLE IF NOT EXISTS `yauth_rate_limits`"));
+    assert!(ddl.contains("CREATE TABLE IF NOT EXISTS `yauth_revocations`"));
 }
 
 #[test]
@@ -419,7 +428,7 @@ fn mysql_ddl_has_all_tables() {
     let ddl = generate_mysql_ddl(&schema);
 
     let create_count = ddl.matches("CREATE TABLE IF NOT EXISTS").count();
-    assert_eq!(create_count, 23);
+    assert_eq!(create_count, 26);
 }
 
 // -- Plugin lookup tests --

@@ -308,10 +308,24 @@ mod tests {
         let to = collect_schema(vec![core_schema()]).unwrap();
         let changes = schema_diff(&from, &to);
 
-        assert_eq!(changes.len(), 3);
-        assert!(matches!(&changes[0], SchemaChange::CreateTable(t) if t.name == "yauth_users"));
-        assert!(matches!(&changes[1], SchemaChange::CreateTable(t) if t.name == "yauth_sessions"));
-        assert!(matches!(&changes[2], SchemaChange::CreateTable(t) if t.name == "yauth_audit_log"));
+        assert_eq!(changes.len(), 6);
+        let table_names: Vec<&str> = changes
+            .iter()
+            .filter_map(|c| match c {
+                SchemaChange::CreateTable(t) => Some(t.name.as_str()),
+                _ => None,
+            })
+            .collect();
+        for expected in &[
+            "yauth_users",
+            "yauth_sessions",
+            "yauth_audit_log",
+            "yauth_challenges",
+            "yauth_rate_limits",
+            "yauth_revocations",
+        ] {
+            assert!(table_names.contains(expected), "Missing table: {expected}");
+        }
     }
 
     #[test]

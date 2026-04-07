@@ -402,6 +402,8 @@ let yauth = YAuthBuilder::new(backend, config).build().await?;
 
 #### Native SQLite (diesel)
 
+> Requires `libsqlite3-dev` (Debian/Ubuntu) or `sqlite3` (macOS Homebrew) system package.
+
 ```bash
 cargo add yauth --features email-password,diesel-sqlite-backend --no-default-features
 ```
@@ -460,7 +462,7 @@ let backend = SqlxSqliteBackend::new("sqlite:yauth.db").await?;
 let yauth = YAuthBuilder::new(backend, config).build().await?;
 ```
 
-> Requires `DATABASE_URL` at compile time. Use `cargo yauth init --orm sqlx --dialect sqlite` to generate migration SQL first.
+> Requires `DATABASE_URL` at compile time. Use an **absolute path** for SQLite: `DATABASE_URL=sqlite:/absolute/path/to/yauth.db cargo build`. Use `cargo yauth init --orm sqlx --dialect sqlite` to generate migration SQL first.
 
 #### In-Memory (no database)
 

@@ -164,7 +164,10 @@ async fn main() {
     };
 
     let yauth = YAuthBuilder::new(backend, config)
-        .with_email_password(EmailPasswordConfig::default())
+        .with_email_password(EmailPasswordConfig {
+            require_email_verification: false,
+            ..Default::default()
+        })
         .build()
         .await
         .expect("Failed to build YAuth");

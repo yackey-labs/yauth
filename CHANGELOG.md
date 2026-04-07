@@ -1,3 +1,9 @@
+## 0.8.1 (2026-04-07)
+
+### Fixes
+
+- recommend cargo binstall for CLI installation in README
+
 ## 0.8.0 (2026-04-06)
 
 ### Breaking Changes

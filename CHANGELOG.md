@@ -1,3 +1,9 @@
+## 0.8.5 (2026-04-07)
+
+### Fixes
+
+- disable email verification in Quick Start example
+
 ## 0.8.4 (2026-04-07)
 
 ### Fixes

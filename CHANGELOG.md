@@ -1,3 +1,9 @@
+## 0.8.3 (2026-04-07)
+
+### Fixes
+
+- document sqlx compile-time DATABASE_URL requirement in README
+
 ## 0.8.2 (2026-04-07)
 
 ### Fixes

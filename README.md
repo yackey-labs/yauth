@@ -427,7 +427,7 @@ let backend = SqlxPgBackend::new("postgres://user:pass@localhost/mydb").await?;
 let yauth = YAuthBuilder::new(backend, config).build().await?;
 ```
 
-Uses `query!()` macros for compile-time SQL checking. Compiles offline via `.sqlx/` cache.
+> **sqlx backends use `query!()` macros** — you must set `DATABASE_URL` at compile time and run migrations first. Use `cargo yauth init --orm sqlx --dialect postgres` to generate migration SQL, apply it, then build with `DATABASE_URL=postgres://... cargo build`.
 
 #### MySQL (sqlx)
 
@@ -442,6 +442,8 @@ let backend = SqlxMysqlBackend::new("mysql://user:pass@localhost/mydb").await?;
 let yauth = YAuthBuilder::new(backend, config).build().await?;
 ```
 
+> Requires `DATABASE_URL` at compile time. Use `cargo yauth init --orm sqlx --dialect mysql` to generate migration SQL first.
+
 #### SQLite (sqlx)
 
 ```bash
@@ -454,6 +456,8 @@ use yauth::backends::sqlx_sqlite::SqlxSqliteBackend;
 let backend = SqlxSqliteBackend::new("sqlite:yauth.db").await?;
 let yauth = YAuthBuilder::new(backend, config).build().await?;
 ```
+
+> Requires `DATABASE_URL` at compile time. Use `cargo yauth init --orm sqlx --dialect sqlite` to generate migration SQL first.
 
 #### In-Memory (no database)
 

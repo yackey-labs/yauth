@@ -1,3 +1,9 @@
+## 0.8.2 (2026-04-07)
+
+### Fixes
+
+- revert cargo binstall recommendation (no prebuilt binaries available) (#41)
+
 ## 0.8.1 (2026-04-07)
 
 ### Fixes

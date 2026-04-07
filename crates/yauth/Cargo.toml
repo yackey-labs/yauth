@@ -63,8 +63,8 @@ futures-util = { version = "0.3", optional = true }
 # sqlx (optional — pulled in by sqlx-*-backend features)
 sqlx = { workspace = true, optional = true }
 
-yauth-migration = { path = "../yauth-migration" }
-yauth-entity = { path = "../yauth-entity" }
+yauth-migration = { path = "../yauth-migration", version = "0.8.0" }
+yauth-entity = { path = "../yauth-entity", version = "0.8.0" }
 
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -111,7 +111,7 @@ opentelemetry-http = { workspace = true, optional = true }
 log = "0.4"
 
 [dev-dependencies]
-yauth-entity = { path = "../yauth-entity" }
+yauth-entity = { path = "../yauth-entity", version = "0.8.0" }
 env_logger = "0.11"
 totp-rs = { workspace = true }
 uuid = { workspace = true }

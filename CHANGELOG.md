@@ -1,3 +1,16 @@
+## 0.8.0 (2026-04-06)
+
+### Breaking Changes
+
+- multi-ORM backend suite + migration CLI (#39)
+
+### Fixes
+
+- remove accidentally committed skill workspace files, add to .gitignore
+- remove unused raw ORM option from migration CLI
+- add version specifiers to inter-crate path dependencies for crates.io publishing
+- add inter-crate dependency versions to knope versioned_files
+
 ## 0.7.1 (2026-04-05)
 
 ### Features

@@ -89,7 +89,7 @@ curl -X POST http://localhost:3000/api/auth/login \
 
 ```bash
 # Install the CLI
-cargo install cargo-yauth
+cargo binstall cargo-yauth  # or: cargo install cargo-yauth
 
 # Initialize yauth in your project (creates yauth.toml + migration files)
 cargo yauth init --orm diesel --dialect postgres --plugins email-password,passkey

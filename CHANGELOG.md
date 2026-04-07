@@ -1,3 +1,9 @@
+## 0.8.4 (2026-04-07)
+
+### Fixes
+
+- improve 30-second quickstart experience
+
 ## 0.8.3 (2026-04-07)
 
 ### Fixes

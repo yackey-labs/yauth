@@ -6,3 +6,5 @@ target/
 .env.local
 *.log
 .DS_Store
+yauth-skill-workspace/
+yauth-skill/

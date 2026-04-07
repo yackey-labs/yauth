@@ -315,10 +315,16 @@ async fn register(
         )
         .await;
 
+    let message = if ep_config.require_email_verification {
+        "Account created. Please check your email to verify your address."
+    } else {
+        "Account created successfully."
+    };
+
     Ok((
         StatusCode::CREATED,
         Json(MessageResponse {
-            message: "Account created. Please check your email to verify your address.".to_string(),
+            message: message.to_string(),
         }),
     ))
 }

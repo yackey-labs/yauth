@@ -42,7 +42,7 @@ Every feature is behind a **feature flag** — enable only what you need.
 No database needed. Add the dependencies, then copy, paste, run:
 
 ```bash
-cargo add yauth --features memory-backend,email-password
+cargo add yauth --no-default-features --features memory-backend,email-password
 cargo add axum
 cargo add tokio --features full
 ```
@@ -75,12 +75,12 @@ async fn main() {
 # Register
 curl -X POST http://localhost:3000/api/auth/register \
   -H 'Content-Type: application/json' \
-  -d '{"email":"test@example.com","password":"MyPassword123!"}'
+  -d '{"email":"test@example.com","password":"Xk9#mP2$vL5nQ8wR"}'
 
 # Login
 curl -X POST http://localhost:3000/api/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"email":"test@example.com","password":"MyPassword123!"}'
+  -d '{"email":"test@example.com","password":"Xk9#mP2$vL5nQ8wR"}'
 ```
 
 ## Migration CLI

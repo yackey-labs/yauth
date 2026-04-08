@@ -1,3 +1,9 @@
+## 0.8.9 (2026-04-08)
+
+### Fixes
+
+- remove dead code from seaorm_common, fix session cleanup error handling
+
 ## 0.8.8 (2026-04-08)
 
 ### Features

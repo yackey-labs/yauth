@@ -33,6 +33,9 @@ pub use mysql::{generate_mysql_ddl, generate_mysql_drop, generate_mysql_drops};
 mod diesel_schema;
 pub use diesel_schema::generate_diesel_schema;
 
+mod seaorm_entities;
+pub use seaorm_entities::generate_seaorm_entities;
+
 mod tracking;
 pub use tracking::schema_hash;
 

@@ -70,3 +70,6 @@ async-trait = "0.1"
 
 # sqlx (optional — pulled in by sqlx-*-backend features)
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "chrono", "uuid", "json", "derive", "macros"] }
+
+# SeaORM (optional — pulled in by seaorm-*-backend features)
+sea-orm = { version = "=2.0.0-rc.37", default-features = false, features = ["macros", "with-chrono", "with-uuid", "with-json", "runtime-tokio-rustls"] }

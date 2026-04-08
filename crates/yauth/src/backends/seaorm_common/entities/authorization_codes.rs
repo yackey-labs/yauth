@@ -1,0 +1,69 @@
+//! SeaORM entity for `yauth_authorization_codes`.
+
+use sea_orm::entity::prelude::*;
+use sea_orm::prelude::DateTimeWithTimeZone;
+use uuid::Uuid;
+
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+#[sea_orm(table_name = "yauth_authorization_codes")]
+pub struct Model {
+    #[sea_orm(primary_key, auto_increment = false, column_type = "Uuid")]
+    pub id: Uuid,
+    #[sea_orm(column_type = "Text")]
+    pub code_hash: String,
+    #[sea_orm(column_type = "Text")]
+    pub client_id: String,
+    #[sea_orm(column_type = "Uuid")]
+    pub user_id: Uuid,
+    #[sea_orm(column_type = "JsonBinary", nullable)]
+    pub scopes: Option<serde_json::Value>,
+    #[sea_orm(column_type = "Text")]
+    pub redirect_uri: String,
+    #[sea_orm(column_type = "Text")]
+    pub code_challenge: String,
+    #[sea_orm(column_type = "Text")]
+    pub code_challenge_method: String,
+    pub expires_at: DateTimeWithTimeZone,
+    pub used: bool,
+    #[sea_orm(column_type = "Text", nullable)]
+    pub nonce: Option<String>,
+    pub created_at: DateTimeWithTimeZone,
+}
+
+#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+pub enum Relation {
+    #[sea_orm(
+        belongs_to = "super::users::Entity",
+        from = "Column::UserId",
+        to = "super::users::Column::Id",
+        on_delete = "Cascade"
+    )]
+    User,
+}
+
+impl Related<super::users::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::User.def()
+    }
+}
+
+impl ActiveModelBehavior for ActiveModel {}
+
+impl Model {
+    pub fn into_domain(self) -> crate::domain::AuthorizationCode {
+        crate::domain::AuthorizationCode {
+            id: self.id,
+            code_hash: self.code_hash,
+            client_id: self.client_id,
+            user_id: self.user_id,
+            scopes: self.scopes,
+            redirect_uri: self.redirect_uri,
+            code_challenge: self.code_challenge,
+            code_challenge_method: self.code_challenge_method,
+            expires_at: self.expires_at.naive_utc(),
+            used: self.used,
+            nonce: self.nonce,
+            created_at: self.created_at.naive_utc(),
+        }
+    }
+}

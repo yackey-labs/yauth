@@ -19,6 +19,9 @@ diesel-sqlite-backend = ["dep:diesel", "diesel/sqlite", "dep:diesel-async-crate"
 sqlx-pg-backend = ["dep:sqlx", "sqlx/postgres"]
 sqlx-mysql-backend = ["dep:sqlx", "sqlx/mysql"]
 sqlx-sqlite-backend = ["dep:sqlx", "sqlx/sqlite"]
+seaorm-pg-backend = ["dep:sea-orm", "sea-orm/sqlx-postgres"]
+seaorm-mysql-backend = ["dep:sea-orm", "sea-orm/sqlx-mysql"]
+seaorm-sqlite-backend = ["dep:sea-orm", "sea-orm/sqlx-sqlite"]
 memory-backend = []
 email-password = []
 passkey = ["dep:webauthn-rs"]
@@ -43,7 +46,7 @@ full = ["email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic
 # NOTE: diesel-libsql-backend is excluded because libsql-ffi bundles its own sqlite3.c,
 # which produces duplicate symbols with libsqlite3-sys (used by diesel-sqlite + sqlx-sqlite).
 # Test diesel-libsql separately: --features full,diesel-libsql-backend
-all-backends = ["diesel-pg-backend", "diesel-mysql-backend", "diesel-sqlite-backend", "sqlx-pg-backend", "sqlx-mysql-backend", "sqlx-sqlite-backend", "memory-backend", "redis"]
+all-backends = ["diesel-pg-backend", "diesel-mysql-backend", "diesel-sqlite-backend", "sqlx-pg-backend", "sqlx-mysql-backend", "sqlx-sqlite-backend", "seaorm-pg-backend", "memory-backend", "redis"]
 
 [dependencies]
 axum = { workspace = true }
@@ -62,6 +65,9 @@ futures-util = { version = "0.3", optional = true }
 
 # sqlx (optional — pulled in by sqlx-*-backend features)
 sqlx = { workspace = true, optional = true }
+
+# SeaORM (optional — pulled in by seaorm-*-backend features)
+sea-orm = { workspace = true, optional = true }
 
 yauth-migration = { path = "../yauth-migration", version = "0.8.6" }
 yauth-entity = { path = "../yauth-entity", version = "0.8.6" }

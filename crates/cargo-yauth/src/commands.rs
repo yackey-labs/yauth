@@ -28,7 +28,7 @@ pub fn init(
     // Resolve values: use flags if provided, otherwise prompt interactively
     let orm_value = match orm {
         Some(v) => v,
-        None => prompt_select("ORM", &["diesel", "sqlx"])?,
+        None => prompt_select("ORM", &["diesel", "sqlx", "seaorm"])?,
     };
 
     let dialect_value = match dialect {
@@ -347,6 +347,43 @@ fn find_existing_file(
                     let name = entry.file_name().to_string_lossy().to_string();
                     if name.ends_with(&format!("_{suffix}")) {
                         return Some(entry.path());
+                    }
+                }
+            }
+            None
+        }
+        yauth_migration::Orm::SeaOrm => {
+            // Generated: <migrations_dir>/m<timestamp>_<name>/<file>  (same as diesel but with m prefix)
+            // Also handles entities/ subdirectory files
+            let file_name = generated_path.file_name()?;
+            let parent = generated_path.parent()?;
+            let parent_name = parent.file_name()?.to_string_lossy();
+
+            // Handle entities/ subdirectory
+            if parent_name == "entities" {
+                let entities_dir = migrations_dir.join("entities");
+                let candidate = entities_dir.join(file_name);
+                if candidate.exists() {
+                    return Some(candidate);
+                }
+                return None;
+            }
+
+            // Handle migration directories: m<timestamp>_<name>/<file>
+            let suffix = parent_name
+                .find('_')
+                .map(|i| &parent_name[i + 1..])
+                .unwrap_or(&parent_name);
+
+            for entry in std::fs::read_dir(migrations_dir).ok()? {
+                let entry = entry.ok()?;
+                if entry.file_type().ok()?.is_dir() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if name.ends_with(&format!("_{suffix}")) {
+                        let candidate = entry.path().join(file_name);
+                        if candidate.exists() {
+                            return Some(candidate);
+                        }
                     }
                 }
             }

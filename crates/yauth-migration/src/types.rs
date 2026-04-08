@@ -36,6 +36,7 @@ impl std::str::FromStr for Dialect {
 pub enum Orm {
     Diesel,
     Sqlx,
+    SeaOrm,
 }
 
 impl std::fmt::Display for Orm {
@@ -43,6 +44,7 @@ impl std::fmt::Display for Orm {
         match self {
             Orm::Diesel => write!(f, "diesel"),
             Orm::Sqlx => write!(f, "sqlx"),
+            Orm::SeaOrm => write!(f, "seaorm"),
         }
     }
 }
@@ -53,6 +55,7 @@ impl std::str::FromStr for Orm {
         match s.to_lowercase().as_str() {
             "diesel" => Ok(Orm::Diesel),
             "sqlx" => Ok(Orm::Sqlx),
+            "seaorm" | "sea-orm" | "sea_orm" => Ok(Orm::SeaOrm),
             _ => Err(format!("unknown orm: '{s}'")),
         }
     }

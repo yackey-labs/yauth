@@ -87,6 +87,9 @@ static SQLX_MYSQL_REPOS: OnceCell<Option<Repositories>> = OnceCell::const_new();
 #[cfg(feature = "sqlx-sqlite-backend")]
 static SQLX_SQLITE_REPOS: OnceCell<Option<Repositories>> = OnceCell::const_new();
 
+#[cfg(feature = "seaorm-pg-backend")]
+static SEAORM_PG_REPOS: OnceCell<Option<Repositories>> = OnceCell::const_new();
+
 #[cfg(feature = "diesel-pg-backend")]
 async fn shared_pg_repos() -> Option<Repositories> {
     PG_REPOS
@@ -282,6 +285,37 @@ async fn shared_sqlx_sqlite_repos() -> Option<Repositories> {
         .clone()
 }
 
+#[cfg(feature = "seaorm-pg-backend")]
+async fn shared_seaorm_pg_repos() -> Option<Repositories> {
+    SEAORM_PG_REPOS
+        .get_or_init(|| async {
+            let url = match std::env::var("SEAORM_PG_DATABASE_URL")
+                .or_else(|_| std::env::var("DATABASE_URL"))
+            {
+                Ok(u) => u,
+                Err(_) => return None,
+            };
+            use yauth::backends::seaorm_pg::SeaOrmPgBackend;
+            match SeaOrmPgBackend::new(&url).await {
+                Ok(backend) => {
+                    // SeaORM migrate() validates schema — tables must already exist
+                    // (created by the diesel_pg backend's migration which runs first).
+                    // If validate fails, try anyway — tables may exist from another backend.
+                    let _ = backend
+                        .migrate(&EnabledFeatures::from_compile_flags())
+                        .await;
+                    Some(backend.repositories())
+                }
+                Err(e) => {
+                    eprintln!("seaorm-pg backend creation failed: {e}, skipping");
+                    None
+                }
+            }
+        })
+        .await
+        .clone()
+}
+
 async fn test_backends() -> Vec<(&'static str, Repositories)> {
     helpers::otel::ensure_init();
     let _span = helpers::otel::HelperSpan::new("test_backends");
@@ -356,6 +390,12 @@ async fn test_backends() -> Vec<(&'static str, Repositories)> {
     #[cfg(feature = "sqlx-sqlite-backend")]
     if let Some(repos) = shared_sqlx_sqlite_repos().await {
         backends.push(("sqlx_sqlite", repos));
+    }
+
+    // SeaORM PostgreSQL -- shared, relies on existing schema (from diesel_pg migrations)
+    #[cfg(feature = "seaorm-pg-backend")]
+    if let Some(repos) = shared_seaorm_pg_repos().await {
+        backends.push(("seaorm_pg", repos));
     }
 
     backends

@@ -1,3 +1,9 @@
+## 0.8.10 (2026-04-08)
+
+### Features
+
+- add Toasty backends in separate yauth-toasty crate (Milestone 3)
+
 ## 0.8.9 (2026-04-08)
 
 ### Fixes

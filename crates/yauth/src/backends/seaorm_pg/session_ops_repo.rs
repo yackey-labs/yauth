@@ -63,12 +63,12 @@ impl SessionOpsRepository for SeaOrmSessionOpsRepo {
                 Some(s) => {
                     let now = Utc::now().fixed_offset();
                     if s.expires_at < now {
-                        // Expired -- clean up
+                        // Expired -- clean up (best-effort, don't fail the read)
                         sessions::Entity::delete_many()
                             .filter(sessions::Column::Id.eq(s.id))
                             .exec(&self.db)
                             .await
-                            .map_err(sea_err)?;
+                            .ok();
                         return Ok(None);
                     }
 

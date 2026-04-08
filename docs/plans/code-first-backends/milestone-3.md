@@ -4,6 +4,8 @@
 
 **Prerequisite:** Rust toolchain >= 1.94 (Toasty's MSRV).
 
+**STATUS: BLOCKED** — Toasty 0.3.0's `toasty-driver-sqlite` dev-dependency bundles `libsqlite3-sys` with `links = "sqlite3"`, which conflicts with sqlx's `libsqlite3-sys` at the Cargo workspace resolver level. This prevents adding `toasty` as a dependency in any workspace that also uses sqlx — even when only the PostgreSQL driver is enabled. The conflict is a Toasty packaging issue (dev-deps shouldn't affect downstream consumers' link resolution). Blocked until Toasty releases a fix or yauth moves Toasty support to a separate crate outside this workspace.
+
 ### What must work:
 1. A user can add `yauth = { features = ["full", "toasty-pg-backend"] }` (or `toasty-mysql-backend`, `toasty-sqlite-backend`) and get a working auth backend powered by Toasty
 2. `ToastyPgBackend::new(url)` connects to PostgreSQL via `toasty::Db::builder().table_name_prefix("yauth_").models(toasty::models!(...)).connect(url)`, validates schema, and returns all repository trait implementations

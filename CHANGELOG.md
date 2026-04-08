@@ -1,3 +1,25 @@
+## 0.8.11 (2026-04-08)
+
+### Features
+
+- add SeaORM PostgreSQL backend + entity generator (Milestone 1)
+- add SeaORM MySQL + SQLite backends (Milestone 2)
+- add Toasty backends in separate yauth-toasty crate (Milestone 3)
+- update README for SeaORM/Toasty + fix Toasty bulk deletes (M4)
+- add cargo yauth generate --orm toasty support
+
+### Fixes
+
+- revert cargo binstall recommendation (no prebuilt binaries available) (#41)
+- document sqlx compile-time DATABASE_URL requirement in README
+- improve 30-second quickstart experience
+- disable email verification in Quick Start example
+- add missing core tables to migration generator + README improvements
+- remove dead code from seaorm_common, fix session cleanup error handling
+- deduplicate Toasty repo implementations into shared common module
+- str_to_dt fallback uses MIN instead of now() for corrupt timestamps
+- wrap Toasty upserts in transactions + add schema validation
+
 ## 0.8.10 (2026-04-08)
 
 ### Features

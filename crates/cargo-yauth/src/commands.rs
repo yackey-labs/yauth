@@ -28,7 +28,7 @@ pub fn init(
     // Resolve values: use flags if provided, otherwise prompt interactively
     let orm_value = match orm {
         Some(v) => v,
-        None => prompt_select("ORM", &["diesel", "sqlx", "seaorm"])?,
+        None => prompt_select("ORM", &["diesel", "sqlx", "seaorm", "toasty"])?,
     };
 
     let dialect_value = match dialect {
@@ -386,6 +386,15 @@ fn find_existing_file(
                         }
                     }
                 }
+            }
+            None
+        }
+        yauth_migration::Orm::Toasty => {
+            // Generated: <migrations_dir>/models.rs (single file)
+            let file_name = generated_path.file_name()?;
+            let candidate = migrations_dir.join(file_name);
+            if candidate.exists() {
+                return Some(candidate);
             }
             None
         }

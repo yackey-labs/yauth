@@ -36,6 +36,9 @@ pub use diesel_schema::generate_diesel_schema;
 mod seaorm_entities;
 pub use seaorm_entities::generate_seaorm_entities;
 
+mod toasty_models;
+pub use toasty_models::generate_toasty_models;
+
 mod tracking;
 pub use tracking::schema_hash;
 

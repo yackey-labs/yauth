@@ -37,6 +37,7 @@ pub enum Orm {
     Diesel,
     Sqlx,
     SeaOrm,
+    Toasty,
 }
 
 impl std::fmt::Display for Orm {
@@ -45,6 +46,7 @@ impl std::fmt::Display for Orm {
             Orm::Diesel => write!(f, "diesel"),
             Orm::Sqlx => write!(f, "sqlx"),
             Orm::SeaOrm => write!(f, "seaorm"),
+            Orm::Toasty => write!(f, "toasty"),
         }
     }
 }
@@ -56,6 +58,7 @@ impl std::str::FromStr for Orm {
             "diesel" => Ok(Orm::Diesel),
             "sqlx" => Ok(Orm::Sqlx),
             "seaorm" | "sea-orm" | "sea_orm" => Ok(Orm::SeaOrm),
+            "toasty" => Ok(Orm::Toasty),
             _ => Err(format!("unknown orm: '{s}'")),
         }
     }

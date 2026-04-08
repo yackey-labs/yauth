@@ -73,6 +73,11 @@ pub fn generate_init(config: &YAuthConfig) -> Result<GeneratedMigration, Generat
         crate::Orm::SeaOrm => {
             generate_seaorm_files(migrations_dir, "yauth_init", &up_sql, &down_sql)?
         }
+        crate::Orm::Toasty => {
+            // Toasty uses push_schema() — no SQL migration files needed.
+            // Only generate model .rs files.
+            vec![]
+        }
     };
 
     // For diesel ORM, also generate a schema.rs file
@@ -88,6 +93,14 @@ pub fn generate_init(config: &YAuthConfig) -> Result<GeneratedMigration, Generat
         let entity_files = crate::generate_seaorm_entities(&schema, &config.migration.table_prefix);
         for (name, content) in entity_files {
             files.push((entities_dir.join(name), content));
+        }
+    }
+
+    // For Toasty, generate #[derive(toasty::Model)] files (no SQL needed)
+    if config.migration.orm == crate::Orm::Toasty {
+        let model_files = crate::generate_toasty_models(&schema, &config.migration.table_prefix);
+        for (name, content) in model_files {
+            files.push((migrations_dir.join(name), content));
         }
     }
 
@@ -128,6 +141,7 @@ pub fn generate_add_plugin(
         crate::Orm::SeaOrm => {
             generate_seaorm_files(migrations_dir, &migration_name, up_sql, down_sql)?
         }
+        crate::Orm::Toasty => vec![], // Toasty uses push_schema(), no migration files
     };
 
     Ok(GeneratedMigration {
@@ -164,6 +178,7 @@ pub fn generate_remove_plugin(
         crate::Orm::SeaOrm => {
             generate_seaorm_files(migrations_dir, &migration_name, up_sql, down_sql)?
         }
+        crate::Orm::Toasty => vec![], // Toasty uses push_schema(), no migration files
     };
 
     Ok(GeneratedMigration {

@@ -39,10 +39,17 @@ pub mod sqlx_sqlite;
     feature = "seaorm-mysql-backend",
     feature = "seaorm-sqlite-backend"
 ))]
+#[allow(dead_code)]
 pub(crate) mod seaorm_common;
 
 #[cfg(feature = "seaorm-pg-backend")]
 pub mod seaorm_pg;
+
+#[cfg(feature = "seaorm-mysql-backend")]
+pub mod seaorm_mysql;
+
+#[cfg(feature = "seaorm-sqlite-backend")]
+pub mod seaorm_sqlite;
 
 #[cfg(feature = "memory-backend")]
 pub mod memory;

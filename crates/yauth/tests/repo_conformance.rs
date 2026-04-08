@@ -90,6 +90,12 @@ static SQLX_SQLITE_REPOS: OnceCell<Option<Repositories>> = OnceCell::const_new()
 #[cfg(feature = "seaorm-pg-backend")]
 static SEAORM_PG_REPOS: OnceCell<Option<Repositories>> = OnceCell::const_new();
 
+#[cfg(feature = "seaorm-mysql-backend")]
+static SEAORM_MYSQL_REPOS: OnceCell<Option<Repositories>> = OnceCell::const_new();
+
+#[cfg(feature = "seaorm-sqlite-backend")]
+static SEAORM_SQLITE_REPOS: OnceCell<Option<Repositories>> = OnceCell::const_new();
+
 #[cfg(feature = "diesel-pg-backend")]
 async fn shared_pg_repos() -> Option<Repositories> {
     PG_REPOS
@@ -316,6 +322,58 @@ async fn shared_seaorm_pg_repos() -> Option<Repositories> {
         .clone()
 }
 
+#[cfg(feature = "seaorm-mysql-backend")]
+async fn shared_seaorm_mysql_repos() -> Option<Repositories> {
+    SEAORM_MYSQL_REPOS
+        .get_or_init(|| async {
+            let url = match std::env::var("SEAORM_MYSQL_DATABASE_URL")
+                .or_else(|_| std::env::var("MYSQL_DATABASE_URL"))
+            {
+                Ok(u) => u,
+                Err(_) => return None,
+            };
+            use yauth::backends::seaorm_mysql::SeaOrmMysqlBackend;
+            match SeaOrmMysqlBackend::new(&url).await {
+                Ok(backend) => {
+                    let _ = backend
+                        .migrate(&EnabledFeatures::from_compile_flags())
+                        .await;
+                    Some(backend.repositories())
+                }
+                Err(e) => {
+                    eprintln!("seaorm-mysql backend creation failed: {e}, skipping");
+                    None
+                }
+            }
+        })
+        .await
+        .clone()
+}
+
+#[cfg(feature = "seaorm-sqlite-backend")]
+async fn shared_seaorm_sqlite_repos() -> Option<Repositories> {
+    SEAORM_SQLITE_REPOS
+        .get_or_init(|| async {
+            use yauth::backends::seaorm_sqlite::SeaOrmSqliteBackend;
+            match SeaOrmSqliteBackend::new("sqlite::memory:").await {
+                Ok(backend) => {
+                    // Create all tables in the in-memory SQLite database
+                    if let Err(e) = backend.create_tables().await {
+                        eprintln!("seaorm-sqlite table creation failed: {e}, skipping");
+                        return None;
+                    }
+                    Some(backend.repositories())
+                }
+                Err(e) => {
+                    eprintln!("seaorm-sqlite backend creation failed: {e}, skipping");
+                    None
+                }
+            }
+        })
+        .await
+        .clone()
+}
+
 async fn test_backends() -> Vec<(&'static str, Repositories)> {
     helpers::otel::ensure_init();
     let _span = helpers::otel::HelperSpan::new("test_backends");
@@ -396,6 +454,18 @@ async fn test_backends() -> Vec<(&'static str, Repositories)> {
     #[cfg(feature = "seaorm-pg-backend")]
     if let Some(repos) = shared_seaorm_pg_repos().await {
         backends.push(("seaorm_pg", repos));
+    }
+
+    // SeaORM MySQL -- shared, relies on existing schema (from diesel_mysql migrations)
+    #[cfg(feature = "seaorm-mysql-backend")]
+    if let Some(repos) = shared_seaorm_mysql_repos().await {
+        backends.push(("seaorm_mysql", repos));
+    }
+
+    // SeaORM SQLite -- shared, in-memory
+    #[cfg(feature = "seaorm-sqlite-backend")]
+    if let Some(repos) = shared_seaorm_sqlite_repos().await {
+        backends.push(("seaorm_sqlite", repos));
     }
 
     backends

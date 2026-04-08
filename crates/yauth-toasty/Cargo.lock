@@ -4273,7 +4273,7 @@ dependencies = [
 
 [[package]]
 name = "yauth"
-version = "0.8.9"
+version = "0.8.10"
 dependencies = [
  "argon2",
  "axum",
@@ -4312,7 +4312,7 @@ dependencies = [
 
 [[package]]
 name = "yauth-entity"
-version = "0.8.9"
+version = "0.8.10"
 dependencies = [
  "chrono",
  "serde",
@@ -4322,7 +4322,7 @@ dependencies = [
 
 [[package]]
 name = "yauth-migration"
-version = "0.8.9"
+version = "0.8.10"
 dependencies = [
  "chrono",
  "hex",

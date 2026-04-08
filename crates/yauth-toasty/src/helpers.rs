@@ -20,7 +20,8 @@ pub(crate) fn opt_dt_to_str(dt: Option<NaiveDateTime>) -> Option<String> {
 pub(crate) fn str_to_dt(s: &str) -> NaiveDateTime {
     NaiveDateTime::parse_from_str(s, DT_FMT).unwrap_or_else(|e| {
         log::error!("Failed to parse datetime '{}': {}", s, e);
-        chrono::Utc::now().naive_utc()
+        // Use MIN so corrupt timestamps appear expired, not fresh
+        NaiveDateTime::MIN
     })
 }
 

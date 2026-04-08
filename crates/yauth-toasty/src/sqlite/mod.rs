@@ -31,6 +31,24 @@ impl ToastySqliteBackend {
         builder.connect(url).await
     }
 
+    /// Wrap an existing Toasty `Db` as a yauth backend.
+    ///
+    /// Use this when your app registers additional Toasty models (e.g., a
+    /// `Todo` model) alongside yauth's models in the same `Db`:
+    ///
+    /// ```ignore
+    /// let db = toasty::Db::builder()
+    ///     .table_name_prefix("yauth_")
+    ///     .models(toasty::models!(crate::*, yauth_toasty::*))
+    ///     .connect("sqlite://app.db")
+    ///     .await?;
+    ///
+    /// let backend = ToastySqliteBackend::from_db(db);
+    /// ```
+    pub fn from_db(db: Db) -> Self {
+        Self { db }
+    }
+
     /// Get a reference to the underlying Toasty `Db`.
     pub fn db(&self) -> &Db {
         &self.db

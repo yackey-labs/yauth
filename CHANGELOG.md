@@ -1,3 +1,9 @@
+## 0.8.7 (2026-04-08)
+
+### Features
+
+- add SeaORM PostgreSQL backend + entity generator (Milestone 1)
+
 ## 0.8.6 (2026-04-07)
 
 ### Fixes

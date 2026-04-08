@@ -14,7 +14,7 @@ name = "cargo-yauth"
 path = "src/main.rs"
 
 [dependencies]
-yauth-migration = { path = "../yauth-migration", version = "0.8.6" }
+yauth-migration = { path = "../yauth-migration", version = "0.8.7" }
 clap = { version = "4", features = ["derive"] }
 dialoguer = "0.11"
 similar = "2"

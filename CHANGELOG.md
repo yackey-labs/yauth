@@ -1,3 +1,9 @@
+## 0.8.8 (2026-04-08)
+
+### Features
+
+- add SeaORM MySQL + SQLite backends (Milestone 2)
+
 ## 0.8.7 (2026-04-08)
 
 ### Features

@@ -1,0 +1,68 @@
+[package]
+name = "yauth-toasty"
+version = "0.8.9"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/yackey-labs/yauth"
+description = "Toasty ORM backends for yauth authentication library (experimental)"
+publish = false
+
+[features]
+default = []
+postgresql = ["toasty/postgresql"]
+mysql = ["toasty/mysql"]
+sqlite = ["toasty/sqlite"]
+
+# Re-export yauth plugin features so users can enable them through yauth-toasty
+email-password = ["yauth/email-password"]
+passkey = ["yauth/passkey"]
+mfa = ["yauth/mfa"]
+oauth = ["yauth/oauth"]
+bearer = ["yauth/bearer"]
+api-key = ["yauth/api-key"]
+magic-link = ["yauth/magic-link"]
+admin = ["yauth/admin"]
+oauth2-server = ["yauth/oauth2-server"]
+account-lockout = ["yauth/account-lockout"]
+webhooks = ["yauth/webhooks"]
+full = [
+    "yauth/full",
+    "email-password",
+    "passkey",
+    "mfa",
+    "oauth",
+    "bearer",
+    "api-key",
+    "magic-link",
+    "admin",
+    "oauth2-server",
+    "account-lockout",
+    "webhooks",
+]
+
+[dependencies]
+yauth = { path = "../yauth", default-features = false }
+yauth-entity = { path = "../yauth-entity" }
+toasty = { version = "0.3.0", default-features = false }
+
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v7", "serde"] }
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+log = "0.4"
+
+# For raw SQL fallback (complex queries Toasty can't express)
+tokio-postgres = { version = "0.7", optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+uuid = { version = "1", features = ["v7"] }
+chrono = "0.4"
+serde_json = "1"
+yauth = { path = "../yauth", default-features = false, features = ["full"] }
+yauth-entity = { path = "../yauth-entity" }
+
+[[test]]
+name = "conformance"
+required-features = ["full"]

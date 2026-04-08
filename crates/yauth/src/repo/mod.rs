@@ -16,7 +16,12 @@ use crate::error::{ApiError, api_err};
 // Sealed trait — prevents downstream implementations
 // ──────────────────────────────────────────────
 
-pub(crate) mod sealed {
+/// Sealed trait — first-party backends only.
+///
+/// This module is `#[doc(hidden)]` because only first-party backend crates
+/// (yauth, yauth-toasty) should implement it. It is NOT part of the public API.
+#[doc(hidden)]
+pub mod sealed {
     pub trait Sealed {}
 }
 

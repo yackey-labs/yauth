@@ -1,5 +1,6 @@
 [workspace]
 members = ["crates/yauth", "crates/yauth-migration", "crates/yauth-entity", "crates/cargo-yauth"]
+exclude = ["crates/yauth-toasty"]
 resolver = "2"
 
 [workspace.package]

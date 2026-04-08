@@ -1,41 +1,73 @@
-# Milestone 3: Toasty Backends
+# Milestone 3: Toasty Backends (separate `yauth-toasty` crate)
 
 **Follow the repo's `CLAUDE.md` exactly. Every rule in it is mandatory.**
 
 **Prerequisite:** Rust toolchain >= 1.94 (Toasty's MSRV).
 
-**STATUS: BLOCKED** — Toasty 0.3.0's `toasty-driver-sqlite` dev-dependency bundles `libsqlite3-sys` with `links = "sqlite3"`, which conflicts with sqlx's `libsqlite3-sys` at the Cargo workspace resolver level. This prevents adding `toasty` as a dependency in any workspace that also uses sqlx — even when only the PostgreSQL driver is enabled. The conflict is a Toasty packaging issue (dev-deps shouldn't affect downstream consumers' link resolution). Blocked until Toasty releases a fix or yauth moves Toasty support to a separate crate outside this workspace.
+**Architecture change:** Toasty backends live in a separate `crates/yauth-toasty` crate (not inside the `yauth` crate) because `toasty-driver-sqlite`'s `rusqlite` dependency uses `libsqlite3-sys 0.37` which conflicts with sqlx's `libsqlite3-sys 0.30` via Cargo's `links = "sqlite3"` check. The separate crate avoids the conflict — it depends on `yauth` (for repo traits) and `toasty`, but doesn't pull in sqlx or diesel.
+
+Users install it via git (not crates.io, since Toasty is experimental):
+```toml
+yauth = { version = "0.8", features = ["full"] }
+yauth-toasty = { git = "https://github.com/yackey-labs/yauth", features = ["postgresql"] }
+```
 
 ### What must work:
-1. A user can add `yauth = { features = ["full", "toasty-pg-backend"] }` (or `toasty-mysql-backend`, `toasty-sqlite-backend`) and get a working auth backend powered by Toasty
-2. `ToastyPgBackend::new(url)` connects to PostgreSQL via `toasty::Db::builder().table_name_prefix("yauth_").models(toasty::models!(...)).connect(url)`, validates schema, and returns all repository trait implementations
-3. All 27 repository traits implemented using Toasty's query API (`Model::get_by_id()`, `Model::filter_by_*()`, `toasty::create!()`, etc.). Models and repo implementations are shared in `toasty_common/` (same pattern as SeaORM). Per-dialect backends only contain pool setup and schema validation.
-4. Toasty model definitions are publicly exported so users can use them alongside their own Toasty models
-5. `cargo yauth generate --orm toasty` emits `#[derive(toasty::Model)]` Rust files from the `TableDef` source of truth
-6. All 65+ conformance tests pass for `toasty_pg`, `toasty_mysql`, and `toasty_sqlite` backends
-7. Toasty backends are marked experimental with `#[doc = "Experimental: Toasty is pre-1.0. API may change."]`
+1. `crates/yauth-toasty/` is a new workspace member with features: `postgresql`, `mysql`, `sqlite`
+2. Each feature enables the corresponding toasty driver (`toasty/postgresql`, `toasty/mysql`, `toasty/sqlite`)
+3. The crate depends on `yauth` (path dep) for `DatabaseBackend`, `Repositories`, all repo traits, domain types, and `RepoError`
+4. Three backend structs: `ToastyPgBackend`, `ToastyMysqlBackend`, `ToastySqliteBackend` — each implementing `DatabaseBackend`
+5. Per-dialect entities + repo implementations (same pattern as seaorm backends — PG uses native UUID, MySQL/SQLite use String)
+6. `Db::builder().table_name_prefix("yauth_")` for the table prefix
+7. `migrate()` validates schema only (same as SeaORM backends)
+8. `create_tables()` method for test setup (uses `db.push_schema()`)
+9. All Toasty backends marked experimental: `#[doc = "Experimental: Toasty is pre-1.0. API may change."]`
+10. All 65+ conformance tests pass for each Toasty backend
+
+### Crate structure:
+```
+crates/yauth-toasty/
+  Cargo.toml          # depends on yauth (path), toasty; features: postgresql, mysql, sqlite
+  src/
+    lib.rs            # feature-gated pub mod pg/mysql/sqlite
+    pg/
+      mod.rs          # ToastyPgBackend
+      entities/       # #[derive(toasty::Model)] with Uuid fields
+      *_repo.rs       # repo implementations using Toasty query API
+    mysql/
+      mod.rs          # ToastyMysqlBackend (String UUIDs)
+      entities/
+      *_repo.rs
+    sqlite/
+      mod.rs          # ToastySqliteBackend (String UUIDs, String JSON)
+      entities/
+      *_repo.rs
+```
 
 ### After building, prove it works:
 Start PostgreSQL and MySQL via `docker compose up -d`.
 
-- Run `cargo test --features full,toasty-pg-backend --test repo_conformance` with `DATABASE_URL` set. All 65+ tests must pass for `toasty_pg`.
-- Run `cargo test --features full,all-backends --test repo_conformance` with all database URLs set. Verify Toasty backends appear alongside all other backends in output and all pass.
-- Run `cargo yauth init --orm toasty --dialect postgres --plugins email-password,passkey,mfa` in a temp directory. Verify generated files contain `#[derive(toasty::Model)]` structs with correct `#[key]`, `#[table = "users"]` (prefix applied at runtime), `#[belongs_to]`, `#[has_many]` attributes. Verify the generated code compiles.
-- Run `cargo clippy --features full,all-backends -- -D warnings` with zero warnings.
+- Run `cargo test -p yauth-toasty --features postgresql -- --test-threads=1` with `DATABASE_URL` set. All 65+ tests must pass for `toasty_pg`.
+- Run `cargo test -p yauth-toasty --features mysql -- --test-threads=1` with `MYSQL_DATABASE_URL` set. All 65+ tests pass for `toasty_mysql`.
+- Run `cargo test -p yauth-toasty --features sqlite -- --test-threads=1`. All 65+ tests pass for `toasty_sqlite` (in-memory).
+- Run `cargo clippy -p yauth-toasty --features postgresql,mysql,sqlite -- -D warnings` — zero warnings.
 - Run `cargo fmt --check` — no formatting issues.
+- Verify the main `yauth` crate still compiles and tests pass without `yauth-toasty` in the feature set.
 
 ### Test strategy:
-- Add `toasty_pg`, `toasty_mysql`, `toasty_sqlite` to `test_backends()` in `crates/yauth/tests/repo_conformance.rs`
-- Toasty backends need schema setup before tests. Use `db.push_schema()` in the `OnceCell` init (acceptable for test environments)
-- Same `shared_runtime().block_on()` pattern as all other backends
+- The `yauth-toasty` crate has its OWN conformance test file (not shared with `yauth`'s `repo_conformance.rs`) because it's a separate crate
+- Copy the test structure from `crates/yauth/tests/repo_conformance.rs` into `crates/yauth-toasty/tests/conformance.rs`
+- Use `#[test]` with a shared tokio runtime (same `OnceLock<Runtime>` pattern)
+- Toasty `&mut db` requires `Arc<tokio::sync::Mutex<Db>>` in backend structs
 
 ### Known pitfalls:
-1. **Toasty is pre-1.0 with sparse docs**: The build agent MUST read the guide links in `dependencies.md` before implementing. The primary reference is the GitHub guide at https://github.com/tokio-rs/toasty/tree/main/docs/guide/src and the API docs at https://docs.rs/toasty/0.3.0/toasty/
-2. **`table_name_prefix` on Db::builder**: Toasty natively supports `Db::builder().table_name_prefix("yauth_")`. Use this instead of hardcoding `#[table = "yauth_users"]` on every model. Set `#[table = "users"]` on the model and let the prefix do the work. Verify the conformance tests see `yauth_users` in the actual database.
-3. **Toasty `#[auto]` for UUIDs defaults to v7**: `#[auto]` on a `uuid::Uuid` field generates UUID v7 by default. This matches yauth's convention. No special config needed.
-4. **Toasty query API is different from SeaORM**: Toasty uses `Model::get_by_id(&mut db, &id)` (immediate), `Model::filter_by_email("x").get(&mut db)` (builder), and `toasty::create!(Model { ... }).exec(&mut db)`. Don't confuse with SeaORM's `Entity::find_by_id(id).one(&db)` pattern.
-5. **Toasty takes `&mut db`**: All Toasty operations take `&mut db` or `&mut tx`. The backend struct needs `Arc<tokio::sync::Mutex<toasty::Db>>` since `Db` owns the connection pool internally and repo methods need shared mutable access.
-6. **Toasty migration for tests**: Use `db.push_schema()` to create tables in test setup. For the `migrate()` validation in production, query `information_schema` (PG/MySQL) or `sqlite_master` (SQLite) same as SeaORM backends.
-7. **Toasty relationship attributes**: `#[belongs_to(key = user_id, references = id)]` requires explicit key and references. Toasty doesn't infer foreign key columns. Map every `ForeignKey` from `TableDef` to the correct `belongs_to` attribute.
-8. **Missing Toasty features**: Toasty may not support all SQL operations yauth needs (e.g., `ILIKE` for case-insensitive email, `ON CONFLICT` for upserts, complex JSON operations). For unsupported operations, use Toasty's raw query escape hatch or implement in application code. Document any workarounds. Note: if workarounds are dialect-specific (e.g., PG `ILIKE` vs MySQL case-insensitive collation vs SQLite default case-insensitivity), they may need to live in the per-dialect backend rather than `toasty_common`, breaking the fully-shared pattern.
-9. **`all-backends` update**: Add all three toasty backends to `all-backends`. Toasty uses its own driver crates (not sqlx), so no symbol conflicts with SeaORM or sqlx backends expected.
+1. **Toasty is pre-1.0 with sparse docs**: Read the guide links in `dependencies.md` before implementing. Primary reference: https://github.com/tokio-rs/toasty/tree/main/docs/guide/src and https://docs.rs/toasty/0.3.0/toasty/
+2. **`table_name_prefix` on Db::builder**: Use `Db::builder().table_name_prefix("yauth_")`. Set `#[table = "users"]` on models, prefix applied at runtime. Verify conformance tests see `yauth_users` in the actual database.
+3. **Toasty `#[auto]` for UUIDs defaults to v7**: Matches yauth's convention.
+4. **Toasty query API differs from SeaORM**: `Model::get_by_id(&mut db, &id)` (immediate), `Model::filter_by_email("x").get(&mut db)` (builder), `toasty::create!(Model { ... }).exec(&mut db)`.
+5. **Toasty takes `&mut db`**: All operations need `&mut db` or `&mut tx`. Backend struct wraps `Db` in `Arc<tokio::sync::Mutex<toasty::Db>>`.
+6. **Schema setup for tests**: Use `db.push_schema()` to create tables in test init.
+7. **Toasty relationship attributes**: `#[belongs_to(key = user_id, references = id)]` requires explicit key/references.
+8. **Missing Toasty features**: Toasty may lack ILIKE, ON CONFLICT, complex JSON operations. Use raw query escape hatch or application-level workarounds. Dialect-specific workarounds may need to live in per-dialect backends.
+9. **`yauth-toasty` depends on `yauth` for traits only**: It re-exports `yauth::repo::DatabaseBackend` etc. The `yauth` dep should use `default-features = false` to avoid pulling in any default backend.
+10. **Separate conformance tests**: The test file lives in `crates/yauth-toasty/tests/`, not in `crates/yauth/tests/`. It imports repo traits from `yauth` and backend structs from `yauth-toasty`.

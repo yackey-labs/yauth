@@ -12,6 +12,23 @@ CREATE TABLE IF NOT EXISTS `yauth_users` (
     `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
 
+CREATE TABLE IF NOT EXISTS `yauth_challenges` (
+    `key` VARCHAR(255) PRIMARY KEY,
+    `value` JSON NOT NULL,
+    `expires_at` DATETIME NOT NULL
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS `yauth_rate_limits` (
+    `key` VARCHAR(255) PRIMARY KEY,
+    `count` INT NOT NULL DEFAULT 1,
+    `window_start` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS `yauth_revocations` (
+    `key` VARCHAR(255) PRIMARY KEY,
+    `expires_at` DATETIME NOT NULL
+) ENGINE=InnoDB;
+
 CREATE TABLE IF NOT EXISTS `yauth_oauth_states` (
     `state` VARCHAR(255) PRIMARY KEY,
     `provider` VARCHAR(255) NOT NULL,

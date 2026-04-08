@@ -12,6 +12,23 @@ CREATE TABLE IF NOT EXISTS yauth_users (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS yauth_challenges (
+    key VARCHAR(255) PRIMARY KEY,
+    value JSONB NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS yauth_rate_limits (
+    key VARCHAR(255) PRIMARY KEY,
+    count INT NOT NULL DEFAULT 1,
+    window_start TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS yauth_revocations (
+    key VARCHAR(255) PRIMARY KEY,
+    expires_at TIMESTAMPTZ NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS yauth_oauth_states (
     state VARCHAR PRIMARY KEY,
     provider VARCHAR NOT NULL,

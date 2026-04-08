@@ -17,6 +17,29 @@ diesel::table! {
 }
 
 diesel::table! {
+    yauth_challenges (key) {
+        key -> Varchar,
+        value -> Jsonb,
+        expires_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    yauth_rate_limits (key) {
+        key -> Varchar,
+        count -> Int4,
+        window_start -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    yauth_revocations (key) {
+        key -> Varchar,
+        expires_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     yauth_oauth_states (state) {
         state -> Varchar,
         provider -> Varchar,

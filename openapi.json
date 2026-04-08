@@ -3,7 +3,7 @@
   "info": {
     "title": "yauth API",
     "description": "Modular, plugin-based authentication API for Axum applications.",
-    "version": "0.8.11"
+    "version": "0.8.12"
   },
   "paths": {
     "/.well-known/jwks.json": {

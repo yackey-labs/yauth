@@ -1,3 +1,9 @@
+## 0.8.12 (2026-04-08)
+
+### Fixes
+
+- release action now fails visibly on partial publish
+
 ## 0.8.11 (2026-04-08)
 
 ### Features

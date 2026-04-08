@@ -59,4 +59,18 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.INFRA_DEPLOY_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ steps.crates-auth.outputs.token }}
-        run: knope release || echo "No unreleased changes"
+        run: |
+          OUTPUT=$(knope release 2>&1) && exit 0 || {
+            EXIT_CODE=$?
+            echo "$OUTPUT"
+            if echo "$OUTPUT" | grep -q "No unreleased changes"; then
+              echo "::notice::No unreleased changes — skipping release"
+              exit 0
+            fi
+            if echo "$OUTPUT" | grep -q "already exists"; then
+              echo "::error::Partial release failure — some crates were published but the release did not complete. See CLAUDE.md 'Partial release recovery' for manual steps."
+              exit 1
+            fi
+            echo "::error::Release failed with exit code $EXIT_CODE"
+            exit 1
+          }

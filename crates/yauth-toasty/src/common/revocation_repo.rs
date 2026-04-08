@@ -25,18 +25,19 @@ impl RevocationRepository for ToastyRevocationRepo {
             let expires_at =
                 Utc::now().naive_utc() + chrono::Duration::seconds(ttl.as_secs() as i64);
 
-            // Delete existing, then insert (no ON CONFLICT in Toasty)
-            if let Ok(existing) = YauthRevocation::get_by_key(&mut db, &jti).await {
-                let _ = existing.delete().exec(&mut db).await;
+            // TODO: replace with atomic upsert when Toasty adds ON CONFLICT support
+            let mut tx = db.transaction().await.map_err(toasty_err)?;
+            if let Ok(row) = YauthRevocation::get_by_key(&mut tx, &jti).await {
+                let _ = row.delete().exec(&mut tx).await;
             }
-
             toasty::create!(YauthRevocation {
                 key: jti,
                 expires_at: dt_to_str(expires_at),
             })
-            .exec(&mut db)
+            .exec(&mut tx)
             .await
             .map_err(toasty_err)?;
+            tx.commit().await.map_err(toasty_err)?;
 
             Ok(())
         })

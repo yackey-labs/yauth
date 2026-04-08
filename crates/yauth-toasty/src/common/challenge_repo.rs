@@ -30,19 +30,20 @@ impl ChallengeRepository for ToastyChallengeRepo {
             let now = Utc::now().naive_utc();
             let expires_at = now + chrono::Duration::seconds(ttl_secs as i64);
 
-            // Delete existing key first (Toasty has no ON CONFLICT)
-            if let Ok(existing) = YauthChallenge::get_by_key(&mut db, &key).await {
-                let _ = existing.delete().exec(&mut db).await;
+            // TODO: replace with atomic upsert when Toasty adds ON CONFLICT support
+            let mut tx = db.transaction().await.map_err(toasty_err)?;
+            if let Ok(existing) = YauthChallenge::get_by_key(&mut tx, &key).await {
+                let _ = existing.delete().exec(&mut tx).await;
             }
-
             toasty::create!(YauthChallenge {
                 key: key,
                 value: json_to_str(&value),
                 expires_at: dt_to_str(expires_at),
             })
-            .exec(&mut db)
+            .exec(&mut tx)
             .await
             .map_err(toasty_err)?;
+            tx.commit().await.map_err(toasty_err)?;
 
             Ok(())
         })

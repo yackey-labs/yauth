@@ -40,17 +40,19 @@ impl PasswordRepository for ToastyPasswordRepo {
     fn upsert(&self, input: domain::NewPassword) -> RepoFuture<'_, ()> {
         Box::pin(async move {
             let mut db = self.db.clone();
-            // Delete existing, then insert (no ON CONFLICT in Toasty)
-            if let Ok(existing) = YauthPassword::get_by_user_id(&mut db, &input.user_id).await {
-                let _ = existing.delete().exec(&mut db).await;
+            // TODO: replace delete+insert with atomic upsert when Toasty adds ON CONFLICT
+            let mut tx = db.transaction().await.map_err(toasty_err)?;
+            if let Ok(existing) = YauthPassword::get_by_user_id(&mut tx, &input.user_id).await {
+                let _ = existing.delete().exec(&mut tx).await;
             }
             toasty::create!(YauthPassword {
                 user_id: input.user_id,
                 password_hash: input.password_hash,
             })
-            .exec(&mut db)
+            .exec(&mut tx)
             .await
             .map_err(toasty_err)?;
+            tx.commit().await.map_err(toasty_err)?;
             Ok(())
         })
     }

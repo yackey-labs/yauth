@@ -31,33 +31,33 @@ impl RateLimitRepository for ToastyRateLimitRepo {
             let now = Utc::now();
             let window_start_cutoff = now - chrono::Duration::seconds(window_secs as i64);
 
-            let existing = YauthRateLimit::get_by_key(&mut db, &key).await.ok();
+            // TODO: replace delete+insert with atomic upsert when Toasty adds ON CONFLICT
+            let mut tx = db.transaction().await.map_err(toasty_err)?;
+            let existing = YauthRateLimit::get_by_key(&mut tx, &key).await.ok();
 
             let (count, window_start) = match existing {
                 Some(row) => {
                     let ws = str_to_dt(&row.window_start);
                     let ws_utc = ws.and_utc();
                     if ws_utc < window_start_cutoff {
-                        // Window expired -- reset by delete+insert
-                        let _ = row.delete().exec(&mut db).await;
+                        let _ = row.delete().exec(&mut tx).await;
                         let _ = toasty::create!(YauthRateLimit {
                             key: key.clone(),
                             count: 1,
                             window_start: dt_to_str(now.naive_utc()),
                         })
-                        .exec(&mut db)
+                        .exec(&mut tx)
                         .await;
                         (1u32, now)
                     } else {
                         let new_count = row.count + 1;
-                        // Update by delete+insert (Toasty update may not work for non-PK fields easily)
-                        let _ = row.delete().exec(&mut db).await;
+                        let _ = row.delete().exec(&mut tx).await;
                         let _ = toasty::create!(YauthRateLimit {
                             key: key.clone(),
                             count: new_count,
                             window_start: dt_to_str(ws),
                         })
-                        .exec(&mut db)
+                        .exec(&mut tx)
                         .await;
                         (new_count as u32, ws_utc)
                     }
@@ -68,11 +68,12 @@ impl RateLimitRepository for ToastyRateLimitRepo {
                         count: 1,
                         window_start: dt_to_str(now.naive_utc()),
                     })
-                    .exec(&mut db)
+                    .exec(&mut tx)
                     .await;
                     (1u32, now)
                 }
             };
+            tx.commit().await.map_err(toasty_err)?;
 
             Ok(rate_limit_result(count, limit, window_start, window_secs))
         })

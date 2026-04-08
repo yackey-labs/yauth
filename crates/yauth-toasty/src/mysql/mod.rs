@@ -54,7 +54,19 @@ impl DatabaseBackend for ToastyMysqlBackend {
         &self,
         _features: &EnabledFeatures,
     ) -> Pin<Box<dyn Future<Output = Result<(), RepoError>> + Send + '_>> {
-        Box::pin(async move { Ok(()) })
+        Box::pin(async move {
+            let mut db = self.db.clone();
+            use crate::entities::YauthUser;
+            match YauthUser::all().limit(0).exec(&mut db).await {
+                Ok(_) => Ok(()),
+                Err(e) => Err(RepoError::Internal(
+                    format!(
+                        "schema validation failed (yauth_users not found): {e} \
+                         -- run create_tables() or toasty-cli migration apply"
+                    ).into(),
+                )),
+            }
+        })
     }
 
     fn repositories(&self) -> Repositories {

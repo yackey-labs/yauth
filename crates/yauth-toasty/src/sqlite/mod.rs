@@ -54,7 +54,19 @@ impl DatabaseBackend for ToastySqliteBackend {
         &self,
         _features: &EnabledFeatures,
     ) -> Pin<Box<dyn Future<Output = Result<(), RepoError>> + Send + '_>> {
-        Box::pin(async move { Ok(()) })
+        Box::pin(async move {
+            let mut db = self.db.clone();
+            use crate::entities::YauthUser;
+            YauthUser::all().limit(0).exec(&mut db).await.map_err(|e| {
+                RepoError::Internal(
+                    format!(
+                        "schema validation failed (yauth_users not found): {e} \
+                         -- run create_tables() or toasty-cli migration apply"
+                    ).into(),
+                )
+            })?;
+            Ok(())
+        })
     }
 
     fn repositories(&self) -> Repositories {

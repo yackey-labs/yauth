@@ -29,6 +29,9 @@ pub mod entities;
 #[allow(dead_code)]
 pub(crate) mod helpers;
 
+/// Shared repository implementations (dialect-agnostic).
+pub(crate) mod common;
+
 #[cfg(feature = "postgresql")]
 pub mod pg;
 

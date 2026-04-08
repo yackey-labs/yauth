@@ -66,13 +66,23 @@ impl TotpRepository for ToastyTotpRepo {
     fn delete_for_user(&self, user_id: Uuid, verified_only: Option<bool>) -> RepoFuture<'_, ()> {
         Box::pin(async move {
             let mut db = self.db.clone();
-            let rows: Vec<YauthTotpSecret> = YauthTotpSecret::filter_by_user_id(user_id)
-                .exec(&mut db)
-                .await
-                .map_err(toasty_err)?;
-            for row in rows {
-                if verified_only.is_none_or(|v| row.verified == v) {
-                    let _ = row.delete().exec(&mut db).await;
+            if verified_only.is_none() {
+                // Bulk delete all TOTP secrets for this user
+                YauthTotpSecret::filter_by_user_id(user_id)
+                    .delete()
+                    .exec(&mut db)
+                    .await
+                    .map_err(toasty_err)?;
+            } else {
+                // Toasty doesn't support compound filters, so filter in app layer
+                let rows: Vec<YauthTotpSecret> = YauthTotpSecret::filter_by_user_id(user_id)
+                    .exec(&mut db)
+                    .await
+                    .map_err(toasty_err)?;
+                for row in rows {
+                    if verified_only.is_none_or(|v| row.verified == v) {
+                        let _ = row.delete().exec(&mut db).await;
+                    }
                 }
             }
             Ok(())
@@ -150,13 +160,11 @@ impl BackupCodeRepository for ToastyBackupCodeRepo {
     fn delete_all_for_user(&self, user_id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
             let mut db = self.db.clone();
-            let rows: Vec<YauthBackupCode> = YauthBackupCode::filter_by_user_id(user_id)
+            YauthBackupCode::filter_by_user_id(user_id)
+                .delete()
                 .exec(&mut db)
                 .await
                 .map_err(toasty_err)?;
-            for row in rows {
-                let _ = row.delete().exec(&mut db).await;
-            }
             Ok(())
         })
     }

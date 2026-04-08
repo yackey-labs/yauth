@@ -108,9 +108,11 @@ impl SessionOpsRepository for ToastySessionOpsRepo {
                 .await
                 .map_err(toasty_err)?;
             let count = sessions.len() as u64;
-            for session in sessions {
-                let _ = session.delete().exec(&mut db).await;
-            }
+            YauthSession::filter_by_user_id(user_id)
+                .delete()
+                .exec(&mut db)
+                .await
+                .map_err(toasty_err)?;
             Ok(count)
         })
     }

@@ -131,14 +131,11 @@ impl EmailVerificationRepository for ToastyEmailVerificationRepo {
     fn delete_all_for_user(&self, user_id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
             let mut db = self.db.clone();
-            let rows: Vec<YauthEmailVerification> =
-                YauthEmailVerification::filter_by_user_id(user_id)
-                    .exec(&mut db)
-                    .await
-                    .map_err(toasty_err)?;
-            for row in rows {
-                let _ = row.delete().exec(&mut db).await;
-            }
+            YauthEmailVerification::filter_by_user_id(user_id)
+                .delete()
+                .exec(&mut db)
+                .await
+                .map_err(toasty_err)?;
             Ok(())
         })
     }

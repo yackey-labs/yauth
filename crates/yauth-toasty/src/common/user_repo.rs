@@ -121,7 +121,11 @@ impl UserRepository for ToastyUserRepo {
     fn any_exists(&self) -> RepoFuture<'_, bool> {
         Box::pin(async move {
             let mut db = self.db.clone();
-            let users: Vec<YauthUser> = YauthUser::all().exec(&mut db).await.map_err(toasty_err)?;
+            let users: Vec<YauthUser> = YauthUser::all()
+                .limit(1)
+                .exec(&mut db)
+                .await
+                .map_err(toasty_err)?;
             Ok(!users.is_empty())
         })
     }

@@ -192,13 +192,11 @@ impl UnlockTokenRepository for ToastyUnlockTokenRepo {
     fn delete_all_for_user(&self, user_id: Uuid) -> RepoFuture<'_, ()> {
         Box::pin(async move {
             let mut db = self.db.clone();
-            let rows: Vec<YauthUnlockToken> = YauthUnlockToken::filter_by_user_id(user_id)
+            YauthUnlockToken::filter_by_user_id(user_id)
+                .delete()
                 .exec(&mut db)
                 .await
                 .map_err(toasty_err)?;
-            for row in rows {
-                let _ = row.delete().exec(&mut db).await;
-            }
             Ok(())
         })
     }

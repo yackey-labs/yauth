@@ -31,11 +31,27 @@ Every feature is behind a **feature flag** — enable only what you need.
 | `sqlx-pg-backend` | PostgreSQL via sqlx with compile-time `query!()` macros | sqlx users who want compile-time SQL checking |
 | `sqlx-mysql-backend` | MySQL via sqlx with compile-time `query!()` macros | sqlx + MySQL deployments |
 | `sqlx-sqlite-backend` | SQLite via sqlx with compile-time `query!()` macros | sqlx + SQLite deployments |
+| `seaorm-pg-backend` | PostgreSQL via SeaORM 2.0 | SeaORM users who want entity-based queries + public entity exports |
+| `seaorm-mysql-backend` | MySQL via SeaORM 2.0 | SeaORM + MySQL deployments |
+| `seaorm-sqlite-backend` | SQLite via SeaORM 2.0 | SeaORM + SQLite deployments |
 | `memory-backend` | Fully in-memory backend (no database) | Unit tests, prototyping, CI |
 | `full` | All auth plugins (no backends) | Real apps: `full` + one backend |
-| `all-backends` | Every backend + redis, except diesel-libsql (CI-only) | Conformance testing only (diesel-libsql tested separately due to bundled sqlite3.c symbol conflict) |
+| `all-backends` | Every backend + redis, except diesel-libsql and toasty (CI-only) | Conformance testing only (diesel-libsql and toasty tested separately due to sqlite3 symbol conflicts) |
 
 `email-password` + `diesel-pg-backend` are enabled by default. Real apps use `full` + one backend (e.g., `features = ["full", "diesel-pg-backend"]`). CI uses `full,all-backends`.
+
+**Toasty backends** (experimental, pre-1.0) are in a separate crate due to a Cargo `links` conflict with sqlx:
+
+```toml
+yauth = { version = "0.8", features = ["full"] }
+yauth-toasty = { git = "https://github.com/yackey-labs/yauth", features = ["postgresql"] }
+```
+
+| Feature | Description | When to use |
+|---------|-------------|-------------|
+| `postgresql` | PostgreSQL via Toasty | Toasty users, PG deployments |
+| `mysql` | MySQL via Toasty | Toasty + MySQL deployments |
+| `sqlite` | SQLite via Toasty | Toasty + SQLite deployments |
 
 ## Try It in 30 Seconds
 
@@ -114,7 +130,7 @@ All commands accept `-f <path>` to specify a config file (default: `yauth.toml`)
 
 ```toml
 [migration]
-orm = "diesel"           # "diesel" | "sqlx"
+orm = "diesel"           # "diesel" | "sqlx" | "seaorm" | "toasty"
 dialect = "postgres"     # "postgres" | "mysql" | "sqlite"
 migrations_dir = "migrations"
 table_prefix = "yauth_"
@@ -133,6 +149,7 @@ No secrets in config -- database URLs come from environment variables only.
 | `yauth-entity` | Domain types (User, Session, Password, etc.) |
 | `yauth-migration` | Schema types, DDL generation, diff engine, migration file gen (zero ORM deps) |
 | `cargo-yauth` | CLI binary -- `cargo yauth init/add-plugin/remove-plugin/status/generate` |
+| `yauth-toasty` | Toasty ORM backends (experimental, separate crate due to sqlite3 links conflict) |
 
 ## Quick Start
 
@@ -180,6 +197,49 @@ async fn main() {
     axum::serve(listener, app).await.unwrap();
 }
 ```
+
+#### SeaORM Backend (alternative)
+
+SeaORM backends export their entity types publicly, so you can use yauth tables in your own SeaORM queries:
+
+```bash
+cargo add yauth --no-default-features --features full,seaorm-pg-backend
+```
+
+```rust
+use yauth::prelude::*;
+use yauth::repo::{DatabaseBackend, EnabledFeatures};
+use yauth::backends::seaorm_pg::SeaOrmPgBackend;
+
+#[tokio::main]
+async fn main() {
+    let backend = SeaOrmPgBackend::new("postgres://user:pass@localhost/mydb")
+        .await
+        .expect("Failed to create backend");
+
+    // SeaORM migrate() validates schema only — run sea-orm-cli migrations first
+    backend.migrate(&EnabledFeatures::from_compile_flags()).await.unwrap();
+
+    let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
+        .with_email_password(Default::default())
+        .build()
+        .await
+        .unwrap();
+
+    // Use yauth entities in your own SeaORM queries:
+    // use yauth::backends::seaorm_pg::entities::users;
+    // let user = users::Entity::find_by_id(id).one(&db).await?;
+
+    let app = axum::Router::new()
+        .nest("/api/auth", yauth.router())
+        .with_state(yauth.state().clone());
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    axum::serve(listener, app).await.unwrap();
+}
+```
+
+> **Note:** SeaORM and Toasty backends use **user-owned migrations**. `migrate()` only validates that tables exist — it does not create them. Run your ORM's migration tool (`sea-orm-cli migrate`, `toasty-cli migration apply`) before starting the app.
 
 ### 2. Frontend (TypeScript)
 

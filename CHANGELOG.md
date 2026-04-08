@@ -1,3 +1,9 @@
+## 0.8.13 (2026-04-08)
+
+### Features
+
+- add from_db() to ToastySqliteBackend for shared Db usage
+
 ## 0.8.12 (2026-04-08)
 
 ### Fixes

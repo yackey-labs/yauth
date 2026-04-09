@@ -1,3 +1,11 @@
+## 0.9.5 (2026-04-09)
+
+### Fixes
+
+- switch to PR-based release flow with knope prepare-release (#42)
+- use github.token for prepare-release PR creation (#43)
+- add explicit release branch creation to knope prepare-release (#44)
+
 ## 0.9.3 (2026-04-09)
 
 ### Fixes

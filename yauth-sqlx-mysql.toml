@@ -3,6 +3,7 @@ orm = "sqlx"
 dialect = "mysql"
 table_prefix = "yauth_"
 migrations_dir = "migrations/sqlx-mysql"
+queries_dir = "queries/sqlx-mysql"
 
 [plugins]
 enabled = [

@@ -3,6 +3,7 @@ orm = "sqlx"
 dialect = "sqlite"
 table_prefix = "yauth_"
 migrations_dir = "migrations/sqlx-sqlite"
+queries_dir = "queries/sqlx-sqlite"
 
 [plugins]
 enabled = [

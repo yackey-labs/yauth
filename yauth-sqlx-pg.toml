@@ -3,6 +3,7 @@ orm = "sqlx"
 dialect = "postgres"
 table_prefix = "yauth_"
 migrations_dir = "migrations/sqlx-pg"
+queries_dir = "queries/sqlx-pg"
 
 [plugins]
 enabled = [

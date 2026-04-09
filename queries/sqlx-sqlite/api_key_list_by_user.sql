@@ -1,0 +1,5 @@
+-- List all API keys for a user.
+-- Params: ? user_id (TEXT)
+-- Returns: API key rows
+-- Plugin: api-key
+SELECT * FROM yauth_api_keys WHERE user_id = ?;

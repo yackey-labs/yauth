@@ -1,4 +1,5 @@
 pub mod otel;
+#[allow(dead_code)]
 pub mod schema;
 
 // Everything below is gated behind diesel-pg-backend since it uses diesel pool types

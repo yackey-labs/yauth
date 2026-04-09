@@ -301,6 +301,7 @@ mod repo_tests {
     use super::*;
     use chrono::Utc;
     use uuid::Uuid;
+    use yauth::repo::DatabaseBackend;
 
     async fn get_repos() -> yauth::repo::Repositories {
         let url = mysql_url();

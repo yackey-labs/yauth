@@ -3,6 +3,7 @@
 //! Uses `yauth-migration` (a dev-dependency) to generate CREATE TABLE statements,
 //! then executes them on the given pool/connection.
 
+
 use yauth_migration::{
     ALL_PLUGINS, collect_schema_for_plugins, generate_mysql_ddl, generate_postgres_ddl,
     generate_sqlite_ddl,

@@ -1,3 +1,9 @@
+## 0.9.6 (2026-04-09)
+
+### Fixes
+
+- trigger CI on release branch push (#46)
+
 ## 0.9.5 (2026-04-09)
 
 ### Fixes

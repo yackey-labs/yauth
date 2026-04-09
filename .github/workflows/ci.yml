@@ -134,6 +134,7 @@ jobs:
           cargo yauth -f yauth-sqlx-pg.toml generate --check
           cargo yauth -f yauth-sqlx-mysql.toml generate --check
           cargo yauth -f yauth-sqlx-sqlite.toml generate --check
+          cargo yauth -f yauth-toasty.toml generate --check
 
   codeql:
     name: CodeQL (${{ matrix.language }})

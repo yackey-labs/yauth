@@ -42,9 +42,9 @@ Every feature is behind a **feature flag** — enable only what you need.
 
 **Toasty backends** (experimental, pre-1.0) are in a separate crate due to a Cargo `links` conflict with sqlx:
 
-```toml
-yauth = { version = "0.8", features = ["full"] }
-yauth-toasty = { git = "https://github.com/yackey-labs/yauth", features = ["postgresql"] }
+```bash
+cargo add yauth --no-default-features --features full
+cargo add yauth-toasty --git https://github.com/yackey-labs/yauth --features postgresql
 ```
 
 | Feature | Description | When to use |
@@ -565,9 +565,13 @@ let yauth = YAuthBuilder::new(backend, config).build().await?;
 
 #### Toasty + SQLite (experimental, separate crate)
 
-```toml
-yauth = { version = "0.8", features = ["full"] }
-yauth-toasty = { git = "https://github.com/yackey-labs/yauth", features = ["sqlite"] }
+```bash
+cargo add yauth --no-default-features --features email-password
+cargo add yauth-toasty --git https://github.com/yackey-labs/yauth --features sqlite
+cargo add toasty --no-default-features --features sqlite
+
+# Generate model files
+cargo yauth init --orm toasty --dialect sqlite --plugins email-password
 ```
 
 ```rust

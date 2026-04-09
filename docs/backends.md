@@ -24,7 +24,7 @@ yauth does not run migrations. Use `cargo yauth generate` to produce migration f
 
 ## Diesel Backends
 
-All Diesel backends use `diesel-async` 0.8 with deadpool for connection pooling. The Diesel PG backend re-exports pool types (`DieselPool`, `AsyncDieselConnectionManager`) so you only need `diesel` as a direct dependency. MySQL and native SQLite backends need `diesel-async` as a direct dependency for pool construction.
+All Diesel backends use `diesel-async` 0.8 with deadpool for connection pooling. The Diesel PG backend re-exports pool types (`DieselPool`, `AsyncDieselConnectionManager`, `AsyncPgConnection`) so you only need `diesel` as a direct dependency. MySQL and native SQLite backends need `diesel-async@0.8` as a direct dependency for pool construction — pin the version to avoid conflicts with older releases.
 
 ### Diesel + PostgreSQL (default)
 
@@ -58,7 +58,7 @@ let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
 ```bash
 cargo add yauth --features email-password,diesel-mysql-backend --no-default-features
 cargo add diesel --features mysql_backend
-cargo add diesel-async --features mysql,deadpool
+cargo add diesel-async@0.8 --features mysql,deadpool
 cargo yauth init --orm diesel --dialect mysql --plugins email-password
 diesel migration run
 ```
@@ -112,7 +112,7 @@ let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
 ```bash
 cargo add yauth --features email-password,diesel-sqlite-backend --no-default-features
 cargo add diesel --features sqlite
-cargo add diesel-async --features deadpool,sqlite
+cargo add diesel-async@0.8 --features deadpool,sqlite
 cargo yauth init --orm diesel --dialect sqlite --plugins email-password
 diesel migration run
 ```
@@ -120,11 +120,11 @@ diesel migration run
 ```rust
 use yauth::prelude::*;
 use yauth::backends::diesel_sqlite::{DieselSqliteBackend, SqlitePool, SqliteAsyncConn};
-use diesel_async::pooled_connection::{AsyncDieselConnectionManager, deadpool::Pool};
+use diesel_async::pooled_connection::AsyncDieselConnectionManager;
 
 let database_url = "yauth.db"; // path to SQLite file
 let manager = AsyncDieselConnectionManager::<SqliteAsyncConn>::new(database_url);
-let pool: SqlitePool = Pool::builder(manager).build().unwrap();
+let pool = SqlitePool::builder(manager).build().unwrap();
 
 let backend = DieselSqliteBackend::from_pool(pool);
 let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
@@ -133,7 +133,7 @@ let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
     .await?;
 ```
 
-> `SqliteAsyncConn` and `SqlitePool` are re-exported by yauth for convenience. Under the hood, `SqliteAsyncConn` is `SyncConnectionWrapper<diesel::SqliteConnection>`.
+> `SqliteAsyncConn` and `SqlitePool` are re-exported by yauth for convenience. `SqlitePool` is `deadpool::Pool<SyncConnectionWrapper<SqliteConnection>>` — use it directly instead of importing `Pool` from diesel-async.
 
 ## sqlx + PostgreSQL
 

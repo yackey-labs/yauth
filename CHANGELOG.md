@@ -1,3 +1,9 @@
+## 0.9.1 (2026-04-09)
+
+### Fixes
+
+- add missing DatabaseBackend import and suppress dead_code warnings
+
 ## 0.9.0 (2026-04-09)
 
 ### Breaking Changes

@@ -24,7 +24,7 @@ yauth does not run migrations. Use `cargo yauth generate` to produce migration f
 
 ## Diesel Backends
 
-All Diesel backends use `diesel-async` 0.8 with deadpool for connection pooling. yauth re-exports the pool types so you don't need `diesel-async` as a direct dependency — but you do need `diesel` for the connection type.
+All Diesel backends use `diesel-async` 0.8 with deadpool for connection pooling. The Diesel PG backend re-exports pool types (`DieselPool`, `AsyncDieselConnectionManager`) so you only need `diesel` as a direct dependency. MySQL and native SQLite backends need `diesel-async` as a direct dependency for pool construction.
 
 ### Diesel + PostgreSQL (default)
 
@@ -36,18 +36,21 @@ diesel migration run
 ```
 
 ```rust
-use yauth::backends::diesel_pg::{DieselPgBackend, DieselPool, AsyncDieselConnectionManager};
-use diesel_async::AsyncPgConnection;
+use yauth::prelude::*;
+use yauth::backends::diesel_pg::{DieselPgBackend, DieselPool, AsyncDieselConnectionManager, AsyncPgConnection};
 
 let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-let config = AsyncDieselConnectionManager::<AsyncPgConnection>::new(&database_url);
-let pool = DieselPool::builder(config).build().unwrap();
+let manager = AsyncDieselConnectionManager::<AsyncPgConnection>::new(&database_url);
+let pool = DieselPool::builder(manager).build().unwrap();
 
 let backend = DieselPgBackend::from_pool(pool);
 // Or isolate yauth tables in a custom PostgreSQL schema:
 // let backend = DieselPgBackend::from_pool_with_schema(pool, "auth")?;
 
-let yauth = YAuthBuilder::new(backend, config).build().await?;
+let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
+    .with_email_password(EmailPasswordConfig::default())
+    .build()
+    .await?;
 ```
 
 ### Diesel + MySQL / MariaDB
@@ -55,24 +58,27 @@ let yauth = YAuthBuilder::new(backend, config).build().await?;
 ```bash
 cargo add yauth --features email-password,diesel-mysql-backend --no-default-features
 cargo add diesel --features mysql_backend
+cargo add diesel-async --features mysql,deadpool
 cargo yauth init --orm diesel --dialect mysql --plugins email-password
 diesel migration run
 ```
 
 ```rust
+use yauth::prelude::*;
 use yauth::backends::diesel_mysql::DieselMysqlBackend;
 use diesel_async::pooled_connection::{AsyncDieselConnectionManager, deadpool::Pool};
 use diesel_async::AsyncMysqlConnection;
 
 let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-let config = AsyncDieselConnectionManager::<AsyncMysqlConnection>::new(&database_url);
-let pool = Pool::builder(config).build().unwrap();
+let manager = AsyncDieselConnectionManager::<AsyncMysqlConnection>::new(&database_url);
+let pool = Pool::builder(manager).build().unwrap();
 
 let backend = DieselMysqlBackend::from_pool(pool);
-let yauth = YAuthBuilder::new(backend, config).build().await?;
+let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
+    .with_email_password(EmailPasswordConfig::default())
+    .build()
+    .await?;
 ```
-
-> You'll need `diesel-async` as a direct dependency for the pool types: `cargo add diesel-async --features mysql,deadpool`.
 
 ### Diesel + SQLite / Turso (diesel-libsql)
 
@@ -84,6 +90,7 @@ diesel migration run
 ```
 
 ```rust
+use yauth::prelude::*;
 use yauth::backends::diesel_libsql::DieselLibsqlBackend;
 
 // Local file:
@@ -92,7 +99,10 @@ let pool = diesel_libsql::deadpool::new_pool("file:yauth.db").unwrap();
 // let pool = diesel_libsql::deadpool::new_pool("libsql://your-db.turso.io?authToken=...").unwrap();
 
 let backend = DieselLibsqlBackend::from_pool(pool);
-let yauth = YAuthBuilder::new(backend, config).build().await?;
+let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
+    .with_email_password(EmailPasswordConfig::default())
+    .build()
+    .await?;
 ```
 
 ### Diesel + Native SQLite
@@ -108,15 +118,19 @@ diesel migration run
 ```
 
 ```rust
+use yauth::prelude::*;
 use yauth::backends::diesel_sqlite::{DieselSqliteBackend, SqlitePool, SqliteAsyncConn};
 use diesel_async::pooled_connection::{AsyncDieselConnectionManager, deadpool::Pool};
 
 let database_url = "yauth.db"; // path to SQLite file
-let config = AsyncDieselConnectionManager::<SqliteAsyncConn>::new(database_url);
-let pool: SqlitePool = Pool::builder(config).build().unwrap();
+let manager = AsyncDieselConnectionManager::<SqliteAsyncConn>::new(database_url);
+let pool: SqlitePool = Pool::builder(manager).build().unwrap();
 
 let backend = DieselSqliteBackend::from_pool(pool);
-let yauth = YAuthBuilder::new(backend, config).build().await?;
+let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
+    .with_email_password(EmailPasswordConfig::default())
+    .build()
+    .await?;
 ```
 
 > `SqliteAsyncConn` and `SqlitePool` are re-exported by yauth for convenience. Under the hood, `SqliteAsyncConn` is `SyncConnectionWrapper<diesel::SqliteConnection>`.
@@ -130,11 +144,16 @@ sqlx migrate run
 ```
 
 ```rust
+use yauth::prelude::*;
 use yauth::backends::sqlx_pg::SqlxPgBackend;
 
+let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
 let pool = sqlx::PgPool::connect(&database_url).await?;
 let backend = SqlxPgBackend::from_pool(pool);
-let yauth = YAuthBuilder::new(backend, config).build().await?;
+let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
+    .with_email_password(EmailPasswordConfig::default())
+    .build()
+    .await?;
 ```
 
 > **Note:** If you use sqlx's compile-time `query!()` macros in your own code, you'll need `DATABASE_URL` set at build time. yauth itself uses runtime queries, so `cargo check` and `cargo build` work without it. Either way, run migrations first: `sqlx migrate run`.
@@ -150,11 +169,16 @@ sqlx migrate run
 ```
 
 ```rust
+use yauth::prelude::*;
 use yauth::backends::sqlx_mysql::SqlxMysqlBackend;
 
+let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
 let pool = sqlx::MySqlPool::connect(&database_url).await?;
 let backend = SqlxMysqlBackend::from_pool(pool);
-let yauth = YAuthBuilder::new(backend, config).build().await?;
+let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
+    .with_email_password(EmailPasswordConfig::default())
+    .build()
+    .await?;
 ```
 
 > yauth uses runtime queries, so `DATABASE_URL` is not required at compile time. Run migrations first: `sqlx migrate run`.
@@ -170,11 +194,16 @@ sqlx migrate run
 ```
 
 ```rust
+use yauth::prelude::*;
 use yauth::backends::sqlx_sqlite::SqlxSqliteBackend;
 
-let pool = sqlx::SqlitePool::connect(&database_url).await?;
+let database_url = "sqlite:/absolute/path/to/yauth.db";
+let pool = sqlx::SqlitePool::connect(database_url).await?;
 let backend = SqlxSqliteBackend::from_pool(pool);
-let yauth = YAuthBuilder::new(backend, config).build().await?;
+let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
+    .with_email_password(EmailPasswordConfig::default())
+    .build()
+    .await?;
 ```
 
 > Use an **absolute path** for SQLite: `DATABASE_URL=sqlite:/absolute/path/to/yauth.db`.
@@ -197,12 +226,16 @@ sea-orm-cli migrate up
 ```
 
 ```rust
+use yauth::prelude::*;
 use yauth::backends::seaorm_pg::SeaOrmPgBackend;
 
 let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
 let db = sea_orm::Database::connect(&database_url).await?;
 let backend = SeaOrmPgBackend::from_connection(db);
-let yauth = YAuthBuilder::new(backend, config).build().await?;
+let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
+    .with_email_password(EmailPasswordConfig::default())
+    .build()
+    .await?;
 
 // Use yauth entities in your own queries:
 // use yauth::backends::seaorm_pg::entities::users;
@@ -219,12 +252,16 @@ sea-orm-cli migrate up
 ```
 
 ```rust
+use yauth::prelude::*;
 use yauth::backends::seaorm_mysql::SeaOrmMysqlBackend;
 
 let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
 let db = sea_orm::Database::connect(&database_url).await?;
 let backend = SeaOrmMysqlBackend::from_connection(db);
-let yauth = YAuthBuilder::new(backend, config).build().await?;
+let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
+    .with_email_password(EmailPasswordConfig::default())
+    .build()
+    .await?;
 ```
 
 ### SeaORM + SQLite
@@ -237,11 +274,15 @@ sea-orm-cli migrate up
 ```
 
 ```rust
+use yauth::prelude::*;
 use yauth::backends::seaorm_sqlite::SeaOrmSqliteBackend;
 
 let db = sea_orm::Database::connect("sqlite:/absolute/path/to/yauth.db?mode=rwc").await?;
 let backend = SeaOrmSqliteBackend::from_connection(db);
-let yauth = YAuthBuilder::new(backend, config).build().await?;
+let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
+    .with_email_password(EmailPasswordConfig::default())
+    .build()
+    .await?;
 ```
 
 > Use an **absolute path** for SQLite: `sqlite:/absolute/path/to/yauth.db?mode=rwc`.
@@ -262,13 +303,17 @@ cargo yauth init --orm toasty --dialect postgres --plugins email-password
 ```
 
 ```rust
+use yauth::prelude::*;
 use yauth_toasty::pg::ToastyPgBackend;
 
 let schema = toasty::schema::from_file("schema/app.toasty").unwrap();
 let db = toasty::Db::builder(schema, toasty::driver::postgresql::Driver::connect(&database_url).await?).build();
 db.push_schema().await?;
 let backend = ToastyPgBackend::from_db(db.clone());
-let yauth = YAuthBuilder::new(backend, config).build().await?;
+let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
+    .with_email_password(EmailPasswordConfig::default())
+    .build()
+    .await?;
 ```
 
 ### Toasty + MySQL
@@ -281,13 +326,17 @@ cargo yauth init --orm toasty --dialect mysql --plugins email-password
 ```
 
 ```rust
+use yauth::prelude::*;
 use yauth_toasty::mysql::ToastyMysqlBackend;
 
 let schema = toasty::schema::from_file("schema/app.toasty").unwrap();
 let db = toasty::Db::builder(schema, toasty::driver::mysql::Driver::connect(&database_url).await?).build();
 db.push_schema().await?;
 let backend = ToastyMysqlBackend::from_db(db.clone());
-let yauth = YAuthBuilder::new(backend, config).build().await?;
+let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
+    .with_email_password(EmailPasswordConfig::default())
+    .build()
+    .await?;
 ```
 
 ### Toasty + SQLite
@@ -300,13 +349,17 @@ cargo yauth init --orm toasty --dialect sqlite --plugins email-password
 ```
 
 ```rust
+use yauth::prelude::*;
 use yauth_toasty::sqlite::ToastySqliteBackend;
 
 let schema = toasty::schema::from_file("schema/app.toasty").unwrap();
 let db = toasty::Db::builder(schema, toasty::driver::sqlite::Driver::open("yauth.db").await?).build();
 db.push_schema().await?;
 let backend = ToastySqliteBackend::from_db(db.clone());
-let yauth = YAuthBuilder::new(backend, config).build().await?;
+let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
+    .with_email_password(EmailPasswordConfig::default())
+    .build()
+    .await?;
 ```
 
 ## In-Memory (no database)
@@ -316,10 +369,14 @@ cargo add yauth --features email-password,memory-backend --no-default-features
 ```
 
 ```rust
+use yauth::prelude::*;
 use yauth::backends::memory::InMemoryBackend;
 
 let backend = InMemoryBackend::new();
-let yauth = YAuthBuilder::new(backend, config).build().await?;
+let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
+    .with_email_password(EmailPasswordConfig::default())
+    .build()
+    .await?;
 ```
 
 ## Redis Caching

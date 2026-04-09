@@ -117,6 +117,8 @@ diesel migration run
 ```
 
 ```rust
+// prelude re-exports YAuthBuilder, YAuthConfig, EmailPasswordConfig,
+// PasskeyConfig, MfaConfig, and other plugin config types.
 use yauth::prelude::*;
 use yauth::backends::diesel_pg::DieselPgBackend;
 
@@ -127,12 +129,10 @@ async fn main() {
 
     let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
         .with_email_password(EmailPasswordConfig::default())
-        .with_passkey(PasskeyConfig {
-            rp_id: "myapp.example.com".into(),
-            rp_origin: "https://myapp.example.com".into(),
-            rp_name: "My App".into(),
-        })
-        .with_mfa(MfaConfig::default())
+        // Enable additional plugins by adding their feature flags to Cargo.toml
+        // (e.g., features = ["email-password", "passkey", "mfa"]):
+        // .with_passkey(PasskeyConfig { rp_id: "...".into(), rp_origin: "...".into(), rp_name: "...".into() })
+        // .with_mfa(MfaConfig::default())
         .build()
         .await
         .expect("Failed to build YAuth");

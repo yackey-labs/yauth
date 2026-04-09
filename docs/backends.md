@@ -203,7 +203,7 @@ sea-orm-cli migrate up
 ```rust
 use yauth::backends::seaorm_sqlite::SeaOrmSqliteBackend;
 
-let db = sea_orm::Database::connect("sqlite:./yauth.db?mode=rwc").await?;
+let db = sea_orm::Database::connect("sqlite:/absolute/path/to/yauth.db?mode=rwc").await?;
 let backend = SeaOrmSqliteBackend::from_connection(db);
 let yauth = YAuthBuilder::new(backend, config).build().await?;
 ```

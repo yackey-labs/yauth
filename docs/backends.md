@@ -304,7 +304,9 @@ yauth-toasty = { path = "...", features = ["sqlite", "email-password"] }
 # yauth-toasty = { path = "...", features = ["sqlite"] }
 ```
 
-**`push_schema()`** creates or updates database tables to match Toasty model definitions. It is idempotent — safe to call on every startup. Unlike other backends where you run `cargo yauth generate` + your ORM's migration CLI, Toasty manages schema directly. You still run `cargo yauth init --orm toasty` to generate Toasty model files (the `.toasty` schema file that `from_file()` reads).
+**`create_tables()`** (which calls Toasty's `push_schema()`) creates or updates database tables. It is idempotent — safe to call on every startup. Unlike other backends where you run `cargo yauth generate` + your ORM's migration CLI, Toasty manages schema directly via `#[derive(toasty::Model)]` structs compiled into the crate.
+
+Each Toasty backend has a `new(url)` constructor that handles schema registration and connection internally, plus a `from_db(db)` for advanced cases where you share a `Db` with your own models. Call `create_tables()` after construction to run `push_schema()`.
 
 ### Toasty + PostgreSQL
 
@@ -312,7 +314,6 @@ yauth-toasty = { path = "...", features = ["sqlite", "email-password"] }
 cargo add yauth --no-default-features
 cargo add yauth-toasty --git https://github.com/yackey-labs/yauth --features postgresql,email-password
 cargo add toasty@0.3 --no-default-features --features postgresql
-cargo yauth init --orm toasty --dialect postgres --plugins email-password
 ```
 
 ```rust
@@ -320,10 +321,9 @@ use yauth::prelude::*;
 use yauth_toasty::pg::ToastyPgBackend;
 
 let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-let schema = toasty::schema::from_file("schema/app.toasty").unwrap();
-let db = toasty::Db::builder(schema, toasty::driver::postgresql::Driver::connect(&database_url).await?).build();
-db.push_schema().await?;
-let backend = ToastyPgBackend::from_db(db.clone());
+let backend = ToastyPgBackend::new(&database_url).await.unwrap();
+backend.create_tables().await.unwrap(); // runs push_schema() — idempotent, safe on every startup
+
 let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
     .with_email_password(EmailPasswordConfig::default())
     .build()
@@ -336,7 +336,6 @@ let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
 cargo add yauth --no-default-features
 cargo add yauth-toasty --git https://github.com/yackey-labs/yauth --features mysql,email-password
 cargo add toasty@0.3 --no-default-features --features mysql
-cargo yauth init --orm toasty --dialect mysql --plugins email-password
 ```
 
 ```rust
@@ -344,10 +343,9 @@ use yauth::prelude::*;
 use yauth_toasty::mysql::ToastyMysqlBackend;
 
 let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-let schema = toasty::schema::from_file("schema/app.toasty").unwrap();
-let db = toasty::Db::builder(schema, toasty::driver::mysql::Driver::connect(&database_url).await?).build();
-db.push_schema().await?;
-let backend = ToastyMysqlBackend::from_db(db.clone());
+let backend = ToastyMysqlBackend::new(&database_url).await.unwrap();
+backend.create_tables().await.unwrap();
+
 let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
     .with_email_password(EmailPasswordConfig::default())
     .build()
@@ -360,21 +358,30 @@ let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
 cargo add yauth --no-default-features
 cargo add yauth-toasty --git https://github.com/yackey-labs/yauth --features sqlite,email-password
 cargo add toasty@0.3 --no-default-features --features sqlite
-cargo yauth init --orm toasty --dialect sqlite --plugins email-password
 ```
 
 ```rust
 use yauth::prelude::*;
 use yauth_toasty::sqlite::ToastySqliteBackend;
 
-let schema = toasty::schema::from_file("schema/app.toasty").unwrap();
-let db = toasty::Db::builder(schema, toasty::driver::sqlite::Driver::open("yauth.db").await?).build();
-db.push_schema().await?;
-let backend = ToastySqliteBackend::from_db(db.clone());
+let backend = ToastySqliteBackend::new("sqlite://yauth.db").await.unwrap();
+backend.create_tables().await.unwrap();
+
 let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
     .with_email_password(EmailPasswordConfig::default())
     .build()
     .await?;
+```
+
+For advanced usage (sharing a `Db` with your own Toasty models), use `from_db()`:
+
+```rust
+let db = toasty::Db::builder()
+    .table_name_prefix("yauth_")
+    .models(toasty::models!(crate::*, yauth_toasty::*))
+    .connect("sqlite://app.db")
+    .await?;
+let backend = ToastySqliteBackend::from_db(db);
 ```
 
 ## In-Memory (no database)

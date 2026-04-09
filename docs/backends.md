@@ -109,7 +109,9 @@ let backend = SqlxPgBackend::from_pool(pool);
 let yauth = YAuthBuilder::new(backend, config).build().await?;
 ```
 
-> **sqlx backends use `query!()` macros** — set `DATABASE_URL` at compile time and run migrations first. Apply with `sqlx migrate run`, then build with `DATABASE_URL=postgres://... cargo build`.
+> **Note:** If you use sqlx's compile-time `query!()` macros in your own code, you'll need `DATABASE_URL` set at build time. yauth itself uses runtime queries, so `cargo check` and `cargo build` work without it. Either way, run migrations first: `sqlx migrate run`.
+>
+> You'll need `sqlx` as a direct dependency: `cargo add sqlx --features runtime-tokio,postgres`.
 
 ## sqlx + MySQL
 
@@ -127,7 +129,9 @@ let backend = SqlxMysqlBackend::from_pool(pool);
 let yauth = YAuthBuilder::new(backend, config).build().await?;
 ```
 
-> Requires `DATABASE_URL` at compile time. Apply migrations with `sqlx migrate run` first.
+> yauth uses runtime queries, so `DATABASE_URL` is not required at compile time. Run migrations first: `sqlx migrate run`.
+>
+> You'll need `sqlx` as a direct dependency: `cargo add sqlx --features runtime-tokio,mysql`.
 
 ## sqlx + SQLite
 
@@ -146,6 +150,8 @@ let yauth = YAuthBuilder::new(backend, config).build().await?;
 ```
 
 > Use an **absolute path** for SQLite: `DATABASE_URL=sqlite:/absolute/path/to/yauth.db`.
+>
+> You'll need `sqlx` as a direct dependency: `cargo add sqlx --features runtime-tokio,sqlite`.
 
 ## SeaORM + PostgreSQL
 
@@ -202,7 +208,13 @@ let backend = SeaOrmSqliteBackend::from_connection(db);
 let yauth = YAuthBuilder::new(backend, config).build().await?;
 ```
 
-## Toasty + PostgreSQL (experimental, separate crate)
+## Toasty Backends (experimental)
+
+Toasty backends are in a separate `yauth-toasty` crate (due to a Cargo `links` conflict with sqlx). Toasty is a pre-1.0 ORM — add it from [crates.io](https://crates.io/crates/toasty).
+
+**`push_schema()`** creates or updates the database tables to match the Toasty model definitions. It is idempotent — safe to call on every startup. Unlike other backends where you run `cargo yauth generate` + your ORM's migration CLI, Toasty manages schema directly. You still run `cargo yauth init --orm toasty` to generate Toasty model files.
+
+### Toasty + PostgreSQL
 
 ```bash
 cargo add yauth --no-default-features --features email-password
@@ -214,13 +226,14 @@ cargo yauth init --orm toasty --dialect postgres --plugins email-password
 ```rust
 use yauth_toasty::pg::ToastyPgBackend;
 
-let db = /* your toasty::Db */;
-db.push_schema().await?;  // Toasty manages its own schema
+let schema = toasty::schema::from_file("schema/app.toasty").unwrap();
+let db = toasty::Db::builder(schema, toasty::driver::postgresql::Driver::connect(&database_url).await?).build();
+db.push_schema().await?;
 let backend = ToastyPgBackend::from_db(db.clone());
 let yauth = YAuthBuilder::new(backend, config).build().await?;
 ```
 
-## Toasty + MySQL (experimental, separate crate)
+### Toasty + MySQL
 
 ```bash
 cargo add yauth --no-default-features --features email-password
@@ -232,13 +245,14 @@ cargo yauth init --orm toasty --dialect mysql --plugins email-password
 ```rust
 use yauth_toasty::mysql::ToastyMysqlBackend;
 
-let db = /* your toasty::Db */;
-db.push_schema().await?;  // Toasty manages its own schema
+let schema = toasty::schema::from_file("schema/app.toasty").unwrap();
+let db = toasty::Db::builder(schema, toasty::driver::mysql::Driver::connect(&database_url).await?).build();
+db.push_schema().await?;
 let backend = ToastyMysqlBackend::from_db(db.clone());
 let yauth = YAuthBuilder::new(backend, config).build().await?;
 ```
 
-## Toasty + SQLite (experimental, separate crate)
+### Toasty + SQLite
 
 ```bash
 cargo add yauth --no-default-features --features email-password
@@ -250,8 +264,9 @@ cargo yauth init --orm toasty --dialect sqlite --plugins email-password
 ```rust
 use yauth_toasty::sqlite::ToastySqliteBackend;
 
-let db = /* your toasty::Db */;
-db.push_schema().await?;  // Toasty manages its own schema
+let schema = toasty::schema::from_file("schema/app.toasty").unwrap();
+let db = toasty::Db::builder(schema, toasty::driver::sqlite::Driver::open("yauth.db").await?).build();
+db.push_schema().await?;
 let backend = ToastySqliteBackend::from_db(db.clone());
 let yauth = YAuthBuilder::new(backend, config).build().await?;
 ```

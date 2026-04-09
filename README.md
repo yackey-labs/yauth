@@ -82,7 +82,7 @@ Custom plugins can be added via `builder.with_plugin(Box::new(MyPlugin))`.
 | `SeaOrmSqliteBackend` | `seaorm-sqlite-backend` | SeaORM | SQLite |
 | `InMemoryBackend` | `memory-backend` | -- | None |
 
-Toasty backends (experimental) are in a [separate crate](docs/backends.md#toasty--postgresql-experimental-separate-crate). All backends accept pools/connections you create. See [docs/backends.md](docs/backends.md) for setup instructions for every backend.
+Toasty backends (experimental) are in a [separate crate](docs/backends.md#toasty-backends-experimental). All backends accept pools/connections you create. See [docs/backends.md](docs/backends.md) for setup instructions for every backend.
 
 ### 2. Pick your plugins
 
@@ -107,6 +107,8 @@ Infrastructure features: `telemetry` (OpenTelemetry), `openapi` (utoipa spec gen
 Use `full` to enable all auth plugins, then add one backend: `features = ["full", "diesel-pg-backend"]`.
 
 ### 3. Wire it up
+
+This example uses Diesel + PostgreSQL (the default backend). For other backends (sqlx, SeaORM, Toasty, SQLite, MySQL), see [docs/backends.md](docs/backends.md) — the builder pattern is identical, only the pool type and import change.
 
 ```bash
 cargo add yauth --features email-password

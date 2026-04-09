@@ -1,3 +1,9 @@
+## 0.9.2 (2026-04-09)
+
+### Fixes
+
+- align MySQL challenge repo with JSON column type from DDL
+
 ## 0.9.1 (2026-04-09)
 
 ### Fixes

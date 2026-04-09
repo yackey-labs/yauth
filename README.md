@@ -82,7 +82,7 @@ Custom plugins can be added via `builder.with_plugin(Box::new(MyPlugin))`.
 | `SeaOrmSqliteBackend` | `seaorm-sqlite-backend` | SeaORM | SQLite |
 | `InMemoryBackend` | `memory-backend` | -- | None |
 
-Toasty backends (experimental) are in a [separate crate](docs/backends.md#toasty-backends-experimental). All backends accept pools/connections you create. See [docs/backends.md](docs/backends.md) for setup instructions for every backend.
+Toasty backends (experimental) are in a [separate crate](docs/backends.md#toasty-backends-experimental) — enable plugin features on `yauth-toasty`, not `yauth` (see docs for details). All backends accept pools/connections you create. See [docs/backends.md](docs/backends.md) for setup instructions for every backend.
 
 ### 2. Pick your plugins
 

@@ -289,16 +289,29 @@ let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
 
 ## Toasty Backends (experimental)
 
-Toasty backends are in a separate `yauth-toasty` crate (due to a Cargo `links` conflict with sqlx). Toasty is a pre-1.0 ORM — add it from [crates.io](https://crates.io/crates/toasty).
+Toasty backends are in a separate `yauth-toasty` crate (due to a Cargo `links` conflict with sqlx). Toasty (`toasty` v0.3 on [crates.io](https://crates.io/crates/toasty)) is a pre-1.0 ORM.
 
-**`push_schema()`** creates or updates the database tables to match the Toasty model definitions. It is idempotent — safe to call on every startup. Unlike other backends where you run `cargo yauth generate` + your ORM's migration CLI, Toasty manages schema directly. You still run `cargo yauth init --orm toasty` to generate Toasty model files.
+**Important:** Enable auth plugin features (e.g., `email-password`) on `yauth-toasty`, not on `yauth` directly. `yauth-toasty` re-exports yauth's features and needs them to compile its own repository implementations. If you enable `email-password` only on `yauth`, the `Repositories` struct will expect fields that `yauth-toasty` hasn't compiled, causing a build error.
+
+```toml
+# Correct — features on yauth-toasty
+[dependencies]
+yauth = { path = "...", default-features = false }
+yauth-toasty = { path = "...", features = ["sqlite", "email-password"] }
+
+# Wrong — features on yauth but not yauth-toasty (will not compile)
+# yauth = { path = "...", features = ["email-password"] }
+# yauth-toasty = { path = "...", features = ["sqlite"] }
+```
+
+**`push_schema()`** creates or updates database tables to match Toasty model definitions. It is idempotent — safe to call on every startup. Unlike other backends where you run `cargo yauth generate` + your ORM's migration CLI, Toasty manages schema directly. You still run `cargo yauth init --orm toasty` to generate Toasty model files (the `.toasty` schema file that `from_file()` reads).
 
 ### Toasty + PostgreSQL
 
 ```bash
-cargo add yauth --no-default-features --features email-password
-cargo add yauth-toasty --git https://github.com/yackey-labs/yauth --features postgresql
-cargo add toasty --no-default-features --features postgresql
+cargo add yauth --no-default-features
+cargo add yauth-toasty --git https://github.com/yackey-labs/yauth --features postgresql,email-password
+cargo add toasty@0.3 --no-default-features --features postgresql
 cargo yauth init --orm toasty --dialect postgres --plugins email-password
 ```
 
@@ -306,6 +319,7 @@ cargo yauth init --orm toasty --dialect postgres --plugins email-password
 use yauth::prelude::*;
 use yauth_toasty::pg::ToastyPgBackend;
 
+let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
 let schema = toasty::schema::from_file("schema/app.toasty").unwrap();
 let db = toasty::Db::builder(schema, toasty::driver::postgresql::Driver::connect(&database_url).await?).build();
 db.push_schema().await?;
@@ -319,9 +333,9 @@ let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
 ### Toasty + MySQL
 
 ```bash
-cargo add yauth --no-default-features --features email-password
-cargo add yauth-toasty --git https://github.com/yackey-labs/yauth --features mysql
-cargo add toasty --no-default-features --features mysql
+cargo add yauth --no-default-features
+cargo add yauth-toasty --git https://github.com/yackey-labs/yauth --features mysql,email-password
+cargo add toasty@0.3 --no-default-features --features mysql
 cargo yauth init --orm toasty --dialect mysql --plugins email-password
 ```
 
@@ -329,6 +343,7 @@ cargo yauth init --orm toasty --dialect mysql --plugins email-password
 use yauth::prelude::*;
 use yauth_toasty::mysql::ToastyMysqlBackend;
 
+let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
 let schema = toasty::schema::from_file("schema/app.toasty").unwrap();
 let db = toasty::Db::builder(schema, toasty::driver::mysql::Driver::connect(&database_url).await?).build();
 db.push_schema().await?;
@@ -342,9 +357,9 @@ let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
 ### Toasty + SQLite
 
 ```bash
-cargo add yauth --no-default-features --features email-password
-cargo add yauth-toasty --git https://github.com/yackey-labs/yauth --features sqlite
-cargo add toasty --no-default-features --features sqlite
+cargo add yauth --no-default-features
+cargo add yauth-toasty --git https://github.com/yackey-labs/yauth --features sqlite,email-password
+cargo add toasty@0.3 --no-default-features --features sqlite
 cargo yauth init --orm toasty --dialect sqlite --plugins email-password
 ```
 

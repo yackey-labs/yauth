@@ -57,16 +57,21 @@ impl ChallengeRepository for MysqlChallengeRepo {
             {
                 use diesel_async_crate::RunQueryDsl;
 
-                // MySQL uses ON DUPLICATE KEY UPDATE instead of ON CONFLICT
+                let value_str =
+                    serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string());
+
+                // MySQL uses ON DUPLICATE KEY UPDATE instead of ON CONFLICT.
+                // Bind JSON value as Text — diesel's MySQL backend serializes it correctly
+                // into the JSON column via implicit cast.
                 diesel::sql_query(
                     "INSERT INTO yauth_challenges (`key`, value, expires_at) \
-                     VALUES (?, ?, DATE_ADD(NOW(), INTERVAL ? SECOND)) \
+                     VALUES (?, CAST(? AS JSON), DATE_ADD(NOW(), INTERVAL ? SECOND)) \
                      AS new_row \
                      ON DUPLICATE KEY UPDATE \
                      `value` = new_row.`value`, `expires_at` = new_row.`expires_at`",
                 )
                 .bind::<diesel::sql_types::Text, _>(&key)
-                .bind::<diesel::sql_types::Json, _>(&value)
+                .bind::<diesel::sql_types::Text, _>(&value_str)
                 .bind::<diesel::sql_types::BigInt, _>(ttl_secs as i64)
                 .execute(&mut *conn)
                 .await
@@ -86,15 +91,15 @@ impl ChallengeRepository for MysqlChallengeRepo {
 
             #[derive(diesel::QueryableByName)]
             struct ChallengeRow {
-                #[diesel(sql_type = diesel::sql_types::Json)]
-                value: serde_json::Value,
+                #[diesel(sql_type = diesel::sql_types::Text)]
+                value: String,
             }
 
             let result: Option<ChallengeRow> = {
                 use diesel::result::OptionalExtension;
                 use diesel_async_crate::RunQueryDsl;
                 diesel::sql_query(
-                    "SELECT value FROM yauth_challenges \
+                    "SELECT CAST(value AS CHAR) AS value FROM yauth_challenges \
                      WHERE `key` = ? AND expires_at > NOW() LIMIT 1",
                 )
                 .bind::<diesel::sql_types::Text, _>(&key)
@@ -105,7 +110,10 @@ impl ChallengeRepository for MysqlChallengeRepo {
             };
 
             match result {
-                Some(row) => Ok(Some(row.value)),
+                Some(row) => {
+                    let v = serde_json::from_str(&row.value).unwrap_or(serde_json::Value::Null);
+                    Ok(Some(v))
+                }
                 None => {
                     // Clean up any expired entry for this key
                     use diesel_async_crate::RunQueryDsl;

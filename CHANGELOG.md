@@ -1,3 +1,28 @@
+## 0.9.0 (2026-04-09)
+
+### Breaking Changes
+
+- DatabaseBackend trait no longer has migrate().
+All backends now require from_pool()/from_connection()/from_db()
+instead of new(url). yauth-migration is now a build-time-only
+dependency of cargo-yauth, not of the yauth crate.
+
+- Remove migrate() from DatabaseBackend trait and all backends
+- Remove new(url) constructors from all backends
+- Remove YAuth::schema() and YAuth::generate_ddl()
+- Remove fn schema() from YAuthPlugin trait
+- Remove schema module and diesel_migrations directory
+- Move yauth-migration to dev-dependencies
+- Add sqlx query file generation to cargo yauth generate
+- Add table descriptions and self-documenting comments to DDL
+- Add guided CLI output for all ORMs
+- Update test helpers to use raw SQL schema setup
+- Update README, CLAUDE.md, and examples
+
+### Features
+
+- remove runtime migrations, backends accept pools only
+
 ## 0.8.13 (2026-04-08)
 
 ### Features

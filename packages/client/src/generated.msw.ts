@@ -3,7 +3,7 @@
  * Do not edit manually.
  * yauth API
  * Modular, plugin-based authentication API for Axum applications.
- * OpenAPI spec version: 0.8.13
+ * OpenAPI spec version: 0.9.0
  */
 import {
   faker

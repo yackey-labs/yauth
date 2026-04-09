@@ -1,3 +1,9 @@
+## 0.9.3 (2026-04-09)
+
+### Fixes
+
+- use dialect-specific query dirs and regenerate migration artifacts
+
 ## 0.9.2 (2026-04-09)
 
 ### Fixes

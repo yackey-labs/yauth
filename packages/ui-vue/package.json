@@ -1,6 +1,6 @@
 {
 	"name": "@yackey-labs/yauth-ui-vue",
-	"version": "0.9.3",
+	"version": "0.9.4",
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/yackey-labs/yauth"
@@ -32,8 +32,8 @@
 	},
 	"dependencies": {
 		"@simplewebauthn/browser": "^13.0.0",
-		"@yackey-labs/yauth-client": "0.9.3",
-		"@yackey-labs/yauth-shared": "0.9.3",
+		"@yackey-labs/yauth-client": "0.9.4",
+		"@yackey-labs/yauth-shared": "0.9.4",
 		"vue": "^3.5.0"
 	},
 	"devDependencies": {

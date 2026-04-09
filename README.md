@@ -424,6 +424,7 @@ All backends accept a pool or connection you create — yauth does not manage co
 #### Diesel + PostgreSQL (default)
 
 ```bash
+cargo add yauth --features email-password
 cargo yauth init --orm diesel --dialect postgres --plugins email-password
 diesel migration run
 ```
@@ -460,6 +461,7 @@ let yauth = YAuthBuilder::new(backend, config).build().await?;
 ```bash
 cargo add yauth --features email-password,diesel-libsql-backend --no-default-features
 cargo yauth init --orm diesel --dialect sqlite --plugins email-password
+diesel migration run
 ```
 
 ```rust
@@ -478,6 +480,7 @@ let yauth = YAuthBuilder::new(backend, config).build().await?;
 ```bash
 cargo add yauth --features email-password,diesel-sqlite-backend --no-default-features
 cargo yauth init --orm diesel --dialect sqlite --plugins email-password
+diesel migration run
 ```
 
 ```rust
@@ -546,9 +549,9 @@ let yauth = YAuthBuilder::new(backend, config).build().await?;
 #### SeaORM + PostgreSQL
 
 ```bash
-cargo add yauth --no-default-features --features full,seaorm-pg-backend
+cargo add yauth --no-default-features --features email-password,seaorm-pg-backend
 cargo yauth init --orm seaorm --dialect postgres --plugins email-password
-# Apply generated migrations with sea-orm-cli
+sea-orm-cli migrate up
 ```
 
 ```rust
@@ -557,10 +560,74 @@ use yauth::backends::seaorm_pg::SeaOrmPgBackend;
 let db = sea_orm::Database::connect(&database_url).await?;
 let backend = SeaOrmPgBackend::from_connection(db);
 let yauth = YAuthBuilder::new(backend, config).build().await?;
+```
 
-// SeaORM backends export entity types for your own queries:
-// use yauth::backends::seaorm_pg::entities::users;
-// let user = users::Entity::find_by_id(id).one(&db).await?;
+#### SeaORM + MySQL
+
+```bash
+cargo add yauth --no-default-features --features email-password,seaorm-mysql-backend
+cargo yauth init --orm seaorm --dialect mysql --plugins email-password
+sea-orm-cli migrate up
+```
+
+```rust
+use yauth::backends::seaorm_mysql::SeaOrmMysqlBackend;
+
+let db = sea_orm::Database::connect(&database_url).await?;
+let backend = SeaOrmMysqlBackend::from_connection(db);
+let yauth = YAuthBuilder::new(backend, config).build().await?;
+```
+
+#### SeaORM + SQLite
+
+```bash
+cargo add yauth --no-default-features --features email-password,seaorm-sqlite-backend
+cargo yauth init --orm seaorm --dialect sqlite --plugins email-password
+sea-orm-cli migrate up
+```
+
+```rust
+use yauth::backends::seaorm_sqlite::SeaOrmSqliteBackend;
+
+let db = sea_orm::Database::connect("sqlite:./yauth.db?mode=rwc").await?;
+let backend = SeaOrmSqliteBackend::from_connection(db);
+let yauth = YAuthBuilder::new(backend, config).build().await?;
+```
+
+#### Toasty + PostgreSQL (experimental, separate crate)
+
+```bash
+cargo add yauth --no-default-features --features email-password
+cargo add yauth-toasty --git https://github.com/yackey-labs/yauth --features postgresql
+cargo add toasty --no-default-features --features postgresql
+cargo yauth init --orm toasty --dialect postgres --plugins email-password
+```
+
+```rust
+use yauth_toasty::pg::ToastyPgBackend;
+
+let db = /* your toasty::Db */;
+db.push_schema().await?;  // Toasty manages its own schema
+let backend = ToastyPgBackend::from_db(db.clone());
+let yauth = YAuthBuilder::new(backend, config).build().await?;
+```
+
+#### Toasty + MySQL (experimental, separate crate)
+
+```bash
+cargo add yauth --no-default-features --features email-password
+cargo add yauth-toasty --git https://github.com/yackey-labs/yauth --features mysql
+cargo add toasty --no-default-features --features mysql
+cargo yauth init --orm toasty --dialect mysql --plugins email-password
+```
+
+```rust
+use yauth_toasty::mysql::ToastyMysqlBackend;
+
+let db = /* your toasty::Db */;
+db.push_schema().await?;  // Toasty manages its own schema
+let backend = ToastyMysqlBackend::from_db(db.clone());
+let yauth = YAuthBuilder::new(backend, config).build().await?;
 ```
 
 #### Toasty + SQLite (experimental, separate crate)
@@ -569,8 +636,6 @@ let yauth = YAuthBuilder::new(backend, config).build().await?;
 cargo add yauth --no-default-features --features email-password
 cargo add yauth-toasty --git https://github.com/yackey-labs/yauth --features sqlite
 cargo add toasty --no-default-features --features sqlite
-
-# Generate model files
 cargo yauth init --orm toasty --dialect sqlite --plugins email-password
 ```
 

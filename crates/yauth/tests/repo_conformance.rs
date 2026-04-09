@@ -2936,10 +2936,10 @@ fn challenge_expired_returns_none() {
             let _span = helpers::otel::TestSpan::new("challenge_expired_returns_none", name);
             let key = format!("chal_exp_{}", Uuid::now_v7());
 
-            // Set with 1-second TTL
+            // Set with 3-second TTL (must be >1s for MySQL DATETIME second-precision)
             repos
                 .challenges
-                .set_challenge(&key, json!({"test": true}), 1)
+                .set_challenge(&key, json!({"test": true}), 3)
                 .await
                 .unwrap_or_else(|e| panic!("{name}: set_challenge: {e}"));
 
@@ -2955,7 +2955,7 @@ fn challenge_expired_returns_none() {
             );
 
             // Wait for TTL to expire
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            tokio::time::sleep(std::time::Duration::from_secs(4)).await;
 
             let after = repos
                 .challenges

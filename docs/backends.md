@@ -22,45 +22,63 @@ Generate migration files with `cargo yauth generate`, apply them with your ORM's
 
 yauth does not run migrations. Use `cargo yauth generate` to produce migration files for your ORM, then apply them with your ORM's CLI (`diesel migration run`, `sqlx migrate run`, `sea-orm-cli migrate`, etc.).
 
-## Diesel + PostgreSQL (default)
+## Diesel Backends
+
+All Diesel backends use `diesel-async` 0.8 with deadpool for connection pooling. yauth re-exports the pool types so you don't need `diesel-async` as a direct dependency — but you do need `diesel` for the connection type.
+
+### Diesel + PostgreSQL (default)
 
 ```bash
 cargo add yauth --features email-password
+cargo add diesel --features postgres
 cargo yauth init --orm diesel --dialect postgres --plugins email-password
 diesel migration run
 ```
 
 ```rust
-use yauth::backends::diesel_pg::DieselPgBackend;
+use yauth::backends::diesel_pg::{DieselPgBackend, DieselPool, AsyncDieselConnectionManager};
+use diesel_async::AsyncPgConnection;
 
-let pool = /* your diesel-async deadpool */;
+let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+let config = AsyncDieselConnectionManager::<AsyncPgConnection>::new(&database_url);
+let pool = DieselPool::builder(config).build().unwrap();
+
 let backend = DieselPgBackend::from_pool(pool);
-// Or with a custom PostgreSQL schema:
-let backend = DieselPgBackend::from_pool_with_schema(pool, "auth");
+// Or isolate yauth tables in a custom PostgreSQL schema:
+// let backend = DieselPgBackend::from_pool_with_schema(pool, "auth")?;
 
 let yauth = YAuthBuilder::new(backend, config).build().await?;
 ```
 
-## Diesel + MySQL / MariaDB
+### Diesel + MySQL / MariaDB
 
 ```bash
 cargo add yauth --features email-password,diesel-mysql-backend --no-default-features
+cargo add diesel --features mysql_backend
 cargo yauth init --orm diesel --dialect mysql --plugins email-password
 diesel migration run
 ```
 
 ```rust
 use yauth::backends::diesel_mysql::DieselMysqlBackend;
+use diesel_async::pooled_connection::{AsyncDieselConnectionManager, deadpool::Pool};
+use diesel_async::AsyncMysqlConnection;
 
-let pool = /* your diesel-async deadpool */;
+let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+let config = AsyncDieselConnectionManager::<AsyncMysqlConnection>::new(&database_url);
+let pool = Pool::builder(config).build().unwrap();
+
 let backend = DieselMysqlBackend::from_pool(pool);
 let yauth = YAuthBuilder::new(backend, config).build().await?;
 ```
 
-## Diesel + SQLite / Turso (diesel-libsql)
+> You'll need `diesel-async` as a direct dependency for the pool types: `cargo add diesel-async --features mysql,deadpool`.
+
+### Diesel + SQLite / Turso (diesel-libsql)
 
 ```bash
 cargo add yauth --features email-password,diesel-libsql-backend --no-default-features
+cargo add diesel-libsql --features async,deadpool
 cargo yauth init --orm diesel --dialect sqlite --plugins email-password
 diesel migration run
 ```
@@ -68,30 +86,40 @@ diesel migration run
 ```rust
 use yauth::backends::diesel_libsql::DieselLibsqlBackend;
 
-let pool = /* your diesel-libsql connection pool */;
-let backend = DieselLibsqlBackend::from_pool(pool);
+// Local file:
+let pool = diesel_libsql::deadpool::new_pool("file:yauth.db").unwrap();
+// Or remote Turso:
+// let pool = diesel_libsql::deadpool::new_pool("libsql://your-db.turso.io?authToken=...").unwrap();
 
+let backend = DieselLibsqlBackend::from_pool(pool);
 let yauth = YAuthBuilder::new(backend, config).build().await?;
 ```
 
-## Diesel + Native SQLite
+### Diesel + Native SQLite
 
 > Requires `libsqlite3-dev` (Debian/Ubuntu) or `sqlite3` (macOS Homebrew) system package.
 
 ```bash
 cargo add yauth --features email-password,diesel-sqlite-backend --no-default-features
+cargo add diesel --features sqlite
+cargo add diesel-async --features deadpool,sqlite
 cargo yauth init --orm diesel --dialect sqlite --plugins email-password
 diesel migration run
 ```
 
 ```rust
-use yauth::backends::diesel_sqlite::DieselSqliteBackend;
+use yauth::backends::diesel_sqlite::{DieselSqliteBackend, SqlitePool, SqliteAsyncConn};
+use diesel_async::pooled_connection::{AsyncDieselConnectionManager, deadpool::Pool};
 
-let pool = /* your diesel SyncConnectionWrapper pool */;
+let database_url = "yauth.db"; // path to SQLite file
+let config = AsyncDieselConnectionManager::<SqliteAsyncConn>::new(database_url);
+let pool: SqlitePool = Pool::builder(config).build().unwrap();
+
 let backend = DieselSqliteBackend::from_pool(pool);
-
 let yauth = YAuthBuilder::new(backend, config).build().await?;
 ```
+
+> `SqliteAsyncConn` and `SqlitePool` are re-exported by yauth for convenience. Under the hood, `SqliteAsyncConn` is `SyncConnectionWrapper<diesel::SqliteConnection>`.
 
 ## sqlx + PostgreSQL
 
@@ -153,10 +181,17 @@ let yauth = YAuthBuilder::new(backend, config).build().await?;
 >
 > You'll need `sqlx` as a direct dependency: `cargo add sqlx --features runtime-tokio,sqlite`.
 
-## SeaORM + PostgreSQL
+## SeaORM Backends
+
+SeaORM backends use SeaORM 2.0 (pre-release). You'll need `sea-orm` as a direct dependency.
+
+SeaORM backends export their entity types publicly, so you can use yauth tables in your own SeaORM queries.
+
+### SeaORM + PostgreSQL
 
 ```bash
 cargo add yauth --no-default-features --features email-password,seaorm-pg-backend
+cargo add sea-orm --version '=2.0.0-rc.37' --features sqlx-postgres,runtime-tokio-rustls
 cargo yauth init --orm seaorm --dialect postgres --plugins email-password
 sea-orm-cli migrate up
 ```
@@ -164,22 +199,21 @@ sea-orm-cli migrate up
 ```rust
 use yauth::backends::seaorm_pg::SeaOrmPgBackend;
 
+let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
 let db = sea_orm::Database::connect(&database_url).await?;
 let backend = SeaOrmPgBackend::from_connection(db);
 let yauth = YAuthBuilder::new(backend, config).build().await?;
+
+// Use yauth entities in your own queries:
+// use yauth::backends::seaorm_pg::entities::users;
+// let user = users::Entity::find_by_id(id).one(&db).await?;
 ```
 
-SeaORM backends export their entity types publicly, so you can use yauth tables in your own SeaORM queries:
-
-```rust
-use yauth::backends::seaorm_pg::entities::users;
-let user = users::Entity::find_by_id(id).one(&db).await?;
-```
-
-## SeaORM + MySQL
+### SeaORM + MySQL
 
 ```bash
 cargo add yauth --no-default-features --features email-password,seaorm-mysql-backend
+cargo add sea-orm --version '=2.0.0-rc.37' --features sqlx-mysql,runtime-tokio-rustls
 cargo yauth init --orm seaorm --dialect mysql --plugins email-password
 sea-orm-cli migrate up
 ```
@@ -187,15 +221,17 @@ sea-orm-cli migrate up
 ```rust
 use yauth::backends::seaorm_mysql::SeaOrmMysqlBackend;
 
+let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
 let db = sea_orm::Database::connect(&database_url).await?;
 let backend = SeaOrmMysqlBackend::from_connection(db);
 let yauth = YAuthBuilder::new(backend, config).build().await?;
 ```
 
-## SeaORM + SQLite
+### SeaORM + SQLite
 
 ```bash
 cargo add yauth --no-default-features --features email-password,seaorm-sqlite-backend
+cargo add sea-orm --version '=2.0.0-rc.37' --features sqlx-sqlite,runtime-tokio-rustls
 cargo yauth init --orm seaorm --dialect sqlite --plugins email-password
 sea-orm-cli migrate up
 ```
@@ -207,6 +243,8 @@ let db = sea_orm::Database::connect("sqlite:/absolute/path/to/yauth.db?mode=rwc"
 let backend = SeaOrmSqliteBackend::from_connection(db);
 let yauth = YAuthBuilder::new(backend, config).build().await?;
 ```
+
+> Use an **absolute path** for SQLite: `sqlite:/absolute/path/to/yauth.db?mode=rwc`.
 
 ## Toasty Backends (experimental)
 

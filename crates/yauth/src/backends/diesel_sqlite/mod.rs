@@ -54,11 +54,9 @@ mod account_lockout_repo;
 #[cfg(feature = "webhooks")]
 mod webhooks_repo;
 
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 
-use crate::repo::{DatabaseBackend, EnabledFeatures, RepoError, Repositories};
+use crate::repo::{DatabaseBackend, Repositories};
 
 /// Type alias for the SQLite async connection (sync connection wrapped for async use).
 pub type SqliteAsyncConn =
@@ -73,62 +71,32 @@ pub type SqlitePool = diesel_async_crate::pooled_connection::deadpool::Pool<Sqli
 /// compatibility. Supports file-based databases and `:memory:` databases.
 pub struct DieselSqliteBackend {
     pool: SqlitePool,
+    /// Whether this is an in-memory database. Stored for diagnostics.
+    #[allow(dead_code)]
     is_memory: bool,
 }
 
 impl DieselSqliteBackend {
-    /// Create from a database URL.
-    ///
-    /// Supported URL formats:
-    /// - `:memory:` or `file::memory:` for in-memory SQLite
-    /// - `file:path.db` or `/path/to/db.sqlite` for file databases
-    ///
-    /// In-memory databases use pool max_size=1 (one connection = one database).
-    /// File databases use WAL mode with pool size 8.
-    pub fn new(url: &str) -> Result<Self, RepoError> {
-        let config = diesel_async_crate::pooled_connection::AsyncDieselConnectionManager::<
-            SqliteAsyncConn,
-        >::new(url);
-
-        let is_memory =
-            url == ":memory:" || url == "file::memory:" || url.starts_with("file::memory:?");
-        let max_size = if is_memory { 1 } else { 8 };
-
-        let pool = diesel_async_crate::pooled_connection::deadpool::Pool::builder(config)
-            .max_size(max_size)
-            .build()
-            .map_err(|e| {
-                RepoError::Internal(format!("Failed to create SQLite pool: {e}").into())
-            })?;
-
-        Ok(Self { pool, is_memory })
-    }
-
     /// Create from an existing pool.
     ///
-    /// Assumes a file-based database (WAL pragma will be set during migration).
-    /// Use `from_pool_memory` for in-memory databases.
+    /// Assumes a file-based database. Use `from_pool_memory` for in-memory databases.
     pub fn from_pool(pool: SqlitePool) -> Self {
         Self {
             pool,
             is_memory: false,
         }
     }
+
+    /// Create from an existing pool for an in-memory database.
+    pub fn from_pool_memory(pool: SqlitePool) -> Self {
+        Self {
+            pool,
+            is_memory: true,
+        }
+    }
 }
 
 impl DatabaseBackend for DieselSqliteBackend {
-    fn migrate(
-        &self,
-        _features: &EnabledFeatures,
-    ) -> Pin<Box<dyn Future<Output = Result<(), RepoError>> + Send + '_>> {
-        let is_memory = self.is_memory;
-        Box::pin(async move {
-            run_sqlite_migrations(&self.pool, is_memory)
-                .await
-                .map_err(RepoError::Internal)
-        })
-    }
-
     fn repositories(&self) -> Repositories {
         Repositories {
             users: Arc::new(user_repo::SqliteUserRepo::new(self.pool.clone())),
@@ -210,97 +178,4 @@ impl DatabaseBackend for DieselSqliteBackend {
             )),
         }
     }
-}
-
-/// Run declarative migrations using the SQLite DDL generator.
-///
-/// When `is_memory` is true, the WAL journal mode pragma is skipped since
-/// in-memory databases do not support persistent journal modes.
-async fn run_sqlite_migrations(
-    pool: &SqlitePool,
-    is_memory: bool,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    use diesel_async_crate::{RunQueryDsl, SimpleAsyncConnection};
-
-    let table_lists = crate::schema::collect_feature_gated_schemas();
-    let merged = crate::schema::collect_schema(table_lists)
-        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-
-    let mut conn = pool.get().await.map_err(|e| {
-        Box::new(std::io::Error::other(e.to_string())) as Box<dyn std::error::Error + Send + Sync>
-    })?;
-
-    // Enable foreign keys
-    (*conn)
-        .batch_execute("PRAGMA foreign_keys = ON")
-        .await
-        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-
-    // Enable WAL mode for file-based databases only (in-memory databases ignore it)
-    if !is_memory {
-        (*conn)
-            .batch_execute("PRAGMA journal_mode = WAL")
-            .await
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-    }
-
-    // Create tracking table
-    (*conn)
-        .batch_execute(
-            "CREATE TABLE IF NOT EXISTS yauth_schema_migrations (\
-            id INTEGER PRIMARY KEY AUTOINCREMENT, \
-            schema_hash TEXT NOT NULL, \
-            applied_at TEXT NOT NULL DEFAULT (datetime('now'))\
-        )",
-        )
-        .await
-        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-
-    // Check schema hash
-    let hash = crate::schema::schema_hash(&merged);
-
-    use diesel::QueryableByName;
-    use diesel::sql_types::Integer;
-
-    #[derive(QueryableByName)]
-    struct CountRow {
-        #[diesel(sql_type = Integer)]
-        count: i32,
-    }
-
-    let query = diesel::sql_query(
-        "SELECT CAST(COUNT(*) AS INTEGER) AS count FROM yauth_schema_migrations WHERE schema_hash = ?",
-    )
-    .bind::<diesel::sql_types::Text, _>(&hash);
-    let rows: Vec<CountRow> = RunQueryDsl::load(query, &mut *conn)
-        .await
-        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-
-    let already_applied = rows.into_iter().next().is_some_and(|r| r.count > 0);
-    if already_applied {
-        return Ok(());
-    }
-
-    // Generate and run SQLite DDL
-    let ddl = crate::schema::generate_sqlite_ddl(&merged);
-
-    for statement in ddl.split(';') {
-        let trimmed = statement.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        (*conn)
-            .batch_execute(trimmed)
-            .await
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-    }
-
-    // Record the schema hash
-    diesel::sql_query("INSERT INTO yauth_schema_migrations (schema_hash) VALUES (?)")
-        .bind::<diesel::sql_types::Text, _>(&hash)
-        .execute(&mut *conn)
-        .await
-        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-
-    Ok(())
 }

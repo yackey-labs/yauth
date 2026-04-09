@@ -20,7 +20,7 @@ use chrono::{Duration, Utc};
 use serde_json::json;
 use std::sync::atomic::{AtomicU64, Ordering};
 use uuid::Uuid;
-use yauth::repo::{DatabaseBackend, EnabledFeatures, RepoError, Repositories};
+use yauth::repo::{DatabaseBackend, RepoError, Repositories};
 use yauth_entity as domain;
 
 use std::sync::OnceLock;
@@ -62,7 +62,7 @@ fn now() -> chrono::NaiveDateTime {
 }
 
 /// Shared backends — initialized once, reused across all parallel tests.
-/// PG and MySQL connect to shared databases (migration runs once via OnceCell).
+/// PG and MySQL connect to shared databases (schema set up once via OnceCell).
 /// Memory creates per-test instances (cheap, no shared state).
 use tokio::sync::OnceCell;
 
@@ -101,12 +101,9 @@ async fn shared_pg_repos() -> Option<Repositories> {
     PG_REPOS
         .get_or_init(|| async {
             let db = helpers::TestDb::shared().await?;
+            // Schema already set up by TestDb::init_schema via helpers::schema::setup_pg_schema_diesel
             use yauth::backends::diesel_pg::DieselPgBackend;
             let backend = DieselPgBackend::from_pool(db.pool.clone());
-            backend
-                .migrate(&EnabledFeatures::from_compile_flags())
-                .await
-                .expect("pg migrate");
             Some(backend.repositories())
         })
         .await
@@ -120,11 +117,16 @@ async fn shared_libsql_repos() -> Option<Repositories> {
             use yauth::backends::diesel_libsql::DieselLibsqlBackend;
             let url =
                 std::env::var("LIBSQL_LOCAL_URL").unwrap_or_else(|_| "file::memory:".to_string());
-            let backend = DieselLibsqlBackend::new(&url).expect("create libsql backend");
-            backend
-                .migrate(&EnabledFeatures::from_compile_flags())
-                .await
-                .expect("libsql migrate");
+            let is_memory =
+                url == ":memory:" || url == "file::memory:" || url.starts_with("file::memory:?");
+            let max_size = if is_memory { 1 } else { 8 };
+            let manager = diesel_libsql::deadpool::Manager::new(&url);
+            let pool = diesel_libsql::deadpool::Pool::builder(manager)
+                .max_size(max_size)
+                .build()
+                .expect("create libsql pool");
+            helpers::schema::setup_libsql_schema_diesel(&pool).await;
+            let backend = DieselLibsqlBackend::from_pool(pool);
             Some(backend.repositories())
         })
         .await
@@ -140,24 +142,22 @@ async fn shared_mysql_repos() -> Option<Repositories> {
                 Err(_) => return None,
             };
             use yauth::backends::diesel_mysql::DieselMysqlBackend;
-            match DieselMysqlBackend::new(&url) {
-                Ok(backend) => {
-                    if backend
-                        .migrate(&EnabledFeatures::from_compile_flags())
-                        .await
-                        .is_ok()
-                    {
-                        Some(backend.repositories())
-                    } else {
-                        eprintln!("MySQL migration failed, skipping");
-                        None
-                    }
-                }
+            let config = diesel_async_crate::pooled_connection::AsyncDieselConnectionManager::<
+                diesel_async_crate::AsyncMysqlConnection,
+            >::new(&url);
+            let pool = match diesel_async_crate::pooled_connection::deadpool::Pool::builder(config)
+                .max_size(32)
+                .build()
+            {
+                Ok(p) => p,
                 Err(e) => {
-                    eprintln!("MySQL backend creation failed: {e}, skipping");
-                    None
+                    eprintln!("MySQL pool creation failed: {e}, skipping");
+                    return None;
                 }
-            }
+            };
+            helpers::schema::setup_mysql_schema_diesel(&pool).await;
+            let backend = DieselMysqlBackend::from_pool(pool);
+            Some(backend.repositories())
         })
         .await
         .clone()
@@ -167,27 +167,35 @@ async fn shared_mysql_repos() -> Option<Repositories> {
 async fn shared_sqlite_repos() -> Option<Repositories> {
     SQLITE_REPOS
         .get_or_init(|| async {
-            use yauth::backends::diesel_sqlite::DieselSqliteBackend;
+            use yauth::backends::diesel_sqlite::{
+                DieselSqliteBackend, SqliteAsyncConn, SqlitePool,
+            };
             let url =
                 std::env::var("SQLITE_DATABASE_URL").unwrap_or_else(|_| ":memory:".to_string());
-            match DieselSqliteBackend::new(&url) {
-                Ok(backend) => {
-                    if backend
-                        .migrate(&EnabledFeatures::from_compile_flags())
-                        .await
-                        .is_ok()
-                    {
-                        Some(backend.repositories())
-                    } else {
-                        eprintln!("SQLite migration failed, skipping");
-                        None
+            let is_memory =
+                url == ":memory:" || url == "file::memory:" || url.starts_with("file::memory:?");
+            let max_size = if is_memory { 1 } else { 8 };
+            let config = diesel_async_crate::pooled_connection::AsyncDieselConnectionManager::<
+                SqliteAsyncConn,
+            >::new(&url);
+            let pool: SqlitePool =
+                match diesel_async_crate::pooled_connection::deadpool::Pool::builder(config)
+                    .max_size(max_size)
+                    .build()
+                {
+                    Ok(p) => p,
+                    Err(e) => {
+                        eprintln!("SQLite pool creation failed: {e}, skipping");
+                        return None;
                     }
-                }
-                Err(e) => {
-                    eprintln!("SQLite backend creation failed: {e}, skipping");
-                    None
-                }
-            }
+                };
+            helpers::schema::setup_sqlite_schema_diesel(&pool).await;
+            let backend = if is_memory {
+                DieselSqliteBackend::from_pool_memory(pool)
+            } else {
+                DieselSqliteBackend::from_pool(pool)
+            };
+            Some(backend.repositories())
         })
         .await
         .clone()
@@ -204,21 +212,14 @@ async fn shared_sqlx_pg_repos() -> Option<Repositories> {
                 Err(_) => return None,
             };
             use yauth::backends::sqlx_pg::SqlxPgBackend;
-            match SqlxPgBackend::new(&url).await {
-                Ok(backend) => {
-                    if backend
-                        .migrate(&EnabledFeatures::from_compile_flags())
-                        .await
-                        .is_ok()
-                    {
-                        Some(backend.repositories())
-                    } else {
-                        eprintln!("sqlx-pg migration failed, skipping");
-                        None
-                    }
+            match sqlx::PgPool::connect(&url).await {
+                Ok(pool) => {
+                    helpers::schema::setup_pg_schema_sqlx(&pool).await;
+                    let backend = SqlxPgBackend::from_pool(pool);
+                    Some(backend.repositories())
                 }
                 Err(e) => {
-                    eprintln!("sqlx-pg backend creation failed: {e}, skipping");
+                    eprintln!("sqlx-pg pool creation failed: {e}, skipping");
                     None
                 }
             }
@@ -238,21 +239,14 @@ async fn shared_sqlx_mysql_repos() -> Option<Repositories> {
                 Err(_) => return None,
             };
             use yauth::backends::sqlx_mysql::SqlxMysqlBackend;
-            match SqlxMysqlBackend::new(&url).await {
-                Ok(backend) => {
-                    if backend
-                        .migrate(&EnabledFeatures::from_compile_flags())
-                        .await
-                        .is_ok()
-                    {
-                        Some(backend.repositories())
-                    } else {
-                        eprintln!("sqlx-mysql migration failed, skipping");
-                        None
-                    }
+            match sqlx::MySqlPool::connect(&url).await {
+                Ok(pool) => {
+                    helpers::schema::setup_mysql_schema_sqlx(&pool).await;
+                    let backend = SqlxMysqlBackend::from_pool(pool);
+                    Some(backend.repositories())
                 }
                 Err(e) => {
-                    eprintln!("sqlx-mysql backend creation failed: {e}, skipping");
+                    eprintln!("sqlx-mysql pool creation failed: {e}, skipping");
                     None
                 }
             }
@@ -268,21 +262,14 @@ async fn shared_sqlx_sqlite_repos() -> Option<Repositories> {
             let url = std::env::var("SQLX_SQLITE_DATABASE_URL")
                 .unwrap_or_else(|_| "sqlite::memory:".to_string());
             use yauth::backends::sqlx_sqlite::SqlxSqliteBackend;
-            match SqlxSqliteBackend::new(&url).await {
-                Ok(backend) => {
-                    if backend
-                        .migrate(&EnabledFeatures::from_compile_flags())
-                        .await
-                        .is_ok()
-                    {
-                        Some(backend.repositories())
-                    } else {
-                        eprintln!("sqlx-sqlite migration failed, skipping");
-                        None
-                    }
+            match sqlx::SqlitePool::connect(&url).await {
+                Ok(pool) => {
+                    helpers::schema::setup_sqlite_schema_sqlx(&pool).await;
+                    let backend = SqlxSqliteBackend::from_pool(pool);
+                    Some(backend.repositories())
                 }
                 Err(e) => {
-                    eprintln!("sqlx-sqlite backend creation failed: {e}, skipping");
+                    eprintln!("sqlx-sqlite pool creation failed: {e}, skipping");
                     None
                 }
             }
@@ -301,19 +288,20 @@ async fn shared_seaorm_pg_repos() -> Option<Repositories> {
                 Ok(u) => u,
                 Err(_) => return None,
             };
+            use sea_orm::{ConnectOptions, Database};
             use yauth::backends::seaorm_pg::SeaOrmPgBackend;
-            match SeaOrmPgBackend::new(&url).await {
-                Ok(backend) => {
-                    // SeaORM migrate() validates schema — tables must already exist
-                    // (created by the diesel_pg backend's migration which runs first).
-                    // If validate fails, try anyway — tables may exist from another backend.
-                    let _ = backend
-                        .migrate(&EnabledFeatures::from_compile_flags())
-                        .await;
+            let mut opts = ConnectOptions::new(url);
+            opts.max_connections(64)
+                .min_connections(2)
+                .sqlx_logging(false);
+            match Database::connect(opts).await {
+                Ok(db) => {
+                    helpers::schema::setup_pg_schema_seaorm(&db).await;
+                    let backend = SeaOrmPgBackend::from_connection(db);
                     Some(backend.repositories())
                 }
                 Err(e) => {
-                    eprintln!("seaorm-pg backend creation failed: {e}, skipping");
+                    eprintln!("seaorm-pg connection failed: {e}, skipping");
                     None
                 }
             }
@@ -332,16 +320,20 @@ async fn shared_seaorm_mysql_repos() -> Option<Repositories> {
                 Ok(u) => u,
                 Err(_) => return None,
             };
+            use sea_orm::{ConnectOptions, Database};
             use yauth::backends::seaorm_mysql::SeaOrmMysqlBackend;
-            match SeaOrmMysqlBackend::new(&url).await {
-                Ok(backend) => {
-                    let _ = backend
-                        .migrate(&EnabledFeatures::from_compile_flags())
-                        .await;
+            let mut opts = ConnectOptions::new(url);
+            opts.max_connections(64)
+                .min_connections(2)
+                .sqlx_logging(false);
+            match Database::connect(opts).await {
+                Ok(db) => {
+                    helpers::schema::setup_mysql_schema_seaorm(&db).await;
+                    let backend = SeaOrmMysqlBackend::from_connection(db);
                     Some(backend.repositories())
                 }
                 Err(e) => {
-                    eprintln!("seaorm-mysql backend creation failed: {e}, skipping");
+                    eprintln!("seaorm-mysql connection failed: {e}, skipping");
                     None
                 }
             }
@@ -354,18 +346,18 @@ async fn shared_seaorm_mysql_repos() -> Option<Repositories> {
 async fn shared_seaorm_sqlite_repos() -> Option<Repositories> {
     SEAORM_SQLITE_REPOS
         .get_or_init(|| async {
+            use sea_orm::{ConnectOptions, Database};
             use yauth::backends::seaorm_sqlite::SeaOrmSqliteBackend;
-            match SeaOrmSqliteBackend::new("sqlite::memory:").await {
-                Ok(backend) => {
-                    // Create all tables in the in-memory SQLite database
-                    if let Err(e) = backend.create_tables().await {
-                        eprintln!("seaorm-sqlite table creation failed: {e}, skipping");
-                        return None;
-                    }
+            let mut opts = ConnectOptions::new("sqlite::memory:".to_string());
+            opts.max_connections(1).sqlx_logging(false);
+            match Database::connect(opts).await {
+                Ok(db) => {
+                    helpers::schema::setup_sqlite_schema_seaorm(&db).await;
+                    let backend = SeaOrmSqliteBackend::from_connection(db);
                     Some(backend.repositories())
                 }
                 Err(e) => {
-                    eprintln!("seaorm-sqlite backend creation failed: {e}, skipping");
+                    eprintln!("seaorm-sqlite connection failed: {e}, skipping");
                     None
                 }
             }
@@ -386,13 +378,13 @@ async fn test_backends() -> Vec<(&'static str, Repositories)> {
         backends.push(("memory", backend.repositories()));
     }
 
-    // Diesel PG -- shared, migrated once
+    // Diesel PG -- shared, schema set up once
     #[cfg(feature = "diesel-pg-backend")]
     if let Some(repos) = shared_pg_repos().await {
         backends.push(("diesel_pg", repos));
     }
 
-    // Diesel libsql -- shared instance, migrated once.
+    // Diesel libsql -- shared instance, schema set up once.
     // Must be shared (not per-test) to avoid deadpool dropping connections on a
     // shutting-down per-test tokio runtime, which causes "Tokio context is being shutdown".
     #[cfg(feature = "diesel-libsql-backend")]
@@ -404,59 +396,59 @@ async fn test_backends() -> Vec<(&'static str, Repositories)> {
     // This tests the hrana/websocket code path (vs local SQLite FFI above).
     #[cfg(feature = "diesel-libsql-backend")]
     if let Ok(url) = std::env::var("LIBSQL_URL") {
-        use yauth::backends::diesel_libsql::DieselLibsqlBackend;
-        match DieselLibsqlBackend::new(&url) {
-            Ok(backend) => {
-                match backend
-                    .migrate(&EnabledFeatures::from_compile_flags())
-                    .await
-                {
-                    Ok(()) => backends.push(("diesel_libsql_remote", backend.repositories())),
-                    Err(e) => eprintln!("Remote libsql migration failed: {e}, skipping"),
-                }
+        let manager = diesel_libsql::deadpool::Manager::new(&url);
+        match diesel_libsql::deadpool::Pool::builder(manager)
+            .max_size(8)
+            .build()
+        {
+            Ok(pool) => {
+                helpers::schema::setup_libsql_schema_diesel(&pool).await;
+                use yauth::backends::diesel_libsql::DieselLibsqlBackend;
+                let backend = DieselLibsqlBackend::from_pool(pool);
+                backends.push(("diesel_libsql_remote", backend.repositories()));
             }
-            Err(e) => eprintln!("Remote libsql connection failed: {e}, skipping"),
+            Err(e) => eprintln!("Remote libsql pool creation failed: {e}, skipping"),
         }
     }
 
-    // Diesel MySQL -- shared, migrated once
+    // Diesel MySQL -- shared, schema set up once
     #[cfg(feature = "diesel-mysql-backend")]
     if let Some(repos) = shared_mysql_repos().await {
         backends.push(("diesel_mysql", repos));
     }
 
-    // Diesel native SQLite -- shared, migrated once.
+    // Diesel native SQLite -- shared, schema set up once.
     // Uses SyncConnectionWrapper<SqliteConnection> via deadpool.
     #[cfg(feature = "diesel-sqlite-backend")]
     if let Some(repos) = shared_sqlite_repos().await {
         backends.push(("diesel_sqlite", repos));
     }
 
-    // sqlx PostgreSQL -- shared, migrated once
+    // sqlx PostgreSQL -- shared, schema set up once
     #[cfg(feature = "sqlx-pg-backend")]
     if let Some(repos) = shared_sqlx_pg_repos().await {
         backends.push(("sqlx_pg", repos));
     }
 
-    // sqlx MySQL -- shared, migrated once
+    // sqlx MySQL -- shared, schema set up once
     #[cfg(feature = "sqlx-mysql-backend")]
     if let Some(repos) = shared_sqlx_mysql_repos().await {
         backends.push(("sqlx_mysql", repos));
     }
 
-    // sqlx SQLite -- shared, migrated once
+    // sqlx SQLite -- shared, schema set up once
     #[cfg(feature = "sqlx-sqlite-backend")]
     if let Some(repos) = shared_sqlx_sqlite_repos().await {
         backends.push(("sqlx_sqlite", repos));
     }
 
-    // SeaORM PostgreSQL -- shared, relies on existing schema (from diesel_pg migrations)
+    // SeaORM PostgreSQL -- shared, relies on existing schema (from diesel_pg setup)
     #[cfg(feature = "seaorm-pg-backend")]
     if let Some(repos) = shared_seaorm_pg_repos().await {
         backends.push(("seaorm_pg", repos));
     }
 
-    // SeaORM MySQL -- shared, relies on existing schema (from diesel_mysql migrations)
+    // SeaORM MySQL -- shared, relies on existing schema (from diesel_mysql setup)
     #[cfg(feature = "seaorm-mysql-backend")]
     if let Some(repos) = shared_seaorm_mysql_repos().await {
         backends.push(("seaorm_mysql", repos));

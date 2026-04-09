@@ -5,7 +5,7 @@ use std::path::Path;
 use yauth_migration::config::YAuthConfig;
 use yauth_migration::diff::{format_sql_diff, render_changes_sql, schema_diff};
 use yauth_migration::generate::{self, write_migration};
-use yauth_migration::{Dialect, collect_schema_for_plugins};
+use yauth_migration::{Dialect, Orm, collect_schema_for_plugins};
 
 /// `cargo yauth init` -- create yauth.toml and initial migration files.
 pub fn init(
@@ -74,7 +74,8 @@ pub fn init(
         println!("  Created {}", path.display());
     }
 
-    println!("\n{}", migration.description);
+    // Print guided next-step instructions
+    print_next_steps(&config, &migration);
     Ok(())
 }
 
@@ -121,7 +122,9 @@ pub fn add_plugin(config_path: &Path, plugin_name: &str) -> Result<(), Box<dyn s
     // Update config
     config.save(config_path)?;
     println!("Updated {}", config_path.display());
-    println!("\n{}", migration.description);
+
+    // Print guided next-step instructions
+    print_next_steps(&config, &migration);
     Ok(())
 }
 
@@ -158,11 +161,16 @@ pub fn remove_plugin(
     for (path, _) in &migration.files {
         println!("  Created {}", path.display());
     }
+    for path in &migration.removed_files {
+        println!("  Removed {}", path.display());
+    }
 
     // Update config
     config.save(config_path)?;
     println!("Updated {}", config_path.display());
-    println!("\n{}", migration.description);
+
+    // Print guided next-step instructions
+    print_next_steps(&config, &migration);
     Ok(())
 }
 
@@ -176,6 +184,9 @@ pub fn status(config_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     println!("  Dialect:      {}", config.migration.dialect);
     println!("  Table prefix: {}", config.migration.table_prefix);
     println!("  Migrations:   {}", config.migration.migrations_dir);
+    if config.migration.orm == Orm::Sqlx {
+        println!("  Queries:      {}", config.migration.queries_dir);
+    }
     if let Some(ref schema) = config.migration.schema {
         println!("  PG schema:    {}", schema);
     }
@@ -217,6 +228,23 @@ pub fn status(config_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // Show query files if they exist (sqlx only)
+    if config.migration.orm == Orm::Sqlx {
+        let queries_dir = Path::new(&config.migration.queries_dir);
+        if queries_dir.exists() {
+            println!();
+            let mut entries: Vec<_> = std::fs::read_dir(queries_dir)?
+                .filter_map(|e| e.ok())
+                .filter(|e| e.file_name().to_string_lossy().ends_with(".sql"))
+                .collect();
+            entries.sort_by_key(|e| e.file_name());
+            println!("Query files ({}):", entries.len());
+            for entry in entries {
+                println!("  {}", entry.file_name().to_string_lossy());
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -233,6 +261,25 @@ pub fn generate(config_path: &Path, check: bool) -> Result<(), Box<dyn std::erro
         let mut stale = false;
 
         for (generated_path, expected_content) in &migration.files {
+            // Query files live outside migrations_dir -- check them directly
+            if is_query_file(generated_path, &config) {
+                if generated_path.exists() {
+                    let actual = std::fs::read_to_string(generated_path)?;
+                    if actual != *expected_content {
+                        eprintln!(
+                            "STALE: {} does not match generated content",
+                            generated_path.display()
+                        );
+                        eprintln!("{}", format_sql_diff(&actual, expected_content));
+                        stale = true;
+                    }
+                } else {
+                    eprintln!("MISSING: expected query file {}", generated_path.display());
+                    stale = true;
+                }
+                continue;
+            }
+
             match find_existing_file(migrations_dir, generated_path, &config) {
                 Some(existing_path) => {
                     let actual = std::fs::read_to_string(&existing_path)?;
@@ -271,10 +318,20 @@ pub fn generate(config_path: &Path, check: bool) -> Result<(), Box<dyn std::erro
         for (path, _) in &migration.files {
             println!("  Generated {}", path.display());
         }
-        println!("\n{}", migration.description);
+        // Print guided next-step instructions
+        print_next_steps(&config, &migration);
     }
 
     Ok(())
+}
+
+/// Check if a generated file path is a query file (lives in queries_dir, not migrations_dir).
+fn is_query_file(path: &Path, config: &YAuthConfig) -> bool {
+    if config.migration.orm != Orm::Sqlx {
+        return false;
+    }
+    let queries_dir = Path::new(&config.migration.queries_dir);
+    path.starts_with(queries_dir)
 }
 
 /// Find an existing file on disk that corresponds to a generated file path.
@@ -397,6 +454,61 @@ fn find_existing_file(
                 return Some(candidate);
             }
             None
+        }
+    }
+}
+
+/// Print guided next-step instructions after generating files.
+fn print_next_steps(config: &YAuthConfig, migration: &generate::GeneratedMigration) {
+    if migration.files.is_empty() && migration.removed_files.is_empty() {
+        println!("\n{}", migration.description);
+        return;
+    }
+
+    // Count migration files vs query files
+    let queries_dir_prefix = &config.migration.queries_dir;
+    let mut migration_count = 0;
+    let mut query_count = 0;
+
+    for (path, _) in &migration.files {
+        if path.starts_with(queries_dir_prefix) {
+            query_count += 1;
+        } else {
+            migration_count += 1;
+        }
+    }
+
+    println!();
+    match config.migration.orm {
+        Orm::Diesel => {
+            if migration_count > 0 {
+                println!("Next: run `diesel migration run` to apply");
+            }
+        }
+        Orm::Sqlx => {
+            if migration_count > 0 {
+                println!("Next: run `sqlx migrate run` to apply");
+            }
+            if query_count > 0 {
+                println!(
+                    "Created {} query files in {}/",
+                    query_count, config.migration.queries_dir
+                );
+                println!(
+                    "Use with sqlx::query_file!(\"{}/<name>.sql\")",
+                    config.migration.queries_dir
+                );
+            }
+        }
+        Orm::SeaOrm => {
+            if migration_count > 0 {
+                println!("Next: run `sea-orm-cli migrate up` to apply");
+            }
+        }
+        Orm::Toasty => {
+            if migration_count > 0 {
+                println!("Use the generated model files with toasty::Db::push_schema()");
+            }
         }
     }
 }

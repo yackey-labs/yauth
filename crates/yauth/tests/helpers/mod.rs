@@ -1,4 +1,5 @@
 pub mod otel;
+pub mod schema;
 
 // Everything below is gated behind diesel-pg-backend since it uses diesel pool types
 // and testcontainers for Postgres. Other backends (sqlx, memory) don't need this helper.
@@ -44,9 +45,7 @@ mod diesel_pg_helpers {
 
                 match pool.get().await {
                     Ok(_) => {
-                        yauth::backends::diesel_pg::migrations::run_migrations(&pool)
-                            .await
-                            .expect("failed to run migrations");
+                        super::schema::setup_pg_schema_diesel(&pool).await;
                         return Some(Self {
                             pool,
                             _container: None,
@@ -112,9 +111,7 @@ mod diesel_pg_helpers {
 
         async fn init_schema(pool: &DbPool) {
             drop_yauth_tables(pool).await;
-            yauth::backends::diesel_pg::migrations::run_migrations(pool)
-                .await
-                .expect("failed to run migrations");
+            super::schema::setup_pg_schema_diesel(pool).await;
         }
     }
 

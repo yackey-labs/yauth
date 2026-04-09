@@ -6,7 +6,6 @@ pub mod error;
 pub mod middleware;
 pub mod plugin;
 pub mod repo;
-pub mod schema;
 pub mod state;
 
 pub(crate) mod otel;
@@ -64,30 +63,6 @@ pub struct YAuth {
 }
 
 impl YAuth {
-    /// Get the merged declarative schema for all enabled plugins.
-    ///
-    /// Returns an error if there are duplicate table definitions or missing FK dependencies.
-    pub fn schema(&self) -> Result<schema::YAuthSchema, schema::SchemaError> {
-        let mut table_lists = vec![schema::core_schema()];
-        for plugin in self.state.plugins.iter() {
-            let s = plugin.schema();
-            if !s.is_empty() {
-                table_lists.push(s);
-            }
-        }
-        schema::collect_schema(table_lists)
-    }
-
-    /// Generate DDL for the specified dialect.
-    pub fn generate_ddl(&self, dialect: schema::Dialect) -> Result<String, schema::SchemaError> {
-        let merged = self.schema()?;
-        Ok(match dialect {
-            schema::Dialect::Postgres => schema::generate_postgres_ddl(&merged),
-            schema::Dialect::Sqlite => schema::generate_sqlite_ddl(&merged),
-            schema::Dialect::Mysql => schema::generate_mysql_ddl(&merged),
-        })
-    }
-
     pub fn router(&self) -> Router<YAuthState> {
         let ctx = plugin::PluginContext::new(&self.state);
         let mut public_router = Router::new();

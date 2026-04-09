@@ -32,10 +32,6 @@ impl YAuthPlugin for ApiKeyPlugin {
                 .route("/api-keys/{id}", delete(delete_api_key)),
         )
     }
-
-    fn schema(&self) -> Vec<crate::schema::TableDef> {
-        crate::schema::plugin_schemas::api_key_schema()
-    }
 }
 
 #[derive(Deserialize)]

@@ -3,7 +3,6 @@
 //! This module contains the `DieselPgBackend` struct, Diesel-annotated models,
 //! schema definitions, migration runner, and all repository implementations.
 
-pub mod migrations;
 mod models;
 pub mod schema;
 
@@ -35,11 +34,9 @@ mod user_repo;
 #[cfg(feature = "webhooks")]
 mod webhooks_repo;
 
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 
-use crate::repo::{DatabaseBackend, EnabledFeatures, RepoError, Repositories};
+use crate::repo::{DatabaseBackend, RepoError, Repositories};
 use crate::state::DbPool;
 
 // Re-export Diesel pool types for consumers who need direct pool access
@@ -51,33 +48,15 @@ pub use diesel_async_crate::pooled_connection::deadpool::Pool as DieselPool;
 /// The Diesel-based database backend for yauth.
 ///
 /// Owns a connection pool and implements `DatabaseBackend` to provide
-/// all repository implementations. Also handles migrations and optional
-/// Diesel query instrumentation.
+/// all repository implementations.
 pub struct DieselPgBackend {
     pool: DbPool,
+    /// PostgreSQL schema name (e.g., "public" or "auth"). Stored for diagnostics.
+    #[allow(dead_code)]
     schema: String,
 }
 
 impl DieselPgBackend {
-    /// Create from a database URL.
-    ///
-    /// Handles pool creation, schema validation, and Diesel query instrumentation setup.
-    pub fn new(url: &str) -> Result<Self, RepoError> {
-        Self::with_schema(url, "public")
-    }
-
-    /// Create with a custom PostgreSQL schema (e.g., "auth").
-    ///
-    /// Validates the schema name and configures `search_path` on every connection.
-    pub fn with_schema(url: &str, schema: &str) -> Result<Self, RepoError> {
-        let pool = create_pool_internal(url, schema).map_err(RepoError::Internal)?;
-        setup_diesel_instrumentation();
-        Ok(Self {
-            pool,
-            schema: schema.to_string(),
-        })
-    }
-
     /// Create from an existing pool (for consumers who manage their own pool).
     pub fn from_pool(pool: DbPool) -> Self {
         setup_diesel_instrumentation();
@@ -99,17 +78,6 @@ impl DieselPgBackend {
 }
 
 impl DatabaseBackend for DieselPgBackend {
-    fn migrate(
-        &self,
-        _features: &EnabledFeatures,
-    ) -> Pin<Box<dyn Future<Output = Result<(), RepoError>> + Send + '_>> {
-        Box::pin(async move {
-            migrations::run_declarative_migrations_with_schema(&self.pool, &self.schema)
-                .await
-                .map_err(RepoError::Internal)
-        })
-    }
-
     fn repositories(&self) -> Repositories {
         Repositories {
             users: Arc::new(user_repo::DieselUserRepo::new(self.pool.clone())),
@@ -190,42 +158,6 @@ impl DatabaseBackend for DieselPgBackend {
                 self.pool.clone(),
             )),
         }
-    }
-}
-
-/// Create a diesel connection pool, optionally with a custom schema search_path.
-fn create_pool_internal(
-    database_url: &str,
-    schema: &str,
-) -> Result<DbPool, Box<dyn std::error::Error + Send + Sync>> {
-    use diesel_async_crate::AsyncConnection;
-    use diesel_async_crate::pooled_connection::{AsyncDieselConnectionManager, ManagerConfig};
-    use futures_util::FutureExt;
-
-    if schema != "public" {
-        crate::validate_schema_name(schema)?;
-        let schema = schema.to_string();
-        let mut manager_config = ManagerConfig::<diesel_async_crate::AsyncPgConnection>::default();
-        manager_config.custom_setup = Box::new(move |url| {
-            let schema = schema.clone();
-            async move {
-                let mut conn = diesel_async_crate::AsyncPgConnection::establish(url).await?;
-                use diesel_async_crate::RunQueryDsl;
-                diesel::sql_query(format!("SET search_path TO {schema}, public"))
-                    .execute(&mut conn)
-                    .await
-                    .map_err(diesel::ConnectionError::CouldntSetupConfiguration)?;
-                Ok(conn)
-            }
-            .boxed()
-        });
-        let manager = AsyncDieselConnectionManager::new_with_config(database_url, manager_config);
-        Ok(DbPool::builder(manager).build()?)
-    } else {
-        let manager = AsyncDieselConnectionManager::<diesel_async_crate::AsyncPgConnection>::new(
-            database_url,
-        );
-        Ok(DbPool::builder(manager).build()?)
     }
 }
 

@@ -19,6 +19,8 @@ use serde_json::{Value, json};
 use std::time::Duration;
 use tower::ServiceExt;
 
+mod helpers;
+
 use yauth::backends::diesel_mysql::DieselMysqlBackend;
 use yauth::middleware::AuthUser;
 use yauth::prelude::*;
@@ -31,14 +33,16 @@ fn mysql_url() -> String {
 /// Build a YAuth instance with DieselMysqlBackend and email-password plugin.
 /// Rate limits are disabled so tests can run in parallel without 429 collisions.
 async fn build_test_app() -> Router {
-    use yauth::repo::{DatabaseBackend, EnabledFeatures};
-
     let url = mysql_url();
-    let backend = DieselMysqlBackend::new(&url).expect("Failed to create MySQL backend");
-    backend
-        .migrate(&EnabledFeatures::from_compile_flags())
-        .await
-        .expect("Failed to run MySQL migrations");
+    let config = diesel_async_crate::pooled_connection::AsyncDieselConnectionManager::<
+        diesel_async_crate::AsyncMysqlConnection,
+    >::new(&url);
+    let pool = diesel_async_crate::pooled_connection::deadpool::Pool::builder(config)
+        .max_size(32)
+        .build()
+        .expect("Failed to create MySQL pool");
+    helpers::schema::setup_mysql_schema_diesel(&pool).await;
+    let backend = DieselMysqlBackend::from_pool(pool);
 
     #[allow(unused_mut)]
     let mut builder = YAuthBuilder::new(
@@ -297,15 +301,18 @@ mod repo_tests {
     use super::*;
     use chrono::Utc;
     use uuid::Uuid;
-    use yauth::repo::{DatabaseBackend, EnabledFeatures};
 
     async fn get_repos() -> yauth::repo::Repositories {
         let url = mysql_url();
-        let backend = DieselMysqlBackend::new(&url).expect("Failed to create MySQL backend");
-        backend
-            .migrate(&EnabledFeatures::from_compile_flags())
-            .await
-            .expect("Failed to run MySQL migrations");
+        let config = diesel_async_crate::pooled_connection::AsyncDieselConnectionManager::<
+            diesel_async_crate::AsyncMysqlConnection,
+        >::new(&url);
+        let pool = diesel_async_crate::pooled_connection::deadpool::Pool::builder(config)
+            .max_size(32)
+            .build()
+            .expect("Failed to create MySQL pool");
+        helpers::schema::setup_mysql_schema_diesel(&pool).await;
+        let backend = DieselMysqlBackend::from_pool(pool);
         backend.repositories()
     }
 

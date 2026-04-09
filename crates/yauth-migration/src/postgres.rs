@@ -32,7 +32,11 @@ fn pg_on_delete(action: &OnDelete) -> &'static str {
 
 /// Generate a CREATE TABLE IF NOT EXISTS statement for a single table.
 fn generate_create_table(table: &TableDef) -> String {
-    let mut sql = format!("CREATE TABLE IF NOT EXISTS {} (\n", table.name);
+    let mut sql = String::new();
+    if let Some(ref desc) = table.description {
+        sql.push_str(&format!("-- {desc}\n"));
+    }
+    sql.push_str(&format!("CREATE TABLE IF NOT EXISTS {} (\n", table.name));
 
     let col_count = table.columns.len();
     for (i, col) in table.columns.iter().enumerate() {

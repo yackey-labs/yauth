@@ -39,10 +39,6 @@ impl YAuthPlugin for MagicLinkPlugin {
     fn protected_routes(&self, _ctx: &PluginContext) -> Option<Router<YAuthState>> {
         None
     }
-
-    fn schema(&self) -> Vec<crate::schema::TableDef> {
-        crate::schema::plugin_schemas::magic_link_schema()
-    }
 }
 
 // ---------------------------------------------------------------------------

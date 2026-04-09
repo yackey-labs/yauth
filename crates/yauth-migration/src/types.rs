@@ -174,6 +174,8 @@ pub struct TableDef {
     pub name: String,
     pub columns: Vec<ColumnDef>,
     pub indices: Vec<IndexDef>,
+    /// Short description of the table's purpose (emitted as SQL comment).
+    pub description: Option<String>,
 }
 
 impl TableDef {
@@ -182,7 +184,13 @@ impl TableDef {
             name: name.to_string(),
             columns: Vec::new(),
             indices: Vec::new(),
+            description: None,
         }
+    }
+
+    pub fn description(mut self, desc: &str) -> Self {
+        self.description = Some(desc.to_string());
+        self
     }
 
     pub fn column(mut self, col: ColumnDef) -> Self {

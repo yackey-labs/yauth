@@ -399,3 +399,495 @@ fn init_mysql_produces_correct_ddl() {
     assert!(schema_rs.contains("diesel::table!"));
     assert!(schema_rs.contains("-> Datetime,"));
 }
+
+// ──────────────────────────────────────────────
+// sqlx query file generation tests
+// ──────────────────────────────────────────────
+
+#[test]
+fn init_sqlx_postgres_generates_query_files() {
+    let dir = TempDir::new().unwrap();
+    let config_path = dir.path().join("yauth.toml");
+
+    cargo_yauth()
+        .current_dir(dir.path())
+        .args([
+            "yauth",
+            "-f",
+            config_path.to_str().unwrap(),
+            "init",
+            "--orm",
+            "sqlx",
+            "--dialect",
+            "postgres",
+            "--plugins",
+            "email-password,passkey,mfa",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("query files"));
+
+    // Verify queries/ directory exists
+    let queries_dir = dir.path().join("queries");
+    assert!(queries_dir.exists(), "queries/ directory should exist");
+
+    // Count SQL files
+    let query_files: Vec<_> = std::fs::read_dir(&queries_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_string_lossy().ends_with(".sql"))
+        .collect();
+    assert!(
+        query_files.len() > 20,
+        "Should have 20+ query files, got {}",
+        query_files.len()
+    );
+
+    // Core queries should exist
+    assert!(queries_dir.join("user_find_by_id.sql").exists());
+    assert!(queries_dir.join("user_find_by_email.sql").exists());
+    assert!(queries_dir.join("user_create.sql").exists());
+    assert!(queries_dir.join("session_create.sql").exists());
+    assert!(queries_dir.join("session_validate.sql").exists());
+    assert!(queries_dir.join("audit_create.sql").exists());
+    assert!(queries_dir.join("rate_limit_check.sql").exists());
+
+    // Plugin queries should exist
+    assert!(queries_dir.join("password_find_by_user.sql").exists());
+    assert!(queries_dir.join("password_upsert.sql").exists());
+    assert!(queries_dir.join("passkey_find_by_user.sql").exists());
+    assert!(queries_dir.join("passkey_create.sql").exists());
+    assert!(queries_dir.join("totp_find_by_user.sql").exists());
+    assert!(queries_dir.join("backup_code_create.sql").exists());
+
+    // Verify query content: postgres should use $1 params
+    let user_create = std::fs::read_to_string(queries_dir.join("user_create.sql")).unwrap();
+    assert!(user_create.contains("$1"), "Postgres should use $1 params");
+    assert!(
+        user_create.contains("RETURNING *"),
+        "Postgres should use RETURNING *"
+    );
+    assert!(user_create.starts_with("-- "), "Should start with comment");
+    assert!(
+        user_create.contains("-- Plugin: core"),
+        "Should have plugin line"
+    );
+
+    // Verify migration also has table comments
+    let migrations_dir = dir.path().join("migrations");
+    let entries: Vec<_> = std::fs::read_dir(&migrations_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .collect();
+    let migration_sql = std::fs::read_to_string(entries[0].path()).unwrap();
+    assert!(
+        migration_sql.contains("-- Registered user accounts."),
+        "Migration should have table comments"
+    );
+    assert!(
+        migration_sql.contains("-- Hashed passwords."),
+        "Migration should have table comments"
+    );
+}
+
+#[test]
+fn init_sqlx_mysql_uses_question_mark_params() {
+    let dir = TempDir::new().unwrap();
+    let config_path = dir.path().join("yauth.toml");
+
+    cargo_yauth()
+        .current_dir(dir.path())
+        .args([
+            "yauth",
+            "-f",
+            config_path.to_str().unwrap(),
+            "init",
+            "--orm",
+            "sqlx",
+            "--dialect",
+            "mysql",
+            "--plugins",
+            "email-password",
+        ])
+        .assert()
+        .success();
+
+    let queries_dir = dir.path().join("queries");
+    let user_create = std::fs::read_to_string(queries_dir.join("user_create.sql")).unwrap();
+    assert!(user_create.contains("?"), "MySQL should use ? params");
+    assert!(
+        !user_create.contains("$1"),
+        "MySQL should not use $1 params"
+    );
+    assert!(
+        !user_create.contains("RETURNING"),
+        "MySQL should not have RETURNING"
+    );
+}
+
+#[test]
+fn init_sqlx_sqlite_uses_question_mark_params() {
+    let dir = TempDir::new().unwrap();
+    let config_path = dir.path().join("yauth.toml");
+
+    cargo_yauth()
+        .current_dir(dir.path())
+        .args([
+            "yauth",
+            "-f",
+            config_path.to_str().unwrap(),
+            "init",
+            "--orm",
+            "sqlx",
+            "--dialect",
+            "sqlite",
+            "--plugins",
+            "email-password",
+        ])
+        .assert()
+        .success();
+
+    let queries_dir = dir.path().join("queries");
+    let user_create = std::fs::read_to_string(queries_dir.join("user_create.sql")).unwrap();
+    assert!(user_create.contains("?"), "SQLite should use ? params");
+    assert!(
+        !user_create.contains("$1"),
+        "SQLite should not use $1 params"
+    );
+    assert!(
+        user_create.contains("RETURNING *"),
+        "SQLite should use RETURNING *"
+    );
+    assert!(
+        user_create.contains("datetime('now')"),
+        "SQLite should use datetime('now')"
+    );
+}
+
+#[test]
+fn init_diesel_does_not_generate_query_files() {
+    let dir = TempDir::new().unwrap();
+    let config_path = dir.path().join("yauth.toml");
+
+    cargo_yauth()
+        .current_dir(dir.path())
+        .args([
+            "yauth",
+            "-f",
+            config_path.to_str().unwrap(),
+            "init",
+            "--orm",
+            "diesel",
+            "--dialect",
+            "postgres",
+            "--plugins",
+            "email-password",
+        ])
+        .assert()
+        .success();
+
+    let queries_dir = dir.path().join("queries");
+    assert!(
+        !queries_dir.exists(),
+        "Diesel should not generate queries/ directory"
+    );
+}
+
+#[test]
+fn add_plugin_sqlx_generates_plugin_query_files() {
+    let dir = TempDir::new().unwrap();
+    let config_path = dir.path().join("yauth.toml");
+
+    // Init with email-password
+    cargo_yauth()
+        .current_dir(dir.path())
+        .args([
+            "yauth",
+            "-f",
+            config_path.to_str().unwrap(),
+            "init",
+            "--orm",
+            "sqlx",
+            "--dialect",
+            "postgres",
+            "--plugins",
+            "email-password",
+        ])
+        .assert()
+        .success();
+
+    let queries_dir = dir.path().join("queries");
+    let before_count = std::fs::read_dir(&queries_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .count();
+
+    // Bearer query files should not exist yet
+    assert!(!queries_dir.join("refresh_token_create.sql").exists());
+
+    // Add bearer plugin
+    cargo_yauth()
+        .current_dir(dir.path())
+        .args([
+            "yauth",
+            "-f",
+            config_path.to_str().unwrap(),
+            "add-plugin",
+            "bearer",
+        ])
+        .assert()
+        .success();
+
+    // Bearer query files should now exist
+    assert!(queries_dir.join("refresh_token_create.sql").exists());
+    assert!(queries_dir.join("refresh_token_find_by_token.sql").exists());
+    assert!(queries_dir.join("refresh_token_revoke_family.sql").exists());
+
+    let after_count = std::fs::read_dir(&queries_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .count();
+    assert!(
+        after_count > before_count,
+        "Should have more query files after add-plugin"
+    );
+}
+
+#[test]
+fn remove_plugin_sqlx_deletes_plugin_query_files() {
+    let dir = TempDir::new().unwrap();
+    let config_path = dir.path().join("yauth.toml");
+
+    // Init with email-password + passkey
+    cargo_yauth()
+        .current_dir(dir.path())
+        .args([
+            "yauth",
+            "-f",
+            config_path.to_str().unwrap(),
+            "init",
+            "--orm",
+            "sqlx",
+            "--dialect",
+            "postgres",
+            "--plugins",
+            "email-password,passkey",
+        ])
+        .assert()
+        .success();
+
+    let queries_dir = dir.path().join("queries");
+    assert!(queries_dir.join("passkey_create.sql").exists());
+    assert!(queries_dir.join("passkey_find_by_user.sql").exists());
+
+    // Remove passkey
+    cargo_yauth()
+        .current_dir(dir.path())
+        .args([
+            "yauth",
+            "-f",
+            config_path.to_str().unwrap(),
+            "remove-plugin",
+            "passkey",
+        ])
+        .assert()
+        .success();
+
+    // Passkey query files should be gone
+    assert!(!queries_dir.join("passkey_create.sql").exists());
+    assert!(!queries_dir.join("passkey_find_by_user.sql").exists());
+
+    // Core and email-password query files should still exist
+    assert!(queries_dir.join("user_find_by_id.sql").exists());
+    assert!(queries_dir.join("password_find_by_user.sql").exists());
+}
+
+#[test]
+fn generate_check_sqlx_passes_on_fresh_output() {
+    let dir = TempDir::new().unwrap();
+    let config_path = dir.path().join("yauth.toml");
+
+    // Init
+    cargo_yauth()
+        .current_dir(dir.path())
+        .args([
+            "yauth",
+            "-f",
+            config_path.to_str().unwrap(),
+            "init",
+            "--orm",
+            "sqlx",
+            "--dialect",
+            "postgres",
+            "--plugins",
+            "email-password,passkey",
+        ])
+        .assert()
+        .success();
+
+    // Check should pass immediately after init
+    cargo_yauth()
+        .current_dir(dir.path())
+        .args([
+            "yauth",
+            "-f",
+            config_path.to_str().unwrap(),
+            "generate",
+            "--check",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("up to date"));
+}
+
+#[test]
+fn generate_check_sqlx_detects_stale_query_files() {
+    let dir = TempDir::new().unwrap();
+    let config_path = dir.path().join("yauth.toml");
+
+    // Init
+    cargo_yauth()
+        .current_dir(dir.path())
+        .args([
+            "yauth",
+            "-f",
+            config_path.to_str().unwrap(),
+            "init",
+            "--orm",
+            "sqlx",
+            "--dialect",
+            "postgres",
+            "--plugins",
+            "email-password",
+        ])
+        .assert()
+        .success();
+
+    // Tamper with a query file
+    let queries_dir = dir.path().join("queries");
+    std::fs::write(queries_dir.join("user_create.sql"), "-- tampered").unwrap();
+
+    // Check should fail
+    cargo_yauth()
+        .current_dir(dir.path())
+        .args([
+            "yauth",
+            "-f",
+            config_path.to_str().unwrap(),
+            "generate",
+            "--check",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("STALE"));
+}
+
+#[test]
+fn migration_sql_has_table_comments_diesel() {
+    let dir = TempDir::new().unwrap();
+    let config_path = dir.path().join("yauth.toml");
+
+    cargo_yauth()
+        .current_dir(dir.path())
+        .args([
+            "yauth",
+            "-f",
+            config_path.to_str().unwrap(),
+            "init",
+            "--orm",
+            "diesel",
+            "--dialect",
+            "postgres",
+            "--plugins",
+            "email-password,mfa",
+        ])
+        .assert()
+        .success();
+
+    let migrations_dir = dir.path().join("migrations");
+    let entries: Vec<_> = std::fs::read_dir(&migrations_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().unwrap().is_dir())
+        .collect();
+    let up_sql = std::fs::read_to_string(entries[0].path().join("up.sql")).unwrap();
+    assert!(
+        up_sql.contains("-- Registered user accounts."),
+        "Diesel migration should have table comments"
+    );
+    assert!(
+        up_sql.contains("-- Active user sessions."),
+        "Diesel migration should have session comment"
+    );
+    assert!(
+        up_sql.contains("-- Hashed passwords."),
+        "Diesel migration should have password comment"
+    );
+    assert!(
+        up_sql.contains("-- TOTP secrets for MFA."),
+        "Diesel migration should have TOTP comment"
+    );
+}
+
+#[test]
+fn sqlx_query_files_all_have_valid_sql() {
+    let dir = TempDir::new().unwrap();
+    let config_path = dir.path().join("yauth.toml");
+
+    // Enable many plugins
+    cargo_yauth()
+        .current_dir(dir.path())
+        .args([
+            "yauth",
+            "-f",
+            config_path.to_str().unwrap(),
+            "init",
+            "--orm",
+            "sqlx",
+            "--dialect",
+            "postgres",
+            "--plugins",
+            "email-password,passkey,mfa,oauth,bearer,api-key,magic-link",
+        ])
+        .assert()
+        .success();
+
+    let queries_dir = dir.path().join("queries");
+    let entries: Vec<_> = std::fs::read_dir(&queries_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_string_lossy().ends_with(".sql"))
+        .collect();
+
+    assert!(
+        entries.len() > 50,
+        "Should have 50+ query files with many plugins, got {}",
+        entries.len()
+    );
+
+    for entry in &entries {
+        let content = std::fs::read_to_string(entry.path()).unwrap();
+        let upper = content.to_uppercase();
+        // Every file should have SQL
+        assert!(
+            upper.contains("SELECT")
+                || upper.contains("INSERT")
+                || upper.contains("UPDATE")
+                || upper.contains("DELETE"),
+            "Query {} should contain a SQL keyword",
+            entry.file_name().to_string_lossy()
+        );
+        // Every file should start with a comment
+        assert!(
+            content.starts_with("-- "),
+            "Query {} should start with a comment",
+            entry.file_name().to_string_lossy()
+        );
+        // No template variables
+        assert!(
+            !content.contains("{{") && !content.contains("}}"),
+            "Query {} should not contain template markers",
+            entry.file_name().to_string_lossy()
+        );
+    }
+}

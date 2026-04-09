@@ -17,6 +17,7 @@ pub fn core_schema() -> Vec<TableDef> {
 
 fn users_table() -> TableDef {
     TableDef::new("yauth_users")
+        .description("Registered user accounts.")
         .column(
             ColumnDef::new("id", ColumnType::Uuid)
                 .primary_key()
@@ -35,6 +36,7 @@ fn users_table() -> TableDef {
 
 fn sessions_table() -> TableDef {
     TableDef::new("yauth_sessions")
+        .description("Active user sessions. One row per login.")
         .column(
             ColumnDef::new("id", ColumnType::Uuid)
                 .primary_key()
@@ -54,6 +56,7 @@ fn sessions_table() -> TableDef {
 
 fn audit_log_table() -> TableDef {
     TableDef::new("yauth_audit_log")
+        .description("Append-only authentication event log.")
         .column(
             ColumnDef::new("id", ColumnType::Uuid)
                 .primary_key()
@@ -72,6 +75,7 @@ fn audit_log_table() -> TableDef {
 
 fn challenges_table() -> TableDef {
     TableDef::new("yauth_challenges")
+        .description("Ephemeral challenge storage for CSRF, WebAuthn, and MFA flows.")
         .column(ColumnDef::new("key", ColumnType::VarcharN(255)).primary_key())
         .column(ColumnDef::new("value", ColumnType::Json))
         .column(ColumnDef::new("expires_at", ColumnType::DateTime))
@@ -79,6 +83,7 @@ fn challenges_table() -> TableDef {
 
 fn rate_limits_table() -> TableDef {
     TableDef::new("yauth_rate_limits")
+        .description("Per-operation rate limit counters.")
         .column(ColumnDef::new("key", ColumnType::VarcharN(255)).primary_key())
         .column(ColumnDef::new("count", ColumnType::Int).default("1"))
         .column(ColumnDef::new("window_start", ColumnType::DateTime).default("now()"))
@@ -86,6 +91,7 @@ fn rate_limits_table() -> TableDef {
 
 fn revocations_table() -> TableDef {
     TableDef::new("yauth_revocations")
+        .description("Revoked JWT token IDs (JTI). TTL-based expiration.")
         .column(ColumnDef::new("key", ColumnType::VarcharN(255)).primary_key())
         .column(ColumnDef::new("expires_at", ColumnType::DateTime))
 }

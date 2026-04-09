@@ -49,7 +49,6 @@ use tokio::net::TcpListener;
 
 use yauth::middleware::AuthUser;
 use yauth::prelude::*;
-use yauth::repo::{DatabaseBackend, EnabledFeatures};
 
 // ---------------------------------------------------------------------------
 // Main
@@ -115,44 +114,45 @@ async fn main() {
     // -----------------------------------------------------------------------
     // 3. Create the database backend
     // -----------------------------------------------------------------------
+    // Tables must already exist. Run migrations first:
+    //   diesel migration run           (for diesel backends)
+    //   cargo yauth generate && sqlx migrate run  (for sqlx backends)
     let backend: Box<dyn yauth::repo::DatabaseBackend> = match yauth_backend.as_str() {
         "memory" => {
             log::info!("Using in-memory backend (no database required)");
             Box::new(yauth::backends::memory::InMemoryBackend::new())
         }
         "libsql" => {
-            log::info!("Using libSQL/SQLite backend");
+            log::info!("Using libSQL/SQLite backend — tables must already exist");
             let url = database_url.as_ref().unwrap();
-            Box::new(
-                yauth::backends::diesel_libsql::DieselLibsqlBackend::new(url)
-                    .expect("Failed to create libsql backend"),
-            )
+            // Pool creation is the consumer's responsibility.
+            // For a real app, use diesel_libsql::deadpool directly.
+            panic!(
+                "libsql backend requires you to create the pool yourself; see yauth docs. URL: {url}"
+            );
         }
         "mysql" => {
-            log::info!("Connecting to MySQL/MariaDB database...");
+            log::info!("Connecting to MySQL/MariaDB database — tables must already exist");
             let url = database_url.as_ref().unwrap();
-            Box::new(
-                yauth::backends::diesel_mysql::DieselMysqlBackend::new(url)
-                    .expect("Failed to create MySQL backend"),
-            )
+            // Pool creation is the consumer's responsibility.
+            // For a real app, use diesel-async's AsyncDieselConnectionManager directly.
+            panic!(
+                "mysql backend requires you to create the pool yourself; see yauth docs. URL: {url}"
+            );
         }
         _ => {
-            log::info!("Connecting to PostgreSQL database...");
+            log::info!("Connecting to PostgreSQL database — tables must already exist");
             let url = database_url.as_ref().unwrap();
-            Box::new(
-                yauth::backends::diesel_pg::DieselPgBackend::new(url)
-                    .expect("Failed to create database backend"),
-            )
+            use yauth::backends::diesel_pg::{
+                AsyncDieselConnectionManager, AsyncPgConnection, DieselPool,
+            };
+            let config = AsyncDieselConnectionManager::<AsyncPgConnection>::new(url.as_str());
+            let pool = DieselPool::builder(config)
+                .build()
+                .expect("Failed to create database pool");
+            Box::new(yauth::backends::diesel_pg::DieselPgBackend::from_pool(pool))
         }
     };
-
-    // -----------------------------------------------------------------------
-    // 3b. Run migrations
-    // -----------------------------------------------------------------------
-    backend
-        .migrate(&EnabledFeatures::from_compile_flags())
-        .await
-        .expect("Failed to run migrations");
 
     // -----------------------------------------------------------------------
     // 4. Build the YAuth instance with all plugins enabled

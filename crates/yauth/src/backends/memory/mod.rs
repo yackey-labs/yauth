@@ -49,8 +49,6 @@ mod account_lockout_repo;
 mod webhooks_repo;
 
 use std::collections::HashMap;
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
@@ -58,7 +56,7 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::domain;
-use crate::repo::{DatabaseBackend, EnabledFeatures, RepoError, Repositories};
+use crate::repo::{DatabaseBackend, Repositories};
 
 /// Shared in-memory storage for all entities.
 ///
@@ -242,14 +240,6 @@ impl Default for InMemoryBackend {
 }
 
 impl DatabaseBackend for InMemoryBackend {
-    fn migrate(
-        &self,
-        _features: &EnabledFeatures,
-    ) -> Pin<Box<dyn Future<Output = Result<(), RepoError>> + Send + '_>> {
-        // No-op: in-memory backend has no schema to migrate.
-        Box::pin(async { Ok(()) })
-    }
-
     fn repositories(&self) -> Repositories {
         Repositories {
             users: Arc::new(user_repo::InMemoryUserRepo::new(self.storage.clone())),

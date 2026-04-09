@@ -10,20 +10,21 @@ use serde_json::{Value, json};
 use std::time::Duration;
 use tower::ServiceExt;
 
+mod helpers;
+
 use yauth::backends::diesel_libsql::DieselLibsqlBackend;
 use yauth::middleware::AuthUser;
 use yauth::prelude::*;
 
 /// Build a YAuth instance with DieselLibsqlBackend (in-memory) and email-password plugin.
 async fn build_test_app() -> Router {
-    use yauth::repo::{DatabaseBackend, EnabledFeatures};
-
-    let backend =
-        DieselLibsqlBackend::new("file::memory:").expect("Failed to create libsql backend");
-    backend
-        .migrate(&EnabledFeatures::from_compile_flags())
-        .await
-        .expect("Failed to run migrations");
+    let manager = diesel_libsql::deadpool::Manager::new("file::memory:");
+    let pool = diesel_libsql::deadpool::Pool::builder(manager)
+        .max_size(1)
+        .build()
+        .expect("Failed to create libsql pool");
+    helpers::schema::setup_libsql_schema_diesel(&pool).await;
+    let backend = DieselLibsqlBackend::from_pool(pool);
 
     #[allow(unused_mut)]
     let mut builder = YAuthBuilder::new(

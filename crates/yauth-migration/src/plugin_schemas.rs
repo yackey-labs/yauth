@@ -9,6 +9,7 @@ use super::types::*;
 pub fn email_password_schema() -> Vec<TableDef> {
     vec![
         TableDef::new("yauth_passwords")
+            .description("Hashed passwords. One row per user.")
             .column(
                 ColumnDef::new("user_id", ColumnType::Uuid)
                     .primary_key()
@@ -16,6 +17,7 @@ pub fn email_password_schema() -> Vec<TableDef> {
             )
             .column(ColumnDef::new("password_hash", ColumnType::Varchar)),
         TableDef::new("yauth_email_verifications")
+            .description("Pending email verification tokens.")
             .column(
                 ColumnDef::new("id", ColumnType::Uuid)
                     .primary_key()
@@ -30,6 +32,7 @@ pub fn email_password_schema() -> Vec<TableDef> {
             .column(ColumnDef::new("expires_at", ColumnType::DateTime))
             .column(ColumnDef::new("created_at", ColumnType::DateTime).default("now()")),
         TableDef::new("yauth_password_resets")
+            .description("Pending password reset tokens.")
             .column(
                 ColumnDef::new("id", ColumnType::Uuid)
                     .primary_key()
@@ -51,6 +54,7 @@ pub fn email_password_schema() -> Vec<TableDef> {
 pub fn passkey_schema() -> Vec<TableDef> {
     vec![
         TableDef::new("yauth_webauthn_credentials")
+            .description("WebAuthn/passkey credentials. Multiple per user.")
             .column(
                 ColumnDef::new("id", ColumnType::Uuid)
                     .primary_key()
@@ -74,6 +78,7 @@ pub fn passkey_schema() -> Vec<TableDef> {
 pub fn mfa_schema() -> Vec<TableDef> {
     vec![
         TableDef::new("yauth_totp_secrets")
+            .description("TOTP secrets for MFA. One per user.")
             .column(
                 ColumnDef::new("id", ColumnType::Uuid)
                     .primary_key()
@@ -89,6 +94,7 @@ pub fn mfa_schema() -> Vec<TableDef> {
             .column(ColumnDef::new("verified", ColumnType::Boolean).default("false"))
             .column(ColumnDef::new("created_at", ColumnType::DateTime).default("now()")),
         TableDef::new("yauth_backup_codes")
+            .description("MFA backup codes. Multiple per user, single-use.")
             .column(
                 ColumnDef::new("id", ColumnType::Uuid)
                     .primary_key()
@@ -109,6 +115,7 @@ pub fn mfa_schema() -> Vec<TableDef> {
 pub fn oauth_schema() -> Vec<TableDef> {
     vec![
         TableDef::new("yauth_oauth_accounts")
+            .description("Linked OAuth provider accounts.")
             .column(
                 ColumnDef::new("id", ColumnType::Uuid)
                     .primary_key()
@@ -127,6 +134,7 @@ pub fn oauth_schema() -> Vec<TableDef> {
             .column(ColumnDef::new("expires_at", ColumnType::DateTime).nullable())
             .column(ColumnDef::new("updated_at", ColumnType::DateTime).default("now()")),
         TableDef::new("yauth_oauth_states")
+            .description("OAuth CSRF state tokens. Consumed on callback.")
             .column(ColumnDef::new("state", ColumnType::Varchar).primary_key())
             .column(ColumnDef::new("provider", ColumnType::Varchar))
             .column(ColumnDef::new("redirect_url", ColumnType::Varchar).nullable())
@@ -139,6 +147,7 @@ pub fn oauth_schema() -> Vec<TableDef> {
 pub fn bearer_schema() -> Vec<TableDef> {
     vec![
         TableDef::new("yauth_refresh_tokens")
+            .description("JWT refresh tokens with rotation family tracking.")
             .column(
                 ColumnDef::new("id", ColumnType::Uuid)
                     .primary_key()
@@ -161,6 +170,7 @@ pub fn bearer_schema() -> Vec<TableDef> {
 pub fn api_key_schema() -> Vec<TableDef> {
     vec![
         TableDef::new("yauth_api_keys")
+            .description("API keys. Identified by prefix, verified by hash.")
             .column(
                 ColumnDef::new("id", ColumnType::Uuid)
                     .primary_key()
@@ -185,6 +195,7 @@ pub fn api_key_schema() -> Vec<TableDef> {
 pub fn magic_link_schema() -> Vec<TableDef> {
     vec![
         TableDef::new("yauth_magic_links")
+            .description("Passwordless login tokens. Single-use, time-limited.")
             .column(
                 ColumnDef::new("id", ColumnType::Uuid)
                     .primary_key()
@@ -202,6 +213,7 @@ pub fn magic_link_schema() -> Vec<TableDef> {
 pub fn oauth2_server_schema() -> Vec<TableDef> {
     vec![
         TableDef::new("yauth_oauth2_clients")
+            .description("Registered OAuth2 server clients.")
             .column(
                 ColumnDef::new("id", ColumnType::Uuid)
                     .primary_key()
@@ -216,6 +228,7 @@ pub fn oauth2_server_schema() -> Vec<TableDef> {
             .column(ColumnDef::new("is_public", ColumnType::Boolean).default("false"))
             .column(ColumnDef::new("created_at", ColumnType::DateTime).default("now()")),
         TableDef::new("yauth_authorization_codes")
+            .description("OAuth2 authorization codes. Single-use, time-limited.")
             .column(
                 ColumnDef::new("id", ColumnType::Uuid)
                     .primary_key()
@@ -237,6 +250,7 @@ pub fn oauth2_server_schema() -> Vec<TableDef> {
             .column(ColumnDef::new("nonce", ColumnType::Varchar).nullable())
             .column(ColumnDef::new("created_at", ColumnType::DateTime).default("now()")),
         TableDef::new("yauth_consents")
+            .description("User consent records for OAuth2 clients.")
             .column(
                 ColumnDef::new("id", ColumnType::Uuid)
                     .primary_key()
@@ -251,6 +265,7 @@ pub fn oauth2_server_schema() -> Vec<TableDef> {
             .column(ColumnDef::new("scopes", ColumnType::Json).nullable())
             .column(ColumnDef::new("created_at", ColumnType::DateTime).default("now()")),
         TableDef::new("yauth_device_codes")
+            .description("Device authorization flow codes.")
             .column(
                 ColumnDef::new("id", ColumnType::Uuid)
                     .primary_key()
@@ -277,6 +292,7 @@ pub fn oauth2_server_schema() -> Vec<TableDef> {
 pub fn account_lockout_schema() -> Vec<TableDef> {
     vec![
         TableDef::new("yauth_account_locks")
+            .description("Account lockout state. One row per user.")
             .column(
                 ColumnDef::new("id", ColumnType::Uuid)
                     .primary_key()
@@ -295,6 +311,7 @@ pub fn account_lockout_schema() -> Vec<TableDef> {
             .column(ColumnDef::new("created_at", ColumnType::DateTime).default("now()"))
             .column(ColumnDef::new("updated_at", ColumnType::DateTime).default("now()")),
         TableDef::new("yauth_unlock_tokens")
+            .description("Account unlock tokens. Time-limited.")
             .column(
                 ColumnDef::new("id", ColumnType::Uuid)
                     .primary_key()
@@ -315,6 +332,7 @@ pub fn account_lockout_schema() -> Vec<TableDef> {
 pub fn webhooks_schema() -> Vec<TableDef> {
     vec![
         TableDef::new("yauth_webhooks")
+            .description("Webhook endpoint configurations.")
             .column(
                 ColumnDef::new("id", ColumnType::Uuid)
                     .primary_key()
@@ -327,6 +345,7 @@ pub fn webhooks_schema() -> Vec<TableDef> {
             .column(ColumnDef::new("created_at", ColumnType::DateTime).default("now()"))
             .column(ColumnDef::new("updated_at", ColumnType::DateTime).default("now()")),
         TableDef::new("yauth_webhook_deliveries")
+            .description("Webhook delivery attempts and responses.")
             .column(
                 ColumnDef::new("id", ColumnType::Uuid)
                     .primary_key()
@@ -351,6 +370,7 @@ pub fn webhooks_schema() -> Vec<TableDef> {
 pub fn oidc_schema() -> Vec<TableDef> {
     vec![
         TableDef::new("yauth_oidc_nonces")
+            .description("OIDC nonce values for replay protection.")
             .column(
                 ColumnDef::new("id", ColumnType::Uuid)
                     .primary_key()

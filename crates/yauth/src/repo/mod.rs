@@ -80,7 +80,7 @@ pub type RepoFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, RepoError>> +
 
 /// Compile-time feature flags, materialized as a runtime struct.
 ///
-/// Used by `DatabaseBackend::migrate()` to know which migrations to run.
+/// Used by the builder and plugin system to determine which features are active.
 /// Built from `cfg!()` macros, NOT from runtime config.
 pub struct EnabledFeatures {
     pub email_password: bool,
@@ -261,31 +261,16 @@ pub struct Repositories {
 /// Abstraction over the persistence layer.
 ///
 /// NOT sealed — consumers may implement custom backends (e.g., wrapping sqlx).
-/// Uses `BoxFuture` for `migrate()` to stay object-safe for `Box<dyn DatabaseBackend>`.
+/// Backends accept pre-configured pools/connections only. Schema setup is the
+/// caller's responsibility — use `cargo yauth generate` to produce migration
+/// files for your ORM and run them before constructing a backend.
 pub trait DatabaseBackend: Send + Sync {
-    /// Run migrations for the enabled features.
-    ///
-    /// - Diesel backend: executes feature-gated SQL migrations.
-    /// - In-memory backend: no-op.
-    /// - External migrations: no-op (assumes schema already exists).
-    fn migrate(
-        &self,
-        features: &EnabledFeatures,
-    ) -> Pin<Box<dyn Future<Output = Result<(), RepoError>> + Send + '_>>;
-
     /// Construct the full `Repositories` struct. Called once during `build()`.
     fn repositories(&self) -> Repositories;
 }
 
 /// Blanket impl so `Box<dyn DatabaseBackend>` can be passed directly to `YAuthBuilder::new`.
 impl DatabaseBackend for Box<dyn DatabaseBackend> {
-    fn migrate(
-        &self,
-        features: &EnabledFeatures,
-    ) -> Pin<Box<dyn Future<Output = Result<(), RepoError>> + Send + '_>> {
-        (**self).migrate(features)
-    }
-
     fn repositories(&self) -> Repositories {
         (**self).repositories()
     }

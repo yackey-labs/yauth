@@ -1,2 +1,0 @@
-ALTER TABLE yauth_oauth_accounts ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
-ALTER TABLE yauth_oauth_accounts ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();

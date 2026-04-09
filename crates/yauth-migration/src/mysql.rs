@@ -56,7 +56,11 @@ pub(crate) fn mysql_default(pg_default: &str) -> Option<Cow<'static, str>> {
 /// must be declared as separate `FOREIGN KEY (col) REFERENCES table(col)` lines
 /// after all column definitions.
 fn generate_create_table(table: &TableDef) -> String {
-    let mut sql = format!("CREATE TABLE IF NOT EXISTS `{}` (\n", table.name);
+    let mut sql = String::new();
+    if let Some(ref desc) = table.description {
+        sql.push_str(&format!("-- {desc}\n"));
+    }
+    sql.push_str(&format!("CREATE TABLE IF NOT EXISTS `{}` (\n", table.name));
 
     // Collect FK constraints to emit after all columns.
     let mut fk_constraints: Vec<String> = Vec::new();

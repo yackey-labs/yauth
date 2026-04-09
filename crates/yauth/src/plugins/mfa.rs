@@ -114,10 +114,6 @@ impl YAuthPlugin for MfaPlugin {
             _ => EventResponse::Continue,
         }
     }
-
-    fn schema(&self) -> Vec<crate::schema::TableDef> {
-        crate::schema::plugin_schemas::mfa_schema()
-    }
 }
 
 // ---------------------------------------------------------------------------

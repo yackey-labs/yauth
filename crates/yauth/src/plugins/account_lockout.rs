@@ -69,10 +69,6 @@ impl YAuthPlugin for AccountLockoutPlugin {
             _ => EventResponse::Continue,
         }
     }
-
-    fn schema(&self) -> Vec<crate::schema::TableDef> {
-        crate::schema::plugin_schemas::account_lockout_schema()
-    }
 }
 
 // ---------------------------------------------------------------------------

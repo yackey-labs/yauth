@@ -32,8 +32,8 @@ async fn main() {
         .build()
         .expect("Failed to create connection pool");
 
-    log::info!("Running migrations (fresh)...");
-    // Drop all yauth tables first for a fresh start
+    log::info!("Setting up schema (fresh)...");
+    // Drop all yauth tables first for a fresh start, then recreate via DDL
     {
         use yauth::backends::diesel_pg::RunQueryDsl;
         let mut conn = db.get().await.expect("Failed to get connection");
@@ -41,7 +41,28 @@ async fn main() {
             .execute(&mut conn)
             .await;
     }
-    // Migrations are called explicitly via backend.migrate() inside start_server
+    // Run schema setup via raw DDL (using yauth-migration's schema system)
+    {
+        use yauth::backends::diesel_pg::RunQueryDsl;
+        let all_plugins: Vec<String> = yauth::schema::ALL_PLUGINS
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        let merged = yauth::schema::collect_schema_for_plugins(&all_plugins, "yauth_")
+            .expect("collect schema");
+        let ddl = yauth::schema::generate_postgres_ddl(&merged);
+        let mut conn = db.get().await.expect("Failed to get connection");
+        for statement in ddl.split(';') {
+            let trimmed = statement.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            diesel::sql_query(trimmed)
+                .execute(&mut conn)
+                .await
+                .expect("execute DDL");
+        }
+    }
     let port = start_server(db.clone()).await;
     let api = format!("{}:{}/api/auth", BASE_URL, port);
     let client = reqwest::Client::builder()
@@ -1325,13 +1346,9 @@ async fn main() {
 
 async fn start_server(db: Pool) -> u16 {
     use yauth::prelude::*;
-    use yauth::repo::{DatabaseBackend, EnabledFeatures};
 
+    // Tables must already exist — migrations are run in main() before calling start_server.
     let backend = DieselPgBackend::from_pool(db);
-    backend
-        .migrate(&EnabledFeatures::from_compile_flags())
-        .await
-        .expect("Failed to run migrations");
 
     let auth = YAuthBuilder::new(
         backend,
@@ -1391,13 +1408,8 @@ async fn start_server(db: Pool) -> u16 {
 
 async fn start_server_with_audience(db: Pool, audience: &str) -> u16 {
     use yauth::prelude::*;
-    use yauth::repo::{DatabaseBackend, EnabledFeatures};
 
     let backend = DieselPgBackend::from_pool(db);
-    backend
-        .migrate(&EnabledFeatures::from_compile_flags())
-        .await
-        .expect("Failed to run migrations");
 
     let auth = YAuthBuilder::new(
         backend,
@@ -1464,13 +1476,8 @@ async fn start_server_with_audience(db: Pool, audience: &str) -> u16 {
 
 async fn start_server_with_oauth2(db: Pool) -> u16 {
     use yauth::prelude::*;
-    use yauth::repo::{DatabaseBackend, EnabledFeatures};
 
     let backend = DieselPgBackend::from_pool(db);
-    backend
-        .migrate(&EnabledFeatures::from_compile_flags())
-        .await
-        .expect("Failed to run migrations");
 
     let auth = YAuthBuilder::new(
         backend,

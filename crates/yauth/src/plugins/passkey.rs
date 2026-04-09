@@ -96,10 +96,6 @@ impl YAuthPlugin for PasskeyPlugin {
                 .route("/passkeys/{id}", delete(delete_passkey)),
         )
     }
-
-    fn schema(&self) -> Vec<crate::schema::TableDef> {
-        crate::schema::plugin_schemas::passkey_schema()
-    }
 }
 
 use crate::auth::session::session_set_cookie;

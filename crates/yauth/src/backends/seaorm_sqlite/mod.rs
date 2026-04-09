@@ -3,21 +3,17 @@
 //! Self-contained -- entities and repo implementations live here, not in `seaorm_common`.
 //! Uses `String` for UUIDs and `Text` for JSON columns (SQLite-native types).
 
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 
-use sea_orm::{ConnectOptions, Database, DatabaseConnection};
+use sea_orm::DatabaseConnection;
 
-use crate::repo::{DatabaseBackend, EnabledFeatures, RepoError, Repositories};
+use crate::repo::{DatabaseBackend, RepoError, Repositories};
 
 // Local entities (SQLite-specific)
 pub mod entities;
 
 // Shared helpers from seaorm_common
-use crate::backends::seaorm_common::{
-    collect_required_tables, opt_to_tz, sea_conflict, sea_err, to_tz,
-};
+use crate::backends::seaorm_common::{opt_to_tz, sea_conflict, sea_err, to_tz};
 
 // Core repo modules (always compiled)
 mod audit_repo;
@@ -84,17 +80,6 @@ pub struct SeaOrmSqliteBackend {
 }
 
 impl SeaOrmSqliteBackend {
-    /// Create from a database URL (e.g., `sqlite://path/to/db.sqlite` or `sqlite::memory:`).
-    pub async fn new(url: &str) -> Result<Self, RepoError> {
-        let mut opts = ConnectOptions::new(url.to_string());
-        opts.max_connections(1) // SQLite is single-writer
-            .sqlx_logging(false);
-        let db = Database::connect(opts)
-            .await
-            .map_err(|e| RepoError::Internal(e.into()))?;
-        Ok(Self { db })
-    }
-
     /// Create from an existing `DatabaseConnection`.
     pub fn from_connection(db: DatabaseConnection) -> Self {
         Self { db }
@@ -104,24 +89,9 @@ impl SeaOrmSqliteBackend {
     pub fn connection(&self) -> &DatabaseConnection {
         &self.db
     }
-
-    /// Create all yauth tables using SeaORM schema builder.
-    ///
-    /// For test/dev environments only -- production should use migrations.
-    pub async fn create_tables(&self) -> Result<(), RepoError> {
-        create_all_tables(&self.db).await
-    }
 }
 
 impl DatabaseBackend for SeaOrmSqliteBackend {
-    fn migrate(
-        &self,
-        features: &EnabledFeatures,
-    ) -> Pin<Box<dyn Future<Output = Result<(), RepoError>> + Send + '_>> {
-        let required_tables = collect_required_tables(features);
-        Box::pin(async move { validate_schema_sqlite(&self.db, &required_tables).await })
-    }
-
     fn repositories(&self) -> Repositories {
         build_repositories(&self.db)
     }
@@ -206,287 +176,5 @@ async fn run_create_table<E: sea_orm::EntityTrait>(
     db.execute_unprepared(&sql)
         .await
         .map_err(|e| RepoError::Internal(e.into()))?;
-    Ok(())
-}
-
-/// Create all yauth tables using SeaORM schema builder with this backend's entities.
-async fn create_all_tables(db: &DatabaseConnection) -> Result<(), RepoError> {
-    use sea_orm::sea_query::TableCreateStatement;
-    use sea_orm::{ConnectionTrait, Schema};
-
-    let schema = Schema::new(db.get_database_backend());
-
-    async fn create_table(
-        db: &DatabaseConnection,
-        stmt: &TableCreateStatement,
-    ) -> Result<(), RepoError> {
-        let builder = db.get_database_backend();
-        let sql = builder.build(stmt).to_string();
-        db.execute_unprepared(&sql)
-            .await
-            .map_err(|e| RepoError::Internal(e.into()))?;
-        Ok(())
-    }
-
-    // Enable foreign keys for SQLite
-    db.execute_unprepared("PRAGMA foreign_keys = ON;")
-        .await
-        .map_err(|e| RepoError::Internal(e.into()))?;
-
-    // Core tables
-    create_table(
-        db,
-        &schema
-            .create_table_from_entity(entities::users::Entity)
-            .if_not_exists()
-            .to_owned(),
-    )
-    .await?;
-    create_table(
-        db,
-        &schema
-            .create_table_from_entity(entities::sessions::Entity)
-            .if_not_exists()
-            .to_owned(),
-    )
-    .await?;
-    create_table(
-        db,
-        &schema
-            .create_table_from_entity(entities::audit_log::Entity)
-            .if_not_exists()
-            .to_owned(),
-    )
-    .await?;
-
-    // Plugin tables
-    #[cfg(feature = "email-password")]
-    {
-        create_table(
-            db,
-            &schema
-                .create_table_from_entity(entities::passwords::Entity)
-                .if_not_exists()
-                .to_owned(),
-        )
-        .await?;
-        create_table(
-            db,
-            &schema
-                .create_table_from_entity(entities::email_verifications::Entity)
-                .if_not_exists()
-                .to_owned(),
-        )
-        .await?;
-        create_table(
-            db,
-            &schema
-                .create_table_from_entity(entities::password_resets::Entity)
-                .if_not_exists()
-                .to_owned(),
-        )
-        .await?;
-    }
-
-    #[cfg(feature = "passkey")]
-    create_table(
-        db,
-        &schema
-            .create_table_from_entity(entities::passkeys::Entity)
-            .if_not_exists()
-            .to_owned(),
-    )
-    .await?;
-
-    #[cfg(feature = "mfa")]
-    {
-        create_table(
-            db,
-            &schema
-                .create_table_from_entity(entities::totp_secrets::Entity)
-                .if_not_exists()
-                .to_owned(),
-        )
-        .await?;
-        create_table(
-            db,
-            &schema
-                .create_table_from_entity(entities::backup_codes::Entity)
-                .if_not_exists()
-                .to_owned(),
-        )
-        .await?;
-    }
-
-    #[cfg(feature = "oauth")]
-    {
-        create_table(
-            db,
-            &schema
-                .create_table_from_entity(entities::oauth_accounts::Entity)
-                .if_not_exists()
-                .to_owned(),
-        )
-        .await?;
-        create_table(
-            db,
-            &schema
-                .create_table_from_entity(entities::oauth_states::Entity)
-                .if_not_exists()
-                .to_owned(),
-        )
-        .await?;
-    }
-
-    #[cfg(feature = "api-key")]
-    create_table(
-        db,
-        &schema
-            .create_table_from_entity(entities::api_keys::Entity)
-            .if_not_exists()
-            .to_owned(),
-    )
-    .await?;
-
-    #[cfg(feature = "bearer")]
-    create_table(
-        db,
-        &schema
-            .create_table_from_entity(entities::refresh_tokens::Entity)
-            .if_not_exists()
-            .to_owned(),
-    )
-    .await?;
-
-    #[cfg(feature = "magic-link")]
-    create_table(
-        db,
-        &schema
-            .create_table_from_entity(entities::magic_links::Entity)
-            .if_not_exists()
-            .to_owned(),
-    )
-    .await?;
-
-    #[cfg(feature = "oauth2-server")]
-    {
-        create_table(
-            db,
-            &schema
-                .create_table_from_entity(entities::oauth2_clients::Entity)
-                .if_not_exists()
-                .to_owned(),
-        )
-        .await?;
-        create_table(
-            db,
-            &schema
-                .create_table_from_entity(entities::authorization_codes::Entity)
-                .if_not_exists()
-                .to_owned(),
-        )
-        .await?;
-        create_table(
-            db,
-            &schema
-                .create_table_from_entity(entities::consents::Entity)
-                .if_not_exists()
-                .to_owned(),
-        )
-        .await?;
-        create_table(
-            db,
-            &schema
-                .create_table_from_entity(entities::device_codes::Entity)
-                .if_not_exists()
-                .to_owned(),
-        )
-        .await?;
-    }
-
-    #[cfg(feature = "account-lockout")]
-    {
-        create_table(
-            db,
-            &schema
-                .create_table_from_entity(entities::account_locks::Entity)
-                .if_not_exists()
-                .to_owned(),
-        )
-        .await?;
-        create_table(
-            db,
-            &schema
-                .create_table_from_entity(entities::unlock_tokens::Entity)
-                .if_not_exists()
-                .to_owned(),
-        )
-        .await?;
-    }
-
-    #[cfg(feature = "webhooks")]
-    {
-        create_table(
-            db,
-            &schema
-                .create_table_from_entity(entities::webhooks::Entity)
-                .if_not_exists()
-                .to_owned(),
-        )
-        .await?;
-        create_table(
-            db,
-            &schema
-                .create_table_from_entity(entities::webhook_deliveries::Entity)
-                .if_not_exists()
-                .to_owned(),
-        )
-        .await?;
-    }
-
-    Ok(())
-}
-
-/// Validate that expected yauth tables exist in SQLite.
-/// Uses `sqlite_master` since SQLite has no `information_schema`.
-async fn validate_schema_sqlite(
-    db: &DatabaseConnection,
-    required: &[String],
-) -> Result<(), RepoError> {
-    use sea_orm::{ConnectionTrait, Statement};
-
-    let stmt = Statement::from_string(
-        db.get_database_backend(),
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'yauth_%'".to_string(),
-    );
-    let rows = db
-        .query_all_raw(stmt)
-        .await
-        .map_err(|e| RepoError::Internal(format!("failed to query sqlite_master: {e}").into()))?;
-
-    let existing_tables: std::collections::HashSet<String> = rows
-        .iter()
-        .filter_map(|r| r.try_get::<String>("", "name").ok())
-        .collect();
-
-    let missing: Vec<&String> = required
-        .iter()
-        .filter(|t| !existing_tables.contains(*t))
-        .collect();
-
-    if !missing.is_empty() {
-        return Err(RepoError::Internal(
-            format!(
-                "missing yauth tables: {} -- run SeaORM migrations first",
-                missing
-                    .iter()
-                    .map(|t| t.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-            .into(),
-        ));
-    }
-
     Ok(())
 }

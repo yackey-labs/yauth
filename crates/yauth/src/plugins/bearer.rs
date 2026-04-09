@@ -45,10 +45,6 @@ impl YAuthPlugin for BearerPlugin {
     fn protected_routes(&self, _ctx: &PluginContext) -> Option<Router<YAuthState>> {
         Some(Router::new().route("/token/revoke", post(revoke_token)))
     }
-
-    fn schema(&self) -> Vec<crate::schema::TableDef> {
-        crate::schema::plugin_schemas::bearer_schema()
-    }
 }
 
 // ---------------------------------------------------------------------------

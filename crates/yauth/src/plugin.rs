@@ -96,10 +96,6 @@ pub trait YAuthPlugin: Send + Sync + 'static {
     fn on_event(&self, _event: &AuthEvent, _ctx: &PluginContext) -> EventResponse {
         EventResponse::Continue
     }
-    /// Declare the tables this plugin needs. Default: empty (no tables).
-    fn schema(&self) -> Vec<crate::schema::TableDef> {
-        Vec::new()
-    }
 }
 
 #[cfg(test)]

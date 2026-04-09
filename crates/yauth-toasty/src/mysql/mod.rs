@@ -2,11 +2,8 @@
 //!
 //! Experimental: Toasty is pre-1.0. API may change.
 
-use std::future::Future;
-use std::pin::Pin;
-
 use toasty::Db;
-use yauth::repo::{DatabaseBackend, EnabledFeatures, RepoError, Repositories};
+use yauth::repo::{DatabaseBackend, RepoError, Repositories};
 
 /// Experimental: Toasty-based MySQL backend.
 #[doc = "Experimental: Toasty is pre-1.0. API may change."]
@@ -50,25 +47,6 @@ impl ToastyMysqlBackend {
 }
 
 impl DatabaseBackend for ToastyMysqlBackend {
-    fn migrate(
-        &self,
-        _features: &EnabledFeatures,
-    ) -> Pin<Box<dyn Future<Output = Result<(), RepoError>> + Send + '_>> {
-        Box::pin(async move {
-            let mut db = self.db.clone();
-            use crate::entities::YauthUser;
-            match YauthUser::all().limit(0).exec(&mut db).await {
-                Ok(_) => Ok(()),
-                Err(e) => Err(RepoError::Internal(
-                    format!(
-                        "schema validation failed (yauth_users not found): {e} \
-                         -- run create_tables() or toasty-cli migration apply"
-                    ).into(),
-                )),
-            }
-        })
-    }
-
     fn repositories(&self) -> Repositories {
         crate::common::build_repositories(&self.db)
     }

@@ -4,21 +4,17 @@
 //! Uses `String` for UUID columns (MySQL stores as CHAR(36)).
 //! Shared helpers (`sea_err`, `to_tz`, etc.) are imported from `seaorm_common`.
 
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 
-use sea_orm::{ConnectOptions, Database, DatabaseConnection};
+use sea_orm::DatabaseConnection;
 
-use crate::repo::{DatabaseBackend, EnabledFeatures, RepoError, Repositories};
+use crate::repo::{DatabaseBackend, RepoError, Repositories};
 
 // Local entities (MySQL-specific -- String UUIDs)
 pub mod entities;
 
 // Shared helpers from seaorm_common
-use crate::backends::seaorm_common::{
-    collect_required_tables, opt_to_tz, sea_conflict, sea_err, to_tz,
-};
+use crate::backends::seaorm_common::{opt_to_tz, sea_conflict, sea_err, to_tz};
 
 // Core repo modules (always compiled)
 mod audit_repo;
@@ -85,18 +81,6 @@ pub struct SeaOrmMysqlBackend {
 }
 
 impl SeaOrmMysqlBackend {
-    /// Create from a database URL.
-    pub async fn new(url: &str) -> Result<Self, RepoError> {
-        let mut opts = ConnectOptions::new(url.to_string());
-        opts.max_connections(64)
-            .min_connections(2)
-            .sqlx_logging(false);
-        let db = Database::connect(opts)
-            .await
-            .map_err(|e| RepoError::Internal(e.into()))?;
-        Ok(Self { db })
-    }
-
     /// Create from an existing `DatabaseConnection`.
     pub fn from_connection(db: DatabaseConnection) -> Self {
         Self { db }
@@ -333,14 +317,6 @@ impl SeaOrmMysqlBackend {
 }
 
 impl DatabaseBackend for SeaOrmMysqlBackend {
-    fn migrate(
-        &self,
-        features: &EnabledFeatures,
-    ) -> Pin<Box<dyn Future<Output = Result<(), RepoError>> + Send + '_>> {
-        let required_tables = collect_required_tables(features);
-        Box::pin(async move { validate_schema_mysql(&self.db, &required_tables).await })
-    }
-
     fn repositories(&self) -> Repositories {
         build_repositories(&self.db)
     }
@@ -405,48 +381,4 @@ fn build_repositories(db: &DatabaseConnection) -> Repositories {
         #[cfg(feature = "webhooks")]
         webhook_deliveries: Arc::new(SeaOrmWebhookDeliveryRepo::new(db.clone())),
     }
-}
-
-/// Validate that expected yauth tables exist in the MySQL database.
-/// Does NOT run any DDL -- returns a descriptive error if tables are missing.
-async fn validate_schema_mysql(
-    db: &DatabaseConnection,
-    required: &[String],
-) -> Result<(), RepoError> {
-    use sea_orm::{ConnectionTrait, Statement};
-
-    let stmt = Statement::from_string(
-        db.get_database_backend(),
-        "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME LIKE 'yauth_%'"
-            .to_string(),
-    );
-    let rows = db.query_all_raw(stmt).await.map_err(|e| {
-        RepoError::Internal(format!("failed to query information_schema: {e}").into())
-    })?;
-
-    let existing_tables: std::collections::HashSet<String> = rows
-        .iter()
-        .filter_map(|r| r.try_get::<String>("", "TABLE_NAME").ok())
-        .collect();
-
-    let missing: Vec<&String> = required
-        .iter()
-        .filter(|t| !existing_tables.contains(*t))
-        .collect();
-
-    if !missing.is_empty() {
-        return Err(RepoError::Internal(
-            format!(
-                "missing yauth tables: {} -- run migrations first",
-                missing
-                    .iter()
-                    .map(|t| t.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-            .into(),
-        ));
-    }
-
-    Ok(())
 }

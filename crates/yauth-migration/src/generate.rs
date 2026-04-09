@@ -11,6 +11,8 @@ use crate::{Dialect, YAuthSchema, collect_schema_for_plugins};
 pub struct GeneratedMigration {
     /// Files that were written (path -> content).
     pub files: Vec<(PathBuf, String)>,
+    /// Files that should be deleted (e.g., query files for removed plugins).
+    pub removed_files: Vec<PathBuf>,
     /// Human-readable description of what was generated.
     pub description: String,
 }
@@ -104,8 +106,21 @@ pub fn generate_init(config: &YAuthConfig) -> Result<GeneratedMigration, Generat
         }
     }
 
+    // For sqlx, also generate query files
+    if config.migration.orm == crate::Orm::Sqlx {
+        let queries_dir = Path::new(&config.migration.queries_dir);
+        let generated = crate::sqlx_queries::generate_queries(
+            queries_dir,
+            &config.plugins.enabled,
+            &config.migration.table_prefix,
+            dialect,
+        );
+        files.extend(generated.files);
+    }
+
     Ok(GeneratedMigration {
         files,
+        removed_files: vec![],
         description: format!(
             "Initial yauth migration with plugins: {}",
             config.plugins.enabled.join(", ")
@@ -126,6 +141,7 @@ pub fn generate_add_plugin(
     if up_sql.trim().is_empty() {
         return Ok(GeneratedMigration {
             files: vec![],
+            removed_files: vec![],
             description: format!("No schema changes for plugin '{plugin_name}'"),
         });
     }
@@ -133,7 +149,7 @@ pub fn generate_add_plugin(
     let migration_name = format!("yauth_add_{}", plugin_name.replace('-', "_"));
 
     let migrations_dir = Path::new(&config.migration.migrations_dir);
-    let files = match config.migration.orm {
+    let mut files = match config.migration.orm {
         crate::Orm::Diesel => {
             generate_diesel_files(migrations_dir, &migration_name, up_sql, down_sql)?
         }
@@ -144,8 +160,26 @@ pub fn generate_add_plugin(
         crate::Orm::Toasty => vec![], // Toasty uses push_schema(), no migration files
     };
 
+    // For sqlx, also generate query files for the new plugin
+    if config.migration.orm == crate::Orm::Sqlx {
+        let dialect: crate::Dialect = config
+            .migration
+            .dialect
+            .parse()
+            .map_err(|e: String| GenerateError::Config(e))?;
+        let queries_dir = Path::new(&config.migration.queries_dir);
+        let query_files = crate::sqlx_queries::plugin_queries_only(
+            queries_dir,
+            plugin_name,
+            &config.migration.table_prefix,
+            dialect,
+        );
+        files.extend(query_files);
+    }
+
     Ok(GeneratedMigration {
         files,
+        removed_files: vec![],
         description: format!("Add plugin '{plugin_name}'"),
     })
 }
@@ -163,6 +197,7 @@ pub fn generate_remove_plugin(
     if up_sql.trim().is_empty() {
         return Ok(GeneratedMigration {
             files: vec![],
+            removed_files: vec![],
             description: format!("No schema changes for removing plugin '{plugin_name}'"),
         });
     }
@@ -181,8 +216,20 @@ pub fn generate_remove_plugin(
         crate::Orm::Toasty => vec![], // Toasty uses push_schema(), no migration files
     };
 
+    // For sqlx, record which query files should be deleted
+    let removed_queries = if config.migration.orm == crate::Orm::Sqlx {
+        let queries_dir = Path::new(&config.migration.queries_dir);
+        crate::sqlx_queries::plugin_query_filenames(plugin_name)
+            .into_iter()
+            .map(|f| queries_dir.join(f))
+            .collect()
+    } else {
+        vec![]
+    };
+
     Ok(GeneratedMigration {
         files,
+        removed_files: removed_queries,
         description: format!("Remove plugin '{plugin_name}'"),
     })
 }
@@ -289,6 +336,12 @@ pub fn write_migration(migration: &GeneratedMigration) -> Result<(), GenerateErr
         }
         std::fs::write(path, content)?;
     }
+    // Remove files (e.g., query files from removed plugins)
+    for path in &migration.removed_files {
+        if path.exists() {
+            std::fs::remove_file(path)?;
+        }
+    }
     Ok(())
 }
 
@@ -325,13 +378,35 @@ mod tests {
             vec!["email-password".to_string()],
         );
         let result = generate_init(&config).unwrap();
-        // sqlx produces a single file
-        assert_eq!(result.files.len(), 1);
+        // sqlx produces a migration file + query files
+        assert!(
+            result.files.len() > 1,
+            "Should have migration + query files"
+        );
+        // First file is the migration SQL
         let content = &result.files[0].1;
         assert!(content.contains("CREATE TABLE IF NOT EXISTS yauth_users"));
         // SQLite should not have UUID or TIMESTAMPTZ
         assert!(!content.contains("UUID "));
         assert!(!content.contains("TIMESTAMPTZ"));
+        // Query files should exist
+        let query_files: Vec<_> = result
+            .files
+            .iter()
+            .filter(|(p, _)| p.starts_with("queries"))
+            .collect();
+        assert!(!query_files.is_empty(), "Should have query files");
+        // Query files should use ? params (SQLite style)
+        for (path, content) in &query_files {
+            if content.contains("-- Params: none") {
+                continue;
+            }
+            assert!(
+                content.contains("?"),
+                "SQLite query should use ? params: {}",
+                path.display()
+            );
+        }
     }
 
     #[test]

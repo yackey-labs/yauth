@@ -31,15 +31,11 @@ mod password_repo;
 #[cfg(feature = "webhooks")]
 mod webhooks_repo;
 
-mod migrations;
-
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 
 use sqlx::MySqlPool;
 
-use crate::repo::{DatabaseBackend, EnabledFeatures, RepoError, Repositories};
+use crate::repo::{DatabaseBackend, Repositories};
 
 /// sqlx-based MySQL backend.
 pub struct SqlxMysqlBackend {
@@ -47,14 +43,6 @@ pub struct SqlxMysqlBackend {
 }
 
 impl SqlxMysqlBackend {
-    /// Create from a database URL.
-    pub async fn new(url: &str) -> Result<Self, RepoError> {
-        let pool = MySqlPool::connect(url)
-            .await
-            .map_err(|e| RepoError::Internal(e.into()))?;
-        Ok(Self { pool })
-    }
-
     /// Create from an existing pool.
     pub fn from_pool(pool: MySqlPool) -> Self {
         Self { pool }
@@ -62,17 +50,6 @@ impl SqlxMysqlBackend {
 }
 
 impl DatabaseBackend for SqlxMysqlBackend {
-    fn migrate(
-        &self,
-        _features: &EnabledFeatures,
-    ) -> Pin<Box<dyn Future<Output = Result<(), RepoError>> + Send + '_>> {
-        Box::pin(async move {
-            migrations::run_migrations(&self.pool)
-                .await
-                .map_err(RepoError::Internal)
-        })
-    }
-
     fn repositories(&self) -> Repositories {
         Repositories {
             users: Arc::new(user_repo::SqlxMysqlUserRepo::new(self.pool.clone())),

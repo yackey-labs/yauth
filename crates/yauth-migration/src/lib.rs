@@ -47,6 +47,7 @@ pub mod plugin_schemas;
 pub mod config;
 pub mod diff;
 pub mod generate;
+pub mod sqlx_queries;
 
 /// All known plugin names.
 pub const ALL_PLUGINS: &[&str] = &[

@@ -70,10 +70,6 @@ impl YAuthPlugin for WebhookPlugin {
 
         EventResponse::Continue
     }
-
-    fn schema(&self) -> Vec<crate::schema::TableDef> {
-        crate::schema::plugin_schemas::webhooks_schema()
-    }
 }
 
 // ---------------------------------------------------------------------------

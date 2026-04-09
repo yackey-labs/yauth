@@ -47,10 +47,6 @@ impl YAuthPlugin for OAuthPlugin {
                 .route("/oauth/{provider}/link", post(start_link)),
         )
     }
-
-    fn schema(&self) -> Vec<crate::schema::TableDef> {
-        crate::schema::plugin_schemas::oauth_schema()
-    }
 }
 
 // ---------------------------------------------------------------------------

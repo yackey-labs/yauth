@@ -92,10 +92,6 @@ impl YAuthPlugin for OAuth2ServerPlugin {
     fn protected_routes(&self, _ctx: &PluginContext) -> Option<Router<YAuthState>> {
         None
     }
-
-    fn schema(&self) -> Vec<crate::schema::TableDef> {
-        crate::schema::plugin_schemas::oauth2_server_schema()
-    }
 }
 
 // ---------------------------------------------------------------------------

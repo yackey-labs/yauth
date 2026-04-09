@@ -31,15 +31,11 @@ mod password_repo;
 #[cfg(feature = "webhooks")]
 mod webhooks_repo;
 
-mod migrations;
-
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 
 use sqlx::SqlitePool;
 
-use crate::repo::{DatabaseBackend, EnabledFeatures, RepoError, Repositories};
+use crate::repo::{DatabaseBackend, Repositories};
 
 /// sqlx-based SQLite backend.
 pub struct SqlxSqliteBackend {
@@ -47,14 +43,6 @@ pub struct SqlxSqliteBackend {
 }
 
 impl SqlxSqliteBackend {
-    /// Create from a database URL (e.g., `sqlite::memory:` or `sqlite:path/to/db.sqlite`).
-    pub async fn new(url: &str) -> Result<Self, RepoError> {
-        let pool = SqlitePool::connect(url)
-            .await
-            .map_err(|e| RepoError::Internal(e.into()))?;
-        Ok(Self { pool })
-    }
-
     /// Create from an existing pool.
     pub fn from_pool(pool: SqlitePool) -> Self {
         Self { pool }
@@ -62,17 +50,6 @@ impl SqlxSqliteBackend {
 }
 
 impl DatabaseBackend for SqlxSqliteBackend {
-    fn migrate(
-        &self,
-        _features: &EnabledFeatures,
-    ) -> Pin<Box<dyn Future<Output = Result<(), RepoError>> + Send + '_>> {
-        Box::pin(async move {
-            migrations::run_migrations(&self.pool)
-                .await
-                .map_err(RepoError::Internal)
-        })
-    }
-
     fn repositories(&self) -> Repositories {
         Repositories {
             users: Arc::new(user_repo::SqlxSqliteUserRepo::new(self.pool.clone())),

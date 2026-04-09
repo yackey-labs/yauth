@@ -99,9 +99,9 @@ curl -X POST http://localhost:3000/api/auth/login \
   -d '{"email":"test@example.com","password":"Xk9#mP2$vL5nQ8wR"}'
 ```
 
-## Migration CLI
+## Schema Generation CLI
 
-`cargo-yauth` generates migration files for your ORM from a declarative schema:
+`cargo-yauth` generates migration files for your ORM from a declarative schema. It produces files — it does not run migrations or connect to a database.
 
 ```bash
 # Install the CLI
@@ -110,21 +110,27 @@ cargo install cargo-yauth
 # Initialize yauth in your project (creates yauth.toml + migration files)
 cargo yauth init --orm diesel --dialect postgres --plugins email-password,passkey
 
-# Add a plugin later
+# Add a plugin later — regenerates migration files
 cargo yauth add-plugin mfa
 
 # Remove a plugin
 cargo yauth remove-plugin passkey
 
-# Show status
+# Show current config and plugin status
 cargo yauth status
 
-# Regenerate migration SQL (CI: --check verifies freshness)
+# Regenerate migration files (CI: --check verifies freshness)
 cargo yauth generate
 cargo yauth generate --check
 ```
 
 All commands accept `-f <path>` to specify a config file (default: `yauth.toml`).
+
+**What each ORM generates:**
+- **diesel**: `up.sql` + `down.sql` migration files + `schema.rs` with `diesel::table!` macros
+- **sqlx**: Numbered `.sql` migration files for `sqlx migrate run`
+- **seaorm**: `up.sql` + `down.sql` + `entities/*.rs` with `DeriveEntityModel` structs
+- **toasty**: `#[derive(toasty::Model)]` Rust files (no SQL — Toasty manages schema via `push_schema()`)
 
 ### yauth.toml
 
@@ -163,17 +169,15 @@ cargo add axum
 
 ```rust
 use yauth::prelude::*;
-use yauth::repo::{DatabaseBackend, EnabledFeatures};
 use yauth::backends::diesel_pg::DieselPgBackend;
 use axum::Router;
 
 #[tokio::main]
 async fn main() {
-    let backend = DieselPgBackend::new("postgres://user:pass@localhost/mydb")
-        .expect("Failed to create backend");
-
-    // Run migrations (creates yauth_* tables)
-    backend.migrate(&EnabledFeatures::from_compile_flags()).await.unwrap();
+    // Create your diesel-async pool, then hand it to yauth.
+    // Run `diesel migration run` first to create yauth_* tables.
+    let pool = /* your diesel-async deadpool */;
+    let backend = DieselPgBackend::from_pool(pool);
 
     let config = YAuthConfig {
         base_url: "http://localhost:3000".into(),
@@ -204,21 +208,22 @@ SeaORM backends export their entity types publicly, so you can use yauth tables 
 
 ```bash
 cargo add yauth --no-default-features --features full,seaorm-pg-backend
+cargo yauth init --orm seaorm --dialect postgres --plugins email-password
+# Apply generated migrations with sea-orm-cli
 ```
 
 ```rust
 use yauth::prelude::*;
-use yauth::repo::{DatabaseBackend, EnabledFeatures};
 use yauth::backends::seaorm_pg::SeaOrmPgBackend;
 
 #[tokio::main]
 async fn main() {
-    let backend = SeaOrmPgBackend::new("postgres://user:pass@localhost/mydb")
+    // Create your SeaORM DatabaseConnection, then hand it to yauth.
+    // Run your ORM's migrations first to create yauth_* tables.
+    let db = sea_orm::Database::connect("postgres://user:pass@localhost/mydb")
         .await
-        .expect("Failed to create backend");
-
-    // SeaORM migrate() validates schema only — run sea-orm-cli migrations first
-    backend.migrate(&EnabledFeatures::from_compile_flags()).await.unwrap();
+        .expect("Failed to connect");
+    let backend = SeaOrmPgBackend::from_connection(db);
 
     let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
         .with_email_password(Default::default())
@@ -238,8 +243,6 @@ async fn main() {
     axum::serve(listener, app).await.unwrap();
 }
 ```
-
-> **Note:** SeaORM and Toasty backends use **user-owned migrations**. `migrate()` only validates that tables exist — it does not create them. Run your ORM's migration tool (`sea-orm-cli migrate`, `toasty-cli migration apply`) before starting the app.
 
 ### 2. Frontend (TypeScript)
 
@@ -416,113 +419,165 @@ All new endpoints are automatically available on the client — no regeneration 
 
 ### Choose Your Backend
 
-#### PostgreSQL (default)
+All backends accept a pool or connection you create — yauth does not manage connections. Generate migration files with `cargo yauth generate`, apply them with your ORM's CLI, then pass the pool to yauth.
+
+#### Diesel + PostgreSQL (default)
+
+```bash
+cargo yauth init --orm diesel --dialect postgres --plugins email-password
+diesel migration run
+```
 
 ```rust
 use yauth::backends::diesel_pg::DieselPgBackend;
 
-let backend = DieselPgBackend::new("postgres://user:pass@localhost/mydb")?;
+let pool = /* your diesel-async deadpool */;
+let backend = DieselPgBackend::from_pool(pool);
 // Or with a custom PostgreSQL schema:
-let backend = DieselPgBackend::with_schema("postgres://user:pass@localhost/mydb", "auth")?;
+let backend = DieselPgBackend::from_pool_with_schema(pool, "auth");
 
 let yauth = YAuthBuilder::new(backend, config).build().await?;
 ```
 
-#### MySQL / MariaDB
+#### Diesel + MySQL / MariaDB
 
 ```bash
 cargo add yauth --features email-password,diesel-mysql-backend --no-default-features
+cargo yauth init --orm diesel --dialect mysql --plugins email-password
+diesel migration run
 ```
 
 ```rust
 use yauth::backends::diesel_mysql::DieselMysqlBackend;
 
-let backend = DieselMysqlBackend::new("mysql://user:pass@localhost/mydb")?;
+let pool = /* your diesel-async deadpool */;
+let backend = DieselMysqlBackend::from_pool(pool);
 let yauth = YAuthBuilder::new(backend, config).build().await?;
 ```
 
-#### SQLite / Turso (diesel-libsql)
+#### Diesel + SQLite / Turso (diesel-libsql)
 
 ```bash
 cargo add yauth --features email-password,diesel-libsql-backend --no-default-features
+cargo yauth init --orm diesel --dialect sqlite --plugins email-password
 ```
 
 ```rust
 use yauth::backends::diesel_libsql::DieselLibsqlBackend;
 
-// Local SQLite file
-let backend = DieselLibsqlBackend::new("file:yauth.db")?;
-// In-memory SQLite
-let backend = DieselLibsqlBackend::new(":memory:")?;
-// Remote Turso (set LIBSQL_AUTH_TOKEN env var)
-let backend = DieselLibsqlBackend::new("libsql://your-db.turso.io")?;
+let pool = /* your diesel-libsql connection pool */;
+let backend = DieselLibsqlBackend::from_pool(pool);
 
 let yauth = YAuthBuilder::new(backend, config).build().await?;
 ```
 
-#### Native SQLite (diesel)
+#### Diesel + Native SQLite
 
 > Requires `libsqlite3-dev` (Debian/Ubuntu) or `sqlite3` (macOS Homebrew) system package.
 
 ```bash
 cargo add yauth --features email-password,diesel-sqlite-backend --no-default-features
+cargo yauth init --orm diesel --dialect sqlite --plugins email-password
 ```
 
 ```rust
 use yauth::backends::diesel_sqlite::DieselSqliteBackend;
 
-// File-based (uses WAL mode automatically)
-let backend = DieselSqliteBackend::new("path/to/yauth.db")?;
-// In-memory (pool max_size=1)
-let backend = DieselSqliteBackend::new(":memory:")?;
+let pool = /* your diesel SyncConnectionWrapper pool */;
+let backend = DieselSqliteBackend::from_pool(pool);
 
 let yauth = YAuthBuilder::new(backend, config).build().await?;
 ```
 
-#### PostgreSQL (sqlx)
+#### sqlx + PostgreSQL
 
 ```bash
 cargo add yauth --features email-password,sqlx-pg-backend --no-default-features
+cargo yauth init --orm sqlx --dialect postgres --plugins email-password
+sqlx migrate run
 ```
 
 ```rust
 use yauth::backends::sqlx_pg::SqlxPgBackend;
 
-let backend = SqlxPgBackend::new("postgres://user:pass@localhost/mydb").await?;
+let pool = sqlx::PgPool::connect(&database_url).await?;
+let backend = SqlxPgBackend::from_pool(pool);
 let yauth = YAuthBuilder::new(backend, config).build().await?;
 ```
 
-> **sqlx backends use `query!()` macros** — you must set `DATABASE_URL` at compile time and run migrations first. Use `cargo yauth init --orm sqlx --dialect postgres` to generate migration SQL, apply it, then build with `DATABASE_URL=postgres://... cargo build`.
+> **sqlx backends use `query!()` macros** — set `DATABASE_URL` at compile time and run migrations first. Apply with `sqlx migrate run`, then build with `DATABASE_URL=postgres://... cargo build`.
 
-#### MySQL (sqlx)
+#### sqlx + MySQL
 
 ```bash
 cargo add yauth --features email-password,sqlx-mysql-backend --no-default-features
+cargo yauth init --orm sqlx --dialect mysql --plugins email-password
+sqlx migrate run
 ```
 
 ```rust
 use yauth::backends::sqlx_mysql::SqlxMysqlBackend;
 
-let backend = SqlxMysqlBackend::new("mysql://user:pass@localhost/mydb").await?;
+let pool = sqlx::MySqlPool::connect(&database_url).await?;
+let backend = SqlxMysqlBackend::from_pool(pool);
 let yauth = YAuthBuilder::new(backend, config).build().await?;
 ```
 
-> Requires `DATABASE_URL` at compile time. Use `cargo yauth init --orm sqlx --dialect mysql` to generate migration SQL first.
+> Requires `DATABASE_URL` at compile time. Apply migrations with `sqlx migrate run` first.
 
-#### SQLite (sqlx)
+#### sqlx + SQLite
 
 ```bash
 cargo add yauth --features email-password,sqlx-sqlite-backend --no-default-features
+cargo yauth init --orm sqlx --dialect sqlite --plugins email-password
+sqlx migrate run
 ```
 
 ```rust
 use yauth::backends::sqlx_sqlite::SqlxSqliteBackend;
 
-let backend = SqlxSqliteBackend::new("sqlite:yauth.db").await?;
+let pool = sqlx::SqlitePool::connect(&database_url).await?;
+let backend = SqlxSqliteBackend::from_pool(pool);
 let yauth = YAuthBuilder::new(backend, config).build().await?;
 ```
 
-> Requires `DATABASE_URL` at compile time. Use an **absolute path** for SQLite: `DATABASE_URL=sqlite:/absolute/path/to/yauth.db cargo build`. Use `cargo yauth init --orm sqlx --dialect sqlite` to generate migration SQL first.
+> Use an **absolute path** for SQLite: `DATABASE_URL=sqlite:/absolute/path/to/yauth.db`.
+
+#### SeaORM + PostgreSQL
+
+```bash
+cargo add yauth --no-default-features --features full,seaorm-pg-backend
+cargo yauth init --orm seaorm --dialect postgres --plugins email-password
+# Apply generated migrations with sea-orm-cli
+```
+
+```rust
+use yauth::backends::seaorm_pg::SeaOrmPgBackend;
+
+let db = sea_orm::Database::connect(&database_url).await?;
+let backend = SeaOrmPgBackend::from_connection(db);
+let yauth = YAuthBuilder::new(backend, config).build().await?;
+
+// SeaORM backends export entity types for your own queries:
+// use yauth::backends::seaorm_pg::entities::users;
+// let user = users::Entity::find_by_id(id).one(&db).await?;
+```
+
+#### Toasty + SQLite (experimental, separate crate)
+
+```toml
+yauth = { version = "0.8", features = ["full"] }
+yauth-toasty = { git = "https://github.com/yackey-labs/yauth", features = ["sqlite"] }
+```
+
+```rust
+use yauth_toasty::sqlite::ToastySqliteBackend;
+
+let db = /* your toasty::Db */;
+db.push_schema().await?;  // Toasty manages its own schema
+let backend = ToastySqliteBackend::from_db(db.clone());
+let yauth = YAuthBuilder::new(backend, config).build().await?;
+```
 
 #### In-Memory (no database)
 
@@ -868,27 +923,30 @@ Pre-built SolidJS components:
 
 ## Database Backends
 
-yauth uses a `DatabaseBackend` trait with pluggable implementations. All persistent data (users, passwords, sessions, API keys, etc.) is accessed through repository traits, making the auth logic fully database-agnostic.
+yauth uses a `DatabaseBackend` trait with pluggable implementations. All persistent data (users, passwords, sessions, API keys, etc.) is accessed through repository traits, making the auth logic fully database-agnostic. All backends accept pools or connections you create — yauth does not manage database connections.
 
-| Backend | Feature Flag | Connection | Use case |
+| Backend | Feature Flag | Constructor | Use case |
 |---|---|---|---|
-| `DieselPgBackend` | `diesel-pg-backend` (default) | PostgreSQL via diesel-async 0.8 + deadpool | Production Postgres |
-| `DieselMysqlBackend` | `diesel-mysql-backend` | MySQL 8.0+ / MariaDB 10.6+ via diesel-async 0.8 | MySQL/MariaDB production |
-| `DieselSqliteBackend` | `diesel-sqlite-backend` | Vanilla SQLite via diesel + SyncConnectionWrapper | Embedded, local dev |
-| `DieselLibsqlBackend` | `diesel-libsql-backend` | Local SQLite / remote Turso via diesel-libsql 0.1.4 | Turso edge databases |
-| `SqlxPgBackend` | `sqlx-pg-backend` | PostgreSQL via sqlx 0.8 with `query!()` macros | sqlx users, compile-time SQL |
-| `SqlxMysqlBackend` | `sqlx-mysql-backend` | MySQL via sqlx 0.8 with `query!()` macros | sqlx + MySQL |
-| `SqlxSqliteBackend` | `sqlx-sqlite-backend` | SQLite via sqlx 0.8 with `query!()` macros | sqlx + SQLite |
-| `InMemoryBackend` | `memory-backend` | None (all data in HashMaps) | Tests, prototyping |
+| `DieselPgBackend` | `diesel-pg-backend` (default) | `from_pool(pool)` | Production Postgres |
+| `DieselMysqlBackend` | `diesel-mysql-backend` | `from_pool(pool)` | MySQL/MariaDB production |
+| `DieselSqliteBackend` | `diesel-sqlite-backend` | `from_pool(pool)` | Embedded, local dev |
+| `DieselLibsqlBackend` | `diesel-libsql-backend` | `from_pool(pool)` | Turso edge databases |
+| `SqlxPgBackend` | `sqlx-pg-backend` | `from_pool(pool)` | sqlx users, compile-time SQL |
+| `SqlxMysqlBackend` | `sqlx-mysql-backend` | `from_pool(pool)` | sqlx + MySQL |
+| `SqlxSqliteBackend` | `sqlx-sqlite-backend` | `from_pool(pool)` | sqlx + SQLite |
+| `SeaOrmPgBackend` | `seaorm-pg-backend` | `from_connection(db)` | SeaORM users, entity-based |
+| `SeaOrmMysqlBackend` | `seaorm-mysql-backend` | `from_connection(db)` | SeaORM + MySQL |
+| `SeaOrmSqliteBackend` | `seaorm-sqlite-backend` | `from_connection(db)` | SeaORM + SQLite |
+| `InMemoryBackend` | `memory-backend` | `new()` | Tests, prototyping |
 
-Migrations are explicit — call `backend.migrate()` before `build()`. Plugins declare tables as Rust data, and DDL is generated per dialect (Postgres, SQLite, MySQL) via the declarative schema system.
+yauth does not run migrations. Use `cargo yauth generate` to produce migration files for your ORM, then apply them with your ORM's CLI (`diesel migration run`, `sqlx migrate run`, `sea-orm-cli migrate`, etc.).
 
 ### Configurable PostgreSQL Schema
 
-By default, yauth tables live in the `public` schema. Use `DieselPgBackend::with_schema()` to isolate them:
+By default, yauth tables live in the `public` schema. Use `from_pool_with_schema()` to isolate them:
 
 ```rust
-let backend = DieselPgBackend::with_schema(&database_url, "auth")?;
+let backend = DieselPgBackend::from_pool_with_schema(pool, "auth");
 ```
 
 ### Redis Caching
@@ -918,26 +976,18 @@ See [docs/migrating-to-diesel.md](docs/migrating-to-diesel.md) for a migration g
 
 ## Database Schema
 
-All tables are prefixed with `yauth_`. Migrations are feature-gated — only tables for enabled features are created.
+All tables are prefixed with `yauth_`. Generated migrations are feature-gated — only tables for enabled plugins are included.
 
-Migrations are explicit — call `backend.migrate()` when and where you want:
+Generate migrations with `cargo yauth generate`, then apply with your ORM's CLI:
 
-```rust
-// At app startup
-let backend = DieselPgBackend::new(&database_url)?;
-backend.migrate(&EnabledFeatures::from_compile_flags()).await?;
-```
+```bash
+# Generate migration files
+cargo yauth generate
 
-```rust
-// Or in CI / init container / CLI tool — same call, different context
-let backend = DieselPgBackend::new(&database_url)?;
-backend.migrate(&EnabledFeatures::from_compile_flags()).await?;
-// No need to build YAuth — just run migrations and exit
-```
-
-```rust
-// Or export DDL for your own migration tool (Flyway, Liquibase, sqlx, etc.)
-let ddl = yauth.generate_ddl(Dialect::Postgres)?;
+# Apply with your ORM
+diesel migration run        # Diesel
+sqlx migrate run            # sqlx
+sea-orm-cli migrate up      # SeaORM
 ```
 
 ### Schema by Plugin

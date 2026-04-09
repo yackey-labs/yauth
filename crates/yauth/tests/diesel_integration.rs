@@ -19,9 +19,9 @@ use yauth::config::YAuthConfig;
 use yauth::prelude::*;
 
 mod helpers;
-use helpers::{TestDb, drop_yauth_tables};
+use helpers::TestDb;
 
-/// Shared DB — reuses a single migrated instance. Safe for parallel tests.
+/// Shared DB — reuses a single instance with schema set up. Safe for parallel tests.
 macro_rules! require_db {
     () => {
         match TestDb::shared().await {
@@ -35,69 +35,7 @@ macro_rules! require_db {
 }
 
 // ---------------------------------------------------------------------------
-// 1. Migration runner — uses isolated testcontainer (not shared DB)
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn diesel_run_migrations_creates_tables() {
-    // Use a fresh isolated DB so drop/create doesn't race with other tests
-    let db = match TestDb::try_new_isolated().await {
-        Some(db) => db,
-        None => {
-            eprintln!("No database available — skipping test");
-            return;
-        }
-    };
-    drop_yauth_tables(&db.pool).await;
-
-    yauth::backends::diesel_pg::migrations::run_migrations(&db.pool)
-        .await
-        .expect("run_migrations should succeed");
-
-    let tables = yauth::backends::diesel_pg::migrations::list_yauth_tables(&db.pool)
-        .await
-        .expect("list_yauth_tables should succeed");
-
-    assert!(
-        tables.contains(&"yauth_users".to_string()),
-        "yauth_users table should exist, got: {tables:?}"
-    );
-    assert!(
-        tables.contains(&"yauth_sessions".to_string()),
-        "yauth_sessions table should exist, got: {tables:?}"
-    );
-    assert!(
-        tables.contains(&"yauth_audit_log".to_string()),
-        "yauth_audit_log table should exist, got: {tables:?}"
-    );
-
-    #[cfg(feature = "email-password")]
-    assert!(
-        tables.contains(&"yauth_email_verifications".to_string()),
-        "yauth_email_verifications table should exist when email-password is enabled, got: {tables:?}"
-    );
-}
-
-#[tokio::test]
-async fn diesel_migrations_are_idempotent() {
-    let db = match TestDb::try_new_isolated().await {
-        Some(db) => db,
-        None => {
-            eprintln!("No database available — skipping test");
-            return;
-        }
-    };
-
-    yauth::backends::diesel_pg::migrations::run_migrations(&db.pool)
-        .await
-        .expect("first run should succeed");
-    yauth::backends::diesel_pg::migrations::run_migrations(&db.pool)
-        .await
-        .expect("second (idempotent) run should succeed");
-}
-
-// ---------------------------------------------------------------------------
-// 2. Session lifecycle
+// 1. Session lifecycle (migration tests removed — yauth no longer owns migrations)
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -121,7 +59,7 @@ async fn diesel_session_create_validate_delete() {
         .expect("insert dummy user");
     }
 
-    // Build state for session operations (shared DB already migrated)
+    // Build state for session operations (shared DB schema set up via raw DDL)
     let config = YAuthConfig::default();
     let backend = DieselPgBackend::from_pool(db.pool.clone());
     let mut builder = YAuthBuilder::new(backend, config);

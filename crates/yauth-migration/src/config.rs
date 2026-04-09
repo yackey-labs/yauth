@@ -23,6 +23,9 @@ pub struct MigrationConfig {
     /// Directory where migration files are written.
     #[serde(default = "default_migrations_dir")]
     pub migrations_dir: String,
+    /// Directory where sqlx query files are written (sqlx only).
+    #[serde(default = "default_queries_dir")]
+    pub queries_dir: String,
     /// PostgreSQL schema name (optional, default "public").
     #[serde(default)]
     pub schema: Option<String>,
@@ -40,6 +43,10 @@ pub struct PluginsConfig {
 
 fn default_migrations_dir() -> String {
     "migrations".to_string()
+}
+
+fn default_queries_dir() -> String {
+    "queries".to_string()
 }
 
 fn default_table_prefix() -> String {
@@ -102,6 +109,7 @@ impl YAuthConfig {
                 orm,
                 dialect: dialect.to_string(),
                 migrations_dir: default_migrations_dir(),
+                queries_dir: default_queries_dir(),
                 schema: None,
                 table_prefix: default_table_prefix(),
             },

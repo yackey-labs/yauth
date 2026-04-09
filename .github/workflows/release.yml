@@ -9,10 +9,62 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
-    name: Release
+  # Step 1: On every push to main, create/update a release PR with version bumps + changelog.
+  prepare-release:
+    name: Prepare Release PR
     runs-on: ubuntu-latest
-    if: "!startsWith(github.event.head_commit.message, 'chore:')"
+    if: "!startsWith(github.event.head_commit.message, 'chore: release')"
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.INFRA_DEPLOY_TOKEN }}
+
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install knope
+        run: |
+          curl -sSL "https://github.com/knope-dev/knope/releases/latest/download/knope-x86_64-unknown-linux-musl.tgz" | tar xz --strip-components=1
+          mv knope /usr/local/bin/
+
+      - name: Install JS dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Prepare release
+        env:
+          GITHUB_TOKEN: ${{ secrets.INFRA_DEPLOY_TOKEN }}
+        run: |
+          OUTPUT=$(knope prepare-release 2>&1) && exit 0 || {
+            EXIT_CODE=$?
+            echo "$OUTPUT"
+            if echo "$OUTPUT" | grep -q "No unreleased changes"; then
+              echo "::notice::No unreleased changes — skipping"
+              exit 0
+            fi
+            echo "::error::prepare-release failed with exit code $EXIT_CODE"
+            exit 1
+          }
+
+  # Step 2: When the release PR is merged, publish to crates.io + npm and create GitHub release.
+  publish:
+    name: Publish
+    runs-on: ubuntu-latest
+    if: "startsWith(github.event.head_commit.message, 'chore: release')"
     permissions:
       contents: write
       id-token: write  # required for OIDC trusted publishing (crates.io + npm)
@@ -55,7 +107,7 @@ jobs:
         id: crates-auth
         uses: rust-lang/crates-io-auth-action@v1
 
-      - name: Release
+      - name: Publish and release
         env:
           GITHUB_TOKEN: ${{ secrets.INFRA_DEPLOY_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ steps.crates-auth.outputs.token }}

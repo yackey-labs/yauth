@@ -27,8 +27,11 @@ changelog = "CHANGELOG.md"
 owner = "yackey-labs"
 repo = "yauth"
 
+# ── Step 1: Prepare a release PR ──────────────────────────────────────────
+# Runs on every push to main. Bumps versions, updates CHANGELOG,
+# regenerates artifacts, and creates/updates a "release" PR.
 [[workflows]]
-name = "release"
+name = "prepare-release"
 
 [[workflows.steps]]
 type = "PrepareRelease"
@@ -45,14 +48,27 @@ type = "Command"
 command = "bun biome format --write packages/shared/package.json packages/client/package.json packages/ui-solidjs/package.json packages/ui-vue/package.json"
 shell = true
 
-# Stage the reformatted + regenerated files
 [[workflows.steps]]
-type = "Command"
-command = "git add packages/shared/package.json packages/client/package.json packages/ui-solidjs/package.json packages/ui-vue/package.json openapi.json packages/client/src/generated.ts packages/client/src/generated.msw.ts"
+type = "CreatePullRequest"
+base = "main"
 
-[[workflows.steps]]
-type = "Command"
-command = "git commit -m \"chore: prepare release $version\""
+[workflows.steps.title]
+template = "chore: release $version"
+
+[workflows.steps.body]
+template = """## Release $version
+
+$changelog
+
+---
+Merging this PR will publish to crates.io and npm.
+"""
+
+# ── Step 2: Publish and tag ───────────────────────────────────────────────
+# Runs when the release PR is merged. Publishes crates + npm packages,
+# then creates the GitHub release with tag.
+[[workflows]]
+name = "release"
 
 # Build TS packages before publishing
 [[workflows.steps]]
@@ -98,10 +114,6 @@ type = "Command"
 command = "cd packages/ui-vue && npm publish --access public --provenance"
 shell = true
 
-# Push and create release after all packages are published
-[[workflows.steps]]
-type = "Command"
-command = "git push"
-
+# Create GitHub release + tag
 [[workflows.steps]]
 type = "Release"

@@ -16,8 +16,8 @@ path = "src/main.rs"
 [dependencies]
 yauth-migration = { path = "../yauth-migration", version = "0.9.6" }
 clap = { version = "4", features = ["derive"] }
-dialoguer = "0.11"
-similar = "2"
+dialoguer = "0.12"
+similar = "3"
 
 [dev-dependencies]
 assert_cmd = "2"

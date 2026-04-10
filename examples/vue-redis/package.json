@@ -8,9 +8,9 @@
 		"start:backend": "DATABASE_URL=postgres://yauth:yauth@127.0.0.1:5433/yauth_test REDIS_URL=redis://127.0.0.1:6379 STORE_BACKEND=redis cargo run --example server --features full,redis --manifest-path ../../Cargo.toml"
 	},
 	"dependencies": {
-		"@yackey-labs/yauth-client": "0.3.0",
-		"@yackey-labs/yauth-shared": "0.3.0",
-		"@yackey-labs/yauth-ui-vue": "0.3.0",
+		"@yackey-labs/yauth-client": "workspace:*",
+		"@yackey-labs/yauth-shared": "workspace:*",
+		"@yackey-labs/yauth-ui-vue": "workspace:*",
 		"vue": "^3.5.0",
 		"vue-router": "^4.5.0"
 	},

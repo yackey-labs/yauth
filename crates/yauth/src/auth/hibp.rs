@@ -45,7 +45,7 @@ pub async fn check_password_breach(password: &str) -> Result<u64, String> {
 async fn check_password_breach_inner<CX>(password: &str, _cx: &CX) -> Result<u64, String> {
     let mut hasher = Sha1::new();
     hasher.update(password.as_bytes());
-    let hash = format!("{:X}", hasher.finalize());
+    let hash = hex::encode_upper(hasher.finalize());
 
     let prefix = &hash[..5];
     let suffix = &hash[5..];
@@ -157,7 +157,7 @@ mod tests {
         use sha1::{Digest, Sha1};
         let mut hasher = Sha1::new();
         hasher.update(b"password");
-        let hash = format!("{:X}", hasher.finalize());
+        let hash = hex::encode_upper(hasher.finalize());
         assert_eq!(hash.len(), 40);
         let prefix = &hash[..5];
         let suffix = &hash[5..];

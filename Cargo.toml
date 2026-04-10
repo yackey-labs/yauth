@@ -30,7 +30,7 @@ argon2 = "0.5"
 password-hash = { version = "0.5", features = ["std"] }
 rand = "0.8"
 hex = "0.4"
-sha1 = "0.10"
+sha1 = "0.11"
 uuid = { version = "1", features = ["v7", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 
@@ -73,4 +73,4 @@ async-trait = "0.1"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "chrono", "uuid", "json", "derive", "macros"] }
 
 # SeaORM (optional — pulled in by seaorm-*-backend features)
-sea-orm = { version = "=2.0.0-rc.37", default-features = false, features = ["macros", "with-chrono", "with-uuid", "with-json", "runtime-tokio-rustls"] }
+sea-orm = { version = "=2.0.0-rc.38", default-features = false, features = ["macros", "with-chrono", "with-uuid", "with-json", "runtime-tokio-rustls"] }

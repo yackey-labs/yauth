@@ -79,7 +79,7 @@ password-hash = { workspace = true }
 rand = { workspace = true }
 hex = { workspace = true }
 sha1 = { workspace = true }
-sha2 = "0.10"
+sha2 = "0.11"
 uuid = { workspace = true }
 chrono = { workspace = true }
 
@@ -87,7 +87,7 @@ lettre = { workspace = true }
 reqwest = { workspace = true }
 
 # Feature-gated: Redis store backend
-redis = { version = "0.27", features = ["aio", "tokio-comp", "connection-manager"], optional = true }
+redis = { version = "1", features = ["aio", "tokio-comp", "connection-manager"], optional = true }
 
 thiserror = { workspace = true }
 utoipa = { workspace = true, optional = true }
@@ -105,7 +105,7 @@ base64 = { version = "0.22", optional = true }
 serde_urlencoded = { version = "0.7", optional = true }
 
 # Feature-gated: Webhooks
-hmac = { version = "0.12", optional = true }
+hmac = { version = "0.13", optional = true }
 
 opentelemetry = { workspace = true, optional = true }
 opentelemetry_sdk = { workspace = true, optional = true }

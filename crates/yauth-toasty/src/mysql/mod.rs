@@ -1,12 +1,9 @@
-//! Toasty-based MySQL backend for yauth.
-//!
-//! Experimental: Toasty is pre-1.0. API may change.
+//! Toasty-based MySQL backend for yauth (experimental support).
 
 use toasty::Db;
 use yauth::repo::{DatabaseBackend, RepoError, Repositories};
 
-/// Experimental: Toasty-based MySQL backend.
-#[doc = "Experimental: Toasty is pre-1.0. API may change."]
+/// Toasty-based MySQL backend (experimental support).
 pub struct ToastyMysqlBackend {
     db: Db,
 }

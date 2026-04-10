@@ -330,7 +330,7 @@ Each Toasty backend has a `new(url)` constructor that handles schema registratio
 ```bash
 cargo add yauth --no-default-features
 cargo add yauth-toasty --git https://github.com/yackey-labs/yauth --features postgresql,email-password
-# toasty 0.3 is pulled in transitively — no need to add it directly
+cargo add toasty@0.3 --no-default-features --features postgresql
 ```
 
 ```rust
@@ -352,6 +352,7 @@ let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
 ```bash
 cargo add yauth --no-default-features
 cargo add yauth-toasty --git https://github.com/yackey-labs/yauth --features mysql,email-password
+cargo add toasty@0.3 --no-default-features --features mysql
 ```
 
 ```rust
@@ -373,6 +374,7 @@ let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
 ```bash
 cargo add yauth --no-default-features
 cargo add yauth-toasty --git https://github.com/yackey-labs/yauth --features sqlite,email-password
+cargo add toasty@0.3 --no-default-features --features sqlite
 ```
 
 ```rust

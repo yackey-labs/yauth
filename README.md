@@ -2,60 +2,15 @@
 
 Modular, plugin-based authentication library for Rust (Axum) with a generated TypeScript client, Vue 3 components, and SolidJS components.
 
-Every feature is behind a **feature flag** — enable only what you need.
-
-## Features
-
-| Feature | Description | When to use |
-|---------|-------------|-------------|
-| `email-password` | Registration, login, email verification, forgot/reset/change password, HIBP breach checking, configurable password policy | Default auth for most apps |
-| `passkey` | WebAuthn registration and passwordless login | When you want passwordless/biometric login |
-| `mfa` | TOTP setup/verify with backup codes; intercepts login flow via event system | When you need 2FA for sensitive accounts |
-| `oauth` | OAuth2 client — multi-provider linking (Google, GitHub, etc.) | When users should sign in with external providers |
-| `bearer` | JWT access/refresh tokens with token family tracking (reuse detection) | When API clients need stateless auth tokens |
-| `api-key` | Scoped API key generation with optional expiration | When third-party integrations or scripts need long-lived credentials |
-| `magic-link` | Passwordless email login with optional signup | When you want frictionless email-based auth |
-| `admin` | User management, ban/unban, session management, impersonation | When you need a back-office admin panel |
-| `status` | Protected endpoint listing enabled plugins | When you want a settings/admin page to show active auth features |
-| `oauth2-server` | Full OAuth2 authorization server (authorization code + PKCE, device flow, client credentials, dynamic registration, token introspection + revocation) | When yauth is the identity provider for other apps |
-| `account-lockout` | Brute-force protection with exponential backoff, unlock via email or admin | When you need per-account lockout beyond IP rate limiting |
-| `webhooks` | HMAC-signed HTTP callbacks on auth events with retry + delivery history | When external systems need real-time auth event notifications |
-| `oidc` | OpenID Connect Provider — id_token issuance, OIDC discovery, JWKS, /userinfo | When downstream apps need OIDC-compliant SSO |
-| `telemetry` | Native OpenTelemetry SDK instrumentation | When you need distributed tracing |
-| `openapi` | utoipa OpenAPI spec generation for client codegen | When you need to generate or update the TypeScript client |
-| `redis` | Redis caching decorator — wraps repository traits for sub-ms lookups | Multi-replica deployments, high-traffic apps |
-| `diesel-pg-backend` | PostgreSQL backend via diesel-async + deadpool | Production Postgres deployments (default) |
-| `diesel-mysql-backend` | MySQL/MariaDB backend via diesel-async + deadpool | MySQL 8.0+ / MariaDB 10.6+ deployments |
-| `diesel-sqlite-backend` | Native SQLite backend via diesel + SyncConnectionWrapper | Embedded apps, local dev (vanilla SQLite) |
-| `diesel-libsql-backend` | SQLite/Turso backend via diesel-libsql | Remote Turso edge databases, libSQL |
-| `sqlx-pg-backend` | PostgreSQL via sqlx with compile-time `query!()` macros | sqlx users who want compile-time SQL checking |
-| `sqlx-mysql-backend` | MySQL via sqlx with compile-time `query!()` macros | sqlx + MySQL deployments |
-| `sqlx-sqlite-backend` | SQLite via sqlx with compile-time `query!()` macros | sqlx + SQLite deployments |
-| `seaorm-pg-backend` | PostgreSQL via SeaORM 2.0 | SeaORM users who want entity-based queries + public entity exports |
-| `seaorm-mysql-backend` | MySQL via SeaORM 2.0 | SeaORM + MySQL deployments |
-| `seaorm-sqlite-backend` | SQLite via SeaORM 2.0 | SeaORM + SQLite deployments |
-| `memory-backend` | Fully in-memory backend (no database) | Unit tests, prototyping, CI |
-| `full` | All auth plugins (no backends) | Real apps: `full` + one backend |
-| `all-backends` | Every backend + redis, except diesel-libsql and toasty (CI-only) | Conformance testing only (diesel-libsql and toasty tested separately due to sqlite3 symbol conflicts) |
-
-`email-password` + `diesel-pg-backend` are enabled by default. Real apps use `full` + one backend (e.g., `features = ["full", "diesel-pg-backend"]`). CI uses `full,all-backends`.
-
-**Toasty backends** (experimental, pre-1.0) are in a separate crate due to a Cargo `links` conflict with sqlx:
-
-```bash
-cargo add yauth --no-default-features --features full
-cargo add yauth-toasty --git https://github.com/yackey-labs/yauth --features postgresql
-```
-
-| Feature | Description | When to use |
-|---------|-------------|-------------|
-| `postgresql` | PostgreSQL via Toasty | Toasty users, PG deployments |
-| `mysql` | MySQL via Toasty | Toasty + MySQL deployments |
-| `sqlite` | SQLite via Toasty | Toasty + SQLite deployments |
+- **Plugin system** — enable only the auth features you need via feature flags
+- **11 database backends** — Diesel, sqlx, SeaORM, Toasty, or in-memory, across Postgres, MySQL, and SQLite
+- **No runtime migrations** — `cargo yauth generate` produces ORM-native migration files; your ORM applies them
+- **Tri-mode auth** — session cookies, JWT bearer tokens, and API keys all work simultaneously
+- **TypeScript included** — auto-generated HTTP client + pre-built Vue 3 and SolidJS components
 
 ## Try It in 30 Seconds
 
-No database needed. Add the dependencies, then copy, paste, run:
+No database needed. Copy, paste, run:
 
 ```bash
 cargo add yauth --no-default-features --features memory-backend,email-password
@@ -99,29 +54,175 @@ curl -X POST http://localhost:3000/api/auth/login \
   -d '{"email":"test@example.com","password":"Xk9#mP2$vL5nQ8wR"}'
 ```
 
-## Schema Generation CLI
+## How It Works
 
-`cargo-yauth` generates migration files for your ORM from a declarative schema. It produces files — it does not run migrations or connect to a database.
+**Plugins** implement the `YAuthPlugin` trait — each provides public routes (login, register), protected routes (change password, manage passkeys), and event handlers (MFA intercepts login, lockout blocks login). Enable plugins with feature flags and wire them up via `YAuthBuilder`.
+
+**Tri-mode auth middleware** checks credentials in order: session cookie, then `Authorization: Bearer <jwt>` (requires `bearer` feature), then `X-Api-Key` header (requires `api-key` feature). The authenticated user is injected as `Extension<AuthUser>`.
+
+**Event system** — all auth operations emit an `AuthEvent` (`UserRegistered`, `LoginSucceeded`, `LoginFailed`, etc.). Plugins respond with `Continue`, `RequireMfa { pending_session_id }`, or `Block { status, message }`.
+
+Custom plugins can be added via `builder.with_plugin(Box::new(MyPlugin))`.
+
+## Add to Your Project
+
+### 1. Pick a backend
+
+| Backend | Feature flag | ORM | Database |
+|---|---|---|---|
+| `DieselPgBackend` | `diesel-pg-backend` (default) | Diesel | PostgreSQL |
+| `DieselMysqlBackend` | `diesel-mysql-backend` | Diesel | MySQL/MariaDB |
+| `DieselSqliteBackend` | `diesel-sqlite-backend` | Diesel | SQLite |
+| `DieselLibsqlBackend` | `diesel-libsql-backend` | Diesel | SQLite/Turso |
+| `SqlxPgBackend` | `sqlx-pg-backend` | sqlx | PostgreSQL |
+| `SqlxMysqlBackend` | `sqlx-mysql-backend` | sqlx | MySQL |
+| `SqlxSqliteBackend` | `sqlx-sqlite-backend` | sqlx | SQLite |
+| `SeaOrmPgBackend` | `seaorm-pg-backend` | SeaORM | PostgreSQL |
+| `SeaOrmMysqlBackend` | `seaorm-mysql-backend` | SeaORM | MySQL |
+| `SeaOrmSqliteBackend` | `seaorm-sqlite-backend` | SeaORM | SQLite |
+| `ToastySqliteBackend` | `sqlite` (on `yauth-toasty`) | Toasty | SQLite |
+| `ToastyPgBackend` | `postgresql` (on `yauth-toasty`) | Toasty | PostgreSQL |
+| `ToastyMysqlBackend` | `mysql` (on `yauth-toasty`) | Toasty | MySQL |
+| `InMemoryBackend` | `memory-backend` | -- | None |
+
+Toasty backends are experimental and live in a [separate `yauth-toasty` crate](docs/backends.md#toasty-backends-experimental) — enable plugin features on `yauth-toasty`, not `yauth`.
+
+All backends accept pools/connections you create. **Each backend has a complete, copy-paste-ready example** in [docs/backends.md](docs/backends.md) — including `Cargo.toml` dependencies, pool construction, and full `main.rs`.
+
+### 2. Pick your plugins
+
+| Plugin | Feature flag | What it does |
+|---|---|---|
+| `email-password` | `email-password` (default) | Registration, login, email verification, forgot/reset/change password, HIBP breach checking |
+| `passkey` | `passkey` | WebAuthn registration + passwordless login |
+| `mfa` | `mfa` | TOTP setup/verify with backup codes |
+| `oauth` | `oauth` | OAuth2 client — multi-provider linking (Google, GitHub, etc.) |
+| `bearer` | `bearer` | JWT access/refresh tokens with token family tracking |
+| `api-key` | `api-key` | Scoped API key generation with optional expiration |
+| `magic-link` | `magic-link` | Passwordless email login with optional signup |
+| `admin` | `admin` | User management, ban/unban, impersonation |
+| `status` | `status` | Protected endpoint listing enabled plugins |
+| `oauth2-server` | `oauth2-server` | Full OAuth2 authorization server (auth code + PKCE, device flow, client credentials) |
+| `account-lockout` | `account-lockout` | Brute-force protection with exponential backoff |
+| `webhooks` | `webhooks` | HMAC-signed HTTP callbacks on auth events |
+| `oidc` | `oidc` | OpenID Connect Provider (id_token, discovery, JWKS, /userinfo) |
+
+Infrastructure features: `telemetry` (OpenTelemetry), `openapi` (utoipa spec generation), `redis` (caching decorator).
+
+Use `full` to enable all auth plugins, then add one backend: `features = ["full", "diesel-pg-backend"]`.
+
+### 3. Wire it up
+
+Two complete examples below — pick the one closest to your stack. Every other backend follows the same pattern; see [docs/backends.md](docs/backends.md) for the full list with copy-paste-ready examples.
+
+#### Diesel + PostgreSQL (default)
 
 ```bash
-# Install the CLI
+cargo add yauth --features email-password
+cargo add diesel --features postgres
+cargo yauth init --orm diesel --dialect postgres --plugins email-password
+diesel migration run
+```
+
+```rust
+// prelude re-exports YAuthBuilder, YAuthConfig, EmailPasswordConfig,
+// PasskeyConfig, MfaConfig, and other plugin config types.
+use yauth::prelude::*;
+use yauth::backends::diesel_pg::{DieselPgBackend, DieselPool, AsyncDieselConnectionManager, AsyncPgConnection};
+
+#[tokio::main]
+async fn main() {
+    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let manager = AsyncDieselConnectionManager::<AsyncPgConnection>::new(&database_url);
+    let pool = DieselPool::builder(manager).build().unwrap();
+    let backend = DieselPgBackend::from_pool(pool);
+
+    let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
+        .with_email_password(EmailPasswordConfig::default())
+        // Enable additional plugins by adding their feature flags to Cargo.toml
+        // (e.g., features = ["email-password", "passkey", "mfa"]):
+        // .with_passkey(PasskeyConfig { rp_id: "...".into(), rp_origin: "...".into(), rp_name: "...".into() })
+        // .with_mfa(MfaConfig::default())
+        .build()
+        .await
+        .expect("Failed to build YAuth");
+
+    let app = axum::Router::new()
+        .nest("/api/auth", yauth.router())
+        .with_state(yauth.state().clone());
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    axum::serve(listener, app).await.unwrap();
+}
+```
+
+#### sqlx + SQLite (no external database needed)
+
+```bash
+cargo add yauth --no-default-features --features email-password,sqlx-sqlite-backend
+cargo add sqlx --features runtime-tokio,sqlite
+cargo add axum
+cargo add tokio --features full
+cargo yauth init --orm sqlx --dialect sqlite --plugins email-password
+sqlx migrate run
+```
+
+```rust
+use yauth::prelude::*;
+use yauth::backends::sqlx_sqlite::SqlxSqliteBackend;
+
+#[tokio::main]
+async fn main() {
+    let pool = sqlx::SqlitePool::connect("sqlite:yauth.db?mode=rwc").await.unwrap();
+    let backend = SqlxSqliteBackend::from_pool(pool);
+
+    let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
+        .with_email_password(EmailPasswordConfig::default())
+        .build()
+        .await
+        .expect("Failed to build YAuth");
+
+    let app = axum::Router::new()
+        .nest("/api/auth", yauth.router())
+        .with_state(yauth.state().clone());
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    axum::serve(listener, app).await.unwrap();
+}
+```
+
+### 4. Add a frontend (optional)
+
+```bash
+bun add @yackey-labs/yauth-client
+```
+
+```typescript
+import { createYAuthClient } from "@yackey-labs/yauth-client";
+
+const auth = createYAuthClient({ baseUrl: "/api/auth" });
+
+await auth.emailPassword.register({ email: "user@example.com", password: "s3cure!Pass" });
+await auth.emailPassword.login({ email: "user@example.com", password: "s3cure!Pass" });
+const user = await auth.getSession();
+await auth.logout();
+```
+
+Pre-built UI components are available for [Vue 3](docs/typescript.md#yackey-labsyauth-ui-vue) and [SolidJS](docs/typescript.md#yackey-labsyauth-ui-solidjs).
+
+## Schema Generation CLI
+
+`cargo-yauth` generates migration files for your ORM from a declarative config. It produces files — it does not run migrations or connect to a database.
+
+```bash
 cargo install cargo-yauth
 
-# Initialize yauth in your project (creates yauth.toml + migration files)
 cargo yauth init --orm diesel --dialect postgres --plugins email-password,passkey
-
-# Add a plugin later — regenerates migration files
 cargo yauth add-plugin mfa
-
-# Remove a plugin
 cargo yauth remove-plugin passkey
-
-# Show current config and plugin status
 cargo yauth status
-
-# Regenerate migration files (CI: --check verifies freshness)
-cargo yauth generate
-cargo yauth generate --check
+cargo yauth generate              # Regenerate migration files
+cargo yauth generate --check      # CI: verify freshness
 ```
 
 All commands accept `-f <path>` to specify a config file (default: `yauth.toml`).
@@ -147,832 +248,6 @@ enabled = ["email-password", "passkey", "mfa"]
 
 No secrets in config -- database URLs come from environment variables only.
 
-## Workspace Crates
-
-| Crate | Purpose |
-|---|---|
-| `yauth` | Main library -- plugins, middleware, builder, auth logic, backends |
-| `yauth-entity` | Domain types (User, Session, Password, etc.) |
-| `yauth-migration` | Schema types, DDL generation, diff engine, migration file gen (zero ORM deps) |
-| `cargo-yauth` | CLI binary -- `cargo yauth init/add-plugin/remove-plugin/status/generate` |
-| `yauth-toasty` | Toasty ORM backends (experimental, separate crate due to sqlite3 links conflict) |
-
-## Quick Start
-
-### 1. Backend (Rust/Axum)
-
-```bash
-cargo add yauth --features email-password
-cargo add tokio --features full
-cargo add axum
-```
-
-```rust
-use yauth::prelude::*;
-use yauth::backends::diesel_pg::DieselPgBackend;
-use axum::Router;
-
-#[tokio::main]
-async fn main() {
-    // Create your diesel-async pool, then hand it to yauth.
-    // Run `diesel migration run` first to create yauth_* tables.
-    let pool = /* your diesel-async deadpool */;
-    let backend = DieselPgBackend::from_pool(pool);
-
-    let config = YAuthConfig {
-        base_url: "http://localhost:3000".into(),
-        ..Default::default()
-    };
-
-    let yauth = YAuthBuilder::new(backend, config)
-        .with_email_password(EmailPasswordConfig {
-            require_email_verification: false,
-            ..Default::default()
-        })
-        .build()
-        .await
-        .expect("Failed to build YAuth");
-
-    let app = Router::new()
-        .nest("/api/auth", yauth.router())
-        .with_state(yauth.state().clone());
-
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
-    axum::serve(listener, app).await.unwrap();
-}
-```
-
-#### SeaORM Backend (alternative)
-
-SeaORM backends export their entity types publicly, so you can use yauth tables in your own SeaORM queries:
-
-```bash
-cargo add yauth --no-default-features --features full,seaorm-pg-backend
-cargo yauth init --orm seaorm --dialect postgres --plugins email-password
-# Apply generated migrations with sea-orm-cli
-```
-
-```rust
-use yauth::prelude::*;
-use yauth::backends::seaorm_pg::SeaOrmPgBackend;
-
-#[tokio::main]
-async fn main() {
-    // Create your SeaORM DatabaseConnection, then hand it to yauth.
-    // Run your ORM's migrations first to create yauth_* tables.
-    let db = sea_orm::Database::connect("postgres://user:pass@localhost/mydb")
-        .await
-        .expect("Failed to connect");
-    let backend = SeaOrmPgBackend::from_connection(db);
-
-    let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
-        .with_email_password(Default::default())
-        .build()
-        .await
-        .unwrap();
-
-    // Use yauth entities in your own SeaORM queries:
-    // use yauth::backends::seaorm_pg::entities::users;
-    // let user = users::Entity::find_by_id(id).one(&db).await?;
-
-    let app = axum::Router::new()
-        .nest("/api/auth", yauth.router())
-        .with_state(yauth.state().clone());
-
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
-    axum::serve(listener, app).await.unwrap();
-}
-```
-
-### 2. Frontend (TypeScript)
-
-```bash
-bun add @yackey-labs/yauth-client
-```
-
-```typescript
-import { createYAuthClient } from "@yackey-labs/yauth-client";
-
-const auth = createYAuthClient({ baseUrl: "/api/auth" });
-
-// Register
-await auth.emailPassword.register({ email: "user@example.com", password: "s3cure!Pass" });
-
-// Login
-await auth.emailPassword.login({ email: "user@example.com", password: "s3cure!Pass" });
-
-// Check session
-const user = await auth.getSession();
-console.log(user.email); // "user@example.com"
-
-// Logout
-await auth.logout();
-```
-
-### 3. Pre-built UI (optional)
-
-#### Vue 3
-
-```bash
-bun add @yackey-labs/yauth-ui-vue
-```
-
-**Install the plugin** in your app entry (`main.ts`):
-
-```typescript
-import { createApp } from "vue";
-import { YAuthPlugin } from "@yackey-labs/yauth-ui-vue";
-import App from "./App.vue";
-
-createApp(App)
-  .use(YAuthPlugin, { baseUrl: "/api/auth" })
-  .mount("#app");
-```
-
-**Login page** — the `LoginForm` component handles email/password and emits `@success` when login succeeds:
-
-```vue
-<script setup lang="ts">
-import { LoginForm } from "@yackey-labs/yauth-ui-vue";
-import { useRouter } from "vue-router";
-
-const router = useRouter();
-</script>
-
-<template>
-  <LoginForm @success="router.push('/dashboard')" />
-</template>
-```
-
-**Dashboard page** — use the `useSession()` composable to access the current user:
-
-```vue
-<script setup lang="ts">
-import { useSession, useAuth } from "@yackey-labs/yauth-ui-vue";
-
-const { user, isAuthenticated, loading } = useSession();
-const { logout } = useAuth();
-</script>
-
-<template>
-  <div v-if="loading">Loading...</div>
-  <div v-else-if="isAuthenticated">
-    <p>Logged in as {{ user?.email }}</p>
-    <button @click="logout">Logout</button>
-  </div>
-  <div v-else>Not logged in</div>
-</template>
-```
-
-**Composables reference:**
-
-| Composable | Returns | Use for |
-|------------|---------|---------|
-| `useYAuth()` | `{ client, user, loading, refetch }` | Direct client access |
-| `useAuth()` | `{ user, loading, error, submitting, login, register, logout, forgotPassword, resetPassword, changePassword }` | Auth actions with error/loading state |
-| `useSession()` | `{ user, loading, isAuthenticated, isEmailVerified, logout }` | Reactive session state checks |
-
-**Component props and events:**
-
-| Component | Props | Events |
-|-----------|-------|--------|
-| `LoginForm` | `showPasskey?: boolean` | `@success`, `@mfa-required(pendingSessionId)` |
-| `RegisterForm` | — | `@success(message)` |
-| `ForgotPasswordForm` | — | `@success(message)` |
-| `ResetPasswordForm` | `token: string` | `@success(message)` |
-| `ChangePasswordForm` | — | `@success(message)` |
-| `VerifyEmail` | `token: string` | `@success(message)` |
-| `MfaChallenge` | `pendingSessionId: string` | `@success` |
-| `MfaSetup` | — | `@complete` |
-| `PasskeyButton` | `mode: "login" \| "register"`, `email?: string` | `@success` |
-| `OAuthButtons` | `providers: string[]` | — |
-| `MagicLinkForm` | — | `@success(message)` |
-| `ProfileSettings` | — | — |
-
-**`AuthUser` type** (returned by `getSession()` and available in composables):
-
-```typescript
-interface AuthUser {
-  id: string;
-  email: string;
-  display_name: string | null;
-  email_verified: boolean;
-  role: string;
-  auth_method: "Session" | "Bearer" | "ApiKey";
-}
-```
-
-#### SolidJS
-
-```bash
-bun add @yackey-labs/yauth-ui-solidjs
-```
-
-```tsx
-import { YAuthProvider, LoginForm } from "@yackey-labs/yauth-ui-solidjs";
-
-function App() {
-  return (
-    <YAuthProvider baseUrl="/api/auth">
-      <LoginForm onSuccess={() => navigate("/dashboard")} />
-    </YAuthProvider>
-  );
-}
-```
-
-Access the session in any child component:
-
-```tsx
-import { useYAuth } from "@yackey-labs/yauth-ui-solidjs";
-
-function Dashboard() {
-  const { user, refetch } = useYAuth();
-  return <p>Logged in as {user()?.email}</p>;
-}
-```
-
-### Adding more features
-
-Enable additional plugins with feature flags:
-
-```bash
-cargo add yauth --features email-password,passkey,mfa,oauth
-```
-
-```rust
-let yauth = YAuthBuilder::new(backend, config)
-    .with_email_password(EmailPasswordConfig::default())
-    .with_passkey(PasskeyConfig {
-        rp_id: "myapp.example.com".into(),
-        rp_origin: "https://myapp.example.com".into(),
-        rp_name: "My App".into(),
-    })
-    .with_mfa(MfaConfig::default())
-    .with_oauth(OAuthConfig {
-        providers: vec![/* Google, GitHub, etc. */],
-    })
-    .build()
-    .await?;
-```
-
-All new endpoints are automatically available on the client — no regeneration needed if you use the pre-built `@yackey-labs/yauth-client` package.
-
-### Choose Your Backend
-
-All backends accept a pool or connection you create — yauth does not manage connections. Generate migration files with `cargo yauth generate`, apply them with your ORM's CLI, then pass the pool to yauth.
-
-#### Diesel + PostgreSQL (default)
-
-```bash
-cargo add yauth --features email-password
-cargo yauth init --orm diesel --dialect postgres --plugins email-password
-diesel migration run
-```
-
-```rust
-use yauth::backends::diesel_pg::DieselPgBackend;
-
-let pool = /* your diesel-async deadpool */;
-let backend = DieselPgBackend::from_pool(pool);
-// Or with a custom PostgreSQL schema:
-let backend = DieselPgBackend::from_pool_with_schema(pool, "auth");
-
-let yauth = YAuthBuilder::new(backend, config).build().await?;
-```
-
-#### Diesel + MySQL / MariaDB
-
-```bash
-cargo add yauth --features email-password,diesel-mysql-backend --no-default-features
-cargo yauth init --orm diesel --dialect mysql --plugins email-password
-diesel migration run
-```
-
-```rust
-use yauth::backends::diesel_mysql::DieselMysqlBackend;
-
-let pool = /* your diesel-async deadpool */;
-let backend = DieselMysqlBackend::from_pool(pool);
-let yauth = YAuthBuilder::new(backend, config).build().await?;
-```
-
-#### Diesel + SQLite / Turso (diesel-libsql)
-
-```bash
-cargo add yauth --features email-password,diesel-libsql-backend --no-default-features
-cargo yauth init --orm diesel --dialect sqlite --plugins email-password
-diesel migration run
-```
-
-```rust
-use yauth::backends::diesel_libsql::DieselLibsqlBackend;
-
-let pool = /* your diesel-libsql connection pool */;
-let backend = DieselLibsqlBackend::from_pool(pool);
-
-let yauth = YAuthBuilder::new(backend, config).build().await?;
-```
-
-#### Diesel + Native SQLite
-
-> Requires `libsqlite3-dev` (Debian/Ubuntu) or `sqlite3` (macOS Homebrew) system package.
-
-```bash
-cargo add yauth --features email-password,diesel-sqlite-backend --no-default-features
-cargo yauth init --orm diesel --dialect sqlite --plugins email-password
-diesel migration run
-```
-
-```rust
-use yauth::backends::diesel_sqlite::DieselSqliteBackend;
-
-let pool = /* your diesel SyncConnectionWrapper pool */;
-let backend = DieselSqliteBackend::from_pool(pool);
-
-let yauth = YAuthBuilder::new(backend, config).build().await?;
-```
-
-#### sqlx + PostgreSQL
-
-```bash
-cargo add yauth --features email-password,sqlx-pg-backend --no-default-features
-cargo yauth init --orm sqlx --dialect postgres --plugins email-password
-sqlx migrate run
-```
-
-```rust
-use yauth::backends::sqlx_pg::SqlxPgBackend;
-
-let pool = sqlx::PgPool::connect(&database_url).await?;
-let backend = SqlxPgBackend::from_pool(pool);
-let yauth = YAuthBuilder::new(backend, config).build().await?;
-```
-
-> **sqlx backends use `query!()` macros** — set `DATABASE_URL` at compile time and run migrations first. Apply with `sqlx migrate run`, then build with `DATABASE_URL=postgres://... cargo build`.
-
-#### sqlx + MySQL
-
-```bash
-cargo add yauth --features email-password,sqlx-mysql-backend --no-default-features
-cargo yauth init --orm sqlx --dialect mysql --plugins email-password
-sqlx migrate run
-```
-
-```rust
-use yauth::backends::sqlx_mysql::SqlxMysqlBackend;
-
-let pool = sqlx::MySqlPool::connect(&database_url).await?;
-let backend = SqlxMysqlBackend::from_pool(pool);
-let yauth = YAuthBuilder::new(backend, config).build().await?;
-```
-
-> Requires `DATABASE_URL` at compile time. Apply migrations with `sqlx migrate run` first.
-
-#### sqlx + SQLite
-
-```bash
-cargo add yauth --features email-password,sqlx-sqlite-backend --no-default-features
-cargo yauth init --orm sqlx --dialect sqlite --plugins email-password
-sqlx migrate run
-```
-
-```rust
-use yauth::backends::sqlx_sqlite::SqlxSqliteBackend;
-
-let pool = sqlx::SqlitePool::connect(&database_url).await?;
-let backend = SqlxSqliteBackend::from_pool(pool);
-let yauth = YAuthBuilder::new(backend, config).build().await?;
-```
-
-> Use an **absolute path** for SQLite: `DATABASE_URL=sqlite:/absolute/path/to/yauth.db`.
-
-#### SeaORM + PostgreSQL
-
-```bash
-cargo add yauth --no-default-features --features email-password,seaorm-pg-backend
-cargo yauth init --orm seaorm --dialect postgres --plugins email-password
-sea-orm-cli migrate up
-```
-
-```rust
-use yauth::backends::seaorm_pg::SeaOrmPgBackend;
-
-let db = sea_orm::Database::connect(&database_url).await?;
-let backend = SeaOrmPgBackend::from_connection(db);
-let yauth = YAuthBuilder::new(backend, config).build().await?;
-```
-
-#### SeaORM + MySQL
-
-```bash
-cargo add yauth --no-default-features --features email-password,seaorm-mysql-backend
-cargo yauth init --orm seaorm --dialect mysql --plugins email-password
-sea-orm-cli migrate up
-```
-
-```rust
-use yauth::backends::seaorm_mysql::SeaOrmMysqlBackend;
-
-let db = sea_orm::Database::connect(&database_url).await?;
-let backend = SeaOrmMysqlBackend::from_connection(db);
-let yauth = YAuthBuilder::new(backend, config).build().await?;
-```
-
-#### SeaORM + SQLite
-
-```bash
-cargo add yauth --no-default-features --features email-password,seaorm-sqlite-backend
-cargo yauth init --orm seaorm --dialect sqlite --plugins email-password
-sea-orm-cli migrate up
-```
-
-```rust
-use yauth::backends::seaorm_sqlite::SeaOrmSqliteBackend;
-
-let db = sea_orm::Database::connect("sqlite:./yauth.db?mode=rwc").await?;
-let backend = SeaOrmSqliteBackend::from_connection(db);
-let yauth = YAuthBuilder::new(backend, config).build().await?;
-```
-
-#### Toasty + PostgreSQL (experimental, separate crate)
-
-```bash
-cargo add yauth --no-default-features --features email-password
-cargo add yauth-toasty --git https://github.com/yackey-labs/yauth --features postgresql
-cargo add toasty --no-default-features --features postgresql
-cargo yauth init --orm toasty --dialect postgres --plugins email-password
-```
-
-```rust
-use yauth_toasty::pg::ToastyPgBackend;
-
-let db = /* your toasty::Db */;
-db.push_schema().await?;  // Toasty manages its own schema
-let backend = ToastyPgBackend::from_db(db.clone());
-let yauth = YAuthBuilder::new(backend, config).build().await?;
-```
-
-#### Toasty + MySQL (experimental, separate crate)
-
-```bash
-cargo add yauth --no-default-features --features email-password
-cargo add yauth-toasty --git https://github.com/yackey-labs/yauth --features mysql
-cargo add toasty --no-default-features --features mysql
-cargo yauth init --orm toasty --dialect mysql --plugins email-password
-```
-
-```rust
-use yauth_toasty::mysql::ToastyMysqlBackend;
-
-let db = /* your toasty::Db */;
-db.push_schema().await?;  // Toasty manages its own schema
-let backend = ToastyMysqlBackend::from_db(db.clone());
-let yauth = YAuthBuilder::new(backend, config).build().await?;
-```
-
-#### Toasty + SQLite (experimental, separate crate)
-
-```bash
-cargo add yauth --no-default-features --features email-password
-cargo add yauth-toasty --git https://github.com/yackey-labs/yauth --features sqlite
-cargo add toasty --no-default-features --features sqlite
-cargo yauth init --orm toasty --dialect sqlite --plugins email-password
-```
-
-```rust
-use yauth_toasty::sqlite::ToastySqliteBackend;
-
-let db = /* your toasty::Db */;
-db.push_schema().await?;  // Toasty manages its own schema
-let backend = ToastySqliteBackend::from_db(db.clone());
-let yauth = YAuthBuilder::new(backend, config).build().await?;
-```
-
-#### In-Memory (no database)
-
-```bash
-cargo add yauth --features email-password,memory-backend --no-default-features
-```
-
-```rust
-use yauth::backends::memory::InMemoryBackend;
-
-let backend = InMemoryBackend::new();
-let yauth = YAuthBuilder::new(backend, config).build().await?;
-```
-
-### Redis Caching
-
-Redis wraps repository traits as a caching decorator. The database remains the source of truth.
-
-```bash
-cargo add yauth --features email-password,redis
-```
-
-```rust
-let redis_client = redis::Client::open("redis://127.0.0.1:6379")?;
-let redis_conn = redis_client.get_connection_manager().await?;
-
-let yauth = YAuthBuilder::new(backend, config)
-    .with_redis(redis_conn)  // caches sessions, rate limits, challenges, revocation
-    .with_email_password(EmailPasswordConfig::default())
-    .build()
-    .await?;
-```
-
-## Architecture
-
-### Plugin System
-
-Plugins implement the `YAuthPlugin` trait:
-
-- `public_routes()` — unauthenticated endpoints (login, register, etc.)
-- `protected_routes()` — endpoints behind auth middleware
-- `on_event()` — react to auth events (e.g., MFA intercepts login, account lockout blocks login)
-
-Custom plugins can be added via `builder.with_plugin(Box::new(MyPlugin))`.
-
-### Tri-Mode Auth Middleware
-
-Every protected route checks credentials in order:
-
-1. **Session cookie** — `CookieJar` → `validate_session()`
-2. **Bearer token** — `Authorization: Bearer <jwt>` → JWT validation (requires `bearer` feature)
-3. **API key** — `X-Api-Key: <key>` → key hash lookup (requires `api-key` feature)
-
-The authenticated user is injected as `Extension<AuthUser>` with fields: `id`, `email`, `display_name`, `email_verified`, `role`, `banned`, `auth_method`, and `scopes`.
-
-### Event System
-
-All auth operations emit an `AuthEvent`:
-
-- `UserRegistered`, `LoginSucceeded`, `LoginFailed`, `SessionCreated`, `Logout`
-- `PasswordChanged`, `EmailVerified`
-- `MfaEnabled`, `MfaDisabled`
-- `UserBanned`, `UserUnbanned`
-- `MagicLinkSent`, `MagicLinkVerified`
-- `AccountLocked`, `AccountUnlocked`
-- `WebhookDelivered`
-
-Plugins respond with `Continue`, `RequireMfa { pending_session_id }`, or `Block { status, message }`.
-
-## Configuration Guide
-
-### Session Binding
-
-Detects session hijacking by binding sessions to client IP and/or User-Agent. Configure in `YAuthConfig`:
-
-- `bind_ip: true` — track client IP at session creation
-- `bind_user_agent: true` — track User-Agent at session creation
-- `BindingAction::Warn` — log mismatch but allow access
-- `BindingAction::Invalidate` — destroy session on mismatch (forces re-auth)
-
-**When to use:** Enable `Warn` by default; use `Invalidate` for high-security applications. Note that `bind_ip` may cause issues with mobile users or VPN changes.
-
-### Remember Me
-
-Set `remember_me_ttl` on `YAuthConfig` to enable longer sessions when users opt in. The login request accepts a `remember_me: true` field.
-
-**When to use:** When you want short default sessions (e.g., 24h) with opt-in long sessions (e.g., 30d) via a "keep me logged in" checkbox.
-
-### Password Policy
-
-Configure `PasswordPolicyConfig` on `EmailPasswordConfig`:
-
-- `require_uppercase`, `require_lowercase`, `require_digit`, `require_special` — character class requirements
-- `max_length` — maximum password length (default: 128)
-- `disallow_common_passwords` — reject top common passwords
-- `password_history_count` — prevent reuse of last N passwords (0 = disabled)
-
-**When to use:** When regulatory compliance or security policy requires specific password complexity rules beyond minimum length + HIBP checking.
-
-### Account Lockout
-
-Configure `AccountLockoutConfig`:
-
-- `max_failed_attempts` — threshold before lockout (default: 5)
-- `lockout_duration` — base lockout time (default: 5 minutes)
-- `exponential_backoff` — double duration on each lockout
-- `max_lockout_duration` — cap for backoff (default: 24 hours)
-- `auto_unlock` — auto-unlock after duration expires
-
-**When to use:** When you need per-account brute-force protection that works across IPs. Rate limiting is per-IP; account lockout is per-account. Use both together for defense in depth.
-
-### Webhooks
-
-Configure `WebhookConfig`:
-
-- `max_retries` — retry failed deliveries (default: 3)
-- `retry_delay` — delay between retries (default: 30s)
-- `timeout` — HTTP timeout per delivery (default: 10s)
-- `max_webhooks` — limit per user (default: 10)
-
-Payloads are signed with HMAC-SHA256 via the `X-Webhook-Signature` header. Admin routes at `/webhooks` manage webhook CRUD.
-
-**When to use:** When external systems (Slack bots, CRMs, analytics) need real-time notifications of auth events without polling.
-
-### OIDC
-
-Configure `OidcConfig`:
-
-- `issuer` — OIDC issuer URL (must match `iss` claim)
-- `id_token_ttl` — id_token expiry (default: 1 hour)
-- `claims_supported` — advertised claims (default: sub, email, email_verified, name)
-
-**When to use:** When yauth is the identity provider and downstream apps need OIDC-compliant SSO. Automatically enables `bearer` + `oauth2-server`.
-
-## API Routes
-
-### Core (always available)
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| GET | `/session` | Yes | Get authenticated user info |
-| POST | `/logout` | Yes | Invalidate session |
-| PATCH | `/me` | Yes | Update display name |
-
-### Email/Password
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| POST | `/register` | No | Register with email + password |
-| POST | `/login` | No | Authenticate (supports `remember_me` flag) |
-| POST | `/verify-email` | No | Verify email token |
-| POST | `/resend-verification` | No | Resend verification email |
-| POST | `/forgot-password` | No | Request password reset |
-| POST | `/reset-password` | No | Reset password with token |
-| POST | `/change-password` | Yes | Change password |
-
-### Passkey (WebAuthn)
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| POST | `/passkey/login/begin` | No | Start WebAuthn login challenge |
-| POST | `/passkey/login/finish` | No | Complete WebAuthn login |
-| POST | `/passkeys/register/begin` | Yes | Start passkey registration |
-| POST | `/passkeys/register/finish` | Yes | Complete passkey registration |
-| GET | `/passkeys` | Yes | List passkeys |
-| DELETE | `/passkeys/{id}` | Yes | Delete passkey |
-
-### MFA (TOTP + Backup Codes)
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| POST | `/mfa/verify` | No | Verify MFA code during login |
-| POST | `/mfa/totp/setup` | Yes | Generate TOTP secret + backup codes |
-| POST | `/mfa/totp/confirm` | Yes | Confirm TOTP setup |
-| DELETE | `/mfa/totp` | Yes | Disable TOTP |
-| GET | `/mfa/backup-codes` | Yes | Get backup code count |
-| POST | `/mfa/backup-codes/regenerate` | Yes | Regenerate backup codes |
-
-### OAuth (Client)
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| GET | `/oauth/{provider}/authorize` | No | Start OAuth flow |
-| GET/POST | `/oauth/{provider}/callback` | No | OAuth callback |
-| GET | `/oauth/accounts` | Yes | List connected accounts |
-| DELETE | `/oauth/{provider}` | Yes | Unlink provider |
-| POST | `/oauth/{provider}/link` | Yes | Link account to provider |
-
-### Bearer Tokens (JWT)
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| POST | `/token` | No | Get access + refresh tokens |
-| POST | `/token/refresh` | No | Refresh access token |
-| POST | `/token/revoke` | Yes | Revoke refresh token |
-
-### API Keys
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| GET | `/api-keys` | Yes | List API keys |
-| POST | `/api-keys` | Yes | Create API key (optional scopes, expiry) |
-| DELETE | `/api-keys/{id}` | Yes | Delete API key |
-
-### Magic Link
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| POST | `/magic-link/send` | No | Send magic link email |
-| POST | `/magic-link/verify` | No | Verify magic link token |
-
-### Status
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| GET | `/status` | Yes | List enabled plugin names |
-
-### Admin
-
-All admin routes require `role = "admin"`.
-
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/admin/users` | List users (paginated, searchable) |
-| GET | `/admin/users/{id}` | Get user details |
-| PUT | `/admin/users/{id}` | Update user |
-| DELETE | `/admin/users/{id}` | Delete user |
-| POST | `/admin/users/{id}/ban` | Ban user |
-| POST | `/admin/users/{id}/unban` | Unban user |
-| POST | `/admin/users/{id}/impersonate` | Create session as user |
-| GET | `/admin/sessions` | List sessions |
-| DELETE | `/admin/sessions/{id}` | Terminate session |
-
-### OAuth2 Server
-
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/.well-known/oauth-authorization-server` | Authorization server metadata (RFC 8414) |
-| GET | `/oauth/authorize` | Authorization endpoint (JSON or redirect to consent UI) |
-| POST | `/oauth/authorize` | Consent submission (JSON or form-urlencoded) |
-| POST | `/oauth/token` | Token endpoint — authorization_code, refresh_token, client_credentials (RFC 6749) |
-| POST | `/oauth/introspect` | Token introspection (RFC 7662) |
-| POST | `/oauth/revoke` | Token revocation (RFC 7009) |
-| POST | `/oauth/register` | Dynamic client registration (RFC 7591) |
-| POST | `/oauth/device/code` | Device authorization request (RFC 8628) |
-| GET/POST | `/oauth/device` | Device verification |
-
-Supported grant types: `authorization_code` (with PKCE S256), `refresh_token`, `client_credentials`, `urn:ietf:params:oauth:grant-type:device_code`.
-
-### Account Lockout
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| POST | `/account/request-unlock` | No | Request unlock email |
-| POST | `/account/unlock` | No | Unlock account with token |
-| POST | `/admin/users/{id}/unlock` | Yes (admin) | Admin force-unlock |
-
-### Webhooks
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| POST | `/webhooks` | Yes | Create webhook |
-| GET | `/webhooks` | Yes | List webhooks |
-| GET | `/webhooks/{id}` | Yes | Get webhook with delivery history |
-| PUT | `/webhooks/{id}` | Yes | Update webhook |
-| DELETE | `/webhooks/{id}` | Yes | Delete webhook |
-| POST | `/webhooks/{id}/test` | Yes | Send test delivery |
-
-### OIDC
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| GET | `/.well-known/openid-configuration` | No | OIDC discovery document |
-| GET | `/.well-known/jwks.json` | No | JSON Web Key Set |
-| GET/POST | `/userinfo` | Yes | OIDC UserInfo endpoint |
-
-## TypeScript Packages
-
-### @yackey-labs/yauth-client
-
-HTTP client auto-generated from the OpenAPI spec via `utoipa` + `orval`.
-
-```typescript
-import { createYAuthClient } from "@yackey-labs/yauth-client";
-
-const auth = createYAuthClient({ baseUrl: "https://myapp.example.com/auth" });
-
-// Email/password
-await auth.emailPassword.register({ email, password });
-await auth.emailPassword.login({ email, password, remember_me: true });
-
-// Session
-const user = await auth.getSession();
-await auth.logout();
-
-// Webhooks, account lockout, OIDC, OAuth2 server, passkey, MFA, etc.
-// — all available as namespaced methods on the client
-```
-
-### @yackey-labs/yauth-shared
-
-Shared TypeScript types (`AuthUser`, `AuthSession`, etc.) and an AAGUID authenticator map.
-
-### @yackey-labs/yauth-ui-vue
-
-Pre-built Vue 3 components and composables:
-
-- `YAuthPlugin` / `useYAuth()` — Vue plugin (accepts `client` or `baseUrl`)
-- `useAuth()` — composable for auth actions (login, register, logout, etc.)
-- `useSession()` — composable for reactive session state (`user`, `isAuthenticated`, `loading`)
-- `LoginForm`, `RegisterForm`, `ForgotPasswordForm`, `ResetPasswordForm`
-- `ChangePasswordForm`, `VerifyEmail`, `ProfileSettings`
-- `PasskeyButton`, `OAuthButtons`
-- `MfaSetup`, `MfaChallenge`
-- `MagicLinkForm`
-
-Components check for feature availability — if a feature group isn't present on the client, the component gracefully renders nothing.
-
-### @yackey-labs/yauth-ui-solidjs
-
-Pre-built SolidJS components:
-
-- `YAuthProvider` / `useYAuth()` — context provider (accepts `client` or `baseUrl`)
-- Same component set as Vue: `LoginForm`, `RegisterForm`, `ProfileSettings`, etc.
-- `ConsentScreen` — OAuth2 authorization consent UI
-
 ## Security
 
 - **Argon2id** password hashing with timing-safe dummy hash on failed lookups
@@ -990,165 +265,27 @@ Pre-built SolidJS components:
 - **Webhook signing** — HMAC-SHA256 signatures for payload integrity
 - **PKCE S256** — required for all OAuth2 authorization code flows
 
-## Database Backends
+## Packages
 
-yauth uses a `DatabaseBackend` trait with pluggable implementations. All persistent data (users, passwords, sessions, API keys, etc.) is accessed through repository traits, making the auth logic fully database-agnostic. All backends accept pools or connections you create — yauth does not manage database connections.
+| Package | Type | Purpose |
+|---|---|---|
+| `yauth` | Rust crate | Main library — plugins, middleware, builder, auth logic, backends |
+| `yauth-entity` | Rust crate | Domain types (User, Session, Password, etc.) |
+| `yauth-migration` | Rust crate | Schema types, DDL generation, diff engine (zero ORM deps) |
+| `cargo-yauth` | Rust crate | CLI binary — `cargo yauth init/add-plugin/remove-plugin/status/generate` |
+| `yauth-toasty` | Rust crate | Toasty ORM backends (experimental) |
+| `@yackey-labs/yauth-client` | npm | Auto-generated HTTP client for all auth endpoints |
+| `@yackey-labs/yauth-shared` | npm | Shared types (`AuthUser`, `AuthSession`, AAGUID map) |
+| `@yackey-labs/yauth-ui-vue` | npm | Vue 3 components + composables |
+| `@yackey-labs/yauth-ui-solidjs` | npm | SolidJS components + context provider |
 
-| Backend | Feature Flag | Constructor | Use case |
-|---|---|---|---|
-| `DieselPgBackend` | `diesel-pg-backend` (default) | `from_pool(pool)` | Production Postgres |
-| `DieselMysqlBackend` | `diesel-mysql-backend` | `from_pool(pool)` | MySQL/MariaDB production |
-| `DieselSqliteBackend` | `diesel-sqlite-backend` | `from_pool(pool)` | Embedded, local dev |
-| `DieselLibsqlBackend` | `diesel-libsql-backend` | `from_pool(pool)` | Turso edge databases |
-| `SqlxPgBackend` | `sqlx-pg-backend` | `from_pool(pool)` | sqlx users, compile-time SQL |
-| `SqlxMysqlBackend` | `sqlx-mysql-backend` | `from_pool(pool)` | sqlx + MySQL |
-| `SqlxSqliteBackend` | `sqlx-sqlite-backend` | `from_pool(pool)` | sqlx + SQLite |
-| `SeaOrmPgBackend` | `seaorm-pg-backend` | `from_connection(db)` | SeaORM users, entity-based |
-| `SeaOrmMysqlBackend` | `seaorm-mysql-backend` | `from_connection(db)` | SeaORM + MySQL |
-| `SeaOrmSqliteBackend` | `seaorm-sqlite-backend` | `from_connection(db)` | SeaORM + SQLite |
-| `InMemoryBackend` | `memory-backend` | `new()` | Tests, prototyping |
+## Reference Docs
 
-yauth does not run migrations. Use `cargo yauth generate` to produce migration files for your ORM, then apply them with your ORM's CLI (`diesel migration run`, `sqlx migrate run`, `sea-orm-cli migrate`, etc.).
-
-### Configurable PostgreSQL Schema
-
-By default, yauth tables live in the `public` schema. Use `from_pool_with_schema()` to isolate them:
-
-```rust
-let backend = DieselPgBackend::from_pool_with_schema(pool, "auth");
-```
-
-### Redis Caching
-
-Enable the `redis` feature for Redis-backed caching of sessions, rate limits, challenges, and JTI revocation:
-
-```bash
-cargo add yauth --features email-password,redis
-```
-
-```rust
-let redis_client = redis::Client::open("redis://127.0.0.1:6379")?;
-let redis_conn = redis_client.get_connection_manager().await?;
-
-let yauth = YAuthBuilder::new(backend, config)
-    .with_redis(redis_conn)  // wraps repo traits with Redis caching
-    .with_email_password(EmailPasswordConfig::default())
-    .build()
-    .await?;
-```
-
-`.with_redis()` adds a caching layer around repository operations for sessions, rate limits, challenges, and token revocation. The database backend remains the source of truth.
-
-**When to use Redis:** multi-replica deployments (shared sessions), high-traffic apps (sub-millisecond session lookups), or when you need instant JWT revocation across all nodes.
-
-See [docs/migrating-to-diesel.md](docs/migrating-to-diesel.md) for a migration guide if upgrading from yauth v0.1.x (which supported SeaORM).
-
-## Database Schema
-
-All tables are prefixed with `yauth_`. Generated migrations are feature-gated — only tables for enabled plugins are included.
-
-Generate migrations with `cargo yauth generate`, then apply with your ORM's CLI:
-
-```bash
-# Generate migration files
-cargo yauth generate
-
-# Apply with your ORM
-diesel migration run        # Diesel
-sqlx migrate run            # sqlx
-sea-orm-cli migrate up      # SeaORM
-```
-
-### Schema by Plugin
-
-Only the tables for your enabled features are created. Core tables are always present.
-
-#### Core (always)
-
-| Table | Description |
-|-------|-------------|
-| `yauth_users` | `id` (uuid), `email`, `display_name`, `email_verified`, `role`, `banned`, `banned_reason`, `banned_until`, `created_at`, `updated_at` |
-| `yauth_sessions` | `id` (uuid), `user_id` → users, `token_hash`, `ip_address`, `user_agent`, `expires_at`, `created_at` |
-| `yauth_audit_log` | `id` (uuid), `user_id` → users, `event_type`, `metadata` (json), `ip_address`, `created_at` |
-
-#### email-password
-
-| Table | Description |
-|-------|-------------|
-| `yauth_passwords` | `user_id` → users (pk), `password_hash` |
-| `yauth_email_verifications` | `id`, `user_id` → users, `token_hash`, `expires_at`, `created_at` |
-| `yauth_password_resets` | `id`, `user_id` → users, `token_hash`, `expires_at`, `used_at`, `created_at` |
-
-#### passkey
-
-| Table | Description |
-|-------|-------------|
-| `yauth_webauthn_credentials` | `id`, `user_id` → users, `name`, `aaguid`, `device_name`, `credential` (json), `created_at`, `last_used_at` |
-
-#### mfa
-
-| Table | Description |
-|-------|-------------|
-| `yauth_totp_secrets` | `id`, `user_id` → users (unique), `encrypted_secret`, `verified`, `created_at` |
-| `yauth_backup_codes` | `id`, `user_id` → users, `code_hash`, `used`, `created_at` |
-
-#### oauth
-
-| Table | Description |
-|-------|-------------|
-| `yauth_oauth_accounts` | `id`, `user_id` → users, `provider`, `provider_user_id`, `access_token_enc`, `refresh_token_enc`, `expires_at`, `updated_at`, `created_at` |
-| `yauth_oauth_states` | `state` (pk), `provider`, `redirect_url`, `expires_at`, `created_at` |
-
-#### bearer
-
-| Table | Description |
-|-------|-------------|
-| `yauth_refresh_tokens` | `id`, `user_id` → users, `token_hash`, `family_id` (token rotation), `expires_at`, `revoked`, `created_at` |
-
-#### api-key
-
-| Table | Description |
-|-------|-------------|
-| `yauth_api_keys` | `id`, `user_id` → users, `key_prefix`, `key_hash`, `name`, `scopes` (json), `last_used_at`, `expires_at`, `created_at` |
-
-#### magic-link
-
-| Table | Description |
-|-------|-------------|
-| `yauth_magic_links` | `id`, `email`, `token_hash`, `expires_at`, `used`, `created_at` |
-
-#### oauth2-server
-
-| Table | Description |
-|-------|-------------|
-| `yauth_oauth2_clients` | `id`, `client_id`, `client_secret_hash`, `redirect_uris` (json), `client_name`, `grant_types` (json), `scopes` (json), `is_public`, `created_at` |
-| `yauth_authorization_codes` | `id`, `code_hash`, `client_id`, `user_id` → users, `scopes` (json), `redirect_uri`, `code_challenge`, `code_challenge_method`, `nonce`, `expires_at`, `used`, `created_at` |
-| `yauth_consents` | `id`, `user_id` → users, `client_id`, `scopes` (json), `created_at` — unique (user_id, client_id) |
-| `yauth_device_codes` | `id`, `device_code_hash`, `user_code`, `client_id`, `scopes` (json), `user_id` → users, `status`, `interval`, `expires_at`, `last_polled_at`, `created_at` |
-
-#### account-lockout
-
-| Table | Description |
-|-------|-------------|
-| `yauth_account_locks` | `id`, `user_id` → users (unique), `failed_count`, `locked_until`, `lock_count`, `locked_reason`, `created_at`, `updated_at` |
-| `yauth_unlock_tokens` | `id`, `user_id` → users, `token_hash`, `expires_at`, `created_at` |
-
-#### webhooks
-
-| Table | Description |
-|-------|-------------|
-| `yauth_webhooks` | `id`, `url`, `secret`, `events` (json), `active`, `created_at`, `updated_at` |
-| `yauth_webhook_deliveries` | `id`, `webhook_id` → webhooks, `event_type`, `payload` (json), `status_code`, `response_body`, `success`, `attempt`, `created_at` |
-
-#### oidc
-
-| Table | Description |
-|-------|-------------|
-| `yauth_oidc_nonces` | `id`, `nonce_hash`, `authorization_code_id`, `created_at` |
-
-Also adds a `nonce` column to `yauth_authorization_codes`.
-
-Plugins without tables: `admin`, `status`, `telemetry`.
+- [Backend setup guides](docs/backends.md) — detailed examples for all 14 backends + Redis caching
+- [API routes](docs/api-routes.md) — complete route tables for every plugin
+- [Configuration](docs/configuration.md) — session binding, password policy, lockout, webhooks, OIDC
+- [Database schema](docs/schema.md) — full table definitions by plugin
+- [TypeScript packages](docs/typescript.md) — client API, Vue composables/components, SolidJS components
 
 ## Development
 
@@ -1164,11 +301,10 @@ bun validate          # lint:fix + typecheck + build
 bun generate          # regenerate TS client from Rust types
 bun generate:check    # CI: fail if client is out of date
 
-# Integration testing (requires docker compose up -d for PostgreSQL + MySQL)
+# Integration testing (requires docker compose up -d)
 docker compose up -d
 cargo test --features full,all-backends --test repo_conformance  # 65 tests across 7 backends
 cargo test --features full,all-backends --test pentest           # OWASP pentest suite
-cargo test --features full,diesel-libsql-backend,memory-backend --test repo_conformance  # diesel-libsql (tested separately)
 
 # Migration CLI
 cargo yauth generate --check -f yauth-diesel-pg.toml   # Verify generated artifacts are fresh

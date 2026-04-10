@@ -128,6 +128,8 @@ let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
 ### Diesel + Native SQLite
 
 > Requires `libsqlite3-dev` (Debian/Ubuntu) or `sqlite3` (macOS Homebrew) system package.
+>
+> `SqliteAsyncConn` and `SqlitePool` are re-exported by yauth. You need `diesel-async@0.8` as a direct dependency for `AsyncDieselConnectionManager`.
 
 ```bash
 cargo add yauth --features email-password,diesel-sqlite-backend --no-default-features
@@ -140,9 +142,6 @@ diesel migration run
 ```rust
 use yauth::prelude::*;
 use yauth::backends::diesel_sqlite::{DieselSqliteBackend, SqlitePool, SqliteAsyncConn};
-
-// AsyncDieselConnectionManager is re-exported from the diesel_pg backend,
-// or add diesel-async@0.8 as a direct dependency to import it.
 use diesel_async::pooled_connection::AsyncDieselConnectionManager;
 
 let database_url = "yauth.db"; // path to SQLite file
@@ -155,8 +154,6 @@ let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
     .build()
     .await?;
 ```
-
-> `SqliteAsyncConn` and `SqlitePool` are re-exported by yauth. `diesel-async@0.8` is needed as a direct dependency for `AsyncDieselConnectionManager`.
 
 ## sqlx + PostgreSQL
 
@@ -220,8 +217,7 @@ sqlx migrate run
 use yauth::prelude::*;
 use yauth::backends::sqlx_sqlite::SqlxSqliteBackend;
 
-let database_url = "sqlite:/absolute/path/to/yauth.db";
-let pool = sqlx::SqlitePool::connect(database_url).await?;
+let pool = sqlx::SqlitePool::connect("sqlite:yauth.db?mode=rwc").await?;
 let backend = SqlxSqliteBackend::from_pool(pool);
 let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
     .with_email_password(EmailPasswordConfig::default())
@@ -229,9 +225,7 @@ let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
     .await?;
 ```
 
-> Use an **absolute path** for SQLite: `DATABASE_URL=sqlite:/absolute/path/to/yauth.db`.
->
-> You'll need `sqlx` as a direct dependency: `cargo add sqlx --features runtime-tokio,sqlite`.
+> `?mode=rwc` creates the file if it doesn't exist. You'll need `sqlx` as a direct dependency: `cargo add sqlx --features runtime-tokio,sqlite`.
 
 ## SeaORM Backends
 
@@ -336,7 +330,7 @@ Each Toasty backend has a `new(url)` constructor that handles schema registratio
 ```bash
 cargo add yauth --no-default-features
 cargo add yauth-toasty --git https://github.com/yackey-labs/yauth --features postgresql,email-password
-cargo add toasty@0.3 --no-default-features --features postgresql
+# toasty 0.3 is pulled in transitively — no need to add it directly
 ```
 
 ```rust
@@ -358,7 +352,6 @@ let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
 ```bash
 cargo add yauth --no-default-features
 cargo add yauth-toasty --git https://github.com/yackey-labs/yauth --features mysql,email-password
-cargo add toasty@0.3 --no-default-features --features mysql
 ```
 
 ```rust
@@ -380,7 +373,6 @@ let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
 ```bash
 cargo add yauth --no-default-features
 cargo add yauth-toasty --git https://github.com/yackey-labs/yauth --features sqlite,email-password
-cargo add toasty@0.3 --no-default-features --features sqlite
 ```
 
 ```rust

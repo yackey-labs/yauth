@@ -1,12 +1,9 @@
-//! Toasty-based SQLite backend for yauth.
-//!
-//! Experimental: Toasty is pre-1.0. API may change.
+//! Toasty-based SQLite backend for yauth (experimental support).
 
 use toasty::Db;
 use yauth::repo::{DatabaseBackend, RepoError, Repositories};
 
-/// Experimental: Toasty-based SQLite backend.
-#[doc = "Experimental: Toasty is pre-1.0. API may change."]
+/// Toasty-based SQLite backend (experimental support).
 pub struct ToastySqliteBackend {
     db: Db,
 }

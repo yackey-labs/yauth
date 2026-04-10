@@ -41,10 +41,18 @@ impl From<Option<String>> for CookieDomainPolicy {
     }
 }
 
+/// Core configuration for the yauth authentication system.
+///
+/// Controls session behavior, cookie settings, CORS origins, and global
+/// feature switches. Pass this as the second argument to `YAuthBuilder::new()`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct YAuthConfig {
+    /// Base URL of your application (e.g., `"https://myapp.example.com"`).
+    /// Used in email templates and OAuth redirect URLs.
     pub base_url: String,
+    /// Name of the session cookie (default: `"session"`).
     pub session_cookie_name: String,
+    /// How long sessions last before expiring (default: 7 days).
     #[serde(with = "duration_secs")]
     pub session_ttl: Duration,
     /// Cookie domain policy. Defaults to `Auto` (no `Domain` attribute — cookie
@@ -57,8 +65,12 @@ pub struct YAuthConfig {
     /// (e.g. `pr-5.app.example.com` receives the production cookie).
     #[serde(default)]
     pub cookie_domain: CookieDomainPolicy,
+    /// Set to `true` in production to add the `Secure` flag to cookies (HTTPS only).
     pub secure_cookies: bool,
+    /// CORS allowed origins. Must include your frontend URL for cookie-based auth to work.
     pub trusted_origins: Vec<String>,
+    /// SMTP configuration for sending emails (verification, password reset, magic links).
+    /// `None` disables email sending — verification and reset endpoints will return errors.
     pub smtp: Option<SmtpConfig>,
     /// When true, the first registered user automatically gets the "admin" role.
     #[serde(default)]
@@ -188,10 +200,14 @@ mod duration_secs {
     }
 }
 
+/// SMTP server configuration for sending transactional emails.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SmtpConfig {
+    /// SMTP server hostname (e.g., `"smtp.example.com"`).
     pub host: String,
+    /// SMTP server port (typically 587 for STARTTLS or 465 for implicit TLS).
     pub port: u16,
+    /// Sender email address for all outgoing emails (e.g., `"auth@example.com"`).
     pub from: String,
 }
 
@@ -216,12 +232,20 @@ impl Default for RateLimitConfig {
     }
 }
 
+/// Configuration for the email/password authentication plugin.
+///
+/// Controls password requirements, email verification, breach checking, and rate limiting.
 #[cfg(feature = "email-password")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmailPasswordConfig {
+    /// Minimum password length (default: 8). Applied before policy checks.
     pub min_password_length: usize,
+    /// Require users to verify their email before login (default: true).
     pub require_email_verification: bool,
+    /// Check passwords against HaveIBeenPwned via k-anonymity API (default: true).
+    /// Fails open — if the HIBP API is unreachable, registration proceeds.
     pub hibp_check: bool,
+    /// Additional password complexity requirements (uppercase, digits, etc.).
     #[serde(default)]
     pub password_policy: PasswordPolicyConfig,
     /// Per-operation rate limit. `Some(config)` enables rate limiting with the
@@ -257,6 +281,7 @@ pub struct PasswordPolicyConfig {
     /// Minimum password length enforced by the policy validator (default: 8).
     #[serde(default = "default_min_password_length")]
     pub min_length: usize,
+    /// Maximum password length (default: 128). Prevents denial-of-service via very long passwords.
     pub max_length: usize,
     pub require_uppercase: bool,
     pub require_lowercase: bool,
@@ -289,18 +314,28 @@ impl Default for PasswordPolicyConfig {
     }
 }
 
+/// Configuration for the WebAuthn passkey plugin.
+///
+/// The relying party (RP) values must match your domain — WebAuthn credentials
+/// are bound to the RP ID and will not work if these don't match the browser's origin.
 #[cfg(feature = "passkey")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PasskeyConfig {
+    /// Relying party ID — typically your domain without port (e.g., `"myapp.example.com"`).
     pub rp_id: String,
+    /// Relying party origin — full origin including scheme (e.g., `"https://myapp.example.com"`).
     pub rp_origin: String,
+    /// Human-readable relying party name shown in authenticator prompts (e.g., `"My App"`).
     pub rp_name: String,
 }
 
+/// Configuration for the MFA (TOTP + backup codes) plugin.
 #[cfg(feature = "mfa")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MfaConfig {
+    /// Issuer name shown in authenticator apps (e.g., `"My App"` → appears as `My App: user@example.com`).
     pub issuer: String,
+    /// Number of one-time backup codes generated when MFA is enabled (default: 10).
     pub backup_code_count: usize,
 }
 
@@ -314,21 +349,31 @@ impl Default for MfaConfig {
     }
 }
 
+/// Configuration for the OAuth2 client plugin (sign in with Google, GitHub, etc.).
 #[cfg(feature = "oauth")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OAuthConfig {
+    /// List of configured OAuth2 providers.
     pub providers: Vec<OAuthProviderConfig>,
 }
 
+/// Configuration for a single OAuth2 provider.
 #[cfg(feature = "oauth")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OAuthProviderConfig {
+    /// Provider name used in URLs (e.g., `"google"` → `/oauth/google/authorize`).
     pub name: String,
+    /// OAuth2 client ID from the provider's developer console.
     pub client_id: String,
+    /// OAuth2 client secret from the provider's developer console.
     pub client_secret: String,
+    /// Authorization endpoint URL (e.g., `"https://accounts.google.com/o/oauth2/v2/auth"`).
     pub auth_url: String,
+    /// Token endpoint URL (e.g., `"https://oauth2.googleapis.com/token"`).
     pub token_url: String,
+    /// Userinfo endpoint URL for fetching the authenticated user's profile.
     pub userinfo_url: String,
+    /// OAuth2 scopes to request (e.g., `["openid", "email", "profile"]`).
     pub scopes: Vec<String>,
     /// Optional URL to fetch user emails (e.g. GitHub's /user/emails).
     /// Used as fallback when the userinfo endpoint doesn't return an email.
@@ -336,12 +381,17 @@ pub struct OAuthProviderConfig {
     pub emails_url: Option<String>,
 }
 
+/// Configuration for the magic link (passwordless email login) plugin.
 #[cfg(feature = "magic-link")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MagicLinkConfig {
+    /// How long magic links remain valid (default: 5 minutes).
     #[serde(with = "duration_secs")]
     pub link_ttl: Duration,
+    /// Allow new accounts to be created via magic link (default: true).
+    /// When false, only existing users can log in with magic links.
     pub allow_signup: bool,
+    /// Role assigned to users created via magic link signup. `None` uses the system default.
     pub default_role: Option<String>,
 }
 
@@ -411,12 +461,20 @@ impl Default for OAuth2ServerConfig {
     }
 }
 
+/// Configuration for the bearer token (JWT) plugin.
+///
+/// Access tokens are short-lived JWTs; refresh tokens are long-lived and stored
+/// in the database with token family tracking for reuse detection.
 #[cfg(feature = "bearer")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BearerConfig {
+    /// Secret key for signing and verifying JWTs (HMAC-SHA256).
+    /// Use a cryptographically random string (e.g., 32+ bytes, base64-encoded).
     pub jwt_secret: String,
+    /// Access token lifetime (typically short, e.g., 15 minutes).
     #[serde(with = "duration_secs")]
     pub access_token_ttl: Duration,
+    /// Refresh token lifetime (typically long, e.g., 30 days).
     #[serde(with = "duration_secs")]
     pub refresh_token_ttl: Duration,
     /// Optional audience claim for JWT tokens (resource server URL per RFC 8707).

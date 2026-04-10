@@ -4,6 +4,26 @@ yauth uses a `DatabaseBackend` trait with pluggable implementations. All persist
 
 Generate migration files with `cargo yauth generate`, apply them with your ORM's CLI, then pass the pool to yauth.
 
+Every Rust example below drops into the same `main()` skeleton — create the pool, build the backend, build yauth, mount the router:
+
+```rust
+use yauth::prelude::*;
+
+#[tokio::main]
+async fn main() {
+    // --- backend-specific pool + backend setup (see each section below) ---
+
+    let app = axum::Router::new()
+        .nest("/api/auth", yauth.router())
+        .with_state(yauth.state().clone());
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    axum::serve(listener, app).await.unwrap();
+}
+```
+
+Copy the backend-specific block from any section below, paste it where the comment is, and you have a running app.
+
 ## Backend Summary
 
 | Backend | Feature Flag | Constructor | Use case |
@@ -120,6 +140,9 @@ diesel migration run
 ```rust
 use yauth::prelude::*;
 use yauth::backends::diesel_sqlite::{DieselSqliteBackend, SqlitePool, SqliteAsyncConn};
+
+// AsyncDieselConnectionManager is re-exported from the diesel_pg backend,
+// or add diesel-async@0.8 as a direct dependency to import it.
 use diesel_async::pooled_connection::AsyncDieselConnectionManager;
 
 let database_url = "yauth.db"; // path to SQLite file
@@ -133,7 +156,7 @@ let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
     .await?;
 ```
 
-> `SqliteAsyncConn` and `SqlitePool` are re-exported by yauth for convenience. `SqlitePool` is `deadpool::Pool<SyncConnectionWrapper<SqliteConnection>>` — use it directly instead of importing `Pool` from diesel-async.
+> `SqliteAsyncConn` and `SqlitePool` are re-exported by yauth. `diesel-async@0.8` is needed as a direct dependency for `AsyncDieselConnectionManager`.
 
 ## sqlx + PostgreSQL
 

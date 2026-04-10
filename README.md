@@ -80,9 +80,14 @@ Custom plugins can be added via `builder.with_plugin(Box::new(MyPlugin))`.
 | `SeaOrmPgBackend` | `seaorm-pg-backend` | SeaORM | PostgreSQL |
 | `SeaOrmMysqlBackend` | `seaorm-mysql-backend` | SeaORM | MySQL |
 | `SeaOrmSqliteBackend` | `seaorm-sqlite-backend` | SeaORM | SQLite |
+| `ToastySqliteBackend` | `sqlite` (on `yauth-toasty`) | Toasty | SQLite |
+| `ToastyPgBackend` | `postgresql` (on `yauth-toasty`) | Toasty | PostgreSQL |
+| `ToastyMysqlBackend` | `mysql` (on `yauth-toasty`) | Toasty | MySQL |
 | `InMemoryBackend` | `memory-backend` | -- | None |
 
-Toasty backends (experimental) are in a [separate crate](docs/backends.md#toasty-backends-experimental) — enable plugin features on `yauth-toasty`, not `yauth` (see docs for details). All backends accept pools/connections you create. See [docs/backends.md](docs/backends.md) for setup instructions for every backend.
+Toasty backends are experimental and live in a [separate `yauth-toasty` crate](docs/backends.md#toasty-backends-experimental) — enable plugin features on `yauth-toasty`, not `yauth`.
+
+All backends accept pools/connections you create. **Each backend has a complete, copy-paste-ready example** in [docs/backends.md](docs/backends.md) — including `Cargo.toml` dependencies, pool construction, and full `main.rs`.
 
 ### 2. Pick your plugins
 
@@ -108,10 +113,13 @@ Use `full` to enable all auth plugins, then add one backend: `features = ["full"
 
 ### 3. Wire it up
 
-This example uses Diesel + PostgreSQL (the default backend). For other backends (sqlx, SeaORM, Toasty, SQLite, MySQL), see [docs/backends.md](docs/backends.md) — the builder pattern is identical, only the pool type and import change.
+Two complete examples below — pick the one closest to your stack. Every other backend follows the same pattern; see [docs/backends.md](docs/backends.md) for the full list with copy-paste-ready examples.
+
+#### Diesel + PostgreSQL (default)
 
 ```bash
 cargo add yauth --features email-password
+cargo add diesel --features postgres
 cargo yauth init --orm diesel --dialect postgres --plugins email-password
 diesel migration run
 ```
@@ -120,11 +128,13 @@ diesel migration run
 // prelude re-exports YAuthBuilder, YAuthConfig, EmailPasswordConfig,
 // PasskeyConfig, MfaConfig, and other plugin config types.
 use yauth::prelude::*;
-use yauth::backends::diesel_pg::DieselPgBackend;
+use yauth::backends::diesel_pg::{DieselPgBackend, DieselPool, AsyncDieselConnectionManager, AsyncPgConnection};
 
 #[tokio::main]
 async fn main() {
-    let pool = /* your diesel-async deadpool */;
+    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let manager = AsyncDieselConnectionManager::<AsyncPgConnection>::new(&database_url);
+    let pool = DieselPool::builder(manager).build().unwrap();
     let backend = DieselPgBackend::from_pool(pool);
 
     let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
@@ -133,6 +143,41 @@ async fn main() {
         // (e.g., features = ["email-password", "passkey", "mfa"]):
         // .with_passkey(PasskeyConfig { rp_id: "...".into(), rp_origin: "...".into(), rp_name: "...".into() })
         // .with_mfa(MfaConfig::default())
+        .build()
+        .await
+        .expect("Failed to build YAuth");
+
+    let app = axum::Router::new()
+        .nest("/api/auth", yauth.router())
+        .with_state(yauth.state().clone());
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    axum::serve(listener, app).await.unwrap();
+}
+```
+
+#### sqlx + SQLite (no external database needed)
+
+```bash
+cargo add yauth --no-default-features --features email-password,sqlx-sqlite-backend
+cargo add sqlx --features runtime-tokio,sqlite
+cargo add axum
+cargo add tokio --features full
+cargo yauth init --orm sqlx --dialect sqlite --plugins email-password
+sqlx migrate run
+```
+
+```rust
+use yauth::prelude::*;
+use yauth::backends::sqlx_sqlite::SqlxSqliteBackend;
+
+#[tokio::main]
+async fn main() {
+    let pool = sqlx::SqlitePool::connect("sqlite:yauth.db?mode=rwc").await.unwrap();
+    let backend = SqlxSqliteBackend::from_pool(pool);
+
+    let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
+        .with_email_password(EmailPasswordConfig::default())
         .build()
         .await
         .expect("Failed to build YAuth");

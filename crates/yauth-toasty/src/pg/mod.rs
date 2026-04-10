@@ -1,12 +1,9 @@
-//! Toasty-based PostgreSQL backend for yauth.
-//!
-//! Experimental: Toasty is pre-1.0. API may change.
+//! Toasty-based PostgreSQL backend for yauth (experimental support).
 
 use toasty::Db;
 use yauth::repo::{DatabaseBackend, RepoError, Repositories};
 
-/// Experimental: Toasty-based PostgreSQL backend.
-#[doc = "Experimental: Toasty is pre-1.0. API may change."]
+/// Toasty-based PostgreSQL backend (experimental support).
 pub struct ToastyPgBackend {
     db: Db,
 }

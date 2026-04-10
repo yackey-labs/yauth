@@ -1,4 +1,4 @@
-//! Toasty ORM backends for yauth (experimental).
+//! Toasty ORM backends for yauth (experimental support).
 //!
 //! This crate provides Toasty-based database backends for the yauth
 //! authentication library. It lives in a separate crate because Toasty's
@@ -8,19 +8,18 @@
 //! # Usage
 //!
 //! ```toml
-//! yauth = { version = "0.8", features = ["full"] }
-//! yauth-toasty = { git = "https://github.com/yackey-labs/yauth", features = ["postgresql"] }
+//! yauth = { version = "0.9", default-features = false }
+//! yauth-toasty = { git = "https://github.com/yackey-labs/yauth", features = ["sqlite", "email-password"] }
 //! ```
+//!
+//! **Important:** Enable plugin features (e.g., `email-password`) on `yauth-toasty`,
+//! not on `yauth` directly.
 //!
 //! # Features
 //!
 //! - `postgresql` — PostgreSQL backend via `toasty-driver-postgresql`
 //! - `mysql` — MySQL backend via `toasty-driver-mysql`
 //! - `sqlite` — SQLite backend via `toasty-driver-sqlite`
-//!
-//! **Warning:** Toasty is pre-1.0. Expect breaking changes across 0.x releases.
-
-#![doc = "Experimental: Toasty is pre-1.0. API may change."]
 
 /// Shared Toasty entity definitions used by all backends.
 pub mod entities;

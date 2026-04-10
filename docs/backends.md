@@ -306,7 +306,7 @@ let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
 
 ## Toasty Backends (experimental)
 
-Toasty backends are in a separate `yauth-toasty` crate (due to a Cargo `links` conflict with sqlx). Toasty (`toasty` v0.3 on [crates.io](https://crates.io/crates/toasty)) is a pre-1.0 ORM.
+Toasty backends are in a separate `yauth-toasty` crate (due to a Cargo `links` conflict with sqlx).
 
 **Important:** Enable auth plugin features (e.g., `email-password`) on `yauth-toasty`, not on `yauth` directly. `yauth-toasty` re-exports yauth's features and needs them to compile its own repository implementations. If you enable `email-password` only on `yauth`, the `Repositories` struct will expect fields that `yauth-toasty` hasn't compiled, causing a build error.
 

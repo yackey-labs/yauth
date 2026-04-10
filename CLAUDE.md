@@ -6,6 +6,17 @@
 
 **Repo:** `github.com/yackey-labs/yauth`
 
+## Integration Guide
+
+When helping users integrate yauth, read these files — they contain complete, copy-paste-ready examples for every backend:
+
+- [README.md](README.md) — quick start, plugin table, two full working examples (in-memory + sqlx SQLite)
+- [docs/backends.md](docs/backends.md) — setup guide for all 14 backends with pool construction, dependencies, and `main()` skeleton
+- [docs/configuration.md](docs/configuration.md) — session binding, password policy, lockout, webhooks, OIDC config
+- [docs/api-routes.md](docs/api-routes.md) — complete route tables for every plugin
+- [docs/typescript.md](docs/typescript.md) — client API, Vue composables, SolidJS components
+- [crates/yauth/src/config.rs](crates/yauth/src/config.rs) — all plugin config structs (`YAuthConfig`, `EmailPasswordConfig`, `PasskeyConfig`, `MfaConfig`, etc.)
+
 ## Workspace Structure
 
 ### Rust Crates (`crates/`)

@@ -4,7 +4,7 @@ version = "0.8.9"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/yackey-labs/yauth"
-description = "Toasty ORM backends for yauth authentication library (experimental)"
+description = "Toasty ORM backends for yauth authentication library (experimental support)"
 publish = false
 
 [features]

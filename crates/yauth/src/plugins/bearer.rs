@@ -735,16 +735,10 @@ pub async fn validate_jwt_as_client(
         return Err("Client is not authorized for client_credentials".to_string());
     }
 
-    // M4: the admin kill-switch must reject outstanding tokens, not just
-    // future issuance — otherwise a compromised credential keeps working
-    // for its full TTL after ban.
+    // M4 kill switch rejects outstanding tokens, not just future issuance —
+    // otherwise a compromised credential keeps working for its full TTL.
     #[cfg(all(feature = "admin", feature = "oauth2-server"))]
-    if state
-        .banned_clients
-        .read()
-        .expect("banned_clients poisoned")
-        .contains_key(&claims.client_id)
-    {
+    if client.banned_at.is_some() {
         return Err("Client is suspended".to_string());
     }
 

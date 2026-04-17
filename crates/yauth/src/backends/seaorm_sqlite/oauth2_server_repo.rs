@@ -1,7 +1,7 @@
 use chrono::Utc;
 use sea_orm::prelude::*;
 use sea_orm::sea_query::Expr;
-use sea_orm::{ActiveModelTrait, Set};
+use sea_orm::{ActiveModelTrait, QueryOrder, Set};
 use uuid::Uuid;
 
 use super::entities::{authorization_codes, consents, device_codes, oauth2_clients};
@@ -53,9 +53,71 @@ impl Oauth2ClientRepository for SeaOrmOauth2ClientRepo {
                     .map(|v| serde_json::to_string(&v).unwrap_or_default())),
                 is_public: Set(input.is_public),
                 created_at: Set(super::to_tz(input.created_at)),
+                token_endpoint_auth_method: Set(input.token_endpoint_auth_method),
+                public_key_pem: Set(input.public_key_pem),
+                jwks_uri: Set(input.jwks_uri),
+                banned_at: Set(None),
+                banned_reason: Set(None),
             };
             model.insert(&self.db).await.map_err(sea_err)?;
             Ok(())
+        })
+    }
+
+    fn set_banned(
+        &self,
+        client_id: &str,
+        banned: Option<(Option<String>, chrono::NaiveDateTime)>,
+    ) -> RepoFuture<'_, bool> {
+        let client_id = client_id.to_string();
+        Box::pin(async move {
+            let (at, reason) = match banned {
+                Some((r, a)) => (Some(a), r),
+                None => (None, None),
+            };
+            let result = oauth2_clients::Entity::update_many()
+                .col_expr(
+                    oauth2_clients::Column::BannedAt,
+                    Expr::value(super::opt_to_tz(at)),
+                )
+                .col_expr(oauth2_clients::Column::BannedReason, Expr::value(reason))
+                .filter(oauth2_clients::Column::ClientId.eq(&client_id))
+                .exec(&self.db)
+                .await
+                .map_err(sea_err)?;
+            Ok(result.rows_affected > 0)
+        })
+    }
+
+    fn rotate_public_key(
+        &self,
+        client_id: &str,
+        public_key_pem: Option<String>,
+    ) -> RepoFuture<'_, bool> {
+        let client_id = client_id.to_string();
+        Box::pin(async move {
+            let result = oauth2_clients::Entity::update_many()
+                .col_expr(
+                    oauth2_clients::Column::PublicKeyPem,
+                    Expr::value(public_key_pem),
+                )
+                .filter(oauth2_clients::Column::ClientId.eq(&client_id))
+                .exec(&self.db)
+                .await
+                .map_err(sea_err)?;
+            Ok(result.rows_affected > 0)
+        })
+    }
+
+    fn list_banned(&self) -> RepoFuture<'_, Vec<domain::Oauth2Client>> {
+        Box::pin(async move {
+            let rows = oauth2_clients::Entity::find()
+                .filter(oauth2_clients::Column::BannedAt.is_not_null())
+                .order_by_desc(oauth2_clients::Column::BannedAt)
+                .all(&self.db)
+                .await
+                .map_err(sea_err)?;
+            Ok(rows.into_iter().map(|m| m.into_domain()).collect())
         })
     }
 }

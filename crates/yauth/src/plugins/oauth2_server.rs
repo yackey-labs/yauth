@@ -1156,13 +1156,9 @@ async fn dynamic_client_registration(
                 "token_endpoint_auth_method=private_key_jwt requires public_key_pem",
             )
         })?;
-        let key = crate::auth::client_keys::ClientKey::from_pem(pem)
+        // Reject malformed PEMs at registration time rather than first use.
+        crate::auth::client_keys::ClientKey::from_pem(pem)
             .map_err(|e| api_err(StatusCode::BAD_REQUEST, &e))?;
-        state
-            .client_keys
-            .write()
-            .expect("client_keys poisoned")
-            .insert(client_id.clone(), key);
     }
 
     let scopes_json = input
@@ -1171,6 +1167,15 @@ async fn dynamic_client_registration(
         .map(|s| serde_json::json!(s.split_whitespace().collect::<Vec<_>>()));
 
     let now = Utc::now();
+
+    #[cfg(all(feature = "asymmetric-jwt", feature = "oauth2-server"))]
+    let public_key_pem = input.public_key_pem.clone();
+    #[cfg(not(all(feature = "asymmetric-jwt", feature = "oauth2-server")))]
+    let public_key_pem: Option<String> = None;
+    #[cfg(all(feature = "asymmetric-jwt", feature = "oauth2-server"))]
+    let jwks_uri = input.jwks_uri.clone();
+    #[cfg(not(all(feature = "asymmetric-jwt", feature = "oauth2-server")))]
+    let jwks_uri: Option<String> = None;
 
     let new_client = crate::domain::NewOauth2Client {
         id: Uuid::now_v7(),
@@ -1182,6 +1187,9 @@ async fn dynamic_client_registration(
         scopes: scopes_json,
         is_public,
         created_at: now.naive_utc(),
+        token_endpoint_auth_method: Some(auth_method.to_string()),
+        public_key_pem,
+        jwks_uri,
     };
 
     state
@@ -2070,13 +2078,12 @@ async fn handle_client_credentials_grant(
 
     let client_id = client_id.as_str();
 
+    let client = lookup_client(state, client_id)
+        .await
+        .map_err(|e| e.into_response())?;
+
     #[cfg(all(feature = "admin", feature = "oauth2-server"))]
-    if state
-        .banned_clients
-        .read()
-        .expect("banned_clients poisoned")
-        .contains_key(client_id)
-    {
+    if client.banned_at.is_some() {
         state
             .write_audit_log(
                 None,
@@ -2094,10 +2101,6 @@ async fn handle_client_credentials_grant(
             "Client is suspended",
         ));
     }
-
-    let client = lookup_client(state, client_id)
-        .await
-        .map_err(|e| e.into_response())?;
 
     let empty_arr = vec![];
     let grant_types = client
@@ -2382,17 +2385,46 @@ async fn authenticate_private_key_jwt(
         })?
         .to_string();
 
-    // Clone the key out of the registry so we can release the sync RwLock
-    // before awaiting — async runtimes require Send across await points.
-    let client_key = {
-        let registry = state.client_keys.read().expect("client_keys poisoned");
-        registry.get(&iss).cloned()
+    let client = state
+        .repos
+        .oauth2_clients
+        .find_by_client_id(&iss)
+        .await
+        .map_err(|_| {
+            oauth2_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "Client lookup failed",
+            )
+        })?
+        .ok_or_else(|| {
+            oauth2_error(
+                StatusCode::UNAUTHORIZED,
+                "invalid_client",
+                "Client not registered",
+            )
+        })?;
+
+    if client.banned_at.is_some() {
+        return Err(oauth2_error(
+            StatusCode::UNAUTHORIZED,
+            "invalid_client",
+            "Client is suspended",
+        ));
     }
-    .ok_or_else(|| {
+
+    let pem = client.public_key_pem.as_deref().ok_or_else(|| {
         oauth2_error(
             StatusCode::UNAUTHORIZED,
             "invalid_client",
             "Client not registered for private_key_jwt",
+        )
+    })?;
+    let client_key = crate::auth::client_keys::ClientKey::from_pem(pem).map_err(|_| {
+        oauth2_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "server_error",
+            "Registered public key failed to parse",
         )
     })?;
 

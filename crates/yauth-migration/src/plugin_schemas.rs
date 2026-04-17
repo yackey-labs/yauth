@@ -226,7 +226,12 @@ pub fn oauth2_server_schema() -> Vec<TableDef> {
             .column(ColumnDef::new("grant_types", ColumnType::Json))
             .column(ColumnDef::new("scopes", ColumnType::Json).nullable())
             .column(ColumnDef::new("is_public", ColumnType::Boolean).default("false"))
-            .column(ColumnDef::new("created_at", ColumnType::DateTime).default("now()")),
+            .column(ColumnDef::new("created_at", ColumnType::DateTime).default("now()"))
+            .column(ColumnDef::new("token_endpoint_auth_method", ColumnType::Varchar).nullable())
+            .column(ColumnDef::new("public_key_pem", ColumnType::Text).nullable())
+            .column(ColumnDef::new("jwks_uri", ColumnType::Varchar).nullable())
+            .column(ColumnDef::new("banned_at", ColumnType::DateTime).nullable())
+            .column(ColumnDef::new("banned_reason", ColumnType::Varchar).nullable()),
         TableDef::new("yauth_authorization_codes")
             .description("OAuth2 authorization codes. Single-use, time-limited.")
             .column(

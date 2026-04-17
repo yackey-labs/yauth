@@ -403,14 +403,6 @@ impl YAuthBuilder {
                     }
                 }
             },
-            #[cfg(all(feature = "asymmetric-jwt", feature = "oauth2-server"))]
-            client_keys: std::sync::Arc::new(std::sync::RwLock::new(
-                std::collections::HashMap::new(),
-            )),
-            #[cfg(all(feature = "admin", feature = "oauth2-server"))]
-            banned_clients: std::sync::Arc::new(std::sync::RwLock::new(
-                std::collections::HashMap::new(),
-            )),
         };
 
         #[cfg(feature = "passkey")]

@@ -10,20 +10,16 @@
 
 #![cfg(all(feature = "asymmetric-jwt", feature = "oauth2-server"))]
 
-use std::sync::Arc;
-
 use jsonwebtoken::{Algorithm, DecodingKey};
 
-/// A registered client's public signing material. Parsed once at registration
-/// so the token endpoint doesn't re-parse PEMs on every assertion. Cloneable
-/// (cheap, `Arc`-backed) so callers can pull the key out from under the
-/// registry RwLock and release the lock before awaiting.
-#[derive(Clone)]
+/// A parsed client public signing key. Constructed per-assertion from the
+/// `public_key_pem` stored on the `yauth_oauth2_clients` row; the Redis
+/// decorator already in front of `Oauth2ClientRepository::find_by_client_id`
+/// caches the fetched row, so the PEM parse is the only extra cost on the
+/// hot path.
 pub struct ClientKey {
-    pub decoding_key: Arc<DecodingKey>,
+    pub decoding_key: DecodingKey,
     pub alg: Algorithm,
-    /// Original PEM — kept only to be returned by admin list endpoints (M4).
-    /// Never logged.
     pub public_key_pem: String,
 }
 
@@ -42,14 +38,14 @@ impl ClientKey {
     pub fn from_pem(pem: &str) -> Result<Self, String> {
         if let Ok(dk) = DecodingKey::from_rsa_pem(pem.as_bytes()) {
             return Ok(Self {
-                decoding_key: Arc::new(dk),
+                decoding_key: dk,
                 alg: Algorithm::RS256,
                 public_key_pem: pem.to_string(),
             });
         }
         if let Ok(dk) = DecodingKey::from_ec_pem(pem.as_bytes()) {
             return Ok(Self {
-                decoding_key: Arc::new(dk),
+                decoding_key: dk,
                 alg: Algorithm::ES256,
                 public_key_pem: pem.to_string(),
             });

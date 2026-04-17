@@ -23,6 +23,16 @@ pub struct Model {
     pub scopes: Option<serde_json::Value>,
     pub is_public: bool,
     pub created_at: DateTimeWithTimeZone,
+    #[sea_orm(column_type = "Text", nullable)]
+    pub token_endpoint_auth_method: Option<String>,
+    #[sea_orm(column_type = "Text", nullable)]
+    pub public_key_pem: Option<String>,
+    #[sea_orm(column_type = "Text", nullable)]
+    pub jwks_uri: Option<String>,
+    #[sea_orm(nullable)]
+    pub banned_at: Option<DateTimeWithTimeZone>,
+    #[sea_orm(column_type = "Text", nullable)]
+    pub banned_reason: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -42,6 +52,11 @@ impl Model {
             scopes: self.scopes,
             is_public: self.is_public,
             created_at: self.created_at.naive_utc(),
+            token_endpoint_auth_method: self.token_endpoint_auth_method,
+            public_key_pem: self.public_key_pem,
+            jwks_uri: self.jwks_uri,
+            banned_at: self.banned_at.map(|dt| dt.naive_utc()),
+            banned_reason: self.banned_reason,
         }
     }
 }

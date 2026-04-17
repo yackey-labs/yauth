@@ -833,6 +833,11 @@ pub(crate) struct DieselOauth2Client {
     pub scopes: Option<serde_json::Value>,
     pub is_public: bool,
     pub created_at: NaiveDateTime,
+    pub token_endpoint_auth_method: Option<String>,
+    pub public_key_pem: Option<String>,
+    pub jwks_uri: Option<String>,
+    pub banned_at: Option<NaiveDateTime>,
+    pub banned_reason: Option<String>,
 }
 
 #[cfg(feature = "oauth2-server")]
@@ -848,6 +853,11 @@ impl DieselOauth2Client {
             scopes: self.scopes,
             is_public: self.is_public,
             created_at: self.created_at,
+            token_endpoint_auth_method: self.token_endpoint_auth_method,
+            public_key_pem: self.public_key_pem,
+            jwks_uri: self.jwks_uri,
+            banned_at: self.banned_at,
+            banned_reason: self.banned_reason,
         }
     }
 }
@@ -865,6 +875,9 @@ pub(crate) struct DieselNewOauth2Client {
     pub scopes: Option<serde_json::Value>,
     pub is_public: bool,
     pub created_at: NaiveDateTime,
+    pub token_endpoint_auth_method: Option<String>,
+    pub public_key_pem: Option<String>,
+    pub jwks_uri: Option<String>,
 }
 
 #[cfg(feature = "oauth2-server")]
@@ -880,6 +893,9 @@ impl DieselNewOauth2Client {
             scopes: input.scopes,
             is_public: input.is_public,
             created_at: input.created_at,
+            token_endpoint_auth_method: input.token_endpoint_auth_method,
+            public_key_pem: input.public_key_pem,
+            jwks_uri: input.jwks_uri,
         }
     }
 }

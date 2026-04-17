@@ -39,7 +39,7 @@ impl Oauth2ClientRepository for MysqlOauth2ClientRepo {
     fn create(&self, i: domain::NewOauth2Client) -> RepoFuture<'_, ()> {
         Box::pin(async move {
             let mut c = get_conn(&self.pool).await?;
-            let (id, cid, csh, ru, cn, gt, sc, ip, ca) = (
+            let (id, cid, csh, ru, cn, gt, sc, ip, ca, team, pkp, ju) = (
                 uuid_to_str(i.id),
                 i.client_id,
                 i.client_secret_hash,
@@ -49,11 +49,14 @@ impl Oauth2ClientRepository for MysqlOauth2ClientRepo {
                 i.scopes.map(json_to_str),
                 i.is_public,
                 i.created_at,
+                i.token_endpoint_auth_method,
+                i.public_key_pem,
+                i.jwks_uri,
             );
             diesel::sql_query(
                 "INSERT INTO yauth_oauth2_clients \
-                 (id, client_id, client_secret_hash, redirect_uris, client_name, grant_types, scopes, is_public, created_at) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 (id, client_id, client_secret_hash, redirect_uris, client_name, grant_types, scopes, is_public, created_at, token_endpoint_auth_method, public_key_pem, jwks_uri) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             )
             .bind::<diesel::sql_types::Text, _>(&id)
             .bind::<diesel::sql_types::Text, _>(&cid)
@@ -64,10 +67,72 @@ impl Oauth2ClientRepository for MysqlOauth2ClientRepo {
             .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(&sc)
             .bind::<diesel::sql_types::Bool, _>(ip)
             .bind::<diesel::sql_types::Datetime, _>(&ca)
+            .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(&team)
+            .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(&pkp)
+            .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(&ju)
             .execute(&mut *c)
             .await
             .map_err(diesel_err)?;
             Ok(())
+        })
+    }
+
+    fn set_banned(
+        &self,
+        client_id: &str,
+        banned: Option<(Option<String>, chrono::NaiveDateTime)>,
+    ) -> RepoFuture<'_, bool> {
+        let client_id = client_id.to_string();
+        Box::pin(async move {
+            let mut c = get_conn(&self.pool).await?;
+            let (at, reason) = match banned {
+                Some((r, a)) => (Some(a), r),
+                None => (None, None),
+            };
+            let updated = diesel::update(
+                yauth_oauth2_clients::table.filter(yauth_oauth2_clients::client_id.eq(&client_id)),
+            )
+            .set((
+                yauth_oauth2_clients::banned_at.eq(at),
+                yauth_oauth2_clients::banned_reason.eq(reason),
+            ))
+            .execute(&mut *c)
+            .await
+            .map_err(diesel_err)?;
+            Ok(updated > 0)
+        })
+    }
+
+    fn rotate_public_key(
+        &self,
+        client_id: &str,
+        public_key_pem: Option<String>,
+    ) -> RepoFuture<'_, bool> {
+        let client_id = client_id.to_string();
+        Box::pin(async move {
+            let mut c = get_conn(&self.pool).await?;
+            let updated = diesel::update(
+                yauth_oauth2_clients::table.filter(yauth_oauth2_clients::client_id.eq(&client_id)),
+            )
+            .set(yauth_oauth2_clients::public_key_pem.eq(public_key_pem))
+            .execute(&mut *c)
+            .await
+            .map_err(diesel_err)?;
+            Ok(updated > 0)
+        })
+    }
+
+    fn list_banned(&self) -> RepoFuture<'_, Vec<domain::Oauth2Client>> {
+        Box::pin(async move {
+            let mut c = get_conn(&self.pool).await?;
+            let rows = yauth_oauth2_clients::table
+                .filter(yauth_oauth2_clients::banned_at.is_not_null())
+                .order(yauth_oauth2_clients::banned_at.desc())
+                .select(MysqlOauth2Client::as_select())
+                .load(&mut *c)
+                .await
+                .map_err(diesel_err)?;
+            Ok(rows.into_iter().map(|r| r.into_domain()).collect())
         })
     }
 }

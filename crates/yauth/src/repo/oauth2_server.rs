@@ -7,6 +7,26 @@ pub trait Oauth2ClientRepository: sealed::Sealed + Send + Sync {
     fn find_by_client_id(&self, client_id: &str) -> RepoFuture<'_, Option<domain::Oauth2Client>>;
 
     fn create(&self, input: domain::NewOauth2Client) -> RepoFuture<'_, ()>;
+
+    /// Set the ban state for a client. `Some((reason, when))` marks banned,
+    /// `None` clears the ban. Returns `true` if the row was updated.
+    fn set_banned(
+        &self,
+        client_id: &str,
+        banned: Option<(Option<String>, chrono::NaiveDateTime)>,
+    ) -> RepoFuture<'_, bool>;
+
+    /// Replace the registered public signing key for `private_key_jwt`.
+    /// Returns `true` if the row was updated.
+    fn rotate_public_key(
+        &self,
+        client_id: &str,
+        public_key_pem: Option<String>,
+    ) -> RepoFuture<'_, bool>;
+
+    /// List clients currently banned, newest ban first. Used by the admin
+    /// list endpoint; other read paths stay on `find_by_client_id`.
+    fn list_banned(&self) -> RepoFuture<'_, Vec<domain::Oauth2Client>>;
 }
 
 /// Repository for authorization codes.

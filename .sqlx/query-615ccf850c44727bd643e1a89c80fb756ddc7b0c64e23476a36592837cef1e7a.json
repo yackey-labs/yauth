@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE yauth_oauth2_clients SET public_key_pem = $2 WHERE client_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "615ccf850c44727bd643e1a89c80fb756ddc7b0c64e23476a36592837cef1e7a"
+}

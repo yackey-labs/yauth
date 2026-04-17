@@ -579,12 +579,21 @@ async fn audit_log_records_ban_with_actor_and_target() {
     )
     .await;
 
-    // The audit repo trait exposes lookup-by-user-id but no broad list; the
-    // ban action writes the audit row with user_id = admin user and
-    // metadata containing the target_client_id. Assert both observable
-    // effects: the ban registry updated AND the audit write did not panic.
+    // Observable effect: after the admin ban call, `find_by_client_id`
+    // returns a row with `banned_at` populated. The audit entry is written
+    // through `state.write_audit_log` (its presence is verified structurally
+    // by the ban handler's code path; a dedicated audit-read API is not
+    // part of the repo trait surface).
+    let client = app
+        .state
+        .repos
+        .oauth2_clients
+        .find_by_client_id(&cid)
+        .await
+        .expect("lookup")
+        .expect("client exists");
     assert!(
-        app.state.banned_clients.read().unwrap().contains_key(&cid),
-        "ban registry reflects the action"
+        client.banned_at.is_some(),
+        "client row must reflect the ban via `banned_at` timestamp"
     );
 }

@@ -21,6 +21,11 @@ struct Oauth2ClientRow {
     scopes: Option<String>,
     is_public: i64,
     created_at: String,
+    token_endpoint_auth_method: Option<String>,
+    public_key_pem: Option<String>,
+    jwks_uri: Option<String>,
+    banned_at: Option<String>,
+    banned_reason: Option<String>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -81,7 +86,7 @@ impl Oauth2ClientRepository for SqlxSqliteOauth2ClientRepo {
         Box::pin(async move {
             let row = sqlx::query_as!(
                 Oauth2ClientRow,
-                "SELECT id, client_id, client_secret_hash, redirect_uris, client_name, grant_types, scopes, is_public, created_at \
+                "SELECT id, client_id, client_secret_hash, redirect_uris, client_name, grant_types, scopes, is_public, created_at, token_endpoint_auth_method, public_key_pem, jwks_uri, banned_at, banned_reason \
                  FROM yauth_oauth2_clients WHERE client_id = ? /* sqlite */",
                 client_id
             )
@@ -98,6 +103,11 @@ impl Oauth2ClientRepository for SqlxSqliteOauth2ClientRepo {
                 scopes: opt_str_to_json(r.scopes),
                 is_public: r.is_public != 0,
                 created_at: str_to_dt(&r.created_at),
+                token_endpoint_auth_method: r.token_endpoint_auth_method,
+                public_key_pem: r.public_key_pem,
+                jwks_uri: r.jwks_uri,
+                banned_at: opt_str_to_dt(r.banned_at),
+                banned_reason: r.banned_reason,
             }))
         })
     }
@@ -110,8 +120,8 @@ impl Oauth2ClientRepository for SqlxSqliteOauth2ClientRepo {
             let scopes_str = input.scopes.map(|v| v.to_string());
             let created_str = dt_to_str(input.created_at);
             sqlx::query!(
-                "INSERT INTO yauth_oauth2_clients (id, client_id, client_secret_hash, redirect_uris, client_name, grant_types, scopes, is_public, created_at) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) /* sqlite */",
+                "INSERT INTO yauth_oauth2_clients (id, client_id, client_secret_hash, redirect_uris, client_name, grant_types, scopes, is_public, created_at, token_endpoint_auth_method, public_key_pem, jwks_uri) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) /* sqlite */",
                 id_str,
                 input.client_id,
                 input.client_secret_hash,
@@ -121,11 +131,89 @@ impl Oauth2ClientRepository for SqlxSqliteOauth2ClientRepo {
                 scopes_str,
                 input.is_public,
                 created_str,
+                input.token_endpoint_auth_method,
+                input.public_key_pem,
+                input.jwks_uri,
             )
             .execute(&self.pool)
             .await
             .map_err(sqlx_err)?;
             Ok(())
+        })
+    }
+
+    fn set_banned(
+        &self,
+        client_id: &str,
+        banned: Option<(Option<String>, chrono::NaiveDateTime)>,
+    ) -> RepoFuture<'_, bool> {
+        let client_id = client_id.to_string();
+        Box::pin(async move {
+            let (at, reason) = match banned {
+                Some((r, a)) => (Some(dt_to_str(a)), r),
+                None => (None, None),
+            };
+            let result = sqlx::query!(
+                "UPDATE yauth_oauth2_clients SET banned_at = ?, banned_reason = ? WHERE client_id = ? /* sqlite */",
+                at,
+                reason,
+                client_id,
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(sqlx_err)?;
+            Ok(result.rows_affected() > 0)
+        })
+    }
+
+    fn rotate_public_key(
+        &self,
+        client_id: &str,
+        public_key_pem: Option<String>,
+    ) -> RepoFuture<'_, bool> {
+        let client_id = client_id.to_string();
+        Box::pin(async move {
+            let result = sqlx::query!(
+                "UPDATE yauth_oauth2_clients SET public_key_pem = ? WHERE client_id = ? /* sqlite */",
+                public_key_pem,
+                client_id,
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(sqlx_err)?;
+            Ok(result.rows_affected() > 0)
+        })
+    }
+
+    fn list_banned(&self) -> RepoFuture<'_, Vec<domain::Oauth2Client>> {
+        Box::pin(async move {
+            let rows = sqlx::query_as!(
+                Oauth2ClientRow,
+                "SELECT id, client_id, client_secret_hash, redirect_uris, client_name, grant_types, scopes, is_public, created_at, token_endpoint_auth_method, public_key_pem, jwks_uri, banned_at, banned_reason \
+                 FROM yauth_oauth2_clients WHERE banned_at IS NOT NULL ORDER BY banned_at DESC /* sqlite */"
+            )
+            .fetch_all(&self.pool)
+            .await
+            .map_err(sqlx_err)?;
+            Ok(rows
+                .into_iter()
+                .map(|r| domain::Oauth2Client {
+                    id: str_to_uuid(&r.id.unwrap_or_default()),
+                    client_id: r.client_id,
+                    client_secret_hash: r.client_secret_hash,
+                    redirect_uris: serde_json::from_str(&r.redirect_uris).unwrap_or_default(),
+                    client_name: r.client_name,
+                    grant_types: serde_json::from_str(&r.grant_types).unwrap_or_default(),
+                    scopes: opt_str_to_json(r.scopes),
+                    is_public: r.is_public != 0,
+                    created_at: str_to_dt(&r.created_at),
+                    token_endpoint_auth_method: r.token_endpoint_auth_method,
+                    public_key_pem: r.public_key_pem,
+                    jwks_uri: r.jwks_uri,
+                    banned_at: opt_str_to_dt(r.banned_at),
+                    banned_reason: r.banned_reason,
+                })
+                .collect())
         })
     }
 }

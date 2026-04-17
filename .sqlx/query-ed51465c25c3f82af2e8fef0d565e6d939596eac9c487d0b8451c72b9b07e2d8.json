@@ -1,0 +1,12 @@
+{
+  "db_name": "MySQL",
+  "query": "UPDATE yauth_oauth2_clients SET public_key_pem = ? WHERE client_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "ed51465c25c3f82af2e8fef0d565e6d939596eac9c487d0b8451c72b9b07e2d8"
+}

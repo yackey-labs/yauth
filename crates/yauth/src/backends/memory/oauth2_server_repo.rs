@@ -47,10 +47,69 @@ impl Oauth2ClientRepository for InMemoryOauth2ClientRepo {
                 scopes: input.scopes,
                 is_public: input.is_public,
                 created_at: input.created_at,
+                token_endpoint_auth_method: input.token_endpoint_auth_method,
+                public_key_pem: input.public_key_pem,
+                jwks_uri: input.jwks_uri,
+                banned_at: None,
+                banned_reason: None,
             };
             let mut map = self.clients.write().unwrap();
             map.insert(client.id, client);
             Ok(())
+        })
+    }
+
+    fn set_banned(
+        &self,
+        client_id: &str,
+        banned: Option<(Option<String>, chrono::NaiveDateTime)>,
+    ) -> RepoFuture<'_, bool> {
+        let client_id = client_id.to_string();
+        Box::pin(async move {
+            let mut map = self.clients.write().unwrap();
+            let Some(client) = map.values_mut().find(|c| c.client_id == client_id) else {
+                return Ok(false);
+            };
+            match banned {
+                Some((reason, at)) => {
+                    client.banned_at = Some(at);
+                    client.banned_reason = reason;
+                }
+                None => {
+                    client.banned_at = None;
+                    client.banned_reason = None;
+                }
+            }
+            Ok(true)
+        })
+    }
+
+    fn rotate_public_key(
+        &self,
+        client_id: &str,
+        public_key_pem: Option<String>,
+    ) -> RepoFuture<'_, bool> {
+        let client_id = client_id.to_string();
+        Box::pin(async move {
+            let mut map = self.clients.write().unwrap();
+            let Some(client) = map.values_mut().find(|c| c.client_id == client_id) else {
+                return Ok(false);
+            };
+            client.public_key_pem = public_key_pem;
+            Ok(true)
+        })
+    }
+
+    fn list_banned(&self) -> RepoFuture<'_, Vec<domain::Oauth2Client>> {
+        Box::pin(async move {
+            let map = self.clients.read().unwrap();
+            let mut out: Vec<domain::Oauth2Client> = map
+                .values()
+                .filter(|c| c.banned_at.is_some())
+                .cloned()
+                .collect();
+            out.sort_by(|a, b| b.banned_at.cmp(&a.banned_at));
+            Ok(out)
         })
     }
 }

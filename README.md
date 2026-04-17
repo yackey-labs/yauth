@@ -4,7 +4,7 @@ Modular, plugin-based authentication library for Rust (Axum) with a generated Ty
 
 - **Plugin system** — enable only the auth features you need via feature flags
 - **11 database backends** — Diesel, sqlx, SeaORM, Toasty, or in-memory, across Postgres, MySQL, and SQLite
-- **No runtime migrations** — `cargo yauth generate` produces ORM-native migration files; your ORM applies them
+- **No runtime migrations** — `cargo yauth generate` produces ORM-native migration files; apply them with your ORM's CLI or via `diesel-async`'s `AsyncMigrationHarness` ([docs](docs/backends.md#async-migrations-diesel-backends))
 - **Tri-mode auth** — session cookies, JWT bearer tokens, and API keys all work simultaneously
 - **Full OAuth2 / OIDC provider** — authorization code + PKCE, device flow, client credentials, `private_key_jwt` (RFC 7523), published JWKS for cross-trust-domain validation
 - **TypeScript included** — auto-generated HTTP client + pre-built Vue 3 and SolidJS components
@@ -121,10 +121,11 @@ Two complete examples below — pick the one closest to your stack. Every other 
 
 ```bash
 cargo add yauth --features email-password
-cargo add diesel --features postgres
 cargo yauth init --orm diesel --dialect postgres --plugins email-password
-diesel migration run
+cargo run --bin migrate -- up   # or: diesel migration run
 ```
+
+> yauth re-exports the diesel-async pool types (`DieselPool`, `AsyncDieselConnectionManager`, `AsyncPgConnection`), so you don't need `diesel` or `diesel-async` as direct dependencies. If you use diesel's query DSL in your own code, add `diesel` with the **`postgres_backend`** feature (types + DSL only, no libpq): `cargo add diesel --no-default-features --features postgres_backend`.
 
 ```rust
 // prelude re-exports YAuthBuilder, YAuthConfig, EmailPasswordConfig,

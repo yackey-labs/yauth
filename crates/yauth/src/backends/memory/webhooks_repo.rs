@@ -127,7 +127,7 @@ impl WebhookDeliveryRepository for InMemoryWebhookDeliveryRepo {
                 .filter(|d| d.webhook_id == webhook_id)
                 .cloned()
                 .collect();
-            results.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+            results.sort_by_key(|r| std::cmp::Reverse(r.created_at));
             results.truncate(limit as usize);
             Ok(results)
         })

@@ -246,7 +246,7 @@ impl UserRepository for InMemoryUserRepo {
             };
 
             // Sort by created_at descending (matching Diesel impl)
-            users.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+            users.sort_by_key(|u| std::cmp::Reverse(u.created_at));
 
             let total = users.len() as i64;
             let offset = offset as usize;
@@ -311,7 +311,7 @@ impl SessionRepository for InMemorySessionRepo {
         Box::pin(async move {
             let map = self.sessions.read().unwrap();
             let mut sessions: Vec<domain::Session> = map.values().cloned().collect();
-            sessions.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+            sessions.sort_by_key(|s| std::cmp::Reverse(s.created_at));
             let total = sessions.len() as i64;
             let page = sessions
                 .into_iter()

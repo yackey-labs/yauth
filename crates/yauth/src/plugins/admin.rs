@@ -27,20 +27,47 @@ impl YAuthPlugin for AdminPlugin {
         None
     }
 
-    fn protected_routes(&self, _ctx: &PluginContext) -> Option<Router<YAuthState>> {
-        Some(
-            Router::new()
-                .route("/admin/users", get(list_users))
-                .route("/admin/users/{id}", get(get_user))
-                .route("/admin/users/{id}", put(update_user))
-                .route("/admin/users/{id}", delete(delete_user))
-                .route("/admin/users/{id}/ban", post(ban_user))
-                .route("/admin/users/{id}/unban", post(unban_user))
-                .route("/admin/users/{id}/impersonate", post(impersonate_user))
-                .route("/admin/sessions", get(list_sessions))
-                .route("/admin/sessions/{id}", delete(delete_session))
-                .layer(axum_mw::from_fn(require_admin)),
-        )
+    fn protected_routes(&self, ctx: &PluginContext) -> Option<Router<YAuthState>> {
+        #[allow(unused_mut)]
+        let mut router = Router::new()
+            .route("/admin/users", get(list_users))
+            .route("/admin/users/{id}", get(get_user))
+            .route("/admin/users/{id}", put(update_user))
+            .route("/admin/users/{id}", delete(delete_user))
+            .route("/admin/users/{id}/ban", post(ban_user))
+            .route("/admin/users/{id}/unban", post(unban_user))
+            .route("/admin/users/{id}/impersonate", post(impersonate_user))
+            .route("/admin/sessions", get(list_sessions))
+            .route("/admin/sessions/{id}", delete(delete_session));
+
+        #[cfg(all(feature = "oauth2-server", feature = "admin"))]
+        {
+            router = router
+                .route(
+                    "/admin/oauth2/clients/{client_id}/ban",
+                    post(super::oauth2_admin::ban_oauth2_client),
+                )
+                .route(
+                    "/admin/oauth2/clients/{client_id}/unban",
+                    post(super::oauth2_admin::unban_oauth2_client),
+                )
+                .route(
+                    "/admin/oauth2/clients",
+                    get(super::oauth2_admin::list_banned_clients),
+                );
+            #[cfg(feature = "asymmetric-jwt")]
+            {
+                router = router.route(
+                    "/admin/oauth2/clients/{client_id}/rotate-public-key",
+                    post(super::oauth2_admin::rotate_public_key),
+                );
+            }
+        }
+
+        Some(router.layer(axum_mw::from_fn_with_state(
+            ctx.state.clone(),
+            require_admin,
+        )))
     }
 }
 

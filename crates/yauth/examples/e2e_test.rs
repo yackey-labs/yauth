@@ -1379,6 +1379,12 @@ async fn start_server(db: Pool) -> u16 {
         access_token_ttl: Duration::from_secs(900),
         refresh_token_ttl: Duration::from_secs(86400),
         audience: None,
+        #[cfg(feature = "asymmetric-jwt")]
+        signing_algorithm: Default::default(),
+        #[cfg(feature = "asymmetric-jwt")]
+        signing_key_pem: None,
+        #[cfg(feature = "asymmetric-jwt")]
+        kid: None,
     })
     .with_mfa(yauth::config::MfaConfig {
         issuer: "YAuth".into(),
@@ -1436,6 +1442,12 @@ async fn start_server_with_audience(db: Pool, audience: &str) -> u16 {
         access_token_ttl: Duration::from_secs(900),
         refresh_token_ttl: Duration::from_secs(86400),
         audience: Some(audience.to_string()),
+        #[cfg(feature = "asymmetric-jwt")]
+        signing_algorithm: Default::default(),
+        #[cfg(feature = "asymmetric-jwt")]
+        signing_key_pem: None,
+        #[cfg(feature = "asymmetric-jwt")]
+        kid: None,
     })
     .build()
     .await
@@ -1504,6 +1516,12 @@ async fn start_server_with_oauth2(db: Pool) -> u16 {
         access_token_ttl: Duration::from_secs(900),
         refresh_token_ttl: Duration::from_secs(86400),
         audience: None,
+        #[cfg(feature = "asymmetric-jwt")]
+        signing_algorithm: Default::default(),
+        #[cfg(feature = "asymmetric-jwt")]
+        signing_key_pem: None,
+        #[cfg(feature = "asymmetric-jwt")]
+        kid: None,
     })
     .with_oauth2_server(yauth::config::OAuth2ServerConfig {
         issuer: "http://127.0.0.1:0".into(),

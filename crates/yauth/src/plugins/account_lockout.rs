@@ -36,11 +36,14 @@ impl YAuthPlugin for AccountLockoutPlugin {
         )
     }
 
-    fn protected_routes(&self, _ctx: &PluginContext) -> Option<Router<YAuthState>> {
+    fn protected_routes(&self, ctx: &PluginContext) -> Option<Router<YAuthState>> {
         Some(
             Router::new()
                 .route("/admin/users/{id}/unlock", post(admin_unlock))
-                .layer(axum_mw::from_fn(require_admin)),
+                .layer(axum_mw::from_fn_with_state(
+                    ctx.state.clone(),
+                    require_admin,
+                )),
         )
     }
 

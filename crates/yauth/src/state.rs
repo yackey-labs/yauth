@@ -5,6 +5,13 @@ use crate::repo::Repositories;
 use std::sync::Arc;
 use uuid::Uuid;
 
+#[cfg(all(feature = "admin", feature = "oauth2-server"))]
+#[derive(Debug, Clone)]
+pub struct BannedClientInfo {
+    pub reason: Option<String>,
+    pub banned_at: chrono::DateTime<chrono::Utc>,
+}
+
 #[cfg(feature = "diesel-pg-backend")]
 pub type DbPool =
     diesel_async_crate::pooled_connection::deadpool::Pool<diesel_async_crate::AsyncPgConnection>;
@@ -20,6 +27,20 @@ pub struct YAuthState {
     pub email_password_config: crate::config::EmailPasswordConfig,
     #[cfg(feature = "bearer")]
     pub bearer_config: crate::config::BearerConfig,
+    /// Pre-parsed asymmetric signing material. `None` when `signing_algorithm`
+    /// is HS256 or the `asymmetric-jwt` feature is disabled. Populated once
+    /// at `YAuthBuilder::build()` time so PEMs are not re-parsed per request.
+    #[cfg(feature = "asymmetric-jwt")]
+    pub signing_keys: Option<Arc<crate::auth::signing::SigningKeys>>,
+    /// In-memory registry of `private_key_jwt` client public keys, keyed by
+    /// `client_id`. Populated at dynamic-client-registration time. Process-
+    /// local — a restart requires clients to re-register. A DB-backed store
+    /// is planned; until then users who need persistence should reseed from
+    /// config at startup.
+    #[cfg(all(feature = "asymmetric-jwt", feature = "oauth2-server"))]
+    pub client_keys: Arc<
+        std::sync::RwLock<std::collections::HashMap<String, crate::auth::client_keys::ClientKey>>,
+    >,
     #[cfg(feature = "mfa")]
     pub mfa_config: crate::config::MfaConfig,
     #[cfg(feature = "oauth")]
@@ -32,6 +53,14 @@ pub struct YAuthState {
     pub account_lockout_config: crate::config::AccountLockoutConfig,
     #[cfg(feature = "oidc")]
     pub oidc_config: crate::config::OidcConfig,
+    #[cfg(feature = "admin")]
+    pub admin_config: crate::config::AdminConfig,
+    /// In-memory registry of banned OAuth2 client IDs with reasons. A
+    /// compromised client's `client_id` can be added here to reject all
+    /// future authentication attempts (and any replayed tokens for it).
+    /// Process-local; a DB-backed store is a follow-up.
+    #[cfg(all(feature = "admin", feature = "oauth2-server"))]
+    pub banned_clients: Arc<std::sync::RwLock<std::collections::HashMap<String, BannedClientInfo>>>,
 }
 
 impl YAuthState {

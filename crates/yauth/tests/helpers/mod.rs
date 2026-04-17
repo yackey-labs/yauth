@@ -2,6 +2,14 @@ pub mod otel;
 #[allow(dead_code)]
 pub mod schema;
 
+#[cfg(feature = "oauth2-server")]
+#[allow(dead_code)]
+mod oauth2;
+
+#[cfg(feature = "oauth2-server")]
+#[allow(unused_imports)]
+pub use oauth2::*;
+
 // Everything below is gated behind diesel-pg-backend since it uses diesel pool types
 // and testcontainers for Postgres. Other backends (sqlx, memory) don't need this helper.
 #[cfg(feature = "diesel-pg-backend")]

@@ -406,6 +406,23 @@ impl Default for MagicLinkConfig {
     }
 }
 
+/// Admin plugin configuration. Controls whether machine callers (OAuth 2.0
+/// Client Credentials tokens with `admin` scope) can hit admin routes.
+///
+/// **Default**: machine callers are NOT permitted. Setting
+/// `allow_machine_callers = true` expands the blast radius of a compromised
+/// `client_id` significantly — only enable it for tightly-scoped ops
+/// automation, and document the risk in your runbook.
+#[cfg(feature = "admin")]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AdminConfig {
+    /// When `true`, a request carrying a valid `MachineCaller` with scope
+    /// `admin` satisfies `require_admin`. When `false` (the default), admin
+    /// routes are human-only.
+    #[serde(default)]
+    pub allow_machine_callers: bool,
+}
+
 #[cfg(feature = "oauth2-server")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OAuth2ServerConfig {
@@ -480,6 +497,39 @@ pub struct BearerConfig {
     /// Optional audience claim for JWT tokens (resource server URL per RFC 8707).
     #[serde(default)]
     pub audience: Option<String>,
+    /// JWT signing algorithm. Default is `HS256` (symmetric). Set to
+    /// `Rs256`/`Es256` together with `signing_key_pem` to publish a verifiable
+    /// JWKS for cross-trust-domain resource servers. Requires the
+    /// `asymmetric-jwt` feature.
+    #[cfg(feature = "asymmetric-jwt")]
+    #[serde(default)]
+    pub signing_algorithm: SigningAlgorithm,
+    /// PKCS#8 PEM-encoded private signing key. Required when
+    /// `signing_algorithm` is `Rs256` or `Es256`. Ignored for `Hs256`.
+    /// The PEM is parsed at `build()` time and a malformed key fails
+    /// fast rather than on first token issued. **Never serialized** —
+    /// config snapshots do not leak the private key.
+    #[cfg(feature = "asymmetric-jwt")]
+    #[serde(default, skip_serializing)]
+    pub signing_key_pem: Option<String>,
+    /// Optional explicit `kid` (JWK key ID) for JWKS lookups. When `None`
+    /// and an asymmetric alg is configured, yauth derives the kid as the
+    /// RFC 7638 JWK thumbprint of the public key — deterministic across
+    /// restarts and stable for a given key.
+    #[cfg(feature = "asymmetric-jwt")]
+    #[serde(default)]
+    pub kid: Option<String>,
+}
+
+/// JWT signing algorithm. HS256 is the default and keeps existing deployments
+/// byte-for-byte unchanged — no `kid` header, shared-secret validation.
+#[cfg(feature = "asymmetric-jwt")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SigningAlgorithm {
+    #[default]
+    Hs256,
+    Rs256,
+    Es256,
 }
 
 /// Account lockout configuration for brute-force protection.

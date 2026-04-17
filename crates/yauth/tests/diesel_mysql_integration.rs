@@ -71,6 +71,12 @@ async fn build_test_app() -> Router {
             access_token_ttl: Duration::from_secs(900),
             refresh_token_ttl: Duration::from_secs(86400),
             audience: None,
+            #[cfg(feature = "asymmetric-jwt")]
+            signing_algorithm: Default::default(),
+            #[cfg(feature = "asymmetric-jwt")]
+            signing_key_pem: None,
+            #[cfg(feature = "asymmetric-jwt")]
+            kid: None,
         });
     }
 

@@ -21,6 +21,8 @@ pub mod magic_link;
 
 #[cfg(feature = "admin")]
 pub mod admin;
+#[cfg(all(feature = "admin", feature = "oauth2-server"))]
+pub mod oauth2_admin;
 
 #[cfg(feature = "oauth2-server")]
 pub mod oauth2_server;

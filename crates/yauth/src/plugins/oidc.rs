@@ -30,14 +30,19 @@ impl YAuthPlugin for OidcPlugin {
     }
 
     fn public_routes(&self, _ctx: &PluginContext) -> Option<Router<YAuthState>> {
-        Some(
-            Router::new()
-                .route(
-                    "/.well-known/openid-configuration",
-                    get(openid_configuration),
-                )
-                .route("/.well-known/jwks.json", get(jwks_endpoint)),
-        )
+        #[allow(unused_mut)]
+        let mut router = Router::new().route(
+            "/.well-known/openid-configuration",
+            get(openid_configuration),
+        );
+        // When `asymmetric-jwt` is enabled, the BearerPlugin mounts the JWKS
+        // endpoint so cross-trust-domain resource servers can reach it
+        // without requiring OIDC. Avoid a duplicate registration here.
+        #[cfg(not(feature = "asymmetric-jwt"))]
+        {
+            router = router.route("/.well-known/jwks.json", get(jwks_endpoint));
+        }
+        Some(router)
     }
 
     fn protected_routes(&self, _ctx: &PluginContext) -> Option<Router<YAuthState>> {
@@ -83,8 +88,9 @@ async fn openid_configuration(State(state): State<YAuthState>) -> Json<serde_jso
 // GET /.well-known/jwks.json — JSON Web Key Set
 // ---------------------------------------------------------------------------
 
+#[cfg(not(feature = "asymmetric-jwt"))]
 async fn jwks_endpoint(State(state): State<YAuthState>) -> Json<serde_json::Value> {
-    let jwks = crate::auth::jwks::generate_jwks(&state.bearer_config);
+    let jwks = crate::auth::jwks::generate_jwks(&state);
     Json(serde_json::to_value(jwks).unwrap_or_else(|_| serde_json::json!({"keys": []})))
 }
 

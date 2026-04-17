@@ -1,3 +1,5 @@
+#[cfg(feature = "asymmetric-jwt")]
+use axum::routing::get;
 use axum::{
     Extension, Json, Router,
     extract::State,
@@ -6,7 +8,6 @@ use axum::{
     routing::post,
 };
 use chrono::Utc;
-use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -35,16 +36,31 @@ impl YAuthPlugin for BearerPlugin {
     }
 
     fn public_routes(&self, _ctx: &PluginContext) -> Option<Router<YAuthState>> {
-        Some(
-            Router::new()
-                .route("/token", post(create_token))
-                .route("/token/refresh", post(refresh_token)),
-        )
+        #[allow(unused_mut)]
+        let mut router = Router::new()
+            .route("/token", post(create_token))
+            .route("/token/refresh", post(refresh_token));
+
+        // JWKS is published when asymmetric signing is configured. OIDC
+        // yields this route to us under the same feature gate so the two
+        // plugins never both register it.
+        #[cfg(feature = "asymmetric-jwt")]
+        {
+            router = router.route("/.well-known/jwks.json", get(jwks_endpoint));
+        }
+
+        Some(router)
     }
 
     fn protected_routes(&self, _ctx: &PluginContext) -> Option<Router<YAuthState>> {
         Some(Router::new().route("/token/revoke", post(revoke_token)))
     }
+}
+
+#[cfg(feature = "asymmetric-jwt")]
+async fn jwks_endpoint(State(state): State<YAuthState>) -> Json<serde_json::Value> {
+    let jwks = crate::auth::jwks::generate_jwks(&state);
+    Json(serde_json::to_value(jwks).unwrap_or_else(|_| serde_json::json!({"keys": []})))
 }
 
 // ---------------------------------------------------------------------------
@@ -111,20 +127,15 @@ pub struct JwtUser {
     pub role: String,
 }
 
-/// Create a JWT from a JwtUser struct (backend-agnostic).
-pub fn create_jwt_with_audience_from_fields(
+/// Create a user JWT. Routes through [`crate::auth::signing::sign_jwt`] so
+/// the configured signing algorithm (HS256 by default, RS256/ES256 when
+/// `asymmetric-jwt` is enabled) applies uniformly.
+pub fn create_jwt(
     user: &JwtUser,
-    config: &BearerConfig,
+    state: &YAuthState,
     scope: Option<&str>,
 ) -> Result<(String, String), ApiError> {
-    create_jwt_internal(user, config, scope)
-}
-
-fn create_jwt_internal(
-    user: &JwtUser,
-    config: &BearerConfig,
-    scope: Option<&str>,
-) -> Result<(String, String), ApiError> {
+    let config = &state.bearer_config;
     let now = Utc::now();
     let jti = Uuid::now_v7().to_string();
     let exp = (now + config.access_token_ttl).timestamp() as usize;
@@ -141,12 +152,7 @@ fn create_jwt_internal(
         scope: scope.map(|s| s.to_string()),
     };
 
-    let token = encode(
-        &Header::new(Algorithm::HS256),
-        &claims,
-        &EncodingKey::from_secret(config.jwt_secret.as_bytes()),
-    )
-    .map_err(|e| {
+    let token = crate::auth::signing::sign_jwt(&claims, state).map_err(|e| {
         crate::otel::record_error("jwt_encoding_error", &e);
         api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
     })?;
@@ -278,7 +284,7 @@ async fn create_token(
                 email: u.email.clone(),
                 role: u.role.clone(),
             };
-            let (access_token, _jti) = create_jwt_internal(&jwt_user, config, scope_str)?;
+            let (access_token, _jti) = create_jwt(&jwt_user, &state, scope_str)?;
 
             let family_id = Uuid::now_v7();
 
@@ -455,7 +461,7 @@ async fn refresh_token(
         email: user.email,
         role: user.role,
     };
-    let (access_token, _jti) = create_jwt_internal(&jwt_user, config, None)?;
+    let (access_token, _jti) = create_jwt(&jwt_user, &state, None)?;
 
     let new_refresh =
         create_refresh_token_repo(&state, jwt_user.id, family_id, config.refresh_token_ttl).await?;
@@ -572,24 +578,7 @@ fn extract_jti_from_auth_header(headers: &HeaderMap, state: &YAuthState) -> Opti
     let auth_header = headers.get("authorization")?;
     let header_str = auth_header.to_str().ok()?;
     let token = header_str.strip_prefix("Bearer ")?;
-
-    let config = &state.bearer_config;
-    let mut validation = Validation::new(Algorithm::HS256);
-    validation.validate_exp = true;
-
-    if let Some(ref expected_aud) = config.audience {
-        validation.set_audience(&[expected_aud]);
-    } else {
-        validation.validate_aud = false;
-    }
-
-    let token_data = decode::<Claims>(
-        token,
-        &DecodingKey::from_secret(config.jwt_secret.as_bytes()),
-        &validation,
-    )
-    .ok()?;
-
+    let token_data = crate::auth::signing::decode_jwt::<Claims>(token, state, &[]).ok()?;
     Some(token_data.claims.jti)
 }
 
@@ -598,24 +587,7 @@ fn extract_jti_from_auth_header(headers: &HeaderMap, state: &YAuthState) -> Opti
 // ---------------------------------------------------------------------------
 
 pub async fn validate_jwt(token: &str, state: &YAuthState) -> Result<AuthUser, String> {
-    let config = &state.bearer_config;
-
-    let mut validation = Validation::new(Algorithm::HS256);
-    validation.validate_exp = true;
-
-    if let Some(ref expected_aud) = config.audience {
-        validation.set_audience(&[expected_aud]);
-    } else {
-        validation.validate_aud = false;
-    }
-
-    let token_data = decode::<Claims>(
-        token,
-        &DecodingKey::from_secret(config.jwt_secret.as_bytes()),
-        &validation,
-    )
-    .map_err(|e| format!("JWT validation failed: {}", e))?;
-
+    let token_data = crate::auth::signing::decode_jwt::<Claims>(token, state, &[])?;
     let claims = token_data.claims;
 
     // Check JTI revocation before accepting the token
@@ -660,5 +632,134 @@ pub async fn validate_jwt(token: &str, state: &YAuthState) -> Result<AuthUser, S
         banned: user.banned,
         auth_method: AuthMethod::Bearer,
         scopes,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Client Credentials JWT validation — RFC 6749 §4.4
+// ---------------------------------------------------------------------------
+
+/// Peek at a Bearer JWT's payload WITHOUT signature verification to decide
+/// whether it's a human token (carries `email`) or a machine token (carries
+/// `client_id` and no `email`). A false positive is safe: the selected
+/// validator re-decodes with the correct schema and rejects anything that
+/// doesn't match — a mis-dispatched token simply 401s.
+pub fn is_machine_token(token: &str) -> bool {
+    let mut parts = token.splitn(3, '.');
+    let Some(_header) = parts.next() else {
+        return false;
+    };
+    let Some(payload_b64) = parts.next() else {
+        return false;
+    };
+    let Some(_sig) = parts.next() else {
+        return false;
+    };
+    use base64::Engine;
+    let Ok(decoded) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload_b64) else {
+        return false;
+    };
+    let Ok(val) = serde_json::from_slice::<serde_json::Value>(&decoded) else {
+        return false;
+    };
+    val.get("client_id").is_some() && val.get("email").is_none()
+}
+
+#[cfg(feature = "oauth2-server")]
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)] // exp/iat are validated by jsonwebtoken at decode time.
+pub(crate) struct ClientCredentialsClaims {
+    pub sub: String,
+    pub exp: usize,
+    pub iat: usize,
+    pub jti: String,
+    #[serde(default)]
+    pub aud: Option<String>,
+    #[serde(default)]
+    pub scope: Option<String>,
+    pub client_id: String,
+    /// Non-reserved claims forwarded from the token endpoint's allow-list.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+#[cfg(feature = "oauth2-server")]
+pub async fn validate_jwt_as_client(
+    token: &str,
+    state: &YAuthState,
+) -> Result<crate::middleware::MachineCaller, String> {
+    let token_data = crate::auth::signing::decode_jwt::<ClientCredentialsClaims>(
+        token,
+        state,
+        &["exp", "sub", "jti"],
+    )?;
+    let claims = token_data.claims;
+
+    // sub and client_id must match — defense against sub/client_id split.
+    if claims.client_id.is_empty() || claims.client_id != claims.sub {
+        return Err("Invalid client JWT: sub/client_id mismatch".to_string());
+    }
+
+    // JTI revocation — same mechanism as user JWTs.
+    if state
+        .repos
+        .revocations
+        .is_token_revoked(&claims.jti)
+        .await
+        .unwrap_or(false)
+    {
+        return Err("Token has been revoked".to_string());
+    }
+
+    // Lookup the client to confirm it still exists. Deleted clients cannot
+    // authenticate even with an unexpired token.
+    let client = state
+        .repos
+        .oauth2_clients
+        .find_by_client_id(&claims.client_id)
+        .await
+        .map_err(|e| format!("DB error during JWT validation: {}", e))?
+        .ok_or_else(|| "Client not found".to_string())?;
+
+    // A client whose grants were revoked post-issuance should not retain access.
+    let allows_client_credentials = client
+        .grant_types
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str())
+                .any(|s| s == crate::middleware::GRANT_TYPE_CLIENT_CREDENTIALS)
+        })
+        .unwrap_or(false);
+    if !allows_client_credentials {
+        return Err("Client is not authorized for client_credentials".to_string());
+    }
+
+    // M4: the admin kill-switch must reject outstanding tokens, not just
+    // future issuance — otherwise a compromised credential keeps working
+    // for its full TTL after ban.
+    #[cfg(all(feature = "admin", feature = "oauth2-server"))]
+    if state
+        .banned_clients
+        .read()
+        .expect("banned_clients poisoned")
+        .contains_key(&claims.client_id)
+    {
+        return Err("Client is suspended".to_string());
+    }
+
+    let scopes: Vec<String> = claims
+        .scope
+        .as_deref()
+        .map(|s| s.split_whitespace().map(String::from).collect())
+        .unwrap_or_default();
+
+    Ok(crate::middleware::MachineCaller {
+        client_id: claims.client_id,
+        scopes,
+        audience: claims.aud,
+        jti: claims.jti,
+        auth_method: crate::middleware::MachineAuthMethod::ClientCredentials,
+        custom_claims: claims.extra,
     })
 }

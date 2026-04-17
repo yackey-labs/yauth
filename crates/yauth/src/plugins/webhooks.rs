@@ -40,7 +40,7 @@ impl YAuthPlugin for WebhookPlugin {
         None
     }
 
-    fn protected_routes(&self, _ctx: &PluginContext) -> Option<Router<YAuthState>> {
+    fn protected_routes(&self, ctx: &PluginContext) -> Option<Router<YAuthState>> {
         Some(
             Router::new()
                 .route("/webhooks", post(create_webhook))
@@ -49,7 +49,10 @@ impl YAuthPlugin for WebhookPlugin {
                 .route("/webhooks/{id}", put(update_webhook))
                 .route("/webhooks/{id}", delete(delete_webhook))
                 .route("/webhooks/{id}/test", post(test_webhook))
-                .layer(axum_mw::from_fn(require_admin)),
+                .layer(axum_mw::from_fn_with_state(
+                    ctx.state.clone(),
+                    require_admin,
+                )),
         )
     }
 

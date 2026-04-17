@@ -62,7 +62,12 @@ CREATE TABLE IF NOT EXISTS `yauth_oauth2_clients` (
     `grant_types` JSON NOT NULL,
     `scopes` JSON,
     `is_public` TINYINT(1) NOT NULL DEFAULT false,
-    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `token_endpoint_auth_method` VARCHAR(255),
+    `public_key_pem` TEXT,
+    `jwks_uri` VARCHAR(255),
+    `banned_at` DATETIME,
+    `banned_reason` VARCHAR(255)
 ) ENGINE=InnoDB;
 
 -- Webhook endpoint configurations.

@@ -217,6 +217,11 @@ diesel::table! {
         scopes -> Nullable<Jsonb>,
         is_public -> Bool,
         created_at -> Timestamptz,
+        token_endpoint_auth_method -> Nullable<Varchar>,
+        public_key_pem -> Nullable<Text>,
+        jwks_uri -> Nullable<Varchar>,
+        banned_at -> Nullable<Timestamptz>,
+        banned_reason -> Nullable<Varchar>,
     }
 }
 

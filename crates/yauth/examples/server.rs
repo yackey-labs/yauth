@@ -198,6 +198,12 @@ async fn main() {
         access_token_ttl: Duration::from_secs(15 * 60), // 15 minutes
         refresh_token_ttl: Duration::from_secs(30 * 24 * 3600), // 30 days
         audience: None,
+        #[cfg(feature = "asymmetric-jwt")]
+        signing_algorithm: Default::default(),
+        #[cfg(feature = "asymmetric-jwt")]
+        signing_key_pem: None,
+        #[cfg(feature = "asymmetric-jwt")]
+        kid: None,
     })
     // API key authentication (X-Api-Key header)
     .with_api_key()

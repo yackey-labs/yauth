@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE yauth_oauth2_clients SET banned_at = ?, banned_reason = ? WHERE client_id = ? /* sqlite */",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "7a445b816a9bdf1d2169fc83d3ee075d9926499fd1abbfb78d3e28393ee8e36b"
+}

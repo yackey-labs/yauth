@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE yauth_oauth2_clients SET public_key_pem = ? WHERE client_id = ? /* sqlite */",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "ba9f495665c5f0d7289ef8fae2a857e08ed4773e79d80fb6598b9d7d3bd5a6f6"
+}

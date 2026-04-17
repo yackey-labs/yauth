@@ -1,0 +1,98 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id, client_id, client_secret_hash, redirect_uris, client_name, grant_types, scopes, is_public, created_at, token_endpoint_auth_method, public_key_pem, jwks_uri, banned_at, banned_reason FROM yauth_oauth2_clients WHERE client_id = ? /* sqlite */",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "client_id",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "client_secret_hash",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "redirect_uris",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "client_name",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "grant_types",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "scopes",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "is_public",
+        "ordinal": 7,
+        "type_info": "Integer"
+      },
+      {
+        "name": "created_at",
+        "ordinal": 8,
+        "type_info": "Text"
+      },
+      {
+        "name": "token_endpoint_auth_method",
+        "ordinal": 9,
+        "type_info": "Text"
+      },
+      {
+        "name": "public_key_pem",
+        "ordinal": 10,
+        "type_info": "Text"
+      },
+      {
+        "name": "jwks_uri",
+        "ordinal": 11,
+        "type_info": "Text"
+      },
+      {
+        "name": "banned_at",
+        "ordinal": 12,
+        "type_info": "Text"
+      },
+      {
+        "name": "banned_reason",
+        "ordinal": 13,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      false,
+      true,
+      false,
+      true,
+      false,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "715dea8a240979dd869dd3540988e035e4dcc125e2b664104707fc2356d05d30"
+}

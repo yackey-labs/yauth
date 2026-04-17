@@ -70,6 +70,12 @@ async fn diesel_session_create_validate_delete() {
             access_token_ttl: Duration::from_secs(900),
             refresh_token_ttl: Duration::from_secs(86400),
             audience: None,
+            #[cfg(feature = "asymmetric-jwt")]
+            signing_algorithm: Default::default(),
+            #[cfg(feature = "asymmetric-jwt")]
+            signing_key_pem: None,
+            #[cfg(feature = "asymmetric-jwt")]
+            kid: None,
         });
     }
     let state = builder.build().await.expect("build YAuth").into_state();
@@ -139,6 +145,12 @@ async fn diesel_pool_sharing() {
             access_token_ttl: Duration::from_secs(900),
             refresh_token_ttl: Duration::from_secs(86400),
             audience: None,
+            #[cfg(feature = "asymmetric-jwt")]
+            signing_algorithm: Default::default(),
+            #[cfg(feature = "asymmetric-jwt")]
+            signing_key_pem: None,
+            #[cfg(feature = "asymmetric-jwt")]
+            kid: None,
         });
     }
     let state = builder.build().await.expect("build YAuth").into_state();

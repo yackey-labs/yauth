@@ -6,6 +6,7 @@ Modular, plugin-based authentication library for Rust (Axum) with a generated Ty
 - **11 database backends** — Diesel, sqlx, SeaORM, Toasty, or in-memory, across Postgres, MySQL, and SQLite
 - **No runtime migrations** — `cargo yauth generate` produces ORM-native migration files; apply them with your ORM's CLI or via `diesel-async`'s `AsyncMigrationHarness` ([docs](docs/backends.md#async-migrations-diesel-backends))
 - **Tri-mode auth** — session cookies, JWT bearer tokens, and API keys all work simultaneously
+- **Full OAuth2 / OIDC provider** — authorization code + PKCE, device flow, client credentials, `private_key_jwt` (RFC 7523), published JWKS for cross-trust-domain validation
 - **TypeScript included** — auto-generated HTTP client + pre-built Vue 3 and SolidJS components
 
 ## Try It in 30 Seconds
@@ -102,10 +103,11 @@ All backends accept pools/connections you create. **Each backend has a complete,
 | `magic-link` | `magic-link` | Passwordless email login with optional signup |
 | `admin` | `admin` | User management, ban/unban, impersonation |
 | `status` | `status` | Protected endpoint listing enabled plugins |
-| `oauth2-server` | `oauth2-server` | Full OAuth2 authorization server (auth code + PKCE, device flow, client credentials) |
+| `oauth2-server` | `oauth2-server` | Full OAuth2 authorization server (auth code + PKCE, device flow, **M2M client_credentials with JWT validation**, **RFC 7523 private_key_jwt** when paired with `asymmetric-jwt`) |
 | `account-lockout` | `account-lockout` | Brute-force protection with exponential backoff |
 | `webhooks` | `webhooks` | HMAC-signed HTTP callbacks on auth events |
 | `oidc` | `oidc` | OpenID Connect Provider (id_token, discovery, JWKS, /userinfo) |
+| `asymmetric-jwt` | `asymmetric-jwt` | RS256/ES256 JWT signing + populated `/.well-known/jwks.json` for cross-trust-domain validation |
 
 Infrastructure features: `telemetry` (OpenTelemetry), `openapi` (utoipa spec generation), `redis` (caching decorator).
 

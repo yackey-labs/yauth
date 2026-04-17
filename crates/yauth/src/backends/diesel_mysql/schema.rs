@@ -226,6 +226,11 @@ diesel::table! {
         scopes -> Nullable<Text>,
         is_public -> Bool,
         created_at -> Datetime,
+        token_endpoint_auth_method -> Nullable<Text>,
+        public_key_pem -> Nullable<Text>,
+        jwks_uri -> Nullable<Text>,
+        banned_at -> Nullable<Datetime>,
+        banned_reason -> Nullable<Text>,
     }
 }
 

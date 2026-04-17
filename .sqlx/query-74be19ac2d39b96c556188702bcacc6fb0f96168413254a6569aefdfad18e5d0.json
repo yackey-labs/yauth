@@ -1,0 +1,12 @@
+{
+  "db_name": "MySQL",
+  "query": "UPDATE yauth_oauth2_clients SET banned_at = ?, banned_reason = ? WHERE client_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "74be19ac2d39b96c556188702bcacc6fb0f96168413254a6569aefdfad18e5d0"
+}

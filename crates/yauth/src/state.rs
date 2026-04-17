@@ -20,6 +20,11 @@ pub struct YAuthState {
     pub email_password_config: crate::config::EmailPasswordConfig,
     #[cfg(feature = "bearer")]
     pub bearer_config: crate::config::BearerConfig,
+    /// Pre-parsed asymmetric signing material. `None` when `signing_algorithm`
+    /// is HS256 or the `asymmetric-jwt` feature is disabled. Populated once
+    /// at `YAuthBuilder::build()` time so PEMs are not re-parsed per request.
+    #[cfg(feature = "asymmetric-jwt")]
+    pub signing_keys: Option<Arc<crate::auth::signing::SigningKeys>>,
     #[cfg(feature = "mfa")]
     pub mfa_config: crate::config::MfaConfig,
     #[cfg(feature = "oauth")]
@@ -32,6 +37,8 @@ pub struct YAuthState {
     pub account_lockout_config: crate::config::AccountLockoutConfig,
     #[cfg(feature = "oidc")]
     pub oidc_config: crate::config::OidcConfig,
+    #[cfg(feature = "admin")]
+    pub admin_config: crate::config::AdminConfig,
 }
 
 impl YAuthState {

@@ -143,7 +143,9 @@ The suite covers three categories:
 | `oauth` | OAuth2 provider linking | No |
 | `bearer` | JWT access/refresh tokens | No |
 | `api-key` | API key generation + validation | No |
-| `admin` | User management, ban/unban, impersonation | No |
+| `admin` | User management, ban/unban, impersonation — also OAuth2 client ban/unban/rotate-public-key when paired with `oauth2-server` | No |
+| `oauth2-server` | OAuth2 authorization server — authorization code + PKCE, device flow, `client_credentials` (M2M JWT with validation + scope enforcement + ban kill switch) | No |
+| `asymmetric-jwt` | RS256/ES256 JWT signing + populated `/.well-known/jwks.json` + `private_key_jwt` client auth (RFC 7523) when paired with `oauth2-server` | No |
 | `telemetry` | Native OpenTelemetry SDK instrumentation (spans, span events, context propagation) | No |
 | `openapi` | utoipa OpenAPI spec generation (for client codegen) | No |
 | `redis` | Redis caching decorator — wraps repository traits for sub-ms session/rate-limit lookups | No |
@@ -215,7 +217,28 @@ The auth middleware checks credentials in order:
 2. **Bearer token** — `Authorization: Bearer <jwt>` → JWT validation (feature-gated)
 3. **API key** — `X-Api-Key: <key>` → key hash lookup (feature-gated)
 
-Authenticated user is injected as `Extension<AuthUser>` on the request.
+Authenticated principal is injected as one of:
+- `Extension<AuthUser>` — human caller (session / user-JWT / API key)
+- `Extension<MachineCaller>` — OAuth 2.0 client_credentials or private_key_jwt caller (requires `oauth2-server`)
+
+The Bearer arm dispatches by **claim shape**: tokens carrying `client_id` + no `email` go to `validate_jwt_as_client` and produce a `MachineCaller`; everything else goes to `validate_jwt` and produces an `AuthUser`. Handlers that need to distinguish use `Authenticated::from_extensions(&req)`; handlers that only care "someone authenticated" keep matching `Extension<AuthUser>` and simply won't see machine callers.
+
+`require_scope("...")` is credential-source-agnostic — it enforces scopes on both `MachineCaller` and `AuthUser` extensions.
+
+### M2M / OAuth 2.0 Client Credentials
+
+With `oauth2-server`:
+- Register clients via dynamic client registration (RFC 7591), optionally with `token_endpoint_auth_method=private_key_jwt` + `public_key_pem`
+- Mint `client_credentials` JWTs at `POST /oauth/token`; validate at `auth_middleware`
+- Ban a client via `POST /admin/oauth2/clients/{id}/ban` — rejects new mints AND outstanding tokens
+- All client metadata (public_key_pem, banned_at, banned_reason) lives on the `yauth_oauth2_clients` table — Redis decorator caches reads on the hot path
+
+With `asymmetric-jwt` on top:
+- Server-issued JWTs become RS256/ES256 with populated `/.well-known/jwks.json`
+- `private_key_jwt` client auth accepts RFC 7523 `client_assertion` at the token endpoint
+- Algorithm allow-list rejects `none` and `HS*` on assertions (alg-confusion defense)
+
+See `examples/m2m_auth.rs` for an end-to-end walkthrough.
 
 ### Core Routes (always available)
 

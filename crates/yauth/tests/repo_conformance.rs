@@ -1497,6 +1497,9 @@ fn oauth2_client_create_find() {
                     scopes: Some(json!(["openid", "profile"])),
                     is_public: false,
                     created_at: now(),
+                    token_endpoint_auth_method: Some("client_secret_post".into()),
+                    public_key_pem: None,
+                    jwks_uri: None,
                 })
                 .await
                 .unwrap_or_else(|e| panic!("{name}: create oauth2 client: {e}"));
@@ -1510,6 +1513,189 @@ fn oauth2_client_create_find() {
             let c = found.unwrap();
             assert_eq!(c.client_id, cid);
             assert_eq!(c.client_name.as_deref(), Some("Test Client"));
+            assert_eq!(
+                c.token_endpoint_auth_method.as_deref(),
+                Some("client_secret_post")
+            );
+            assert!(c.banned_at.is_none(), "{name}: fresh client not banned");
+            assert!(c.public_key_pem.is_none(), "{name}: no pkj key registered");
+        }
+    });
+}
+
+fn make_test_client(cid: &str, pem: Option<&str>, method: &str) -> domain::NewOauth2Client {
+    domain::NewOauth2Client {
+        id: Uuid::now_v7(),
+        client_id: cid.into(),
+        client_secret_hash: Some("h".into()),
+        redirect_uris: json!(["https://example.com/cb"]),
+        client_name: Some("Conformance".into()),
+        grant_types: json!(["client_credentials"]),
+        scopes: Some(json!(["inbox.write"])),
+        is_public: false,
+        created_at: now(),
+        token_endpoint_auth_method: Some(method.into()),
+        public_key_pem: pem.map(String::from),
+        jwks_uri: None,
+    }
+}
+
+#[cfg(feature = "oauth2-server")]
+#[test]
+fn oauth2_client_set_banned_and_clear() {
+    shared_runtime().block_on(async {
+        for (name, repos) in test_backends().await {
+            let _span = helpers::otel::TestSpan::new("oauth2_client_set_banned", name);
+            let cid = format!("client_{}", Uuid::now_v7());
+            repos
+                .oauth2_clients
+                .create(make_test_client(&cid, None, "client_secret_post"))
+                .await
+                .unwrap_or_else(|e| panic!("{name}: create: {e}"));
+
+            // Ban
+            let updated = repos
+                .oauth2_clients
+                .set_banned(&cid, Some((Some("compromised".into()), now())))
+                .await
+                .unwrap_or_else(|e| panic!("{name}: set_banned: {e}"));
+            assert!(updated, "{name}: ban should report row updated");
+
+            let c = repos
+                .oauth2_clients
+                .find_by_client_id(&cid)
+                .await
+                .unwrap()
+                .expect("client");
+            assert!(c.banned_at.is_some(), "{name}: banned_at populated");
+            assert_eq!(c.banned_reason.as_deref(), Some("compromised"));
+
+            // Clear
+            let updated = repos
+                .oauth2_clients
+                .set_banned(&cid, None)
+                .await
+                .unwrap_or_else(|e| panic!("{name}: clear ban: {e}"));
+            assert!(updated, "{name}: unban reports row updated");
+            let c = repos
+                .oauth2_clients
+                .find_by_client_id(&cid)
+                .await
+                .unwrap()
+                .expect("client");
+            assert!(c.banned_at.is_none(), "{name}: cleared banned_at");
+            assert!(c.banned_reason.is_none(), "{name}: cleared reason");
+
+            // Unknown client -> false
+            let miss = repos
+                .oauth2_clients
+                .set_banned("does-not-exist", Some((None, now())))
+                .await
+                .unwrap_or_else(|e| panic!("{name}: unknown ban: {e}"));
+            assert!(!miss, "{name}: set_banned on missing client returns false");
+        }
+    });
+}
+
+#[cfg(feature = "oauth2-server")]
+#[test]
+fn oauth2_client_rotate_public_key() {
+    shared_runtime().block_on(async {
+        for (name, repos) in test_backends().await {
+            let _span = helpers::otel::TestSpan::new("oauth2_client_rotate_key", name);
+            let cid = format!("client_{}", Uuid::now_v7());
+            repos
+                .oauth2_clients
+                .create(make_test_client(
+                    &cid,
+                    Some("-----BEGIN PUBLIC KEY-----\noriginal\n-----END PUBLIC KEY-----"),
+                    "private_key_jwt",
+                ))
+                .await
+                .unwrap_or_else(|e| panic!("{name}: create: {e}"));
+
+            let updated = repos
+                .oauth2_clients
+                .rotate_public_key(&cid, Some("new-pem-body".into()))
+                .await
+                .unwrap_or_else(|e| panic!("{name}: rotate: {e}"));
+            assert!(updated, "{name}: rotate reports row updated");
+
+            let c = repos
+                .oauth2_clients
+                .find_by_client_id(&cid)
+                .await
+                .unwrap()
+                .expect("client");
+            assert_eq!(c.public_key_pem.as_deref(), Some("new-pem-body"));
+
+            // Missing client -> false
+            let miss = repos
+                .oauth2_clients
+                .rotate_public_key("does-not-exist", Some("pem".into()))
+                .await
+                .unwrap_or_else(|e| panic!("{name}: miss rotate: {e}"));
+            assert!(!miss, "{name}: rotate on missing client returns false");
+        }
+    });
+}
+
+#[cfg(feature = "oauth2-server")]
+#[test]
+fn oauth2_client_list_banned_orders_newest_first() {
+    shared_runtime().block_on(async {
+        for (name, repos) in test_backends().await {
+            let _span = helpers::otel::TestSpan::new("oauth2_client_list_banned", name);
+            let suffix = Uuid::now_v7();
+
+            // Create three clients; ban the first and third.
+            for tag in ["A", "B", "C"] {
+                let cid = format!("listbanned_{tag}_{suffix}");
+                repos
+                    .oauth2_clients
+                    .create(make_test_client(&cid, None, "client_secret_post"))
+                    .await
+                    .unwrap_or_else(|e| panic!("{name}: create {tag}: {e}"));
+            }
+
+            let cid_a = format!("listbanned_A_{suffix}");
+            let cid_c = format!("listbanned_C_{suffix}");
+
+            // Use explicit timestamps with a large gap — MySQL DATETIME only
+            // has second-level precision by default, so a millisecond sleep
+            // between the two calls is below that resolution.
+            let t_a = now() - chrono::Duration::minutes(5);
+            let t_c = now();
+            repos
+                .oauth2_clients
+                .set_banned(&cid_a, Some((Some("first".into()), t_a)))
+                .await
+                .unwrap();
+            repos
+                .oauth2_clients
+                .set_banned(&cid_c, Some((Some("second".into()), t_c)))
+                .await
+                .unwrap();
+
+            let banned = repos
+                .oauth2_clients
+                .list_banned()
+                .await
+                .unwrap_or_else(|e| panic!("{name}: list_banned: {e}"));
+
+            let ours: Vec<_> = banned
+                .into_iter()
+                .filter(|c| c.client_id.contains(&suffix.to_string()))
+                .collect();
+            assert_eq!(
+                ours.len(),
+                2,
+                "{name}: expected 2 banned, got {}",
+                ours.len()
+            );
+            assert_eq!(ours[0].client_id, cid_c, "{name}: newest ban first");
+            assert_eq!(ours[1].client_id, cid_a, "{name}: older ban second");
+            assert_eq!(ours[0].banned_reason.as_deref(), Some("second"));
         }
     });
 }

@@ -28,6 +28,9 @@ passkey = ["dep:webauthn-rs"]
 mfa = ["dep:totp-rs"]
 oauth = ["dep:oauth2"]
 bearer = ["dep:jsonwebtoken"]
+# Asymmetric JWT signing (RS256/ES256) + populated JWKS for cross-trust-domain M2M.
+# Default deployments stay on HS256 — this only adds cost when explicitly enabled.
+asymmetric-jwt = ["bearer", "dep:rsa", "dep:p256", "dep:base64"]
 api-key = []
 magic-link = []
 admin = []
@@ -41,7 +44,7 @@ openapi = ["dep:utoipa"]
 redis = ["dep:redis"]
 # All auth plugins — this is what "full" means to users.
 # Real apps use `full` + one backend (e.g., `yauth = { features = ["full", "diesel-pg-backend"] }`).
-full = ["email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link", "admin", "status", "oauth2-server", "account-lockout", "webhooks", "oidc", "telemetry", "openapi"]
+full = ["email-password", "passkey", "mfa", "oauth", "bearer", "api-key", "magic-link", "admin", "status", "oauth2-server", "account-lockout", "webhooks", "oidc", "asymmetric-jwt", "telemetry", "openapi"]
 # CI-only — every backend + redis, for conformance testing. Never recommended for production.
 # NOTE: diesel-libsql-backend is excluded because libsql-ffi bundles its own sqlite3.c,
 # which produces duplicate symbols with libsqlite3-sys (used by diesel-sqlite + sqlx-sqlite).
@@ -104,6 +107,11 @@ url = { version = "2", optional = true }
 base64 = { version = "0.22", optional = true }
 serde_urlencoded = { version = "0.7", optional = true }
 
+# Feature-gated: asymmetric JWT signing (RS256/ES256) + JWKS publication.
+# Pinned to 0.9 / 0.13 stable — RC releases would block downstream crates.io users.
+rsa = { version = "0.9", optional = true }
+p256 = { version = "0.13", features = ["pem"], optional = true }
+
 # Feature-gated: Webhooks
 hmac = { version = "0.13", optional = true }
 
@@ -144,3 +152,7 @@ required-features = ["full", "diesel-pg-backend"]
 [[example]]
 name = "e2e_test"
 required-features = ["full", "diesel-pg-backend"]
+
+[[example]]
+name = "m2m_auth"
+required-features = ["full", "memory-backend"]

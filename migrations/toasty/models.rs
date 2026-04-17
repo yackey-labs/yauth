@@ -94,6 +94,11 @@ pub struct YauthOauth2Clients {
     pub scopes: Option<String>,
     pub is_public: bool,
     pub created_at: String,
+    pub token_endpoint_auth_method: Option<String>,
+    pub public_key_pem: Option<String>,
+    pub jwks_uri: Option<String>,
+    pub banned_at: Option<String>,
+    pub banned_reason: Option<String>,
 }
 
 /// Toasty model for `yauth_webhooks`.

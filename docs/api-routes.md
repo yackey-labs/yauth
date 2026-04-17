@@ -85,7 +85,8 @@ All routes are mounted under your chosen prefix (e.g., `/api/auth`).
 
 ## Admin
 
-All admin routes require `role = "admin"`.
+All admin routes require `role = "admin"` (or a `MachineCaller` with
+scope `admin` when `AdminConfig::allow_machine_callers = true`).
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -99,6 +100,19 @@ All admin routes require `role = "admin"`.
 | GET | `/admin/sessions` | List sessions |
 | DELETE | `/admin/sessions/{id}` | Terminate session |
 
+### OAuth2 client administration (requires `admin` + `oauth2-server`)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/admin/oauth2/clients` | List banned OAuth2 clients (newest ban first) |
+| POST | `/admin/oauth2/clients/{client_id}/ban` | Mark a client banned; rejects new mints AND outstanding tokens |
+| POST | `/admin/oauth2/clients/{client_id}/unban` | Clear ban |
+| POST | `/admin/oauth2/clients/{client_id}/rotate-public-key` | Replace registered `public_key_pem` (requires `asymmetric-jwt`) |
+
+Ban / unban / rotate each write an audit_log row with `actor_type`,
+`actor_id` (for users) or `actor_client_id` (for machine callers), and
+`target_client_id` in the metadata JSON.
+
 ## OAuth2 Server
 
 | Method | Path | Description |
@@ -109,11 +123,21 @@ All admin routes require `role = "admin"`.
 | POST | `/oauth/token` | Token endpoint — authorization_code, refresh_token, client_credentials (RFC 6749) |
 | POST | `/oauth/introspect` | Token introspection (RFC 7662) |
 | POST | `/oauth/revoke` | Token revocation (RFC 7009) |
-| POST | `/oauth/register` | Dynamic client registration (RFC 7591) |
+| POST | `/oauth/register` | Dynamic client registration (RFC 7591) — accepts `token_endpoint_auth_method` + `public_key_pem` for `private_key_jwt` clients |
 | POST | `/oauth/device/code` | Device authorization request (RFC 8628) |
 | GET/POST | `/oauth/device` | Device verification |
 
 Supported grant types: `authorization_code` (with PKCE S256), `refresh_token`, `client_credentials`, `urn:ietf:params:oauth:grant-type:device_code`.
+
+Supported client authentication methods at `/oauth/token`:
+- `client_secret_post` (form-urlencoded `client_id` + `client_secret`)
+- `client_secret_basic` (HTTP Basic)
+- `private_key_jwt` (RFC 7523 — `client_assertion_type` + `client_assertion`; requires `asymmetric-jwt`)
+
+Machine callers: tokens minted via `client_credentials` are validated at
+`auth_middleware` and populate `Extension<MachineCaller>` on the request.
+Use `require_scope("...")` to gate routes — it works for both human and
+machine callers. See [configuration.md](configuration.md#oauth-20-m2m--client_credentials--private_key_jwt).
 
 ## Account Lockout
 

@@ -107,12 +107,18 @@ struct AuthorizationServerMetadata {
     registration_endpoint: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     device_authorization_endpoint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    jwks_uri: Option<String>,
     introspection_endpoint: String,
     revocation_endpoint: String,
     scopes_supported: Vec<String>,
     response_types_supported: Vec<String>,
     grant_types_supported: Vec<String>,
     token_endpoint_auth_methods_supported: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    token_endpoint_auth_signing_alg_values_supported: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    id_token_signing_alg_values_supported: Vec<String>,
     code_challenge_methods_supported: Vec<String>,
 }
 
@@ -128,12 +134,35 @@ async fn as_metadata(State(state): State<YAuthState>) -> Json<AuthorizationServe
 
     let device_authorization_endpoint = Some(format!("{}/oauth/device/code", issuer));
 
+    #[allow(unused_mut)]
+    let mut token_endpoint_auth_methods_supported =
+        vec!["none".into(), "client_secret_post".into()];
+    #[allow(unused_assignments, unused_mut)]
+    let mut token_endpoint_auth_signing_alg_values_supported: Vec<String> = Vec::new();
+    #[allow(unused_assignments, unused_mut)]
+    let mut id_token_signing_alg_values_supported: Vec<String> = Vec::new();
+    #[allow(unused_assignments, unused_mut)]
+    let mut jwks_uri: Option<String> = None;
+
+    #[cfg(feature = "asymmetric-jwt")]
+    {
+        token_endpoint_auth_methods_supported.push("private_key_jwt".into());
+        token_endpoint_auth_signing_alg_values_supported = vec!["RS256".into(), "ES256".into()];
+        jwks_uri = Some(format!("{}/.well-known/jwks.json", issuer));
+        id_token_signing_alg_values_supported = match state.signing_keys.as_ref().map(|k| k.alg) {
+            Some(crate::config::SigningAlgorithm::Rs256) => vec!["RS256".into()],
+            Some(crate::config::SigningAlgorithm::Es256) => vec!["ES256".into()],
+            _ => vec!["HS256".into()],
+        };
+    }
+
     Json(AuthorizationServerMetadata {
         issuer: issuer.clone(),
         authorization_endpoint: format!("{}/oauth/authorize", issuer),
         token_endpoint: format!("{}/oauth/token", issuer),
         registration_endpoint,
         device_authorization_endpoint,
+        jwks_uri,
         introspection_endpoint: format!("{}/oauth/introspect", issuer),
         revocation_endpoint: format!("{}/oauth/revoke", issuer),
         scopes_supported: config.scopes_supported.clone(),
@@ -144,7 +173,9 @@ async fn as_metadata(State(state): State<YAuthState>) -> Json<AuthorizationServe
             "client_credentials".into(),
             "urn:ietf:params:oauth:grant-type:device_code".into(),
         ],
-        token_endpoint_auth_methods_supported: vec!["none".into(), "client_secret_post".into()],
+        token_endpoint_auth_methods_supported,
+        token_endpoint_auth_signing_alg_values_supported,
+        id_token_signing_alg_values_supported,
         code_challenge_methods_supported: vec!["S256".into()],
     })
 }
@@ -428,6 +459,15 @@ pub struct TokenCodeRequest {
     pub client_secret: Option<String>,
     #[serde(default)]
     pub scope: Option<String>,
+    /// RFC 7521 §4.2 — `urn:ietf:params:oauth:client-assertion-type:jwt-bearer`
+    /// when the client is authenticating via `private_key_jwt`.
+    #[cfg(all(feature = "asymmetric-jwt", feature = "oauth2-server"))]
+    #[serde(default)]
+    pub client_assertion_type: Option<String>,
+    /// RFC 7523 — signed JWT assertion proving client identity.
+    #[cfg(all(feature = "asymmetric-jwt", feature = "oauth2-server"))]
+    #[serde(default)]
+    pub client_assertion: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -748,18 +788,16 @@ async fn handle_authorization_code_grant(
             role: user.role.clone(),
         };
 
-        let (access_token, _jti) = crate::plugins::bearer::create_jwt_with_audience_from_fields(
-            &jwt_user,
-            bearer_config,
-            scope_str.as_deref(),
-        )
-        .map_err(|_| {
-            oauth2_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "server_error",
-                "Failed to create token",
-            )
-        })?;
+        let (access_token, _jti) =
+            crate::plugins::bearer::create_jwt(&jwt_user, state, scope_str.as_deref()).map_err(
+                |_| {
+                    oauth2_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "server_error",
+                        "Failed to create token",
+                    )
+                },
+            )?;
 
         let family_id = Uuid::now_v7();
         let refresh_token = create_refresh_token_for_oauth2(
@@ -972,12 +1010,7 @@ async fn handle_oauth2_refresh_token(
                 email: user.email.clone(),
                 role: user.role.clone(),
             };
-            crate::plugins::bearer::create_jwt_with_audience_from_fields(
-                &jwt_user,
-                bearer_config,
-                None,
-            )
-            .map_err(|_| {
+            crate::plugins::bearer::create_jwt(&jwt_user, state, None).map_err(|_| {
                 oauth2_error(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "server_error",
@@ -1038,6 +1071,16 @@ pub struct ClientRegistrationRequest {
     pub token_endpoint_auth_method: Option<String>,
     #[serde(default)]
     pub scope: Option<String>,
+    /// Client's public signing key for `private_key_jwt` (RFC 7523). Required
+    /// when `token_endpoint_auth_method = "private_key_jwt"` unless `jwks_uri`
+    /// is supplied instead.
+    #[cfg(all(feature = "asymmetric-jwt", feature = "oauth2-server"))]
+    #[serde(default)]
+    pub public_key_pem: Option<String>,
+    /// Reserved for the runtime JWKS-URI fetch path (not yet implemented).
+    #[cfg(all(feature = "asymmetric-jwt", feature = "oauth2-server"))]
+    #[serde(default)]
+    pub jwks_uri: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -1089,13 +1132,34 @@ async fn dynamic_client_registration(
         .unwrap_or("none");
 
     let client_id = Uuid::now_v7().to_string();
-    let (client_secret, client_secret_hash, is_public) = if auth_method == "none" {
-        (None, None, true)
-    } else {
-        let secret = crypto::generate_token();
-        let hash = crypto::hash_token(&secret);
-        (Some(secret), Some(hash), false)
+
+    #[cfg(all(feature = "asymmetric-jwt", feature = "oauth2-server"))]
+    let using_private_key_jwt = auth_method == "private_key_jwt";
+    #[cfg(not(all(feature = "asymmetric-jwt", feature = "oauth2-server")))]
+    let using_private_key_jwt = false;
+
+    let (client_secret, client_secret_hash, is_public) = match auth_method {
+        "none" => (None, None, true),
+        m if m == "private_key_jwt" && using_private_key_jwt => (None, None, false),
+        _ => {
+            let secret = crypto::generate_token();
+            let hash = crypto::hash_token(&secret);
+            (Some(secret), Some(hash), false)
+        }
     };
+
+    #[cfg(all(feature = "asymmetric-jwt", feature = "oauth2-server"))]
+    if using_private_key_jwt {
+        let pem = input.public_key_pem.as_deref().ok_or_else(|| {
+            api_err(
+                StatusCode::BAD_REQUEST,
+                "token_endpoint_auth_method=private_key_jwt requires public_key_pem",
+            )
+        })?;
+        // Reject malformed PEMs at registration time rather than first use.
+        crate::auth::client_keys::ClientKey::from_pem(pem)
+            .map_err(|e| api_err(StatusCode::BAD_REQUEST, &e))?;
+    }
 
     let scopes_json = input
         .scope
@@ -1103,6 +1167,15 @@ async fn dynamic_client_registration(
         .map(|s| serde_json::json!(s.split_whitespace().collect::<Vec<_>>()));
 
     let now = Utc::now();
+
+    #[cfg(all(feature = "asymmetric-jwt", feature = "oauth2-server"))]
+    let public_key_pem = input.public_key_pem.clone();
+    #[cfg(not(all(feature = "asymmetric-jwt", feature = "oauth2-server")))]
+    let public_key_pem: Option<String> = None;
+    #[cfg(all(feature = "asymmetric-jwt", feature = "oauth2-server"))]
+    let jwks_uri = input.jwks_uri.clone();
+    #[cfg(not(all(feature = "asymmetric-jwt", feature = "oauth2-server")))]
+    let jwks_uri: Option<String> = None;
 
     let new_client = crate::domain::NewOauth2Client {
         id: Uuid::now_v7(),
@@ -1114,6 +1187,9 @@ async fn dynamic_client_registration(
         scopes: scopes_json,
         is_public,
         created_at: now.naive_utc(),
+        token_endpoint_auth_method: Some(auth_method.to_string()),
+        public_key_pem,
+        jwks_uri,
     };
 
     state
@@ -1670,18 +1746,16 @@ async fn handle_device_code_grant(
             role: user.role.clone(),
         };
 
-        let (access_token, _jti) = crate::plugins::bearer::create_jwt_with_audience_from_fields(
-            &jwt_user,
-            bearer_config,
-            scope_str.as_deref(),
-        )
-        .map_err(|_| {
-            oauth2_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "server_error",
-                "Failed to create token",
-            )
-        })?;
+        let (access_token, _jti) =
+            crate::plugins::bearer::create_jwt(&jwt_user, state, scope_str.as_deref()).map_err(
+                |_| {
+                    oauth2_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "server_error",
+                        "Failed to create token",
+                    )
+                },
+            )?;
 
         let family_id = Uuid::now_v7();
         let refresh_token = create_refresh_token_for_oauth2(
@@ -1944,51 +2018,87 @@ async fn handle_client_credentials_grant(
     state: &YAuthState,
     input: &TokenCodeRequest,
 ) -> Result<impl IntoResponse, Response> {
-    let client_id = input.client_id.as_deref().ok_or_else(|| {
-        oauth2_error(
+    // Accept either `client_secret_post` OR `private_key_jwt` authentication.
+    // The caller must supply exactly one — refuse requests that mix both.
+    #[cfg(all(feature = "asymmetric-jwt", feature = "oauth2-server"))]
+    let using_assertion = input
+        .client_assertion_type
+        .as_deref()
+        .is_some_and(|t| t == "urn:ietf:params:oauth:client-assertion-type:jwt-bearer");
+    #[cfg(not(all(feature = "asymmetric-jwt", feature = "oauth2-server")))]
+    let using_assertion = false;
+
+    #[cfg(all(feature = "asymmetric-jwt", feature = "oauth2-server"))]
+    if using_assertion && input.client_secret.is_some() {
+        return Err(oauth2_error(
             StatusCode::BAD_REQUEST,
             "invalid_request",
-            "Missing 'client_id' parameter",
-        )
-    })?;
-    let client_secret = input.client_secret.as_deref().ok_or_else(|| {
-        oauth2_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_request",
-            "Missing 'client_secret' parameter",
-        )
-    })?;
+            "client_secret must not be sent with client_assertion",
+        ));
+    }
+
+    let client_id = if using_assertion {
+        #[cfg(all(feature = "asymmetric-jwt", feature = "oauth2-server"))]
+        {
+            let assertion = input.client_assertion.as_deref().ok_or_else(|| {
+                oauth2_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_request",
+                    "Missing 'client_assertion' parameter",
+                )
+            })?;
+            authenticate_private_key_jwt(state, assertion).await?
+        }
+        #[cfg(not(all(feature = "asymmetric-jwt", feature = "oauth2-server")))]
+        {
+            return Err(oauth2_error(
+                StatusCode::BAD_REQUEST,
+                "unsupported_grant_type",
+                "private_key_jwt is not enabled on this server",
+            ));
+        }
+    } else {
+        let client_id = input.client_id.as_deref().ok_or_else(|| {
+            oauth2_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "Missing 'client_id' parameter",
+            )
+        })?;
+        let client_secret = input.client_secret.as_deref().ok_or_else(|| {
+            oauth2_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "Missing 'client_secret' parameter",
+            )
+        })?;
+        authenticate_client_secret(state, client_id, client_secret).await?;
+        client_id.to_string()
+    };
+
+    let client_id = client_id.as_str();
 
     let client = lookup_client(state, client_id)
         .await
         .map_err(|e| e.into_response())?;
 
-    let secret_hash = client.client_secret_hash.as_deref().ok_or_else(|| {
-        oauth2_error(
-            StatusCode::UNAUTHORIZED,
-            "invalid_client",
-            "Client authentication failed",
-        )
-    })?;
-
-    if !crypto::constant_time_eq(
-        crypto::hash_token(client_secret).as_bytes(),
-        secret_hash.as_bytes(),
-    ) {
-        crate::otel::add_event(
-            "oauth2_client_auth_failed",
-            #[cfg(feature = "telemetry")]
-            vec![opentelemetry::KeyValue::new(
-                "client.id",
-                client_id.to_string(),
-            )],
-            #[cfg(not(feature = "telemetry"))]
-            vec![],
-        );
+    #[cfg(all(feature = "admin", feature = "oauth2-server"))]
+    if client.banned_at.is_some() {
+        state
+            .write_audit_log(
+                None,
+                "oauth2_token_denied_banned",
+                Some(serde_json::json!({
+                    "actor_type": "machine",
+                    "actor_client_id": client_id,
+                })),
+                None,
+            )
+            .await;
         return Err(oauth2_error(
             StatusCode::UNAUTHORIZED,
             "invalid_client",
-            "Client authentication failed",
+            "Client is suspended",
         ));
     }
 
@@ -2062,12 +2172,7 @@ async fn handle_client_credentials_grant(
             client_id: client_id.to_string(),
         };
 
-        let access_token = jsonwebtoken::encode(
-            &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256),
-            &claims,
-            &jsonwebtoken::EncodingKey::from_secret(bearer_config.jwt_secret.as_bytes()),
-        )
-        .map_err(|e| {
+        let access_token = crate::auth::signing::sign_jwt(&claims, state).map_err(|e| {
             crate::otel::record_error("jwt_encoding_error", &e);
             oauth2_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -2154,6 +2259,233 @@ async fn authenticate_client(
         }
         _ => Ok(()),
     }
+}
+
+async fn authenticate_client_secret(
+    state: &YAuthState,
+    client_id: &str,
+    client_secret: &str,
+) -> Result<(), Response> {
+    let client = lookup_client(state, client_id)
+        .await
+        .map_err(|e| e.into_response())?;
+    let secret_hash = client.client_secret_hash.as_deref().ok_or_else(|| {
+        oauth2_error(
+            StatusCode::UNAUTHORIZED,
+            "invalid_client",
+            "Client authentication failed",
+        )
+    })?;
+    if !crypto::constant_time_eq(
+        crypto::hash_token(client_secret).as_bytes(),
+        secret_hash.as_bytes(),
+    ) {
+        crate::otel::add_event(
+            "oauth2_client_auth_failed",
+            #[cfg(feature = "telemetry")]
+            vec![opentelemetry::KeyValue::new(
+                "client.id",
+                client_id.to_string(),
+            )],
+            #[cfg(not(feature = "telemetry"))]
+            vec![],
+        );
+        return Err(oauth2_error(
+            StatusCode::UNAUTHORIZED,
+            "invalid_client",
+            "Client authentication failed",
+        ));
+    }
+    Ok(())
+}
+
+/// Validate an RFC 7523 `client_assertion` JWT. Verifies signature against
+/// the client's registered public key, checks `iss`/`sub`/`aud`/`exp`/`jti`,
+/// and blocks assertion reuse within its lifetime. Returns the authenticated
+/// `client_id` on success.
+#[cfg(all(feature = "asymmetric-jwt", feature = "oauth2-server"))]
+async fn authenticate_private_key_jwt(
+    state: &YAuthState,
+    assertion: &str,
+) -> Result<String, Response> {
+    use jsonwebtoken::{Validation, decode, decode_header};
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    #[allow(dead_code)] // exp/iat validated by jsonwebtoken
+    struct AssertionClaims {
+        iss: String,
+        sub: String,
+        aud: serde_json::Value,
+        exp: usize,
+        #[serde(default)]
+        iat: Option<usize>,
+        #[serde(default)]
+        nbf: Option<usize>,
+        jti: String,
+    }
+
+    let header = decode_header(assertion).map_err(|_| {
+        oauth2_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_client",
+            "Malformed client_assertion header",
+        )
+    })?;
+
+    // Allow-list accepted algs. Reject `none`, HS*, and anything else.
+    if !matches!(
+        header.alg,
+        jsonwebtoken::Algorithm::RS256 | jsonwebtoken::Algorithm::ES256
+    ) {
+        return Err(oauth2_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_client",
+            "client_assertion alg must be RS256 or ES256",
+        ));
+    }
+
+    // Peek at iss without verification to find the client_id — we need it to
+    // look up the registered public key. The subsequent `decode` call verifies
+    // the signature, so this peek is not trust-bearing.
+    use base64::Engine;
+    let payload_segment = assertion.split('.').nth(1).ok_or_else(|| {
+        oauth2_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_client",
+            "Malformed client_assertion",
+        )
+    })?;
+    let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload_segment)
+        .map_err(|_| {
+            oauth2_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_client",
+                "Malformed client_assertion payload",
+            )
+        })?;
+    let payload_value: serde_json::Value =
+        serde_json::from_slice(&payload_bytes).map_err(|_| {
+            oauth2_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_client",
+                "Malformed client_assertion JSON",
+            )
+        })?;
+    let iss = payload_value
+        .get("iss")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            oauth2_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_client",
+                "client_assertion missing iss",
+            )
+        })?
+        .to_string();
+
+    let client = state
+        .repos
+        .oauth2_clients
+        .find_by_client_id(&iss)
+        .await
+        .map_err(|_| {
+            oauth2_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "Client lookup failed",
+            )
+        })?
+        .ok_or_else(|| {
+            oauth2_error(
+                StatusCode::UNAUTHORIZED,
+                "invalid_client",
+                "Client not registered",
+            )
+        })?;
+
+    if client.banned_at.is_some() {
+        return Err(oauth2_error(
+            StatusCode::UNAUTHORIZED,
+            "invalid_client",
+            "Client is suspended",
+        ));
+    }
+
+    let pem = client.public_key_pem.as_deref().ok_or_else(|| {
+        oauth2_error(
+            StatusCode::UNAUTHORIZED,
+            "invalid_client",
+            "Client not registered for private_key_jwt",
+        )
+    })?;
+    let client_key = crate::auth::client_keys::ClientKey::from_pem(pem).map_err(|_| {
+        oauth2_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "server_error",
+            "Registered public key failed to parse",
+        )
+    })?;
+
+    if client_key.alg != header.alg {
+        return Err(oauth2_error(
+            StatusCode::UNAUTHORIZED,
+            "invalid_client",
+            "assertion alg does not match registered key",
+        ));
+    }
+
+    let token_endpoint_url = format!("{}/oauth/token", state.oauth2_server_config.issuer);
+    let mut validation = Validation::new(header.alg);
+    validation.validate_exp = true;
+    validation.set_required_spec_claims(&["iss", "sub", "aud", "exp", "jti"]);
+    validation.set_audience(&[token_endpoint_url.as_str()]);
+
+    let data = decode::<AssertionClaims>(assertion, &client_key.decoding_key, &validation)
+        .map_err(|e| {
+            crate::otel::record_error("oauth2_assertion_invalid", &e);
+            oauth2_error(
+                StatusCode::UNAUTHORIZED,
+                "invalid_client",
+                "client_assertion signature / claim validation failed",
+            )
+        })?;
+
+    let claims = data.claims;
+    if claims.iss != claims.sub || claims.iss != iss {
+        return Err(oauth2_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_client",
+            "client_assertion iss/sub mismatch",
+        ));
+    }
+
+    // Replay defense: revoke the assertion jti for its remaining lifetime
+    // using a prefixed key so access-token JTIs don't collide with it.
+    let replay_key = format!("client_assertion:{}", claims.jti);
+    if state
+        .repos
+        .revocations
+        .is_token_revoked(&replay_key)
+        .await
+        .unwrap_or(false)
+    {
+        return Err(oauth2_error(
+            StatusCode::UNAUTHORIZED,
+            "invalid_client",
+            "client_assertion has been replayed",
+        ));
+    }
+    let now_secs = chrono::Utc::now().timestamp();
+    let remaining = (claims.exp as i64 - now_secs).max(1) as u64;
+    let _ = state
+        .repos
+        .revocations
+        .revoke_token(&replay_key, std::time::Duration::from_secs(remaining))
+        .await;
+
+    Ok(claims.iss)
 }
 
 // ---------------------------------------------------------------------------

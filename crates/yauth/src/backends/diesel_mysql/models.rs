@@ -616,6 +616,11 @@ pub(crate) struct MysqlOauth2Client {
     pub scopes: Option<String>,
     pub is_public: bool,
     pub created_at: NaiveDateTime,
+    pub token_endpoint_auth_method: Option<String>,
+    pub public_key_pem: Option<String>,
+    pub jwks_uri: Option<String>,
+    pub banned_at: Option<NaiveDateTime>,
+    pub banned_reason: Option<String>,
 }
 
 #[cfg(feature = "oauth2-server")]
@@ -631,6 +636,11 @@ impl MysqlOauth2Client {
             scopes: self.scopes.map(|s| str_to_json(&s)),
             is_public: self.is_public,
             created_at: self.created_at,
+            token_endpoint_auth_method: self.token_endpoint_auth_method,
+            public_key_pem: self.public_key_pem,
+            jwks_uri: self.jwks_uri,
+            banned_at: self.banned_at,
+            banned_reason: self.banned_reason,
         }
     }
 }

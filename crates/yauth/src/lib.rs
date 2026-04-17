@@ -128,6 +128,8 @@ pub struct YAuthBuilder {
     webhook_config: Option<config::WebhookConfig>,
     #[cfg(feature = "oidc")]
     oidc_config: Option<config::OidcConfig>,
+    #[cfg(feature = "admin")]
+    admin_config: Option<config::AdminConfig>,
     #[cfg(feature = "redis")]
     redis: Option<(redis::aio::ConnectionManager, String)>,
 }
@@ -158,6 +160,8 @@ impl YAuthBuilder {
             webhook_config: None,
             #[cfg(feature = "oidc")]
             oidc_config: None,
+            #[cfg(feature = "admin")]
+            admin_config: None,
             #[cfg(feature = "redis")]
             redis: None,
         }
@@ -252,6 +256,14 @@ impl YAuthBuilder {
     #[cfg(feature = "admin")]
     pub fn with_admin(mut self) -> Self {
         self.plugins.push(Box::new(plugins::admin::AdminPlugin));
+        self
+    }
+
+    /// Set admin plugin configuration. Use alongside [`with_admin`] to
+    /// opt into machine-caller access on admin routes.
+    #[cfg(feature = "admin")]
+    pub fn with_admin_config(mut self, config: config::AdminConfig) -> Self {
+        self.admin_config = Some(config);
         self
     }
 
@@ -373,6 +385,24 @@ impl YAuthBuilder {
             account_lockout_config: self.account_lockout_config.clone().unwrap_or_default(),
             #[cfg(feature = "oidc")]
             oidc_config: self.oidc_config.clone().unwrap_or_default(),
+            #[cfg(feature = "admin")]
+            admin_config: self.admin_config.clone().unwrap_or_default(),
+            #[cfg(feature = "asymmetric-jwt")]
+            signing_keys: {
+                let cfg = self
+                    .bearer_config
+                    .as_ref()
+                    .expect("Bearer feature requires .with_bearer(config)");
+                match crate::auth::signing::SigningKeys::from_config(cfg) {
+                    Ok(Some(keys)) => Some(std::sync::Arc::new(keys)),
+                    Ok(None) => None,
+                    Err(e) => {
+                        return Err(crate::repo::RepoError::Internal(Box::from(format!(
+                            "Failed to load asymmetric signing key: {e}"
+                        ))));
+                    }
+                }
+            },
         };
 
         #[cfg(feature = "passkey")]

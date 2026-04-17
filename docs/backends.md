@@ -40,19 +40,20 @@ Copy the backend-specific block from any section below, paste it where the comme
 | `SeaOrmSqliteBackend` | `seaorm-sqlite-backend` | `from_connection(db)` | SeaORM + SQLite |
 | `InMemoryBackend` | `memory-backend` | `new()` | Tests, prototyping |
 
-yauth does not run migrations. Use `cargo yauth generate` to produce migration files for your ORM, then apply them with your ORM's CLI (`diesel migration run`, `sqlx migrate run`, `sea-orm-cli migrate`, etc.).
+yauth does not run migrations. Use `cargo yauth generate` to produce migration files for your ORM, then apply them with your ORM's CLI (`diesel migration run`, `sqlx migrate run`, `sea-orm-cli migrate`) or via `diesel-async`'s `AsyncMigrationHarness` for a libpq-free alternative (see [Async Migrations](#async-migrations-diesel-backends)).
 
 ## Diesel Backends
 
-All Diesel backends use `diesel-async` 0.8 with deadpool for connection pooling. The Diesel PG backend re-exports pool types (`DieselPool`, `AsyncDieselConnectionManager`, `AsyncPgConnection`) so you only need `diesel` as a direct dependency. MySQL and native SQLite backends need `diesel-async@0.8` as a direct dependency for pool construction — pin the version to avoid conflicts with older releases.
+All Diesel backends use `diesel-async` 0.8 with deadpool for connection pooling — **no libpq required at runtime**. The Diesel PG backend re-exports pool types (`DieselPool`, `AsyncDieselConnectionManager`, `AsyncPgConnection`), so you don't need `diesel` or `diesel-async` as direct dependencies. If you use diesel's query DSL in your own code, add `diesel` with the types-only backend feature (e.g., `postgres_backend`, `mysql_backend`) — not the full driver feature (e.g., `postgres`, `mysql`) which links native client libraries. MySQL and native SQLite backends need `diesel-async@0.8` as a direct dependency for pool construction — pin the version to avoid conflicts with older releases.
 
 ### Diesel + PostgreSQL (default)
 
 ```bash
 cargo add yauth --features email-password
-cargo add diesel --features postgres
 cargo yauth init --orm diesel --dialect postgres --plugins email-password
-diesel migration run
+# Apply migrations — pick one:
+#   diesel migration run            (requires diesel_cli + libpq, dev-only)
+#   cargo run --bin migrate -- up   (async, libpq-free — see "Async Migrations" below)
 ```
 
 ```rust
@@ -77,16 +78,17 @@ let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
 
 ```bash
 cargo add yauth --features email-password,diesel-mysql-backend --no-default-features
-cargo add diesel --features mysql_backend
 cargo add diesel-async@0.8 --features mysql,deadpool
 cargo yauth init --orm diesel --dialect mysql --plugins email-password
-diesel migration run
+# Apply migrations — pick one:
+#   diesel migration run            (requires diesel_cli + libmysqlclient, dev-only)
+#   cargo run --bin migrate -- up   (async — see "Async Migrations" below)
 ```
 
 ```rust
 use yauth::prelude::*;
 use yauth::backends::diesel_mysql::DieselMysqlBackend;
-use diesel_async::pooled_connection::{AsyncDieselConnectionManager, deadpool::Pool};
+use diesel_async::pooled_connection::{deadpool::Pool, AsyncDieselConnectionManager};
 use diesel_async::AsyncMysqlConnection;
 
 let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
@@ -106,7 +108,9 @@ let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
 cargo add yauth --features email-password,diesel-libsql-backend --no-default-features
 cargo add diesel-libsql --features async,deadpool
 cargo yauth init --orm diesel --dialect sqlite --plugins email-password
-diesel migration run
+# Apply migrations — pick one:
+#   diesel migration run            (requires diesel_cli + libsqlite3, dev-only)
+#   cargo run --bin migrate -- up   (async — see "Async Migrations" below)
 ```
 
 ```rust
@@ -133,10 +137,11 @@ let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
 
 ```bash
 cargo add yauth --features email-password,diesel-sqlite-backend --no-default-features
-cargo add diesel --features sqlite
 cargo add diesel-async@0.8 --features deadpool,sqlite
 cargo yauth init --orm diesel --dialect sqlite --plugins email-password
-diesel migration run
+# Apply migrations — pick one:
+#   diesel migration run            (requires diesel_cli + libsqlite3, dev-only)
+#   cargo run --bin migrate -- up   (async — see "Async Migrations" below)
 ```
 
 ```rust
@@ -440,6 +445,135 @@ let yauth = YAuthBuilder::new(backend, config)
 `.with_redis()` adds a caching layer around repository operations for sessions, rate limits, challenges, and token revocation. The database backend remains the source of truth.
 
 **When to use Redis:** multi-replica deployments (shared sessions), high-traffic apps (sub-millisecond session lookups), or when you need instant JWT revocation across all nodes.
+
+## Async Migrations (Diesel backends)
+
+The `diesel_cli` (`diesel migration run`) works but requires native client libraries (libpq, libmysqlclient, libsqlite3) at dev time. For a fully async, libpq-free alternative, use `diesel-async`'s `AsyncMigrationHarness` with `diesel_migrations::embed_migrations!`. This compiles your SQL migration files into the binary at build time, then applies them at runtime over the same async connection pool your app uses — no native client libraries required in your runtime image.
+
+### Setup
+
+Add these dependencies alongside yauth:
+
+```toml
+[dependencies]
+diesel-async = { version = "0.8", features = ["postgres", "deadpool", "migrations"] }
+diesel_migrations = "2.3"
+```
+
+> Swap `postgres` for `mysql` or `sqlite` to match your backend.
+
+### Migration module
+
+Create a shared module that both your app and a standalone `migrate` binary can use:
+
+```rust
+use diesel_async::AsyncMigrationHarness;
+use diesel_migrations::EmbeddedMigrations;
+use yauth::backends::diesel_pg::{
+    AsyncDieselConnectionManager, AsyncPgConnection, DieselPool,
+};
+
+pub const MIGRATIONS: EmbeddedMigrations =
+    diesel_migrations::embed_migrations!("migrations");
+
+pub async fn build_pool(database_url: &str, max_size: usize) -> DieselPool<AsyncPgConnection> {
+    let manager = AsyncDieselConnectionManager::<AsyncPgConnection>::new(database_url);
+    DieselPool::builder(manager)
+        .max_size(max_size)
+        .build()
+        .expect("failed to build pool")
+}
+
+pub async fn run_pending_migrations(
+    pool: &DieselPool<AsyncPgConnection>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let conn = pool.get().await?;
+    let mut harness = AsyncMigrationHarness::new(conn);
+    harness.run_pending_migrations(MIGRATIONS)?;
+    Ok(())
+}
+```
+
+### Standalone `migrate` binary
+
+Add a `[[bin]]` entry in your `Cargo.toml` and create `src/bin/migrate.rs`:
+
+```rust
+#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
+async fn main() {
+    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL not set");
+    let pool = your_crate::db::build_pool(&database_url, 1).await;
+
+    let cmd = std::env::args().nth(1).unwrap_or_else(|| "up".into());
+    match cmd.as_str() {
+        "up" => your_crate::db::run_pending_migrations(&pool).await.unwrap(),
+        _ => panic!("usage: migrate up"),
+    }
+}
+```
+
+> **`multi_thread` is required.** `AsyncMigrationHarness` calls `tokio::task::block_in_place` internally, which panics on a current-thread runtime. Any code that runs migrations — binaries, integration tests — must use `flavor = "multi_thread"`.
+
+### When to use which
+
+| Approach | Pros | Cons |
+|---|---|---|
+| `diesel migration run` (CLI) | Zero app code, familiar workflow | Requires native client library (libpq, etc.) installed; sync-only |
+| `AsyncMigrationHarness` (binary) | Libpq-free, same pool/driver as app, embeds into container image | Requires `multi_thread` tokio runtime, small amount of app code |
+
+For containerized deployments, the async approach eliminates native client libraries from your runtime image entirely. Run the `migrate` binary as a Kubernetes init container or Helm pre-install Job before the app starts.
+
+## Pool Ownership
+
+yauth accepts pre-built pools via `from_pool()` — it never creates its own connections. This means your app decides the pool topology. There are two common patterns:
+
+### One shared pool (recommended)
+
+Create a single pool and pass `pool.clone()` to both yauth and your own service layer. Deadpool wraps the inner state in `Arc`, so cloning is cheap — both sides draw from the same connection set.
+
+```rust
+let pool = build_pool(&database_url, 20).await;
+
+// yauth gets a clone
+let backend = DieselPgBackend::from_pool(pool.clone());
+let yauth = YAuthBuilder::new(backend, config).build().await?;
+
+// Your services get the same pool
+let app_state = AppState { pool, yauth_state: yauth.state().clone() };
+```
+
+**Advantages:**
+- **Single source of truth** for connection count — one `max_size` knob to tune
+- **Better resource efficiency** — auth queries and app queries share idle connections rather than reserving separate pools
+- **Simpler mental model** — total connections to the database = pool max size, period
+- **Easier to monitor** — one pool's metrics (checkout latency, queue depth) tell the full story
+
+**Tradeoff:** A pathological query pattern in either yauth or your app code can starve the other side. In practice this is rare — yauth queries are simple key lookups that complete in single-digit milliseconds.
+
+### Separate pools
+
+Create two pools with independent sizes — one for yauth, one for your app:
+
+```rust
+let auth_pool = build_pool(&database_url, 5).await;
+let app_pool = build_pool(&database_url, 15).await;
+
+let backend = DieselPgBackend::from_pool(auth_pool);
+let yauth = YAuthBuilder::new(backend, config).build().await?;
+
+let app_state = AppState { pool: app_pool, yauth_state: yauth.state().clone() };
+```
+
+**Advantages:**
+- **Blast radius isolation** — a slow migration or lock in your app can't block auth middleware
+- **Independent sizing** — right-size each pool for its workload
+- **Clearer ownership** — easier to attribute connection usage in monitoring
+
+**Tradeoff:** More total connections to the database (both pools reserve their max independently), harder to reason about total connection count, and idle connections in one pool can't serve demand spikes in the other.
+
+### Guidance
+
+**Start with one shared pool.** It's simpler, more efficient, and yauth's auth queries are lightweight. If you later observe pool contention where auth latency spikes because of app-side long-running queries (visible as `deadpool::PoolError::Timeout` in auth middleware), split into separate pools at that point. Don't pre-optimize for a problem you may never have.
 
 ## Configurable PostgreSQL Schema
 

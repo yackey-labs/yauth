@@ -108,7 +108,7 @@ impl Oauth2ClientRepository for InMemoryOauth2ClientRepo {
                 .filter(|c| c.banned_at.is_some())
                 .cloned()
                 .collect();
-            out.sort_by(|a, b| b.banned_at.cmp(&a.banned_at));
+            out.sort_by_key(|c| std::cmp::Reverse(c.banned_at));
             Ok(out)
         })
     }

@@ -72,7 +72,7 @@ sqlx = { workspace = true, optional = true }
 # SeaORM (optional — pulled in by seaorm-*-backend features)
 sea-orm = { workspace = true, optional = true }
 
-yauth-entity = { path = "../yauth-entity", version = "0.10.0" }
+yauth-entity = { path = "../yauth-entity", version = "0.11.0" }
 
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -124,8 +124,8 @@ opentelemetry-http = { workspace = true, optional = true }
 log = "0.4"
 
 [dev-dependencies]
-yauth-entity = { path = "../yauth-entity", version = "0.10.0" }
-yauth-migration = { path = "../yauth-migration", version = "0.10.0" }
+yauth-entity = { path = "../yauth-entity", version = "0.11.0" }
+yauth-migration = { path = "../yauth-migration", version = "0.11.0" }
 env_logger = "0.11"
 totp-rs = { workspace = true }
 uuid = { workspace = true }

@@ -62,7 +62,12 @@ CREATE TABLE IF NOT EXISTS yauth_oauth2_clients (
     grant_types TEXT NOT NULL,
     scopes TEXT,
     is_public INTEGER NOT NULL DEFAULT false,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    token_endpoint_auth_method TEXT,
+    public_key_pem TEXT,
+    jwks_uri TEXT,
+    banned_at TEXT,
+    banned_reason TEXT
 );
 
 -- Webhook endpoint configurations.

@@ -1,3 +1,14 @@
+## 0.12.0 (2026-04-18)
+
+### Breaking Changes
+
+- M2M auth — client_credentials + private_key_jwt + DB-backed ban/key registry (#55)
+
+### Fixes
+
+- match knope's actual "no release" error message in release workflow (#50)
+- release workflow guard matches knope's actual commit message (#58)
+
 ## 0.11.0 (2026-04-17)
 
 ### Breaking Changes

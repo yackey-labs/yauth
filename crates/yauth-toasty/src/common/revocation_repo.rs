@@ -32,7 +32,7 @@ impl RevocationRepository for ToastyRevocationRepo {
             }
             toasty::create!(YauthRevocation {
                 key: jti,
-                expires_at: dt_to_str(expires_at),
+                expires_at: chrono_to_jiff(expires_at),
             })
             .exec(&mut tx)
             .await
@@ -50,7 +50,7 @@ impl RevocationRepository for ToastyRevocationRepo {
             match YauthRevocation::get_by_key(&mut db, &jti).await {
                 Ok(row) => {
                     let now = Utc::now().naive_utc();
-                    if str_to_dt(&row.expires_at) > now {
+                    if jiff_to_chrono(row.expires_at) > now {
                         Ok(true)
                     } else {
                         // Expired revocation -- clean up

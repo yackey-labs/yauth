@@ -37,14 +37,14 @@ impl RateLimitRepository for ToastyRateLimitRepo {
 
             let (count, window_start) = match existing {
                 Some(row) => {
-                    let ws = str_to_dt(&row.window_start);
+                    let ws = jiff_to_chrono(row.window_start);
                     let ws_utc = ws.and_utc();
                     if ws_utc < window_start_cutoff {
                         let _ = row.delete().exec(&mut tx).await;
                         let _ = toasty::create!(YauthRateLimit {
                             key: key.clone(),
                             count: 1,
-                            window_start: dt_to_str(now.naive_utc()),
+                            window_start: chrono_to_jiff(now.naive_utc()),
                         })
                         .exec(&mut tx)
                         .await;
@@ -55,7 +55,7 @@ impl RateLimitRepository for ToastyRateLimitRepo {
                         let _ = toasty::create!(YauthRateLimit {
                             key: key.clone(),
                             count: new_count,
-                            window_start: dt_to_str(ws),
+                            window_start: chrono_to_jiff(ws),
                         })
                         .exec(&mut tx)
                         .await;
@@ -66,7 +66,7 @@ impl RateLimitRepository for ToastyRateLimitRepo {
                     let _ = toasty::create!(YauthRateLimit {
                         key: key.clone(),
                         count: 1,
-                        window_start: dt_to_str(now.naive_utc()),
+                        window_start: chrono_to_jiff(now.naive_utc()),
                     })
                     .exec(&mut tx)
                     .await;

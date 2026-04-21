@@ -54,9 +54,9 @@ impl PasskeyRepository for ToastyPasskeyRepo {
                 name: input.name,
                 aaguid: input.aaguid,
                 device_name: input.device_name,
-                credential: json_to_str(&input.credential),
-                created_at: dt_to_str(input.created_at),
-                last_used_at: Option::<String>::None,
+                credential: input.credential,
+                created_at: chrono_to_jiff(input.created_at),
+                last_used_at: Option::<jiff::Timestamp>::None,
             })
             .exec(&mut db)
             .await
@@ -72,10 +72,10 @@ impl PasskeyRepository for ToastyPasskeyRepo {
                 .exec(&mut db)
                 .await
                 .map_err(toasty_err)?;
-            let now_str = dt_to_str(Utc::now().naive_utc());
+            let now_ts = chrono_to_jiff(Utc::now().naive_utc());
             for mut row in rows {
                 row.update()
-                    .last_used_at(Some(now_str.clone()))
+                    .last_used_at(Some(now_ts))
                     .exec(&mut db)
                     .await
                     .map_err(toasty_err)?;
@@ -102,8 +102,8 @@ fn passkey_to_domain(m: YauthPasskey) -> domain::WebauthnCredential {
         name: m.name,
         aaguid: m.aaguid,
         device_name: m.device_name,
-        credential: str_to_json(&m.credential),
-        created_at: str_to_dt(&m.created_at),
-        last_used_at: opt_str_to_dt(m.last_used_at.as_deref()),
+        credential: m.credential,
+        created_at: jiff_to_chrono(m.created_at),
+        last_used_at: opt_jiff_to_chrono(m.last_used_at),
     }
 }

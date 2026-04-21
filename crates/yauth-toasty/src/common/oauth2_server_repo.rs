@@ -46,12 +46,12 @@ impl Oauth2ClientRepository for ToastyOauth2ClientRepo {
                 id: input.id,
                 client_id: input.client_id,
                 client_secret_hash: input.client_secret_hash,
-                redirect_uris: json_to_str(&input.redirect_uris),
+                redirect_uris: serde_json::from_value(input.redirect_uris).unwrap_or_default(),
                 client_name: input.client_name,
-                grant_types: json_to_str(&input.grant_types),
-                scopes: opt_json_to_str(input.scopes.as_ref()),
+                grant_types: serde_json::from_value(input.grant_types).unwrap_or_default(),
+                scopes: input.scopes,
                 is_public: input.is_public,
-                created_at: dt_to_str(input.created_at),
+                created_at: chrono_to_jiff(input.created_at),
             })
             .exec(&mut db)
             .await
@@ -89,7 +89,7 @@ impl AuthorizationCodeRepository for ToastyAuthorizationCodeRepo {
             {
                 Ok(row) => {
                     let now = Utc::now().naive_utc();
-                    if str_to_dt(&row.expires_at) < now || row.used {
+                    if jiff_to_chrono(row.expires_at) < now || row.used {
                         Ok(None)
                     } else {
                         Ok(Some(auth_code_to_domain(row)))
@@ -108,14 +108,14 @@ impl AuthorizationCodeRepository for ToastyAuthorizationCodeRepo {
                 code_hash: input.code_hash,
                 client_id: input.client_id,
                 user_id: input.user_id,
-                scopes: opt_json_to_str(input.scopes.as_ref()),
+                scopes: input.scopes,
                 redirect_uri: input.redirect_uri,
                 code_challenge: input.code_challenge,
                 code_challenge_method: input.code_challenge_method,
-                expires_at: dt_to_str(input.expires_at),
+                expires_at: chrono_to_jiff(input.expires_at),
                 used: input.used,
                 nonce: input.nonce,
-                created_at: dt_to_str(input.created_at),
+                created_at: chrono_to_jiff(input.created_at),
             })
             .exec(&mut db)
             .await
@@ -180,8 +180,8 @@ impl ConsentRepository for ToastyConsentRepo {
                 id: input.id,
                 user_id: input.user_id,
                 client_id: input.client_id,
-                scopes: opt_json_to_str(input.scopes.as_ref()),
-                created_at: dt_to_str(input.created_at),
+                scopes: input.scopes,
+                created_at: chrono_to_jiff(input.created_at),
             })
             .exec(&mut db)
             .await
@@ -195,7 +195,7 @@ impl ConsentRepository for ToastyConsentRepo {
             let mut db = self.db.clone();
             if let Ok(mut row) = YauthConsent::get_by_id(&mut db, &id).await {
                 row.update()
-                    .scopes(opt_json_to_str(scopes.as_ref()))
+                    .scopes(scopes)
                     .exec(&mut db)
                     .await
                     .map_err(toasty_err)?;
@@ -262,13 +262,13 @@ impl DeviceCodeRepository for ToastyDeviceCodeRepo {
                 device_code_hash: input.device_code_hash,
                 user_code: input.user_code,
                 client_id: input.client_id,
-                scopes: opt_json_to_str(input.scopes.as_ref()),
+                scopes: input.scopes,
                 user_id: input.user_id,
                 status: input.status,
                 interval: input.interval,
-                expires_at: dt_to_str(input.expires_at),
-                last_polled_at: Option::<String>::None,
-                created_at: dt_to_str(input.created_at),
+                expires_at: chrono_to_jiff(input.expires_at),
+                last_polled_at: Option::<jiff::Timestamp>::None,
+                created_at: chrono_to_jiff(input.created_at),
             })
             .exec(&mut db)
             .await
@@ -298,7 +298,7 @@ impl DeviceCodeRepository for ToastyDeviceCodeRepo {
             let mut db = self.db.clone();
             if let Ok(mut row) = YauthDeviceCode::get_by_id(&mut db, &id).await {
                 row.update()
-                    .last_polled_at(Some(dt_to_str(Utc::now().naive_utc())))
+                    .last_polled_at(Some(chrono_to_jiff(Utc::now().naive_utc())))
                     .exec(&mut db)
                     .await
                     .map_err(toasty_err)?;
@@ -329,12 +329,12 @@ fn oauth2_client_to_domain(m: YauthOauth2Client) -> domain::Oauth2Client {
         id: m.id,
         client_id: m.client_id,
         client_secret_hash: m.client_secret_hash,
-        redirect_uris: str_to_json(&m.redirect_uris),
+        redirect_uris: serde_json::to_value(m.redirect_uris).unwrap_or_default(),
         client_name: m.client_name,
-        grant_types: str_to_json(&m.grant_types),
-        scopes: opt_str_to_json(m.scopes.as_deref()),
+        grant_types: serde_json::to_value(m.grant_types).unwrap_or_default(),
+        scopes: m.scopes,
         is_public: m.is_public,
-        created_at: str_to_dt(&m.created_at),
+        created_at: jiff_to_chrono(m.created_at),
     }
 }
 
@@ -344,14 +344,14 @@ fn auth_code_to_domain(m: YauthAuthorizationCode) -> domain::AuthorizationCode {
         code_hash: m.code_hash,
         client_id: m.client_id,
         user_id: m.user_id,
-        scopes: opt_str_to_json(m.scopes.as_deref()),
+        scopes: m.scopes,
         redirect_uri: m.redirect_uri,
         code_challenge: m.code_challenge,
         code_challenge_method: m.code_challenge_method,
-        expires_at: str_to_dt(&m.expires_at),
+        expires_at: jiff_to_chrono(m.expires_at),
         used: m.used,
         nonce: m.nonce,
-        created_at: str_to_dt(&m.created_at),
+        created_at: jiff_to_chrono(m.created_at),
     }
 }
 
@@ -360,8 +360,8 @@ fn consent_to_domain(m: YauthConsent) -> domain::Consent {
         id: m.id,
         user_id: m.user_id,
         client_id: m.client_id,
-        scopes: opt_str_to_json(m.scopes.as_deref()),
-        created_at: str_to_dt(&m.created_at),
+        scopes: m.scopes,
+        created_at: jiff_to_chrono(m.created_at),
     }
 }
 
@@ -371,12 +371,12 @@ fn device_code_to_domain(m: YauthDeviceCode) -> domain::DeviceCode {
         device_code_hash: m.device_code_hash,
         user_code: m.user_code,
         client_id: m.client_id,
-        scopes: opt_str_to_json(m.scopes.as_deref()),
+        scopes: m.scopes,
         user_id: m.user_id,
         status: m.status,
         interval: m.interval,
-        expires_at: str_to_dt(&m.expires_at),
-        last_polled_at: opt_str_to_dt(m.last_polled_at.as_deref()),
-        created_at: str_to_dt(&m.created_at),
+        expires_at: jiff_to_chrono(m.expires_at),
+        last_polled_at: opt_jiff_to_chrono(m.last_polled_at),
+        created_at: jiff_to_chrono(m.created_at),
     }
 }

@@ -37,8 +37,8 @@ impl ChallengeRepository for ToastyChallengeRepo {
             }
             toasty::create!(YauthChallenge {
                 key: key,
-                value: json_to_str(&value),
-                expires_at: dt_to_str(expires_at),
+                value: value,
+                expires_at: chrono_to_jiff(expires_at),
             })
             .exec(&mut tx)
             .await
@@ -56,12 +56,12 @@ impl ChallengeRepository for ToastyChallengeRepo {
             match YauthChallenge::get_by_key(&mut db, &key).await {
                 Ok(row) => {
                     let now = Utc::now().naive_utc();
-                    if str_to_dt(&row.expires_at) < now {
+                    if jiff_to_chrono(row.expires_at) < now {
                         // Expired
                         let _ = row.delete().exec(&mut db).await;
                         Ok(None)
                     } else {
-                        Ok(Some(str_to_json(&row.value)))
+                        Ok(Some(row.value))
                     }
                 }
                 Err(_) => Ok(None),

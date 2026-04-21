@@ -1,8 +1,7 @@
-use chrono::Utc;
 use toasty::Db;
 
 use crate::entities::YauthRevocation;
-use crate::helpers::*;
+use crate::helpers::toasty_err;
 use yauth::repo::{RepoFuture, RevocationRepository, sealed};
 
 pub(crate) struct ToastyRevocationRepo {
@@ -23,7 +22,7 @@ impl RevocationRepository for ToastyRevocationRepo {
         Box::pin(async move {
             let mut db = self.db.clone();
             let expires_at =
-                Utc::now().naive_utc() + chrono::Duration::seconds(ttl.as_secs() as i64);
+                jiff::Timestamp::now() + jiff::SignedDuration::from_secs(ttl.as_secs() as i64);
 
             // TODO: replace with atomic upsert when Toasty adds ON CONFLICT support
             let mut tx = db.transaction().await.map_err(toasty_err)?;
@@ -32,7 +31,7 @@ impl RevocationRepository for ToastyRevocationRepo {
             }
             toasty::create!(YauthRevocation {
                 key: jti,
-                expires_at: chrono_to_jiff(expires_at),
+                expires_at: expires_at,
             })
             .exec(&mut tx)
             .await

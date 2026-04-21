@@ -1,8 +1,7 @@
-use chrono::Utc;
 use toasty::Db;
 
 use crate::entities::YauthChallenge;
-use crate::helpers::*;
+use crate::helpers::toasty_err;
 use yauth::repo::{ChallengeRepository, RepoFuture, sealed};
 
 pub(crate) struct ToastyChallengeRepo {
@@ -27,8 +26,8 @@ impl ChallengeRepository for ToastyChallengeRepo {
         let key = key.to_string();
         Box::pin(async move {
             let mut db = self.db.clone();
-            let now = Utc::now().naive_utc();
-            let expires_at = now + chrono::Duration::seconds(ttl_secs as i64);
+            let expires_at =
+                jiff::Timestamp::now() + jiff::SignedDuration::from_secs(ttl_secs as i64);
 
             // TODO: replace with atomic upsert when Toasty adds ON CONFLICT support
             let mut tx = db.transaction().await.map_err(toasty_err)?;
@@ -38,7 +37,7 @@ impl ChallengeRepository for ToastyChallengeRepo {
             toasty::create!(YauthChallenge {
                 key: key,
                 value: value,
-                expires_at: chrono_to_jiff(expires_at),
+                expires_at: expires_at,
             })
             .exec(&mut tx)
             .await

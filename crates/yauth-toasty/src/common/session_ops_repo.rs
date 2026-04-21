@@ -1,4 +1,3 @@
-use chrono::Utc;
 use toasty::Db;
 use uuid::Uuid;
 
@@ -31,9 +30,10 @@ impl SessionOpsRepository for ToastySessionOpsRepo {
         Box::pin(async move {
             let mut db = self.db.clone();
             let session_id = Uuid::now_v7();
-            let now = Utc::now().naive_utc();
-            let expires_at =
-                now + chrono::Duration::from_std(ttl).unwrap_or(chrono::Duration::days(7));
+            let now = jiff::Timestamp::now();
+            let ttl_duration = jiff::SignedDuration::try_from(ttl)
+                .unwrap_or(jiff::SignedDuration::from_hours(168));
+            let expires_at = now + ttl_duration;
 
             toasty::create!(YauthSession {
                 id: session_id,
@@ -41,8 +41,8 @@ impl SessionOpsRepository for ToastySessionOpsRepo {
                 token_hash: token_hash,
                 ip_address: ip_address,
                 user_agent: user_agent,
-                expires_at: chrono_to_jiff(expires_at),
-                created_at: chrono_to_jiff(now),
+                expires_at: expires_at,
+                created_at: now,
             })
             .exec(&mut db)
             .await

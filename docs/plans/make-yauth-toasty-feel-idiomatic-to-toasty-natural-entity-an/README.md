@@ -25,14 +25,20 @@ Rewrite all 27 entity structs to use Toasty relationships, `jiff::Timestamp`, an
 
 This is the core deliverable. It addresses problems 1-4 from the PRD and produces the most visible idiomaticity improvement.
 
-### Milestone 2: Migration System (future)
+### Milestone 2: Toasty Migration System
 
-Set up Toasty's migration chain: `Toasty.toml`, dev CLI binary, embedded migrations via `include_dir!`, `apply_migrations()` public API. Addresses problem 5 from the PRD.
+Set up Toasty 0.4's snapshot-anchored migration chain: `Toasty.toml` configuration, `toasty-dev` CLI binary for generating migrations from model diffs, embedded migrations via `include_dir!`, and the consumer-facing `apply_migrations(&db).await?` public API. Removes all hand-rolled per-backend SQL. Includes schema equivalence tests proving `apply_migrations()` produces the same schema as `push_schema()`. Addresses problem 5 from the PRD.
 
-### Milestone 3: Workspace Integration + CI (future)
+See `milestone-2.md` for full details.
 
-Bring yauth-toasty under CI coverage. Attempt workspace inclusion; fall back to separate CI job if `links` conflict is unavoidable. Addresses problem 6 from the PRD.
+### Milestone 3: Workspace Integration + CI
 
-### Milestone 4: Documentation + Examples (future)
+Un-exclude `yauth-toasty` from the root `Cargo.toml` workspace (or document precisely why it must stay separate and add a dedicated CI job). Add CI matrix coverage across PostgreSQL, MySQL, and SQLite. Ensure `cargo test --workspace` and `cargo clippy --workspace` catch regressions. Addresses problem 6 from the PRD.
 
-Update `CLAUDE.md`, `README.md`, the yauth skill, and any examples to reflect the idiomatic Toasty backend. Update `cargo yauth generate --orm toasty` output to match the new entity patterns.
+See `milestone-3.md` for full details.
+
+### Milestone 4: Documentation + Examples
+
+Write `crates/yauth-toasty/README.md`, update `CLAUDE.md` and `docs/backends.md`, add minimal runnable example app (≤30 lines of wiring including `apply_migrations`), add full-stack flow example (create, query, update, relationship traversal), and update `cargo yauth generate --orm toasty` output to emit idiomatic Toasty 0.4 patterns (jiff timestamps, relationships, serialize(json)).
+
+See `milestone-4.md` for full details.

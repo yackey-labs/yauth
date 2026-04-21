@@ -1,56 +1,37 @@
-//! Conversion helpers between Toasty string types and yauth domain types.
+//! Conversion helpers between Toasty jiff types and yauth domain chrono types,
+//! plus error mapping.
 
 use chrono::NaiveDateTime;
 use yauth::repo::RepoError;
 
-/// Format for storing timestamps as strings in Toasty models.
-const DT_FMT: &str = "%Y-%m-%dT%H:%M:%S%.f";
-
-/// Convert a `NaiveDateTime` to an ISO 8601 string for Toasty storage.
-pub(crate) fn dt_to_str(dt: NaiveDateTime) -> String {
-    dt.format(DT_FMT).to_string()
+/// Convert `jiff::Timestamp` to `chrono::NaiveDateTime` for domain types.
+///
+/// Uses epoch-seconds + subsecond-nanoseconds as the bridge for lossless conversion.
+pub(crate) fn jiff_to_chrono(ts: jiff::Timestamp) -> NaiveDateTime {
+    let epoch_secs = ts.as_second();
+    let nanos = ts.subsec_nanosecond();
+    chrono::DateTime::from_timestamp(epoch_secs, nanos as u32)
+        .map(|dt| dt.naive_utc())
+        .unwrap_or(NaiveDateTime::MIN)
 }
 
-/// Convert an `Option<NaiveDateTime>` to an optional string.
-pub(crate) fn opt_dt_to_str(dt: Option<NaiveDateTime>) -> Option<String> {
-    dt.map(dt_to_str)
+/// Convert `Option<jiff::Timestamp>` to `Option<chrono::NaiveDateTime>`.
+pub(crate) fn opt_jiff_to_chrono(ts: Option<jiff::Timestamp>) -> Option<NaiveDateTime> {
+    ts.map(jiff_to_chrono)
 }
 
-/// Parse an ISO 8601 string back to `NaiveDateTime`.
-pub(crate) fn str_to_dt(s: &str) -> NaiveDateTime {
-    NaiveDateTime::parse_from_str(s, DT_FMT).unwrap_or_else(|e| {
-        log::error!("Failed to parse datetime '{}': {}", s, e);
-        // Use MIN so corrupt timestamps appear expired, not fresh
-        NaiveDateTime::MIN
-    })
+/// Convert `chrono::NaiveDateTime` to `jiff::Timestamp` for Toasty entities.
+///
+/// Uses epoch-seconds + subsecond-nanoseconds as the bridge for lossless conversion.
+pub(crate) fn chrono_to_jiff(dt: NaiveDateTime) -> jiff::Timestamp {
+    let epoch_secs = dt.and_utc().timestamp();
+    let nanos = dt.and_utc().timestamp_subsec_nanos();
+    jiff::Timestamp::new(epoch_secs, nanos as i32).expect("valid jiff timestamp from chrono")
 }
 
-/// Parse an optional string to `Option<NaiveDateTime>`.
-pub(crate) fn opt_str_to_dt(s: Option<&str>) -> Option<NaiveDateTime> {
-    s.map(str_to_dt)
-}
-
-/// Serialize `serde_json::Value` to string for Toasty storage.
-pub(crate) fn json_to_str(v: &serde_json::Value) -> String {
-    serde_json::to_string(v).unwrap_or_else(|_| "null".to_string())
-}
-
-/// Serialize `Option<serde_json::Value>` to optional string.
-pub(crate) fn opt_json_to_str(v: Option<&serde_json::Value>) -> Option<String> {
-    v.map(json_to_str)
-}
-
-/// Parse a string back to `serde_json::Value`.
-pub(crate) fn str_to_json(s: &str) -> serde_json::Value {
-    serde_json::from_str(s).unwrap_or_else(|e| {
-        log::error!("Failed to parse JSON '{}': {}", s, e);
-        serde_json::Value::Null
-    })
-}
-
-/// Parse an optional string to `Option<serde_json::Value>`.
-pub(crate) fn opt_str_to_json(s: Option<&str>) -> Option<serde_json::Value> {
-    s.map(str_to_json)
+/// Convert `Option<chrono::NaiveDateTime>` to `Option<jiff::Timestamp>`.
+pub(crate) fn opt_chrono_to_jiff(dt: Option<NaiveDateTime>) -> Option<jiff::Timestamp> {
+    dt.map(chrono_to_jiff)
 }
 
 /// Map a Toasty error to `RepoError::Internal`.

@@ -1,8 +1,10 @@
 //! Toasty model for `yauth_oauth2_clients`.
 //!
-//! Inverse relationships (`has_many`) are omitted — see `users.rs` module doc.
 //! Child entities (`YauthAuthorizationCode`, `YauthConsent`, `YauthDeviceCode`)
-//! declare `#[belongs_to]` and provide `filter_by_client_id()` accessors.
+//! reference this entity via a `client_id: String` FK. Because `client_id` is a
+//! non-PK unique field, the `#[belongs_to]` / `#[has_many]` pair cannot express
+//! this relationship directly — use `filter_by_client_id()` accessors on child
+//! entities instead.
 
 use uuid::Uuid;
 

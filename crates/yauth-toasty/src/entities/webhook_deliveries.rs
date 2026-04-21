@@ -1,5 +1,6 @@
 //! Toasty model for `yauth_webhook_deliveries`.
 
+use super::YauthWebhook;
 use uuid::Uuid;
 
 #[derive(Debug, toasty::Model)]
@@ -10,6 +11,9 @@ pub struct YauthWebhookDelivery {
 
     #[index]
     pub webhook_id: Uuid,
+
+    #[belongs_to(key = webhook_id, references = id)]
+    pub webhook: toasty::BelongsTo<YauthWebhook>,
 
     pub event_type: String,
 

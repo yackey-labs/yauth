@@ -7,12 +7,14 @@ use yauth::repo::RepoError;
 /// Convert `jiff::Timestamp` to `chrono::NaiveDateTime` for domain types.
 ///
 /// Uses epoch-seconds + subsecond-nanoseconds as the bridge for lossless conversion.
+/// Returns the Unix epoch on out-of-range timestamps (safe for round-tripping
+/// through `chrono_to_jiff`).
 pub(crate) fn jiff_to_chrono(ts: jiff::Timestamp) -> NaiveDateTime {
     let epoch_secs = ts.as_second();
     let nanos = ts.subsec_nanosecond();
     chrono::DateTime::from_timestamp(epoch_secs, nanos as u32)
         .map(|dt| dt.naive_utc())
-        .unwrap_or(NaiveDateTime::MIN)
+        .unwrap_or(NaiveDateTime::UNIX_EPOCH)
 }
 
 /// Convert `Option<jiff::Timestamp>` to `Option<chrono::NaiveDateTime>`.
@@ -23,10 +25,12 @@ pub(crate) fn opt_jiff_to_chrono(ts: Option<jiff::Timestamp>) -> Option<NaiveDat
 /// Convert `chrono::NaiveDateTime` to `jiff::Timestamp` for Toasty entities.
 ///
 /// Uses epoch-seconds + subsecond-nanoseconds as the bridge for lossless conversion.
+/// Returns `jiff::Timestamp::UNIX_EPOCH` for values outside jiff's supported range
+/// rather than panicking.
 pub(crate) fn chrono_to_jiff(dt: NaiveDateTime) -> jiff::Timestamp {
     let utc = dt.and_utc();
     jiff::Timestamp::new(utc.timestamp(), utc.timestamp_subsec_nanos() as i32)
-        .expect("valid jiff timestamp from chrono")
+        .unwrap_or(jiff::Timestamp::UNIX_EPOCH)
 }
 
 /// Convert `Option<chrono::NaiveDateTime>` to `Option<jiff::Timestamp>`.

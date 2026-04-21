@@ -1,5 +1,6 @@
 //! Toasty model for `yauth_api_keys`.
 
+use super::YauthUser;
 use uuid::Uuid;
 
 #[derive(Debug, toasty::Model)]
@@ -10,6 +11,9 @@ pub struct YauthApiKey {
 
     #[index]
     pub user_id: Uuid,
+
+    #[belongs_to(key = user_id, references = id)]
+    pub user: toasty::BelongsTo<YauthUser>,
 
     #[unique]
     pub key_prefix: String,

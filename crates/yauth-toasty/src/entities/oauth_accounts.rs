@@ -1,5 +1,6 @@
 //! Toasty model for `yauth_oauth_accounts`.
 
+use super::YauthUser;
 use uuid::Uuid;
 
 #[derive(Debug, toasty::Model)]
@@ -10,6 +11,9 @@ pub struct YauthOauthAccount {
 
     #[index]
     pub user_id: Uuid,
+
+    #[belongs_to(key = user_id, references = id)]
+    pub user: toasty::BelongsTo<YauthUser>,
 
     #[index]
     pub provider: String,

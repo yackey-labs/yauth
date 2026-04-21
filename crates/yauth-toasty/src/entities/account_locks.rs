@@ -1,5 +1,6 @@
 //! Toasty model for `yauth_account_locks`.
 
+use super::YauthUser;
 use uuid::Uuid;
 
 #[derive(Debug, toasty::Model)]
@@ -10,6 +11,9 @@ pub struct YauthAccountLock {
 
     #[index]
     pub user_id: Uuid,
+
+    #[belongs_to(key = user_id, references = id)]
+    pub user: toasty::BelongsTo<YauthUser>,
 
     pub failed_count: i32,
     pub locked_until: Option<jiff::Timestamp>,

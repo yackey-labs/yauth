@@ -1,5 +1,6 @@
 //! Toasty model for `yauth_authorization_codes`.
 
+use super::YauthUser;
 use uuid::Uuid;
 
 #[derive(Debug, toasty::Model)]
@@ -12,7 +13,12 @@ pub struct YauthAuthorizationCode {
     pub code_hash: String,
 
     pub client_id: String,
+
+    #[index]
     pub user_id: Uuid,
+
+    #[belongs_to(key = user_id, references = id)]
+    pub user: toasty::BelongsTo<YauthUser>,
 
     #[serialize(json, nullable)]
     pub scopes: Option<serde_json::Value>,

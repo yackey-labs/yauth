@@ -1,8 +1,8 @@
 //! Toasty model for `yauth_webhooks`.
 //!
-//! Inverse relationship (`has_many`) for deliveries is omitted — see `users.rs`
-//! module doc. Use `YauthWebhookDelivery::filter_by_webhook_id()` instead.
+//! Declares `#[has_many]` inverse relationship for webhook deliveries.
 
+use super::YauthWebhookDelivery;
 use uuid::Uuid;
 
 #[derive(Debug, toasty::Model)]
@@ -20,4 +20,7 @@ pub struct YauthWebhook {
     pub active: bool,
     pub created_at: jiff::Timestamp,
     pub updated_at: jiff::Timestamp,
+
+    #[has_many]
+    pub deliveries: toasty::HasMany<YauthWebhookDelivery>,
 }

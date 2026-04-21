@@ -30,4 +30,10 @@ pub struct YauthOauth2Client {
 
     pub is_public: bool,
     pub created_at: jiff::Timestamp,
+
+    pub token_endpoint_auth_method: Option<String>,
+    pub public_key_pem: Option<String>,
+    pub jwks_uri: Option<String>,
+    pub banned_at: Option<jiff::Timestamp>,
+    pub banned_reason: Option<String>,
 }

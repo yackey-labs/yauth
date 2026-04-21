@@ -53,12 +53,20 @@ impl RevocationRepository for ToastyRevocationRepo {
                     if jiff_to_chrono(row.expires_at) > now {
                         Ok(true)
                     } else {
-                        // Expired revocation -- clean up
+                        // Expired revocation -- clean up (best-effort)
                         let _ = row.delete().exec(&mut db).await;
                         Ok(false)
                     }
                 }
-                Err(_) => Ok(false),
+                Err(e) => {
+                    let msg = format!("{e}");
+                    // "not found" means the token was never revoked
+                    if msg.contains("not found") || msg.contains("no rows") {
+                        Ok(false)
+                    } else {
+                        Err(toasty_err(e))
+                    }
+                }
             }
         })
     }

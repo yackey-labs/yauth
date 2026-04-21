@@ -179,7 +179,9 @@ impl OauthStateRepository for ToastyOauthStateRepo {
                         expires_at: jiff_to_chrono(row.expires_at),
                         created_at: jiff_to_chrono(row.created_at),
                     };
-                    let _ = row.delete().exec(&mut db).await;
+                    // Delete MUST succeed before returning the state value;
+                    // otherwise the same state can be replayed (CSRF bypass).
+                    row.delete().exec(&mut db).await.map_err(toasty_err)?;
                     Ok(Some(domain))
                 }
                 Err(_) => Ok(None),

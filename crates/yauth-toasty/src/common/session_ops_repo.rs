@@ -61,7 +61,14 @@ impl SessionOpsRepository for ToastySessionOpsRepo {
                 .await
             {
                 Ok(s) => s,
-                Err(_) => return Ok(None),
+                Err(e) => {
+                    let msg = format!("{e}");
+                    // "not found" means no session exists for this hash
+                    if msg.contains("not found") || msg.contains("no rows") {
+                        return Ok(None);
+                    }
+                    return Err(toasty_err(e));
+                }
             };
 
             let now = Utc::now().naive_utc();

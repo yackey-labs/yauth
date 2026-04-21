@@ -1,4 +1,4 @@
-use chrono::Utc;
+use chrono::{NaiveDateTime, Utc};
 use toasty::Db;
 use uuid::Uuid;
 
@@ -52,11 +52,89 @@ impl Oauth2ClientRepository for ToastyOauth2ClientRepo {
                 scopes: input.scopes,
                 is_public: input.is_public,
                 created_at: chrono_to_jiff(input.created_at),
+                token_endpoint_auth_method: input.token_endpoint_auth_method,
+                public_key_pem: input.public_key_pem,
+                jwks_uri: input.jwks_uri,
+                banned_at: Option::<jiff::Timestamp>::None,
+                banned_reason: Option::<String>::None,
             })
             .exec(&mut db)
             .await
             .map_err(toasty_err)?;
             Ok(())
+        })
+    }
+    fn set_banned(
+        &self,
+        client_id: &str,
+        banned: Option<(Option<String>, NaiveDateTime)>,
+    ) -> RepoFuture<'_, bool> {
+        let client_id = client_id.to_string();
+        Box::pin(async move {
+            let mut db = self.db.clone();
+            match YauthOauth2Client::filter_by_client_id(&client_id)
+                .get(&mut db)
+                .await
+            {
+                Ok(mut row) => {
+                    let (banned_at, banned_reason) = match banned {
+                        Some((reason, at)) => (Some(chrono_to_jiff(at)), reason),
+                        None => (None, None),
+                    };
+                    row.update()
+                        .banned_at(banned_at)
+                        .banned_reason(banned_reason)
+                        .exec(&mut db)
+                        .await
+                        .map_err(toasty_err)?;
+                    Ok(true)
+                }
+                Err(_) => Ok(false),
+            }
+        })
+    }
+
+    fn rotate_public_key(
+        &self,
+        client_id: &str,
+        public_key_pem: Option<String>,
+    ) -> RepoFuture<'_, bool> {
+        let client_id = client_id.to_string();
+        Box::pin(async move {
+            let mut db = self.db.clone();
+            match YauthOauth2Client::filter_by_client_id(&client_id)
+                .get(&mut db)
+                .await
+            {
+                Ok(mut row) => {
+                    row.update()
+                        .public_key_pem(public_key_pem)
+                        .exec(&mut db)
+                        .await
+                        .map_err(toasty_err)?;
+                    Ok(true)
+                }
+                Err(_) => Ok(false),
+            }
+        })
+    }
+
+    fn list_banned(&self) -> RepoFuture<'_, Vec<domain::Oauth2Client>> {
+        Box::pin(async move {
+            let mut db = self.db.clone();
+            // Toasty lacks WHERE IS NOT NULL filters; fetch all and filter in-app.
+            let rows: Vec<YauthOauth2Client> = YauthOauth2Client::all()
+                .exec(&mut db)
+                .await
+                .map_err(toasty_err)?;
+            let mut banned: Vec<domain::Oauth2Client> = rows
+                .into_iter()
+                .filter(|r| r.banned_at.is_some())
+                .map(oauth2_client_to_domain)
+                .collect();
+            // Newest ban first
+            banned.sort_by_key(|b| std::cmp::Reverse(b.banned_at));
+            Ok(banned)
         })
     }
 }
@@ -335,6 +413,11 @@ fn oauth2_client_to_domain(m: YauthOauth2Client) -> domain::Oauth2Client {
         scopes: m.scopes,
         is_public: m.is_public,
         created_at: jiff_to_chrono(m.created_at),
+        token_endpoint_auth_method: m.token_endpoint_auth_method,
+        public_key_pem: m.public_key_pem,
+        jwks_uri: m.jwks_uri,
+        banned_at: opt_jiff_to_chrono(m.banned_at),
+        banned_reason: m.banned_reason,
     }
 }
 

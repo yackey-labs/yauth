@@ -75,7 +75,11 @@ impl RefreshTokenRepository for ToastyRefreshTokenRepo {
                 .map_err(toasty_err)?;
             for mut row in rows {
                 if !row.revoked {
-                    let _ = row.update().revoked(true).exec(&mut db).await;
+                    row.update()
+                        .revoked(true)
+                        .exec(&mut db)
+                        .await
+                        .map_err(toasty_err)?;
                 }
             }
             Ok(())

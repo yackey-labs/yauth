@@ -40,36 +40,39 @@ impl RateLimitRepository for ToastyRateLimitRepo {
                     let ws = jiff_to_chrono(row.window_start);
                     let ws_utc = ws.and_utc();
                     if ws_utc < window_start_cutoff {
-                        let _ = row.delete().exec(&mut tx).await;
-                        let _ = toasty::create!(YauthRateLimit {
+                        row.delete().exec(&mut tx).await.map_err(toasty_err)?;
+                        toasty::create!(YauthRateLimit {
                             key: key.clone(),
                             count: 1,
                             window_start: chrono_to_jiff(now.naive_utc()),
                         })
                         .exec(&mut tx)
-                        .await;
+                        .await
+                        .map_err(toasty_err)?;
                         (1u32, now)
                     } else {
                         let new_count = row.count + 1;
-                        let _ = row.delete().exec(&mut tx).await;
-                        let _ = toasty::create!(YauthRateLimit {
+                        row.delete().exec(&mut tx).await.map_err(toasty_err)?;
+                        toasty::create!(YauthRateLimit {
                             key: key.clone(),
                             count: new_count,
                             window_start: chrono_to_jiff(ws),
                         })
                         .exec(&mut tx)
-                        .await;
+                        .await
+                        .map_err(toasty_err)?;
                         (new_count as u32, ws_utc)
                     }
                 }
                 None => {
-                    let _ = toasty::create!(YauthRateLimit {
+                    toasty::create!(YauthRateLimit {
                         key: key.clone(),
                         count: 1,
                         window_start: chrono_to_jiff(now.naive_utc()),
                     })
                     .exec(&mut tx)
-                    .await;
+                    .await
+                    .map_err(toasty_err)?;
                     (1u32, now)
                 }
             };

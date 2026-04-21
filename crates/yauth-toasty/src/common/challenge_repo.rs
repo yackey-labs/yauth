@@ -55,8 +55,7 @@ impl ChallengeRepository for ToastyChallengeRepo {
             let mut db = self.db.clone();
             match YauthChallenge::get_by_key(&mut db, &key).await {
                 Ok(row) => {
-                    let now = Utc::now().naive_utc();
-                    if jiff_to_chrono(row.expires_at) < now {
+                    if row.expires_at < jiff::Timestamp::now() {
                         // Expired
                         let _ = row.delete().exec(&mut db).await;
                         Ok(None)

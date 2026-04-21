@@ -1,4 +1,3 @@
-use chrono::Utc;
 use toasty::Db;
 use uuid::Uuid;
 
@@ -32,8 +31,7 @@ impl MagicLinkRepository for ToastyMagicLinkRepo {
                 .await
             {
                 Ok(row) => {
-                    let now = Utc::now().naive_utc();
-                    if jiff_to_chrono(row.expires_at) < now || row.used {
+                    if row.expires_at < jiff::Timestamp::now() || row.used {
                         Ok(None)
                     } else {
                         Ok(Some(magic_link_to_domain(row)))

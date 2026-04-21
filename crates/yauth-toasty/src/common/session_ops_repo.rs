@@ -71,9 +71,7 @@ impl SessionOpsRepository for ToastySessionOpsRepo {
                 }
             };
 
-            let now = Utc::now().naive_utc();
-            let expires = jiff_to_chrono(session.expires_at);
-            if expires < now {
+            if session.expires_at < jiff::Timestamp::now() {
                 // Expired -- clean up (best-effort)
                 let _ = session.delete().exec(&mut db).await;
                 return Ok(None);
@@ -84,7 +82,7 @@ impl SessionOpsRepository for ToastySessionOpsRepo {
                 user_id: session.user_id,
                 ip_address: session.ip_address,
                 user_agent: session.user_agent,
-                expires_at: expires,
+                expires_at: jiff_to_chrono(session.expires_at),
                 created_at: jiff_to_chrono(session.created_at),
             }))
         })

@@ -1,4 +1,3 @@
-use chrono::Utc;
 use toasty::Db;
 use uuid::Uuid;
 
@@ -72,7 +71,7 @@ impl PasskeyRepository for ToastyPasskeyRepo {
                 .exec(&mut db)
                 .await
                 .map_err(toasty_err)?;
-            let now_ts = chrono_to_jiff(Utc::now().naive_utc());
+            let now_ts = jiff::Timestamp::now();
             for mut row in rows {
                 row.update()
                     .last_used_at(Some(now_ts))

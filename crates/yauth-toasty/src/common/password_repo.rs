@@ -1,4 +1,3 @@
-use chrono::Utc;
 use toasty::Db;
 use uuid::Uuid;
 
@@ -85,8 +84,7 @@ impl EmailVerificationRepository for ToastyEmailVerificationRepo {
                 .await
             {
                 Ok(row) => {
-                    let now = Utc::now().naive_utc();
-                    if jiff_to_chrono(row.expires_at) < now {
+                    if row.expires_at < jiff::Timestamp::now() {
                         Ok(None)
                     } else {
                         Ok(Some(domain::EmailVerification {
@@ -170,8 +168,7 @@ impl PasswordResetRepository for ToastyPasswordResetRepo {
                 .await
             {
                 Ok(row) => {
-                    let now = Utc::now().naive_utc();
-                    if jiff_to_chrono(row.expires_at) < now || row.used_at.is_some() {
+                    if row.expires_at < jiff::Timestamp::now() || row.used_at.is_some() {
                         Ok(None)
                     } else {
                         Ok(Some(domain::PasswordReset {

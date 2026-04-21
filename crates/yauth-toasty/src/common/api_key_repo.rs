@@ -1,4 +1,3 @@
-use chrono::Utc;
 use toasty::Db;
 use uuid::Uuid;
 
@@ -29,9 +28,8 @@ impl ApiKeyRepository for ToastyApiKeyRepo {
                 .await
             {
                 Ok(row) => {
-                    let now = Utc::now().naive_utc();
                     if let Some(ref exp) = row.expires_at
-                        && jiff_to_chrono(*exp) < now
+                        && *exp < jiff::Timestamp::now()
                     {
                         return Ok(None);
                     }
@@ -103,7 +101,7 @@ impl ApiKeyRepository for ToastyApiKeyRepo {
             let mut db = self.db.clone();
             if let Ok(mut row) = YauthApiKey::get_by_id(&mut db, &id).await {
                 row.update()
-                    .last_used_at(Some(chrono_to_jiff(Utc::now().naive_utc())))
+                    .last_used_at(Some(jiff::Timestamp::now()))
                     .exec(&mut db)
                     .await
                     .map_err(toasty_err)?;

@@ -1,4 +1,4 @@
-use chrono::{NaiveDateTime, Utc};
+use chrono::NaiveDateTime;
 use toasty::Db;
 use uuid::Uuid;
 
@@ -60,7 +60,7 @@ impl AccountLockRepository for ToastyAccountLockRepo {
                 let new_count = row.failed_count + 1;
                 row.update()
                     .failed_count(new_count)
-                    .updated_at(chrono_to_jiff(Utc::now().naive_utc()))
+                    .updated_at(jiff::Timestamp::now())
                     .exec(&mut db)
                     .await
                     .map_err(toasty_err)?;
@@ -84,7 +84,7 @@ impl AccountLockRepository for ToastyAccountLockRepo {
                     .locked_until(opt_chrono_to_jiff(locked_until))
                     .locked_reason(locked_reason)
                     .lock_count(lock_count)
-                    .updated_at(chrono_to_jiff(Utc::now().naive_utc()))
+                    .updated_at(jiff::Timestamp::now())
                     .exec(&mut db)
                     .await
                     .map_err(toasty_err)?;
@@ -99,7 +99,7 @@ impl AccountLockRepository for ToastyAccountLockRepo {
             if let Ok(mut row) = YauthAccountLock::get_by_id(&mut db, &id).await {
                 row.update()
                     .failed_count(0)
-                    .updated_at(chrono_to_jiff(Utc::now().naive_utc()))
+                    .updated_at(jiff::Timestamp::now())
                     .exec(&mut db)
                     .await
                     .map_err(toasty_err)?;
@@ -116,7 +116,7 @@ impl AccountLockRepository for ToastyAccountLockRepo {
                     .locked_until(Option::<jiff::Timestamp>::None)
                     .locked_reason(Option::<String>::None)
                     .failed_count(0)
-                    .updated_at(chrono_to_jiff(Utc::now().naive_utc()))
+                    .updated_at(jiff::Timestamp::now())
                     .exec(&mut db)
                     .await
                     .map_err(toasty_err)?;
@@ -150,8 +150,7 @@ impl UnlockTokenRepository for ToastyUnlockTokenRepo {
                 .await
             {
                 Ok(row) => {
-                    let now = Utc::now().naive_utc();
-                    if jiff_to_chrono(row.expires_at) < now {
+                    if row.expires_at < jiff::Timestamp::now() {
                         Ok(None)
                     } else {
                         Ok(Some(unlock_token_to_domain(row)))

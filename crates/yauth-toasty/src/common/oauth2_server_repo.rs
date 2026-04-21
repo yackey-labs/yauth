@@ -1,4 +1,4 @@
-use chrono::{NaiveDateTime, Utc};
+use chrono::NaiveDateTime;
 use toasty::Db;
 use uuid::Uuid;
 
@@ -166,8 +166,7 @@ impl AuthorizationCodeRepository for ToastyAuthorizationCodeRepo {
                 .await
             {
                 Ok(row) => {
-                    let now = Utc::now().naive_utc();
-                    if jiff_to_chrono(row.expires_at) < now || row.used {
+                    if row.expires_at < jiff::Timestamp::now() || row.used {
                         Ok(None)
                     } else {
                         Ok(Some(auth_code_to_domain(row)))
@@ -376,7 +375,7 @@ impl DeviceCodeRepository for ToastyDeviceCodeRepo {
             let mut db = self.db.clone();
             if let Ok(mut row) = YauthDeviceCode::get_by_id(&mut db, &id).await {
                 row.update()
-                    .last_polled_at(Some(chrono_to_jiff(Utc::now().naive_utc())))
+                    .last_polled_at(Some(jiff::Timestamp::now()))
                     .exec(&mut db)
                     .await
                     .map_err(toasty_err)?;

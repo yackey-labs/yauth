@@ -1,4 +1,4 @@
-use chrono::{NaiveDateTime, Utc};
+use chrono::NaiveDateTime;
 use toasty::Db;
 use uuid::Uuid;
 
@@ -109,7 +109,7 @@ impl OauthAccountRepository for ToastyOauthAccountRepo {
                     .access_token_enc(access_token_enc)
                     .refresh_token_enc(refresh_token_enc)
                     .expires_at(opt_chrono_to_jiff(expires_at))
-                    .updated_at(chrono_to_jiff(Utc::now().naive_utc()))
+                    .updated_at(jiff::Timestamp::now())
                     .exec(&mut db)
                     .await
                     .map_err(toasty_err)?;
@@ -167,8 +167,7 @@ impl OauthStateRepository for ToastyOauthStateRepo {
             let mut db = self.db.clone();
             match YauthOauthState::get_by_state(&mut db, &state).await {
                 Ok(row) => {
-                    let now = Utc::now().naive_utc();
-                    if jiff_to_chrono(row.expires_at) < now {
+                    if row.expires_at < jiff::Timestamp::now() {
                         let _ = row.delete().exec(&mut db).await;
                         return Ok(None);
                     }

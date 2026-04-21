@@ -32,7 +32,7 @@ impl ChallengeRepository for ToastyChallengeRepo {
             // TODO: replace with atomic upsert when Toasty adds ON CONFLICT support
             let mut tx = db.transaction().await.map_err(toasty_err)?;
             if let Ok(existing) = YauthChallenge::get_by_key(&mut tx, &key).await {
-                let _ = existing.delete().exec(&mut tx).await;
+                existing.delete().exec(&mut tx).await.map_err(toasty_err)?;
             }
             toasty::create!(YauthChallenge {
                 key: key,

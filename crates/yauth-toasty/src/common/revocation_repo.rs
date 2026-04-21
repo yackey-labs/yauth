@@ -1,7 +1,7 @@
 use toasty::Db;
 
 use crate::entities::YauthRevocation;
-use crate::helpers::toasty_err;
+use crate::helpers::{is_not_found, toasty_err};
 use yauth::repo::{RepoFuture, RevocationRepository, sealed};
 
 pub(crate) struct ToastyRevocationRepo {
@@ -27,7 +27,7 @@ impl RevocationRepository for ToastyRevocationRepo {
             // TODO: replace with atomic upsert when Toasty adds ON CONFLICT support
             let mut tx = db.transaction().await.map_err(toasty_err)?;
             if let Ok(row) = YauthRevocation::get_by_key(&mut tx, &jti).await {
-                let _ = row.delete().exec(&mut tx).await;
+                row.delete().exec(&mut tx).await.map_err(toasty_err)?;
             }
             toasty::create!(YauthRevocation {
                 key: jti,
@@ -56,15 +56,8 @@ impl RevocationRepository for ToastyRevocationRepo {
                         Ok(false)
                     }
                 }
-                Err(e) => {
-                    let msg = format!("{e}");
-                    // "not found" means the token was never revoked
-                    if msg.contains("not found") || msg.contains("no rows") {
-                        Ok(false)
-                    } else {
-                        Err(toasty_err(e))
-                    }
-                }
+                Err(e) if is_not_found(&e) => Ok(false),
+                Err(e) => Err(toasty_err(e)),
             }
         })
     }

@@ -2,7 +2,7 @@ use toasty::Db;
 use uuid::Uuid;
 
 use crate::entities::YauthSession;
-use crate::helpers::*;
+use crate::helpers::{is_not_found, jiff_to_chrono, toasty_err};
 use yauth::repo::{RepoFuture, SessionOpsRepository, sealed};
 use yauth_entity as domain;
 
@@ -61,14 +61,8 @@ impl SessionOpsRepository for ToastySessionOpsRepo {
                 .await
             {
                 Ok(s) => s,
-                Err(e) => {
-                    let msg = format!("{e}");
-                    // "not found" means no session exists for this hash
-                    if msg.contains("not found") || msg.contains("no rows") {
-                        return Ok(None);
-                    }
-                    return Err(toasty_err(e));
-                }
+                Err(e) if is_not_found(&e) => return Ok(None),
+                Err(e) => return Err(toasty_err(e)),
             };
 
             if session.expires_at < jiff::Timestamp::now() {

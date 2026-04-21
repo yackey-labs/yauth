@@ -35,8 +35,9 @@ impl RateLimitRepository for ToastyRateLimitRepo {
             let existing = YauthRateLimit::get_by_key(&mut tx, &key).await.ok();
 
             let (count, window_start) = match existing {
-                Some(row) => {
+                Some(mut row) => {
                     if row.window_start < window_start_cutoff {
+                        // Window expired — reset counter
                         row.delete().exec(&mut tx).await.map_err(toasty_err)?;
                         toasty::create!(YauthRateLimit {
                             key: key.clone(),
@@ -48,17 +49,14 @@ impl RateLimitRepository for ToastyRateLimitRepo {
                         .map_err(toasty_err)?;
                         (1u32, now)
                     } else {
+                        // Within window — increment in-place
                         let new_count = row.count + 1;
                         let ws = row.window_start;
-                        row.delete().exec(&mut tx).await.map_err(toasty_err)?;
-                        toasty::create!(YauthRateLimit {
-                            key: key.clone(),
-                            count: new_count,
-                            window_start: ws,
-                        })
-                        .exec(&mut tx)
-                        .await
-                        .map_err(toasty_err)?;
+                        row.update()
+                            .count(new_count)
+                            .exec(&mut tx)
+                            .await
+                            .map_err(toasty_err)?;
                         (new_count as u32, ws)
                     }
                 }
@@ -76,7 +74,7 @@ impl RateLimitRepository for ToastyRateLimitRepo {
             };
             tx.commit().await.map_err(toasty_err)?;
 
-            Ok(rate_limit_result(count, limit, window_start, window_secs))
+            Ok(rate_limit_result(count, limit, window_start, window_secs, now))
         })
     }
 }
@@ -86,10 +84,11 @@ fn rate_limit_result(
     limit: u32,
     window_start: jiff::Timestamp,
     window_secs: u64,
+    now: jiff::Timestamp,
 ) -> domain::RateLimitResult {
     if count >= limit {
         let window_end = window_start + jiff::SignedDuration::from_secs(window_secs as i64);
-        let diff = window_end.duration_since(jiff::Timestamp::now()).as_secs();
+        let diff = window_end.duration_since(now).as_secs();
         let retry_after = diff.max(0) as u64;
         domain::RateLimitResult {
             allowed: false,

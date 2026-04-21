@@ -194,7 +194,7 @@ impl PasswordResetRepository for ToastyPasswordResetRepo {
                 user_id: input.user_id,
                 token_hash: input.token_hash,
                 expires_at: chrono_to_jiff(input.expires_at),
-                used_at: Option::<jiff::Timestamp>::None,
+                used_at: None::<jiff::Timestamp>,
                 created_at: chrono_to_jiff(input.created_at),
             })
             .exec(&mut db)

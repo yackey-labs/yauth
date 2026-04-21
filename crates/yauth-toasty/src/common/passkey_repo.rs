@@ -55,7 +55,7 @@ impl PasskeyRepository for ToastyPasskeyRepo {
                 device_name: input.device_name,
                 credential: input.credential,
                 created_at: chrono_to_jiff(input.created_at),
-                last_used_at: Option::<jiff::Timestamp>::None,
+                last_used_at: None::<jiff::Timestamp>,
             })
             .exec(&mut db)
             .await

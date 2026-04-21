@@ -75,7 +75,7 @@ impl ApiKeyRepository for ToastyApiKeyRepo {
                 key_hash: input.key_hash,
                 name: input.name,
                 scopes: input.scopes,
-                last_used_at: Option::<jiff::Timestamp>::None,
+                last_used_at: None::<jiff::Timestamp>,
                 expires_at: opt_chrono_to_jiff(input.expires_at),
                 created_at: chrono_to_jiff(input.created_at),
             })

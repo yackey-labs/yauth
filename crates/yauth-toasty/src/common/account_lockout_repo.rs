@@ -113,8 +113,8 @@ impl AccountLockRepository for ToastyAccountLockRepo {
             let mut db = self.db.clone();
             if let Ok(mut row) = YauthAccountLock::get_by_id(&mut db, &id).await {
                 row.update()
-                    .locked_until(Option::<jiff::Timestamp>::None)
-                    .locked_reason(Option::<String>::None)
+                    .locked_until(None::<jiff::Timestamp>)
+                    .locked_reason(None::<String>)
                     .failed_count(0)
                     .updated_at(jiff::Timestamp::now())
                     .exec(&mut db)

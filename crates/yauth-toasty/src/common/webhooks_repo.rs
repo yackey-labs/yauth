@@ -64,7 +64,7 @@ impl WebhookRepository for ToastyWebhookRepo {
                 id: input.id,
                 url: input.url,
                 secret: input.secret,
-                events: serde_json::from_value(input.events).unwrap_or_default(),
+                events: json_from_domain(input.events),
                 active: input.active,
                 created_at: chrono_to_jiff(input.created_at),
                 updated_at: chrono_to_jiff(input.updated_at),
@@ -92,7 +92,7 @@ impl WebhookRepository for ToastyWebhookRepo {
                 update = update.secret(secret);
             }
             if let Some(events) = changes.events {
-                update = update.events(serde_json::from_value(events).unwrap_or_default());
+                update = update.events(json_from_domain(events));
             }
             if let Some(active) = changes.active {
                 update = update.active(active);
@@ -183,7 +183,7 @@ fn webhook_to_domain(m: YauthWebhook) -> domain::Webhook {
         id: m.id,
         url: m.url,
         secret: m.secret,
-        events: serde_json::to_value(m.events).unwrap_or_default(),
+        events: json_to_domain(m.events),
         active: m.active,
         created_at: jiff_to_chrono(m.created_at),
         updated_at: jiff_to_chrono(m.updated_at),

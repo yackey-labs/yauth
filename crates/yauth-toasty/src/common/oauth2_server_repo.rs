@@ -46,17 +46,17 @@ impl Oauth2ClientRepository for ToastyOauth2ClientRepo {
                 id: input.id,
                 client_id: input.client_id,
                 client_secret_hash: input.client_secret_hash,
-                redirect_uris: serde_json::from_value(input.redirect_uris).unwrap_or_default(),
+                redirect_uris: json_from_domain(input.redirect_uris),
                 client_name: input.client_name,
-                grant_types: serde_json::from_value(input.grant_types).unwrap_or_default(),
+                grant_types: json_from_domain(input.grant_types),
                 scopes: input.scopes,
                 is_public: input.is_public,
                 created_at: chrono_to_jiff(input.created_at),
                 token_endpoint_auth_method: input.token_endpoint_auth_method,
                 public_key_pem: input.public_key_pem,
                 jwks_uri: input.jwks_uri,
-                banned_at: Option::<jiff::Timestamp>::None,
-                banned_reason: Option::<String>::None,
+                banned_at: None::<jiff::Timestamp>,
+                banned_reason: None::<String>,
             })
             .exec(&mut db)
             .await
@@ -344,7 +344,7 @@ impl DeviceCodeRepository for ToastyDeviceCodeRepo {
                 status: input.status,
                 interval: input.interval,
                 expires_at: chrono_to_jiff(input.expires_at),
-                last_polled_at: Option::<jiff::Timestamp>::None,
+                last_polled_at: None::<jiff::Timestamp>,
                 created_at: chrono_to_jiff(input.created_at),
             })
             .exec(&mut db)
@@ -406,9 +406,9 @@ fn oauth2_client_to_domain(m: YauthOauth2Client) -> domain::Oauth2Client {
         id: m.id,
         client_id: m.client_id,
         client_secret_hash: m.client_secret_hash,
-        redirect_uris: serde_json::to_value(m.redirect_uris).unwrap_or_default(),
+        redirect_uris: json_to_domain(m.redirect_uris),
         client_name: m.client_name,
-        grant_types: serde_json::to_value(m.grant_types).unwrap_or_default(),
+        grant_types: json_to_domain(m.grant_types),
         scopes: m.scopes,
         is_public: m.is_public,
         created_at: jiff_to_chrono(m.created_at),

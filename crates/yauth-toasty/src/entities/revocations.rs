@@ -5,5 +5,5 @@
 pub struct YauthRevocation {
     #[key]
     pub key: String,
-    pub expires_at: String,
+    pub expires_at: jiff::Timestamp,
 }

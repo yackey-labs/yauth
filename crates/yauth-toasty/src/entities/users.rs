@@ -1,4 +1,9 @@
 //! Toasty model for `yauth_users`.
+//!
+//! Inverse relationships (`has_many`/`has_one`) are omitted because Toasty's
+//! cross-module pair verification doesn't resolve across sibling entity modules.
+//! Child entities declare `#[belongs_to]` instead; use `Child::filter_by_user_id()`
+//! for the same query semantics.
 
 use uuid::Uuid;
 
@@ -7,15 +12,16 @@ use uuid::Uuid;
 pub struct YauthUser {
     #[key]
     pub id: Uuid,
+
     #[unique]
     pub email: String,
+
     pub display_name: Option<String>,
     pub email_verified: bool,
     pub role: String,
     pub banned: bool,
     pub banned_reason: Option<String>,
-    /// Stored as ISO 8601 string (chrono not supported by Toasty).
-    pub banned_until: Option<String>,
-    pub created_at: String,
-    pub updated_at: String,
+    pub banned_until: Option<jiff::Timestamp>,
+    pub created_at: jiff::Timestamp,
+    pub updated_at: jiff::Timestamp,
 }

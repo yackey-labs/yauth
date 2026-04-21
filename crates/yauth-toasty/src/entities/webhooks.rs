@@ -1,4 +1,7 @@
 //! Toasty model for `yauth_webhooks`.
+//!
+//! Inverse relationship (`has_many`) for deliveries is omitted — see `users.rs`
+//! module doc. Use `YauthWebhookDelivery::filter_by_webhook_id()` instead.
 
 use uuid::Uuid;
 
@@ -7,11 +10,14 @@ use uuid::Uuid;
 pub struct YauthWebhook {
     #[key]
     pub id: Uuid,
+
     pub url: String,
     pub secret: String,
-    /// JSON events list, serialized as string.
-    pub events: String,
+
+    #[serialize(json)]
+    pub events: Vec<String>,
+
     pub active: bool,
-    pub created_at: String,
-    pub updated_at: String,
+    pub created_at: jiff::Timestamp,
+    pub updated_at: jiff::Timestamp,
 }

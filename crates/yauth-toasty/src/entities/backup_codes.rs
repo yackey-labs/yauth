@@ -7,9 +7,11 @@ use uuid::Uuid;
 pub struct YauthBackupCode {
     #[key]
     pub id: Uuid,
+
     #[index]
     pub user_id: Uuid,
+
     pub code_hash: String,
     pub used: bool,
-    pub created_at: String,
+    pub created_at: jiff::Timestamp,
 }

@@ -1,4 +1,8 @@
 //! Toasty model for `yauth_oauth2_clients`.
+//!
+//! Inverse relationships (`has_many`) are omitted — see `users.rs` module doc.
+//! Child entities (`YauthAuthorizationCode`, `YauthConsent`, `YauthDeviceCode`)
+//! declare `#[belongs_to]` and provide `filter_by_client_id()` accessors.
 
 use uuid::Uuid;
 
@@ -7,16 +11,23 @@ use uuid::Uuid;
 pub struct YauthOauth2Client {
     #[key]
     pub id: Uuid,
+
     #[unique]
     pub client_id: String,
+
     pub client_secret_hash: Option<String>,
-    /// JSON redirect URIs, serialized as string.
-    pub redirect_uris: String,
+
+    #[serialize(json)]
+    pub redirect_uris: Vec<String>,
+
     pub client_name: Option<String>,
-    /// JSON grant types, serialized as string.
-    pub grant_types: String,
-    /// JSON scopes, serialized as string.
-    pub scopes: Option<String>,
+
+    #[serialize(json)]
+    pub grant_types: Vec<String>,
+
+    #[serialize(json, nullable)]
+    pub scopes: Option<serde_json::Value>,
+
     pub is_public: bool,
-    pub created_at: String,
+    pub created_at: jiff::Timestamp,
 }

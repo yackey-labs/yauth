@@ -7,10 +7,14 @@ use uuid::Uuid;
 pub struct YauthConsent {
     #[key]
     pub id: Uuid,
+
     #[index]
     pub user_id: Uuid,
+
     pub client_id: String,
-    /// JSON scopes, serialized as string.
-    pub scopes: Option<String>,
-    pub created_at: String,
+
+    #[serialize(json, nullable)]
+    pub scopes: Option<serde_json::Value>,
+
+    pub created_at: jiff::Timestamp,
 }

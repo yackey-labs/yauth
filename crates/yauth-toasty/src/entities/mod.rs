@@ -6,8 +6,12 @@
 //! These entities are shared across all backends (PostgreSQL, MySQL, SQLite).
 //! Toasty handles UUID storage differences internally (native UUID on PG,
 //! CHAR(36) on MySQL, TEXT on SQLite).
+//!
+//! All entity modules are always compiled regardless of which plugin features
+//! are enabled. This ensures a consistent model set for Toasty's migration
+//! snapshot system. Only repository implementations are feature-gated.
 
-// Core tables (always compiled)
+// Core tables
 mod users;
 pub use users::*;
 
@@ -26,98 +30,60 @@ pub use rate_limits::*;
 mod revocations;
 pub use revocations::*;
 
-// Feature-gated tables
-#[cfg(feature = "email-password")]
+// Plugin tables (always compiled — feature gates on repos only)
 mod passwords;
-#[cfg(feature = "email-password")]
 pub use passwords::*;
 
-#[cfg(feature = "email-password")]
 mod email_verifications;
-#[cfg(feature = "email-password")]
 pub use email_verifications::*;
 
-#[cfg(feature = "email-password")]
 mod password_resets;
-#[cfg(feature = "email-password")]
 pub use password_resets::*;
 
-#[cfg(feature = "passkey")]
 mod passkeys;
-#[cfg(feature = "passkey")]
 pub use passkeys::*;
 
-#[cfg(feature = "mfa")]
 mod totp_secrets;
-#[cfg(feature = "mfa")]
 pub use totp_secrets::*;
 
-#[cfg(feature = "mfa")]
 mod backup_codes;
-#[cfg(feature = "mfa")]
 pub use backup_codes::*;
 
-#[cfg(feature = "oauth")]
 mod oauth_accounts;
-#[cfg(feature = "oauth")]
 pub use oauth_accounts::*;
 
-#[cfg(feature = "oauth")]
 mod oauth_states;
-#[cfg(feature = "oauth")]
 pub use oauth_states::*;
 
-#[cfg(feature = "api-key")]
 mod api_keys;
-#[cfg(feature = "api-key")]
 pub use api_keys::*;
 
-#[cfg(feature = "bearer")]
 mod refresh_tokens;
-#[cfg(feature = "bearer")]
 pub use refresh_tokens::*;
 
-#[cfg(feature = "magic-link")]
 mod magic_links;
-#[cfg(feature = "magic-link")]
 pub use magic_links::*;
 
-#[cfg(feature = "oauth2-server")]
 mod oauth2_clients;
-#[cfg(feature = "oauth2-server")]
 pub use oauth2_clients::*;
 
-#[cfg(feature = "oauth2-server")]
 mod authorization_codes;
-#[cfg(feature = "oauth2-server")]
 pub use authorization_codes::*;
 
-#[cfg(feature = "oauth2-server")]
 mod consents;
-#[cfg(feature = "oauth2-server")]
 pub use consents::*;
 
-#[cfg(feature = "oauth2-server")]
 mod device_codes;
-#[cfg(feature = "oauth2-server")]
 pub use device_codes::*;
 
-#[cfg(feature = "account-lockout")]
 mod account_locks;
-#[cfg(feature = "account-lockout")]
 pub use account_locks::*;
 
-#[cfg(feature = "account-lockout")]
 mod unlock_tokens;
-#[cfg(feature = "account-lockout")]
 pub use unlock_tokens::*;
 
-#[cfg(feature = "webhooks")]
 mod webhooks;
-#[cfg(feature = "webhooks")]
 pub use webhooks::*;
 
-#[cfg(feature = "webhooks")]
 mod webhook_deliveries;
-#[cfg(feature = "webhooks")]
 pub use webhook_deliveries::*;

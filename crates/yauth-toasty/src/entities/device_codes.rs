@@ -7,17 +7,22 @@ use uuid::Uuid;
 pub struct YauthDeviceCode {
     #[key]
     pub id: Uuid,
+
     #[unique]
     pub device_code_hash: String,
+
     #[unique]
     pub user_code: String,
+
     pub client_id: String,
-    /// JSON scopes, serialized as string.
-    pub scopes: Option<String>,
+
+    #[serialize(json, nullable)]
+    pub scopes: Option<serde_json::Value>,
+
     pub user_id: Option<Uuid>,
     pub status: String,
     pub interval: i32,
-    pub expires_at: String,
-    pub last_polled_at: Option<String>,
-    pub created_at: String,
+    pub expires_at: jiff::Timestamp,
+    pub last_polled_at: Option<jiff::Timestamp>,
+    pub created_at: jiff::Timestamp,
 }

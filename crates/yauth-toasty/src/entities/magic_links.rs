@@ -7,11 +7,14 @@ use uuid::Uuid;
 pub struct YauthMagicLink {
     #[key]
     pub id: Uuid,
+
     #[index]
     pub email: String,
+
     #[unique]
     pub token_hash: String,
-    pub expires_at: String,
+
+    pub expires_at: jiff::Timestamp,
     pub used: bool,
-    pub created_at: String,
+    pub created_at: jiff::Timestamp,
 }

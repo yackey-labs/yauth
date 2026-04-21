@@ -7,12 +7,14 @@ use uuid::Uuid;
 pub struct YauthAccountLock {
     #[key]
     pub id: Uuid,
+
     #[index]
     pub user_id: Uuid,
+
     pub failed_count: i32,
-    pub locked_until: Option<String>,
+    pub locked_until: Option<jiff::Timestamp>,
     pub lock_count: i32,
     pub locked_reason: Option<String>,
-    pub created_at: String,
-    pub updated_at: String,
+    pub created_at: jiff::Timestamp,
+    pub updated_at: jiff::Timestamp,
 }

@@ -7,13 +7,17 @@ use uuid::Uuid;
 pub struct YauthRefreshToken {
     #[key]
     pub id: Uuid,
+
     #[index]
     pub user_id: Uuid,
+
     #[unique]
     pub token_hash: String,
+
     #[index]
     pub family_id: Uuid,
-    pub expires_at: String,
+
+    pub expires_at: jiff::Timestamp,
     pub revoked: bool,
-    pub created_at: String,
+    pub created_at: jiff::Timestamp,
 }

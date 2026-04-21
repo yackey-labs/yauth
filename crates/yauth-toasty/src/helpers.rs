@@ -24,9 +24,9 @@ pub(crate) fn opt_jiff_to_chrono(ts: Option<jiff::Timestamp>) -> Option<NaiveDat
 ///
 /// Uses epoch-seconds + subsecond-nanoseconds as the bridge for lossless conversion.
 pub(crate) fn chrono_to_jiff(dt: NaiveDateTime) -> jiff::Timestamp {
-    let epoch_secs = dt.and_utc().timestamp();
-    let nanos = dt.and_utc().timestamp_subsec_nanos();
-    jiff::Timestamp::new(epoch_secs, nanos as i32).expect("valid jiff timestamp from chrono")
+    let utc = dt.and_utc();
+    jiff::Timestamp::new(utc.timestamp(), utc.timestamp_subsec_nanos() as i32)
+        .expect("valid jiff timestamp from chrono")
 }
 
 /// Convert `Option<chrono::NaiveDateTime>` to `Option<jiff::Timestamp>`.

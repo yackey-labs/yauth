@@ -4599,7 +4599,6 @@ version = "0.8.9"
 dependencies = [
  "chrono",
  "jiff",
- "log",
  "serde",
  "serde_json",
  "toasty",

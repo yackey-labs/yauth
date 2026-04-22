@@ -7,6 +7,6 @@ pub struct YauthOauthState {
     pub state: String,
     pub provider: String,
     pub redirect_url: Option<String>,
-    pub expires_at: String,
-    pub created_at: String,
+    pub expires_at: jiff::Timestamp,
+    pub created_at: jiff::Timestamp,
 }

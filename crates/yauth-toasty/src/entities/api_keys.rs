@@ -1,5 +1,6 @@
 //! Toasty model for `yauth_api_keys`.
 
+use super::YauthUser;
 use uuid::Uuid;
 
 #[derive(Debug, toasty::Model)]
@@ -7,15 +8,23 @@ use uuid::Uuid;
 pub struct YauthApiKey {
     #[key]
     pub id: Uuid,
+
     #[index]
     pub user_id: Uuid,
+
+    #[belongs_to(key = user_id, references = id)]
+    pub yauth_user: toasty::BelongsTo<YauthUser>,
+
     #[unique]
     pub key_prefix: String,
+
     pub key_hash: String,
     pub name: String,
-    /// JSON scopes, serialized as string.
-    pub scopes: Option<String>,
-    pub last_used_at: Option<String>,
-    pub expires_at: Option<String>,
-    pub created_at: String,
+
+    #[serialize(json, nullable)]
+    pub scopes: Option<serde_json::Value>,
+
+    pub last_used_at: Option<jiff::Timestamp>,
+    pub expires_at: Option<jiff::Timestamp>,
+    pub created_at: jiff::Timestamp,
 }

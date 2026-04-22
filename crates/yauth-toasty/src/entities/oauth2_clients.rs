@@ -1,4 +1,10 @@
 //! Toasty model for `yauth_oauth2_clients`.
+//!
+//! Child entities (`YauthAuthorizationCode`, `YauthConsent`, `YauthDeviceCode`)
+//! reference this entity via a `client_id: String` FK. Because `client_id` is a
+//! non-PK unique field, the `#[belongs_to]` / `#[has_many]` pair cannot express
+//! this relationship directly — use `filter_by_client_id()` accessors on child
+//! entities instead.
 
 use uuid::Uuid;
 
@@ -7,16 +13,29 @@ use uuid::Uuid;
 pub struct YauthOauth2Client {
     #[key]
     pub id: Uuid,
+
     #[unique]
     pub client_id: String,
+
     pub client_secret_hash: Option<String>,
-    /// JSON redirect URIs, serialized as string.
-    pub redirect_uris: String,
+
+    #[serialize(json)]
+    pub redirect_uris: Vec<String>,
+
     pub client_name: Option<String>,
-    /// JSON grant types, serialized as string.
-    pub grant_types: String,
-    /// JSON scopes, serialized as string.
-    pub scopes: Option<String>,
+
+    #[serialize(json)]
+    pub grant_types: Vec<String>,
+
+    #[serialize(json, nullable)]
+    pub scopes: Option<serde_json::Value>,
+
     pub is_public: bool,
-    pub created_at: String,
+    pub created_at: jiff::Timestamp,
+
+    pub token_endpoint_auth_method: Option<String>,
+    pub public_key_pem: Option<String>,
+    pub jwks_uri: Option<String>,
+    pub banned_at: Option<jiff::Timestamp>,
+    pub banned_reason: Option<String>,
 }

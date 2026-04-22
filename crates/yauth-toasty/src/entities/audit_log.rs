@@ -7,10 +7,13 @@ use uuid::Uuid;
 pub struct YauthAuditLog {
     #[key]
     pub id: Uuid,
+
     pub user_id: Option<Uuid>,
     pub event_type: String,
-    /// JSON metadata, serialized as string.
-    pub metadata: Option<String>,
+
+    #[serialize(json, nullable)]
+    pub metadata: Option<serde_json::Value>,
+
     pub ip_address: Option<String>,
-    pub created_at: String,
+    pub created_at: jiff::Timestamp,
 }

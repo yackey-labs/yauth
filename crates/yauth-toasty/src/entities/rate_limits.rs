@@ -6,5 +6,5 @@ pub struct YauthRateLimit {
     #[key]
     pub key: String,
     pub count: i32,
-    pub window_start: String,
+    pub window_start: jiff::Timestamp,
 }

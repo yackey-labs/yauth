@@ -2,7 +2,9 @@ use toasty::Db;
 use uuid::Uuid;
 
 use crate::entities::{YauthWebhook, YauthWebhookDelivery};
-use crate::helpers::*;
+use crate::helpers::{
+    chrono_to_jiff, jiff_to_chrono, json_from_domain, json_to_domain, toasty_err,
+};
 use yauth::repo::{RepoFuture, WebhookDeliveryRepository, WebhookRepository, sealed};
 use yauth_entity as domain;
 
@@ -64,10 +66,10 @@ impl WebhookRepository for ToastyWebhookRepo {
                 id: input.id,
                 url: input.url,
                 secret: input.secret,
-                events: json_to_str(&input.events),
+                events: json_from_domain(input.events),
                 active: input.active,
-                created_at: dt_to_str(input.created_at),
-                updated_at: dt_to_str(input.updated_at),
+                created_at: chrono_to_jiff(input.created_at),
+                updated_at: chrono_to_jiff(input.updated_at),
             })
             .exec(&mut db)
             .await
@@ -92,13 +94,13 @@ impl WebhookRepository for ToastyWebhookRepo {
                 update = update.secret(secret);
             }
             if let Some(events) = changes.events {
-                update = update.events(json_to_str(&events));
+                update = update.events(json_from_domain(events));
             }
             if let Some(active) = changes.active {
                 update = update.active(active);
             }
             if let Some(updated_at) = changes.updated_at {
-                update = update.updated_at(dt_to_str(updated_at));
+                update = update.updated_at(chrono_to_jiff(updated_at));
             }
 
             update.exec(&mut db).await.map_err(toasty_err)?;
@@ -163,12 +165,12 @@ impl WebhookDeliveryRepository for ToastyWebhookDeliveryRepo {
                 id: input.id,
                 webhook_id: input.webhook_id,
                 event_type: input.event_type,
-                payload: json_to_str(&input.payload),
+                payload: input.payload,
                 status_code: input.status_code.map(|c| c as i32),
                 response_body: input.response_body,
                 success: input.success,
                 attempt: input.attempt,
-                created_at: dt_to_str(input.created_at),
+                created_at: chrono_to_jiff(input.created_at),
             })
             .exec(&mut db)
             .await
@@ -183,10 +185,10 @@ fn webhook_to_domain(m: YauthWebhook) -> domain::Webhook {
         id: m.id,
         url: m.url,
         secret: m.secret,
-        events: str_to_json(&m.events),
+        events: json_to_domain(m.events),
         active: m.active,
-        created_at: str_to_dt(&m.created_at),
-        updated_at: str_to_dt(&m.updated_at),
+        created_at: jiff_to_chrono(m.created_at),
+        updated_at: jiff_to_chrono(m.updated_at),
     }
 }
 
@@ -195,11 +197,11 @@ fn webhook_delivery_to_domain(m: YauthWebhookDelivery) -> domain::WebhookDeliver
         id: m.id,
         webhook_id: m.webhook_id,
         event_type: m.event_type,
-        payload: str_to_json(&m.payload),
+        payload: m.payload,
         status_code: m.status_code.map(|c| c as i16),
         response_body: m.response_body,
         success: m.success,
         attempt: m.attempt,
-        created_at: str_to_dt(&m.created_at),
+        created_at: jiff_to_chrono(m.created_at),
     }
 }

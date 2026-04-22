@@ -5,7 +5,9 @@
 pub struct YauthChallenge {
     #[key]
     pub key: String,
-    /// JSON value, serialized as string.
-    pub value: String,
-    pub expires_at: String,
+
+    #[serialize(json)]
+    pub value: serde_json::Value,
+
+    pub expires_at: jiff::Timestamp,
 }

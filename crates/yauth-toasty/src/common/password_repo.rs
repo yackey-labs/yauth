@@ -1,9 +1,8 @@
-use chrono::Utc;
 use toasty::Db;
 use uuid::Uuid;
 
 use crate::entities::{YauthEmailVerification, YauthPassword, YauthPasswordReset};
-use crate::helpers::*;
+use crate::helpers::{chrono_to_jiff, jiff_to_chrono, opt_jiff_to_chrono, toasty_err};
 use yauth::repo::{
     EmailVerificationRepository, PasswordRepository, PasswordResetRepository, RepoFuture, sealed,
 };
@@ -85,16 +84,15 @@ impl EmailVerificationRepository for ToastyEmailVerificationRepo {
                 .await
             {
                 Ok(row) => {
-                    let now = Utc::now().naive_utc();
-                    if str_to_dt(&row.expires_at) < now {
+                    if row.expires_at < jiff::Timestamp::now() {
                         Ok(None)
                     } else {
                         Ok(Some(domain::EmailVerification {
                             id: row.id,
                             user_id: row.user_id,
                             token_hash: row.token_hash,
-                            expires_at: str_to_dt(&row.expires_at),
-                            created_at: str_to_dt(&row.created_at),
+                            expires_at: jiff_to_chrono(row.expires_at),
+                            created_at: jiff_to_chrono(row.created_at),
                         }))
                     }
                 }
@@ -110,8 +108,8 @@ impl EmailVerificationRepository for ToastyEmailVerificationRepo {
                 id: input.id,
                 user_id: input.user_id,
                 token_hash: input.token_hash,
-                expires_at: dt_to_str(input.expires_at),
-                created_at: dt_to_str(input.created_at),
+                expires_at: chrono_to_jiff(input.expires_at),
+                created_at: chrono_to_jiff(input.created_at),
             })
             .exec(&mut db)
             .await
@@ -170,17 +168,16 @@ impl PasswordResetRepository for ToastyPasswordResetRepo {
                 .await
             {
                 Ok(row) => {
-                    let now = Utc::now().naive_utc();
-                    if str_to_dt(&row.expires_at) < now || row.used_at.is_some() {
+                    if row.expires_at < jiff::Timestamp::now() || row.used_at.is_some() {
                         Ok(None)
                     } else {
                         Ok(Some(domain::PasswordReset {
                             id: row.id,
                             user_id: row.user_id,
                             token_hash: row.token_hash,
-                            expires_at: str_to_dt(&row.expires_at),
-                            used_at: opt_str_to_dt(row.used_at.as_deref()),
-                            created_at: str_to_dt(&row.created_at),
+                            expires_at: jiff_to_chrono(row.expires_at),
+                            used_at: opt_jiff_to_chrono(row.used_at),
+                            created_at: jiff_to_chrono(row.created_at),
                         }))
                     }
                 }
@@ -196,9 +193,9 @@ impl PasswordResetRepository for ToastyPasswordResetRepo {
                 id: input.id,
                 user_id: input.user_id,
                 token_hash: input.token_hash,
-                expires_at: dt_to_str(input.expires_at),
-                used_at: Option::<String>::None,
-                created_at: dt_to_str(input.created_at),
+                expires_at: chrono_to_jiff(input.expires_at),
+                used_at: None::<jiff::Timestamp>,
+                created_at: chrono_to_jiff(input.created_at),
             })
             .exec(&mut db)
             .await

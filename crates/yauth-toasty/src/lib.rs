@@ -24,7 +24,7 @@
 /// Shared Toasty entity definitions used by all backends.
 pub mod entities;
 
-/// Shared conversion helpers (datetime, JSON, UUID, error mapping).
+/// Shared conversion helpers (jiff↔chrono bridging, error mapping).
 #[allow(dead_code)]
 pub(crate) mod helpers;
 

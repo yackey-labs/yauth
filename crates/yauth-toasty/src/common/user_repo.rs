@@ -2,7 +2,10 @@ use toasty::Db;
 use uuid::Uuid;
 
 use crate::entities::{YauthSession, YauthUser};
-use crate::helpers::*;
+use crate::helpers::{
+    chrono_to_jiff, jiff_to_chrono, opt_chrono_to_jiff, opt_jiff_to_chrono, toasty_conflict,
+    toasty_err,
+};
 use yauth::repo::{RepoFuture, SessionRepository, UserRepository, sealed};
 use yauth_entity as domain;
 
@@ -53,9 +56,9 @@ impl UserRepository for ToastyUserRepo {
                 role: input.role,
                 banned: input.banned,
                 banned_reason: input.banned_reason,
-                banned_until: opt_dt_to_str(input.banned_until),
-                created_at: dt_to_str(input.created_at),
-                updated_at: dt_to_str(input.updated_at),
+                banned_until: opt_chrono_to_jiff(input.banned_until),
+                created_at: chrono_to_jiff(input.created_at),
+                updated_at: chrono_to_jiff(input.updated_at),
             })
             .exec(&mut db)
             .await
@@ -92,10 +95,10 @@ impl UserRepository for ToastyUserRepo {
                 update = update.banned_reason(banned_reason);
             }
             if let Some(banned_until) = changes.banned_until {
-                update = update.banned_until(opt_dt_to_str(banned_until));
+                update = update.banned_until(opt_chrono_to_jiff(banned_until));
             }
             if let Some(updated_at) = changes.updated_at {
-                update = update.updated_at(dt_to_str(updated_at));
+                update = update.updated_at(chrono_to_jiff(updated_at));
             }
 
             update.exec(&mut db).await.map_err(toasty_err)?;
@@ -139,10 +142,10 @@ impl UserRepository for ToastyUserRepo {
         let search = search.map(|s| s.to_lowercase());
         Box::pin(async move {
             let mut db = self.db.clone();
+            // GAP: Toasty doesn't support ILIKE — filter in application layer
             let all_users: Vec<YauthUser> =
                 YauthUser::all().exec(&mut db).await.map_err(toasty_err)?;
 
-            // Filter in application layer (Toasty doesn't support ILIKE)
             let filtered: Vec<domain::User> = all_users
                 .into_iter()
                 .filter(|u| {
@@ -202,8 +205,8 @@ impl SessionRepository for ToastySessionRepo {
                 token_hash: input.token_hash,
                 ip_address: input.ip_address,
                 user_agent: input.user_agent,
-                expires_at: dt_to_str(input.expires_at),
-                created_at: dt_to_str(input.created_at),
+                expires_at: chrono_to_jiff(input.expires_at),
+                created_at: chrono_to_jiff(input.created_at),
             })
             .exec(&mut db)
             .await
@@ -252,9 +255,9 @@ fn user_to_domain(m: YauthUser) -> domain::User {
         role: m.role,
         banned: m.banned,
         banned_reason: m.banned_reason,
-        banned_until: opt_str_to_dt(m.banned_until.as_deref()),
-        created_at: str_to_dt(&m.created_at),
-        updated_at: str_to_dt(&m.updated_at),
+        banned_until: opt_jiff_to_chrono(m.banned_until),
+        created_at: jiff_to_chrono(m.created_at),
+        updated_at: jiff_to_chrono(m.updated_at),
     }
 }
 
@@ -265,7 +268,7 @@ fn session_to_domain(m: YauthSession) -> domain::Session {
         token_hash: m.token_hash,
         ip_address: m.ip_address,
         user_agent: m.user_agent,
-        expires_at: str_to_dt(&m.expires_at),
-        created_at: str_to_dt(&m.created_at),
+        expires_at: jiff_to_chrono(m.expires_at),
+        created_at: jiff_to_chrono(m.created_at),
     }
 }

@@ -43,17 +43,14 @@ full = [
 [dependencies]
 yauth = { path = "../yauth", default-features = false }
 yauth-entity = { path = "../yauth-entity" }
-toasty = { version = "0.3.0", default-features = false }
+toasty = { version = "0.4.0", default-features = false, features = ["jiff", "serde"] }
 
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v7", "serde"] }
+jiff = { version = "0.2", features = ["serde"] }
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
-log = "0.4"
-
-# For raw SQL fallback (complex queries Toasty can't express)
-tokio-postgres = { version = "0.7", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }

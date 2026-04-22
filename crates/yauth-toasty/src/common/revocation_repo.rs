@@ -1,8 +1,7 @@
-use chrono::Utc;
 use toasty::Db;
 
 use crate::entities::YauthRevocation;
-use crate::helpers::*;
+use crate::helpers::{is_not_found, toasty_err};
 use yauth::repo::{RepoFuture, RevocationRepository, sealed};
 
 pub(crate) struct ToastyRevocationRepo {
@@ -23,16 +22,16 @@ impl RevocationRepository for ToastyRevocationRepo {
         Box::pin(async move {
             let mut db = self.db.clone();
             let expires_at =
-                Utc::now().naive_utc() + chrono::Duration::seconds(ttl.as_secs() as i64);
+                jiff::Timestamp::now() + jiff::SignedDuration::from_secs(ttl.as_secs() as i64);
 
             // TODO: replace with atomic upsert when Toasty adds ON CONFLICT support
             let mut tx = db.transaction().await.map_err(toasty_err)?;
             if let Ok(row) = YauthRevocation::get_by_key(&mut tx, &jti).await {
-                let _ = row.delete().exec(&mut tx).await;
+                row.delete().exec(&mut tx).await.map_err(toasty_err)?;
             }
             toasty::create!(YauthRevocation {
                 key: jti,
-                expires_at: dt_to_str(expires_at),
+                expires_at,
             })
             .exec(&mut tx)
             .await
@@ -49,16 +48,16 @@ impl RevocationRepository for ToastyRevocationRepo {
             let mut db = self.db.clone();
             match YauthRevocation::get_by_key(&mut db, &jti).await {
                 Ok(row) => {
-                    let now = Utc::now().naive_utc();
-                    if str_to_dt(&row.expires_at) > now {
+                    if row.expires_at > jiff::Timestamp::now() {
                         Ok(true)
                     } else {
-                        // Expired revocation -- clean up
+                        // Expired revocation -- clean up (best-effort)
                         let _ = row.delete().exec(&mut db).await;
                         Ok(false)
                     }
                 }
-                Err(_) => Ok(false),
+                Err(e) if is_not_found(&e) => Ok(false),
+                Err(e) => Err(toasty_err(e)),
             }
         })
     }

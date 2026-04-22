@@ -2,7 +2,7 @@ use toasty::Db;
 use uuid::Uuid;
 
 use crate::entities::{YauthBackupCode, YauthTotpSecret};
-use crate::helpers::*;
+use crate::helpers::{chrono_to_jiff, jiff_to_chrono, toasty_err};
 use yauth::repo::{BackupCodeRepository, RepoFuture, TotpRepository, sealed};
 use yauth_entity as domain;
 
@@ -41,7 +41,7 @@ impl TotpRepository for ToastyTotpRepo {
                 user_id: r.user_id,
                 encrypted_secret: r.encrypted_secret,
                 verified: r.verified,
-                created_at: str_to_dt(&r.created_at),
+                created_at: jiff_to_chrono(r.created_at),
             }))
         })
     }
@@ -54,7 +54,7 @@ impl TotpRepository for ToastyTotpRepo {
                 user_id: input.user_id,
                 encrypted_secret: input.encrypted_secret,
                 verified: input.verified,
-                created_at: dt_to_str(input.created_at),
+                created_at: chrono_to_jiff(input.created_at),
             })
             .exec(&mut db)
             .await
@@ -134,7 +134,7 @@ impl BackupCodeRepository for ToastyBackupCodeRepo {
                     user_id: r.user_id,
                     code_hash: r.code_hash,
                     used: r.used,
-                    created_at: str_to_dt(&r.created_at),
+                    created_at: jiff_to_chrono(r.created_at),
                 })
                 .collect())
         })
@@ -148,7 +148,7 @@ impl BackupCodeRepository for ToastyBackupCodeRepo {
                 user_id: input.user_id,
                 code_hash: input.code_hash,
                 used: input.used,
-                created_at: dt_to_str(input.created_at),
+                created_at: chrono_to_jiff(input.created_at),
             })
             .exec(&mut db)
             .await

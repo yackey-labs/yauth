@@ -1,9 +1,10 @@
-use chrono::Utc;
 use toasty::Db;
 use uuid::Uuid;
 
 use crate::entities::YauthApiKey;
-use crate::helpers::*;
+use crate::helpers::{
+    chrono_to_jiff, jiff_to_chrono, opt_chrono_to_jiff, opt_jiff_to_chrono, toasty_err,
+};
 use yauth::repo::{ApiKeyRepository, RepoFuture, sealed};
 use yauth_entity as domain;
 
@@ -29,9 +30,8 @@ impl ApiKeyRepository for ToastyApiKeyRepo {
                 .await
             {
                 Ok(row) => {
-                    let now = Utc::now().naive_utc();
                     if let Some(ref exp) = row.expires_at
-                        && str_to_dt(exp) < now
+                        && *exp < jiff::Timestamp::now()
                     {
                         return Ok(None);
                     }
@@ -76,10 +76,10 @@ impl ApiKeyRepository for ToastyApiKeyRepo {
                 key_prefix: input.key_prefix,
                 key_hash: input.key_hash,
                 name: input.name,
-                scopes: opt_json_to_str(input.scopes.as_ref()),
-                last_used_at: Option::<String>::None,
-                expires_at: opt_dt_to_str(input.expires_at),
-                created_at: dt_to_str(input.created_at),
+                scopes: input.scopes,
+                last_used_at: None::<jiff::Timestamp>,
+                expires_at: opt_chrono_to_jiff(input.expires_at),
+                created_at: chrono_to_jiff(input.created_at),
             })
             .exec(&mut db)
             .await
@@ -103,7 +103,7 @@ impl ApiKeyRepository for ToastyApiKeyRepo {
             let mut db = self.db.clone();
             if let Ok(mut row) = YauthApiKey::get_by_id(&mut db, &id).await {
                 row.update()
-                    .last_used_at(Some(dt_to_str(Utc::now().naive_utc())))
+                    .last_used_at(Some(jiff::Timestamp::now()))
                     .exec(&mut db)
                     .await
                     .map_err(toasty_err)?;
@@ -120,9 +120,9 @@ fn api_key_to_domain(m: YauthApiKey) -> domain::ApiKey {
         key_prefix: m.key_prefix,
         key_hash: m.key_hash,
         name: m.name,
-        scopes: opt_str_to_json(m.scopes.as_deref()),
-        last_used_at: opt_str_to_dt(m.last_used_at.as_deref()),
-        expires_at: opt_str_to_dt(m.expires_at.as_deref()),
-        created_at: str_to_dt(&m.created_at),
+        scopes: m.scopes,
+        last_used_at: opt_jiff_to_chrono(m.last_used_at),
+        expires_at: opt_jiff_to_chrono(m.expires_at),
+        created_at: jiff_to_chrono(m.created_at),
     }
 }

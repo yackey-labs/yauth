@@ -2,7 +2,7 @@ use toasty::Db;
 use uuid::Uuid;
 
 use crate::entities::YauthRefreshToken;
-use crate::helpers::*;
+use crate::helpers::{chrono_to_jiff, jiff_to_chrono, toasty_err};
 use yauth::repo::{RefreshTokenRepository, RepoFuture, sealed};
 use yauth_entity as domain;
 
@@ -41,9 +41,9 @@ impl RefreshTokenRepository for ToastyRefreshTokenRepo {
                 user_id: input.user_id,
                 token_hash: input.token_hash,
                 family_id: input.family_id,
-                expires_at: dt_to_str(input.expires_at),
+                expires_at: chrono_to_jiff(input.expires_at),
                 revoked: input.revoked,
-                created_at: dt_to_str(input.created_at),
+                created_at: chrono_to_jiff(input.created_at),
             })
             .exec(&mut db)
             .await
@@ -75,7 +75,11 @@ impl RefreshTokenRepository for ToastyRefreshTokenRepo {
                 .map_err(toasty_err)?;
             for mut row in rows {
                 if !row.revoked {
-                    let _ = row.update().revoked(true).exec(&mut db).await;
+                    row.update()
+                        .revoked(true)
+                        .exec(&mut db)
+                        .await
+                        .map_err(toasty_err)?;
                 }
             }
             Ok(())
@@ -108,8 +112,8 @@ fn refresh_token_to_domain(m: YauthRefreshToken) -> domain::RefreshToken {
         user_id: m.user_id,
         token_hash: m.token_hash,
         family_id: m.family_id,
-        expires_at: str_to_dt(&m.expires_at),
+        expires_at: jiff_to_chrono(m.expires_at),
         revoked: m.revoked,
-        created_at: str_to_dt(&m.created_at),
+        created_at: jiff_to_chrono(m.created_at),
     }
 }

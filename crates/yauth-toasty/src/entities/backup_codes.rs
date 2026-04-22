@@ -1,5 +1,6 @@
 //! Toasty model for `yauth_backup_codes`.
 
+use super::YauthUser;
 use uuid::Uuid;
 
 #[derive(Debug, toasty::Model)]
@@ -7,9 +8,14 @@ use uuid::Uuid;
 pub struct YauthBackupCode {
     #[key]
     pub id: Uuid,
+
     #[index]
     pub user_id: Uuid,
+
+    #[belongs_to(key = user_id, references = id)]
+    pub yauth_user: toasty::BelongsTo<YauthUser>,
+
     pub code_hash: String,
     pub used: bool,
-    pub created_at: String,
+    pub created_at: jiff::Timestamp,
 }

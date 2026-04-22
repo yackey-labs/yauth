@@ -1,9 +1,12 @@
-use chrono::Utc;
+use chrono::NaiveDateTime;
 use toasty::Db;
 use uuid::Uuid;
 
 use crate::entities::{YauthAuthorizationCode, YauthConsent, YauthDeviceCode, YauthOauth2Client};
-use crate::helpers::*;
+use crate::helpers::{
+    chrono_to_jiff, jiff_to_chrono, json_from_domain, json_to_domain, opt_jiff_to_chrono,
+    toasty_err,
+};
 use yauth::repo::{
     AuthorizationCodeRepository, ConsentRepository, DeviceCodeRepository, Oauth2ClientRepository,
     RepoFuture, sealed,
@@ -46,17 +49,95 @@ impl Oauth2ClientRepository for ToastyOauth2ClientRepo {
                 id: input.id,
                 client_id: input.client_id,
                 client_secret_hash: input.client_secret_hash,
-                redirect_uris: json_to_str(&input.redirect_uris),
+                redirect_uris: json_from_domain(input.redirect_uris),
                 client_name: input.client_name,
-                grant_types: json_to_str(&input.grant_types),
-                scopes: opt_json_to_str(input.scopes.as_ref()),
+                grant_types: json_from_domain(input.grant_types),
+                scopes: input.scopes,
                 is_public: input.is_public,
-                created_at: dt_to_str(input.created_at),
+                created_at: chrono_to_jiff(input.created_at),
+                token_endpoint_auth_method: input.token_endpoint_auth_method,
+                public_key_pem: input.public_key_pem,
+                jwks_uri: input.jwks_uri,
+                banned_at: None::<jiff::Timestamp>,
+                banned_reason: None::<String>,
             })
             .exec(&mut db)
             .await
             .map_err(toasty_err)?;
             Ok(())
+        })
+    }
+    fn set_banned(
+        &self,
+        client_id: &str,
+        banned: Option<(Option<String>, NaiveDateTime)>,
+    ) -> RepoFuture<'_, bool> {
+        let client_id = client_id.to_string();
+        Box::pin(async move {
+            let mut db = self.db.clone();
+            match YauthOauth2Client::filter_by_client_id(&client_id)
+                .get(&mut db)
+                .await
+            {
+                Ok(mut row) => {
+                    let (banned_at, banned_reason) = match banned {
+                        Some((reason, at)) => (Some(chrono_to_jiff(at)), reason),
+                        None => (None, None),
+                    };
+                    row.update()
+                        .banned_at(banned_at)
+                        .banned_reason(banned_reason)
+                        .exec(&mut db)
+                        .await
+                        .map_err(toasty_err)?;
+                    Ok(true)
+                }
+                Err(_) => Ok(false),
+            }
+        })
+    }
+
+    fn rotate_public_key(
+        &self,
+        client_id: &str,
+        public_key_pem: Option<String>,
+    ) -> RepoFuture<'_, bool> {
+        let client_id = client_id.to_string();
+        Box::pin(async move {
+            let mut db = self.db.clone();
+            match YauthOauth2Client::filter_by_client_id(&client_id)
+                .get(&mut db)
+                .await
+            {
+                Ok(mut row) => {
+                    row.update()
+                        .public_key_pem(public_key_pem)
+                        .exec(&mut db)
+                        .await
+                        .map_err(toasty_err)?;
+                    Ok(true)
+                }
+                Err(_) => Ok(false),
+            }
+        })
+    }
+
+    fn list_banned(&self) -> RepoFuture<'_, Vec<domain::Oauth2Client>> {
+        Box::pin(async move {
+            let mut db = self.db.clone();
+            // Toasty lacks WHERE IS NOT NULL filters; fetch all and filter in-app.
+            let rows: Vec<YauthOauth2Client> = YauthOauth2Client::all()
+                .exec(&mut db)
+                .await
+                .map_err(toasty_err)?;
+            let mut banned: Vec<domain::Oauth2Client> = rows
+                .into_iter()
+                .filter(|r| r.banned_at.is_some())
+                .map(oauth2_client_to_domain)
+                .collect();
+            // Newest ban first
+            banned.sort_by_key(|b| std::cmp::Reverse(b.banned_at));
+            Ok(banned)
         })
     }
 }
@@ -88,8 +169,7 @@ impl AuthorizationCodeRepository for ToastyAuthorizationCodeRepo {
                 .await
             {
                 Ok(row) => {
-                    let now = Utc::now().naive_utc();
-                    if str_to_dt(&row.expires_at) < now || row.used {
+                    if row.expires_at < jiff::Timestamp::now() || row.used {
                         Ok(None)
                     } else {
                         Ok(Some(auth_code_to_domain(row)))
@@ -108,14 +188,14 @@ impl AuthorizationCodeRepository for ToastyAuthorizationCodeRepo {
                 code_hash: input.code_hash,
                 client_id: input.client_id,
                 user_id: input.user_id,
-                scopes: opt_json_to_str(input.scopes.as_ref()),
+                scopes: input.scopes,
                 redirect_uri: input.redirect_uri,
                 code_challenge: input.code_challenge,
                 code_challenge_method: input.code_challenge_method,
-                expires_at: dt_to_str(input.expires_at),
+                expires_at: chrono_to_jiff(input.expires_at),
                 used: input.used,
                 nonce: input.nonce,
-                created_at: dt_to_str(input.created_at),
+                created_at: chrono_to_jiff(input.created_at),
             })
             .exec(&mut db)
             .await
@@ -180,8 +260,8 @@ impl ConsentRepository for ToastyConsentRepo {
                 id: input.id,
                 user_id: input.user_id,
                 client_id: input.client_id,
-                scopes: opt_json_to_str(input.scopes.as_ref()),
-                created_at: dt_to_str(input.created_at),
+                scopes: input.scopes,
+                created_at: chrono_to_jiff(input.created_at),
             })
             .exec(&mut db)
             .await
@@ -195,7 +275,7 @@ impl ConsentRepository for ToastyConsentRepo {
             let mut db = self.db.clone();
             if let Ok(mut row) = YauthConsent::get_by_id(&mut db, &id).await {
                 row.update()
-                    .scopes(opt_json_to_str(scopes.as_ref()))
+                    .scopes(scopes)
                     .exec(&mut db)
                     .await
                     .map_err(toasty_err)?;
@@ -262,13 +342,13 @@ impl DeviceCodeRepository for ToastyDeviceCodeRepo {
                 device_code_hash: input.device_code_hash,
                 user_code: input.user_code,
                 client_id: input.client_id,
-                scopes: opt_json_to_str(input.scopes.as_ref()),
+                scopes: input.scopes,
                 user_id: input.user_id,
                 status: input.status,
                 interval: input.interval,
-                expires_at: dt_to_str(input.expires_at),
-                last_polled_at: Option::<String>::None,
-                created_at: dt_to_str(input.created_at),
+                expires_at: chrono_to_jiff(input.expires_at),
+                last_polled_at: None::<jiff::Timestamp>,
+                created_at: chrono_to_jiff(input.created_at),
             })
             .exec(&mut db)
             .await
@@ -298,7 +378,7 @@ impl DeviceCodeRepository for ToastyDeviceCodeRepo {
             let mut db = self.db.clone();
             if let Ok(mut row) = YauthDeviceCode::get_by_id(&mut db, &id).await {
                 row.update()
-                    .last_polled_at(Some(dt_to_str(Utc::now().naive_utc())))
+                    .last_polled_at(Some(jiff::Timestamp::now()))
                     .exec(&mut db)
                     .await
                     .map_err(toasty_err)?;
@@ -329,12 +409,17 @@ fn oauth2_client_to_domain(m: YauthOauth2Client) -> domain::Oauth2Client {
         id: m.id,
         client_id: m.client_id,
         client_secret_hash: m.client_secret_hash,
-        redirect_uris: str_to_json(&m.redirect_uris),
+        redirect_uris: json_to_domain(m.redirect_uris),
         client_name: m.client_name,
-        grant_types: str_to_json(&m.grant_types),
-        scopes: opt_str_to_json(m.scopes.as_deref()),
+        grant_types: json_to_domain(m.grant_types),
+        scopes: m.scopes,
         is_public: m.is_public,
-        created_at: str_to_dt(&m.created_at),
+        created_at: jiff_to_chrono(m.created_at),
+        token_endpoint_auth_method: m.token_endpoint_auth_method,
+        public_key_pem: m.public_key_pem,
+        jwks_uri: m.jwks_uri,
+        banned_at: opt_jiff_to_chrono(m.banned_at),
+        banned_reason: m.banned_reason,
     }
 }
 
@@ -344,14 +429,14 @@ fn auth_code_to_domain(m: YauthAuthorizationCode) -> domain::AuthorizationCode {
         code_hash: m.code_hash,
         client_id: m.client_id,
         user_id: m.user_id,
-        scopes: opt_str_to_json(m.scopes.as_deref()),
+        scopes: m.scopes,
         redirect_uri: m.redirect_uri,
         code_challenge: m.code_challenge,
         code_challenge_method: m.code_challenge_method,
-        expires_at: str_to_dt(&m.expires_at),
+        expires_at: jiff_to_chrono(m.expires_at),
         used: m.used,
         nonce: m.nonce,
-        created_at: str_to_dt(&m.created_at),
+        created_at: jiff_to_chrono(m.created_at),
     }
 }
 
@@ -360,8 +445,8 @@ fn consent_to_domain(m: YauthConsent) -> domain::Consent {
         id: m.id,
         user_id: m.user_id,
         client_id: m.client_id,
-        scopes: opt_str_to_json(m.scopes.as_deref()),
-        created_at: str_to_dt(&m.created_at),
+        scopes: m.scopes,
+        created_at: jiff_to_chrono(m.created_at),
     }
 }
 
@@ -371,12 +456,12 @@ fn device_code_to_domain(m: YauthDeviceCode) -> domain::DeviceCode {
         device_code_hash: m.device_code_hash,
         user_code: m.user_code,
         client_id: m.client_id,
-        scopes: opt_str_to_json(m.scopes.as_deref()),
+        scopes: m.scopes,
         user_id: m.user_id,
         status: m.status,
         interval: m.interval,
-        expires_at: str_to_dt(&m.expires_at),
-        last_polled_at: opt_str_to_dt(m.last_polled_at.as_deref()),
-        created_at: str_to_dt(&m.created_at),
+        expires_at: jiff_to_chrono(m.expires_at),
+        last_polled_at: opt_jiff_to_chrono(m.last_polled_at),
+        created_at: jiff_to_chrono(m.created_at),
     }
 }

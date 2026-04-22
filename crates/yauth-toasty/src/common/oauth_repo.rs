@@ -1,9 +1,11 @@
-use chrono::{NaiveDateTime, Utc};
+use chrono::NaiveDateTime;
 use toasty::Db;
 use uuid::Uuid;
 
 use crate::entities::{YauthOauthAccount, YauthOauthState};
-use crate::helpers::*;
+use crate::helpers::{
+    chrono_to_jiff, jiff_to_chrono, opt_chrono_to_jiff, opt_jiff_to_chrono, toasty_err,
+};
 use yauth::repo::{OauthAccountRepository, OauthStateRepository, RepoFuture, sealed};
 use yauth_entity as domain;
 
@@ -82,9 +84,9 @@ impl OauthAccountRepository for ToastyOauthAccountRepo {
                 provider_user_id: input.provider_user_id,
                 access_token_enc: input.access_token_enc,
                 refresh_token_enc: input.refresh_token_enc,
-                created_at: dt_to_str(input.created_at),
-                expires_at: opt_dt_to_str(input.expires_at),
-                updated_at: dt_to_str(input.updated_at),
+                created_at: chrono_to_jiff(input.created_at),
+                expires_at: opt_chrono_to_jiff(input.expires_at),
+                updated_at: chrono_to_jiff(input.updated_at),
             })
             .exec(&mut db)
             .await
@@ -108,8 +110,8 @@ impl OauthAccountRepository for ToastyOauthAccountRepo {
                 row.update()
                     .access_token_enc(access_token_enc)
                     .refresh_token_enc(refresh_token_enc)
-                    .expires_at(opt_dt_to_str(expires_at))
-                    .updated_at(dt_to_str(Utc::now().naive_utc()))
+                    .expires_at(opt_chrono_to_jiff(expires_at))
+                    .updated_at(jiff::Timestamp::now())
                     .exec(&mut db)
                     .await
                     .map_err(toasty_err)?;
@@ -151,8 +153,8 @@ impl OauthStateRepository for ToastyOauthStateRepo {
                 state: input.state,
                 provider: input.provider,
                 redirect_url: input.redirect_url,
-                expires_at: dt_to_str(input.expires_at),
-                created_at: dt_to_str(input.created_at),
+                expires_at: chrono_to_jiff(input.expires_at),
+                created_at: chrono_to_jiff(input.created_at),
             })
             .exec(&mut db)
             .await
@@ -167,8 +169,7 @@ impl OauthStateRepository for ToastyOauthStateRepo {
             let mut db = self.db.clone();
             match YauthOauthState::get_by_state(&mut db, &state).await {
                 Ok(row) => {
-                    let now = Utc::now().naive_utc();
-                    if str_to_dt(&row.expires_at) < now {
+                    if row.expires_at < jiff::Timestamp::now() {
                         let _ = row.delete().exec(&mut db).await;
                         return Ok(None);
                     }
@@ -176,10 +177,12 @@ impl OauthStateRepository for ToastyOauthStateRepo {
                         state: row.state.clone(),
                         provider: row.provider.clone(),
                         redirect_url: row.redirect_url.clone(),
-                        expires_at: str_to_dt(&row.expires_at),
-                        created_at: str_to_dt(&row.created_at),
+                        expires_at: jiff_to_chrono(row.expires_at),
+                        created_at: jiff_to_chrono(row.created_at),
                     };
-                    let _ = row.delete().exec(&mut db).await;
+                    // Delete MUST succeed before returning the state value;
+                    // otherwise the same state can be replayed (CSRF bypass).
+                    row.delete().exec(&mut db).await.map_err(toasty_err)?;
                     Ok(Some(domain))
                 }
                 Err(_) => Ok(None),
@@ -196,8 +199,8 @@ fn oauth_account_to_domain(m: YauthOauthAccount) -> domain::OauthAccount {
         provider_user_id: m.provider_user_id,
         access_token_enc: m.access_token_enc,
         refresh_token_enc: m.refresh_token_enc,
-        created_at: str_to_dt(&m.created_at),
-        expires_at: opt_str_to_dt(m.expires_at.as_deref()),
-        updated_at: str_to_dt(&m.updated_at),
+        created_at: jiff_to_chrono(m.created_at),
+        expires_at: opt_jiff_to_chrono(m.expires_at),
+        updated_at: jiff_to_chrono(m.updated_at),
     }
 }

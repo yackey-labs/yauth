@@ -1,9 +1,8 @@
-use chrono::Utc;
 use toasty::Db;
 use uuid::Uuid;
 
 use crate::entities::YauthSession;
-use crate::helpers::*;
+use crate::helpers::{is_not_found, jiff_to_chrono, toasty_err};
 use yauth::repo::{RepoFuture, SessionOpsRepository, sealed};
 use yauth_entity as domain;
 
@@ -31,18 +30,19 @@ impl SessionOpsRepository for ToastySessionOpsRepo {
         Box::pin(async move {
             let mut db = self.db.clone();
             let session_id = Uuid::now_v7();
-            let now = Utc::now().naive_utc();
-            let expires_at =
-                now + chrono::Duration::from_std(ttl).unwrap_or(chrono::Duration::days(7));
+            let now = jiff::Timestamp::now();
+            let ttl_duration = jiff::SignedDuration::try_from(ttl)
+                .unwrap_or(jiff::SignedDuration::from_hours(168));
+            let expires_at = now + ttl_duration;
 
             toasty::create!(YauthSession {
                 id: session_id,
-                user_id: user_id,
-                token_hash: token_hash,
-                ip_address: ip_address,
-                user_agent: user_agent,
-                expires_at: dt_to_str(expires_at),
-                created_at: dt_to_str(now),
+                user_id,
+                token_hash,
+                ip_address,
+                user_agent,
+                expires_at,
+                created_at: now,
             })
             .exec(&mut db)
             .await
@@ -61,12 +61,11 @@ impl SessionOpsRepository for ToastySessionOpsRepo {
                 .await
             {
                 Ok(s) => s,
-                Err(_) => return Ok(None),
+                Err(e) if is_not_found(&e) => return Ok(None),
+                Err(e) => return Err(toasty_err(e)),
             };
 
-            let now = Utc::now().naive_utc();
-            let expires = str_to_dt(&session.expires_at);
-            if expires < now {
+            if session.expires_at < jiff::Timestamp::now() {
                 // Expired -- clean up (best-effort)
                 let _ = session.delete().exec(&mut db).await;
                 return Ok(None);
@@ -77,8 +76,8 @@ impl SessionOpsRepository for ToastySessionOpsRepo {
                 user_id: session.user_id,
                 ip_address: session.ip_address,
                 user_agent: session.user_agent,
-                expires_at: expires,
-                created_at: str_to_dt(&session.created_at),
+                expires_at: jiff_to_chrono(session.expires_at),
+                created_at: jiff_to_chrono(session.created_at),
             }))
         })
     }

@@ -1,8 +1,7 @@
-use chrono::Utc;
 use toasty::Db;
 
 use crate::entities::YauthChallenge;
-use crate::helpers::*;
+use crate::helpers::toasty_err;
 use yauth::repo::{ChallengeRepository, RepoFuture, sealed};
 
 pub(crate) struct ToastyChallengeRepo {
@@ -27,18 +26,18 @@ impl ChallengeRepository for ToastyChallengeRepo {
         let key = key.to_string();
         Box::pin(async move {
             let mut db = self.db.clone();
-            let now = Utc::now().naive_utc();
-            let expires_at = now + chrono::Duration::seconds(ttl_secs as i64);
+            let expires_at =
+                jiff::Timestamp::now() + jiff::SignedDuration::from_secs(ttl_secs as i64);
 
             // TODO: replace with atomic upsert when Toasty adds ON CONFLICT support
             let mut tx = db.transaction().await.map_err(toasty_err)?;
             if let Ok(existing) = YauthChallenge::get_by_key(&mut tx, &key).await {
-                let _ = existing.delete().exec(&mut tx).await;
+                existing.delete().exec(&mut tx).await.map_err(toasty_err)?;
             }
             toasty::create!(YauthChallenge {
-                key: key,
-                value: json_to_str(&value),
-                expires_at: dt_to_str(expires_at),
+                key,
+                value,
+                expires_at,
             })
             .exec(&mut tx)
             .await
@@ -55,13 +54,12 @@ impl ChallengeRepository for ToastyChallengeRepo {
             let mut db = self.db.clone();
             match YauthChallenge::get_by_key(&mut db, &key).await {
                 Ok(row) => {
-                    let now = Utc::now().naive_utc();
-                    if str_to_dt(&row.expires_at) < now {
+                    if row.expires_at < jiff::Timestamp::now() {
                         // Expired
                         let _ = row.delete().exec(&mut db).await;
                         Ok(None)
                     } else {
-                        Ok(Some(str_to_json(&row.value)))
+                        Ok(Some(row.value))
                     }
                 }
                 Err(_) => Ok(None),

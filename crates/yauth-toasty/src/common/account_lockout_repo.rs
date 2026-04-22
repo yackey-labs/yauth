@@ -1,9 +1,11 @@
-use chrono::{NaiveDateTime, Utc};
+use chrono::NaiveDateTime;
 use toasty::Db;
 use uuid::Uuid;
 
 use crate::entities::{YauthAccountLock, YauthUnlockToken};
-use crate::helpers::*;
+use crate::helpers::{
+    chrono_to_jiff, jiff_to_chrono, opt_chrono_to_jiff, opt_jiff_to_chrono, toasty_err,
+};
 use yauth::repo::{AccountLockRepository, RepoFuture, UnlockTokenRepository, sealed};
 use yauth_entity as domain;
 
@@ -40,11 +42,11 @@ impl AccountLockRepository for ToastyAccountLockRepo {
                 id: input.id,
                 user_id: input.user_id,
                 failed_count: input.failed_count,
-                locked_until: opt_dt_to_str(input.locked_until),
+                locked_until: opt_chrono_to_jiff(input.locked_until),
                 lock_count: input.lock_count,
                 locked_reason: input.locked_reason,
-                created_at: dt_to_str(input.created_at),
-                updated_at: dt_to_str(input.updated_at),
+                created_at: chrono_to_jiff(input.created_at),
+                updated_at: chrono_to_jiff(input.updated_at),
             })
             .exec(&mut db)
             .await
@@ -60,7 +62,7 @@ impl AccountLockRepository for ToastyAccountLockRepo {
                 let new_count = row.failed_count + 1;
                 row.update()
                     .failed_count(new_count)
-                    .updated_at(dt_to_str(Utc::now().naive_utc()))
+                    .updated_at(jiff::Timestamp::now())
                     .exec(&mut db)
                     .await
                     .map_err(toasty_err)?;
@@ -81,10 +83,10 @@ impl AccountLockRepository for ToastyAccountLockRepo {
             let mut db = self.db.clone();
             if let Ok(mut row) = YauthAccountLock::get_by_id(&mut db, &id).await {
                 row.update()
-                    .locked_until(opt_dt_to_str(locked_until))
+                    .locked_until(opt_chrono_to_jiff(locked_until))
                     .locked_reason(locked_reason)
                     .lock_count(lock_count)
-                    .updated_at(dt_to_str(Utc::now().naive_utc()))
+                    .updated_at(jiff::Timestamp::now())
                     .exec(&mut db)
                     .await
                     .map_err(toasty_err)?;
@@ -99,7 +101,7 @@ impl AccountLockRepository for ToastyAccountLockRepo {
             if let Ok(mut row) = YauthAccountLock::get_by_id(&mut db, &id).await {
                 row.update()
                     .failed_count(0)
-                    .updated_at(dt_to_str(Utc::now().naive_utc()))
+                    .updated_at(jiff::Timestamp::now())
                     .exec(&mut db)
                     .await
                     .map_err(toasty_err)?;
@@ -113,10 +115,10 @@ impl AccountLockRepository for ToastyAccountLockRepo {
             let mut db = self.db.clone();
             if let Ok(mut row) = YauthAccountLock::get_by_id(&mut db, &id).await {
                 row.update()
-                    .locked_until(Option::<String>::None)
-                    .locked_reason(Option::<String>::None)
+                    .locked_until(None::<jiff::Timestamp>)
+                    .locked_reason(None::<String>)
                     .failed_count(0)
-                    .updated_at(dt_to_str(Utc::now().naive_utc()))
+                    .updated_at(jiff::Timestamp::now())
                     .exec(&mut db)
                     .await
                     .map_err(toasty_err)?;
@@ -150,8 +152,7 @@ impl UnlockTokenRepository for ToastyUnlockTokenRepo {
                 .await
             {
                 Ok(row) => {
-                    let now = Utc::now().naive_utc();
-                    if str_to_dt(&row.expires_at) < now {
+                    if row.expires_at < jiff::Timestamp::now() {
                         Ok(None)
                     } else {
                         Ok(Some(unlock_token_to_domain(row)))
@@ -169,8 +170,8 @@ impl UnlockTokenRepository for ToastyUnlockTokenRepo {
                 id: input.id,
                 user_id: input.user_id,
                 token_hash: input.token_hash,
-                expires_at: dt_to_str(input.expires_at),
-                created_at: dt_to_str(input.created_at),
+                expires_at: chrono_to_jiff(input.expires_at),
+                created_at: chrono_to_jiff(input.created_at),
             })
             .exec(&mut db)
             .await
@@ -207,11 +208,11 @@ fn account_lock_to_domain(m: YauthAccountLock) -> domain::AccountLock {
         id: m.id,
         user_id: m.user_id,
         failed_count: m.failed_count,
-        locked_until: opt_str_to_dt(m.locked_until.as_deref()),
+        locked_until: opt_jiff_to_chrono(m.locked_until),
         lock_count: m.lock_count,
         locked_reason: m.locked_reason,
-        created_at: str_to_dt(&m.created_at),
-        updated_at: str_to_dt(&m.updated_at),
+        created_at: jiff_to_chrono(m.created_at),
+        updated_at: jiff_to_chrono(m.updated_at),
     }
 }
 
@@ -220,7 +221,7 @@ fn unlock_token_to_domain(m: YauthUnlockToken) -> domain::UnlockToken {
         id: m.id,
         user_id: m.user_id,
         token_hash: m.token_hash,
-        expires_at: str_to_dt(&m.expires_at),
-        created_at: str_to_dt(&m.created_at),
+        expires_at: jiff_to_chrono(m.expires_at),
+        created_at: jiff_to_chrono(m.created_at),
     }
 }

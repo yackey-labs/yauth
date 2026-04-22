@@ -1,7 +1,7 @@
 use toasty::Db;
 
 use crate::entities::YauthAuditLog;
-use crate::helpers::*;
+use crate::helpers::{chrono_to_jiff, toasty_err};
 use yauth::repo::{AuditLogRepository, RepoFuture, sealed};
 use yauth_entity as domain;
 
@@ -25,9 +25,9 @@ impl AuditLogRepository for ToastyAuditLogRepo {
                 id: input.id,
                 user_id: input.user_id,
                 event_type: input.event_type,
-                metadata: opt_json_to_str(input.metadata.as_ref()),
+                metadata: input.metadata,
                 ip_address: input.ip_address,
-                created_at: dt_to_str(input.created_at),
+                created_at: chrono_to_jiff(input.created_at),
             })
             .exec(&mut db)
             .await

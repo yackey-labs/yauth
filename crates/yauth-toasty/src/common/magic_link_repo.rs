@@ -1,9 +1,8 @@
-use chrono::Utc;
 use toasty::Db;
 use uuid::Uuid;
 
 use crate::entities::YauthMagicLink;
-use crate::helpers::*;
+use crate::helpers::{chrono_to_jiff, jiff_to_chrono, toasty_err};
 use yauth::repo::{MagicLinkRepository, RepoFuture, sealed};
 use yauth_entity as domain;
 
@@ -32,8 +31,7 @@ impl MagicLinkRepository for ToastyMagicLinkRepo {
                 .await
             {
                 Ok(row) => {
-                    let now = Utc::now().naive_utc();
-                    if str_to_dt(&row.expires_at) < now || row.used {
+                    if row.expires_at < jiff::Timestamp::now() || row.used {
                         Ok(None)
                     } else {
                         Ok(Some(magic_link_to_domain(row)))
@@ -51,9 +49,9 @@ impl MagicLinkRepository for ToastyMagicLinkRepo {
                 id: input.id,
                 email: input.email,
                 token_hash: input.token_hash,
-                expires_at: dt_to_str(input.expires_at),
+                expires_at: chrono_to_jiff(input.expires_at),
                 used: false,
-                created_at: dt_to_str(input.created_at),
+                created_at: chrono_to_jiff(input.created_at),
             })
             .exec(&mut db)
             .await
@@ -109,8 +107,8 @@ fn magic_link_to_domain(m: YauthMagicLink) -> domain::MagicLink {
         id: m.id,
         email: m.email,
         token_hash: m.token_hash,
-        expires_at: str_to_dt(&m.expires_at),
+        expires_at: jiff_to_chrono(m.expires_at),
         used: m.used,
-        created_at: str_to_dt(&m.created_at),
+        created_at: jiff_to_chrono(m.created_at),
     }
 }

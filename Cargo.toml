@@ -1,5 +1,13 @@
 [workspace]
 members = ["crates/yauth", "crates/yauth-migration", "crates/yauth-entity", "crates/cargo-yauth"]
+# yauth-toasty is excluded because toasty-driver-sqlite (via rusqlite 0.39 →
+# libsqlite3-sys 0.37) and sqlx-sqlite (via libsqlite3-sys 0.30) both declare
+# `links = "sqlite3"`. Cargo's links check is global across the resolved
+# workspace graph and triggers even when the features that activate them are
+# never co-enabled — the mere presence of both potential links targets in the
+# resolution graph is enough to fail. CI covers yauth-toasty via a dedicated
+# job (.github/workflows/ci.yml::toasty) that builds the crate via
+# `--manifest-path crates/yauth-toasty/Cargo.toml`.
 exclude = ["crates/yauth-toasty"]
 resolver = "2"
 

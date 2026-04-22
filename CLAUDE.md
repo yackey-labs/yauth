@@ -27,6 +27,7 @@ When helping users integrate yauth, read these files — they contain complete, 
 | `yauth-entity` | Domain types (User, Session, Password, etc.) — ORM-agnostic, no migration dependency |
 | `yauth-migration` | Schema types, DDL generation, diff engine, migration file gen — **zero ORM deps**, build-time-only dep of `cargo-yauth` (NOT a dependency of `yauth` itself) |
 | `cargo-yauth` | CLI binary — `cargo yauth init/add-plugin/remove-plugin/status/generate` |
+| `yauth-toasty` | **Excluded from workspace.** Toasty ORM backends (experimental). Excluded because `toasty-driver-sqlite`'s `libsqlite3-sys` and `sqlx-sqlite`'s `libsqlite3-sys` both declare `links = "sqlite3"`, which Cargo forbids in a single resolved workspace graph. CI has a dedicated `toasty` matrix job that builds this crate via `--manifest-path`. |
 
 Key internal modules in `yauth`:
 - `backends/diesel_pg/` — PostgreSQL backend (`DieselPgBackend`)
@@ -100,6 +101,17 @@ cargo yauth add-plugin mfa
 cargo yauth remove-plugin passkey
 cargo yauth status
 cargo yauth generate --check -f yauth.toml
+
+# yauth-toasty (excluded from workspace — must use --manifest-path)
+cargo fmt --manifest-path crates/yauth-toasty/Cargo.toml --check
+cargo clippy --manifest-path crates/yauth-toasty/Cargo.toml --features full,sqlite --all-targets -- -D warnings
+cargo test --manifest-path crates/yauth-toasty/Cargo.toml --features full,sqlite --test conformance
+cargo test --manifest-path crates/yauth-toasty/Cargo.toml --features full,sqlite --test migrations
+# With services running (`docker compose up -d`) and DATABASE_URL / MYSQL_DATABASE_URL set:
+DATABASE_URL=postgres://yauth:yauth@127.0.0.1:5433/yauth_test \
+  cargo test --manifest-path crates/yauth-toasty/Cargo.toml --features full,postgresql --test conformance
+MYSQL_DATABASE_URL=mysql://yauth:yauth@127.0.0.1:3307/yauth_test \
+  cargo test --manifest-path crates/yauth-toasty/Cargo.toml --features full,mysql --test conformance
 ```
 
 ### Conformance Test Suite

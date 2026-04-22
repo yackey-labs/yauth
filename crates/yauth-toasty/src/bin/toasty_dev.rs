@@ -239,7 +239,11 @@ async fn cmd_status() -> Result<()> {
     println!("Migrations ({}):", history.migrations.len());
     for entry in &history.migrations {
         let sql_path = migrations_dir().join(format!("{}.sql", entry.name));
-        let status = if sql_path.exists() { "✓" } else { "✗ MISSING" };
+        let status = if sql_path.exists() {
+            "✓"
+        } else {
+            "✗ MISSING"
+        };
         println!("  {status} {} ({})", entry.name, entry.checksum);
     }
 

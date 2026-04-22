@@ -16,7 +16,8 @@
 			"!**/generated.ts",
 			"!**/generated.msw.ts",
 			"!openapi.json",
-			"!.sqlx"
+			"!.sqlx",
+			"!crates/yauth-toasty/toasty/snapshots"
 		]
 	},
 	"formatter": {

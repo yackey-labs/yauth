@@ -40,6 +40,9 @@ full = [
     "webhooks",
 ]
 
+# Dev-only: CLI binary for generating migrations (not published)
+dev-cli = ["dep:anyhow"]
+
 [dependencies]
 yauth = { path = "../yauth", default-features = false }
 yauth-entity = { path = "../yauth-entity" }
@@ -51,15 +54,32 @@ jiff = { version = "0.2", features = ["serde"] }
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
+include_dir = "0.7"
+sha2 = "0.10"
+toml = "0.8"
+anyhow = { version = "1", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
 uuid = { version = "1", features = ["v7"] }
 chrono = "0.4"
 serde_json = "1"
-yauth = { path = "../yauth", default-features = false, features = ["full"] }
+tempfile = "3"
+jiff = "0.2"
+# NOTE: yauth dev features are unified with the main dep via --features full.
+# Don't add features = ["full"] here — it forces openssl on ALL tests.
+yauth = { path = "../yauth", default-features = false }
 yauth-entity = { path = "../yauth-entity" }
+
+[[bin]]
+name = "toasty-dev"
+path = "src/bin/toasty_dev.rs"
+required-features = ["dev-cli"]
 
 [[test]]
 name = "conformance"
 required-features = ["full"]
+
+[[test]]
+name = "migrations"
+required-features = ["sqlite"]

@@ -74,7 +74,13 @@ impl RateLimitRepository for ToastyRateLimitRepo {
             };
             tx.commit().await.map_err(toasty_err)?;
 
-            Ok(rate_limit_result(count, limit, window_start, window_secs, now))
+            Ok(rate_limit_result(
+                count,
+                limit,
+                window_start,
+                window_secs,
+                now,
+            ))
         })
     }
 }

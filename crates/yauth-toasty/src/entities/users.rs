@@ -9,9 +9,9 @@
 //! attributes.
 
 use super::{
-    YauthAccountLock, YauthApiKey, YauthAuthorizationCode, YauthBackupCode,
-    YauthEmailVerification, YauthOauthAccount, YauthPasskey, YauthPasswordReset,
-    YauthRefreshToken, YauthSession, YauthUnlockToken,
+    YauthAccountLock, YauthApiKey, YauthAuthorizationCode, YauthBackupCode, YauthEmailVerification,
+    YauthOauthAccount, YauthPasskey, YauthPasswordReset, YauthRefreshToken, YauthSession,
+    YauthUnlockToken,
 };
 use uuid::Uuid;
 

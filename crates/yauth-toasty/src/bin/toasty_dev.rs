@@ -26,7 +26,7 @@ use std::fs;
 use std::path::PathBuf;
 
 /// Migration history entry stored in history.toml
-#[derive(serde::Serialize, serde::Deserialize, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Default)]
 struct History {
     migrations: Vec<MigrationEntry>,
 }
@@ -78,9 +78,7 @@ fn load_history() -> History {
     fs::read_to_string(history_path())
         .ok()
         .and_then(|content| toml::from_str(&content).ok())
-        .unwrap_or(History {
-            migrations: Vec::new(),
-        })
+        .unwrap_or_default()
 }
 
 /// Compute SHA-256 checksum of file contents.
@@ -102,8 +100,10 @@ fn schema_to_snapshot(schema: &toasty::schema::db::Schema) -> String {
         // Columns
         out.push_str("columns = [\n");
         for col in &table.columns {
-            let mut parts = vec![format!("name = {:?}", col.name)];
-            parts.push(format!("ty = {:?}", format!("{:?}", col.ty)));
+            let mut parts = vec![
+                format!("name = {:?}", col.name),
+                format!("ty = {:?}", format!("{:?}", col.ty)),
+            ];
             if col.nullable {
                 parts.push("nullable = true".to_string());
             }
@@ -127,8 +127,10 @@ fn schema_to_snapshot(schema: &toasty::schema::db::Schema) -> String {
             out.push_str("indices = [\n");
             for idx in &table.indices {
                 let cols: Vec<_> = idx.columns.iter().map(|c| c.column.index).collect();
-                let mut parts = vec![format!("name = {:?}", idx.name)];
-                parts.push(format!("columns = {:?}", cols));
+                let mut parts = vec![
+                    format!("name = {:?}", idx.name),
+                    format!("columns = {:?}", cols),
+                ];
                 if idx.unique {
                     parts.push("unique = true".to_string());
                 }

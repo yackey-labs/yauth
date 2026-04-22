@@ -45,7 +45,7 @@ fn dump_sqlite_schema(db_path: &Path) -> (Vec<String>, Vec<String>) {
     let all: Vec<String> = stmt
         .query_map([], |row| row.get::<_, String>(0))
         .expect("query sqlite_master")
-        .filter_map(|r| r.ok())
+        .filter_map(Result::ok)
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         // Exclude toasty's internal migration tracking table

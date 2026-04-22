@@ -37,11 +37,11 @@ impl SessionOpsRepository for ToastySessionOpsRepo {
 
             toasty::create!(YauthSession {
                 id: session_id,
-                user_id: user_id,
-                token_hash: token_hash,
-                ip_address: ip_address,
-                user_agent: user_agent,
-                expires_at: expires_at,
+                user_id,
+                token_hash,
+                ip_address,
+                user_agent,
+                expires_at,
                 created_at: now,
             })
             .exec(&mut db)

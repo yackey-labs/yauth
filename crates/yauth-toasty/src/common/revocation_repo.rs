@@ -31,7 +31,7 @@ impl RevocationRepository for ToastyRevocationRepo {
             }
             toasty::create!(YauthRevocation {
                 key: jti,
-                expires_at: expires_at,
+                expires_at,
             })
             .exec(&mut tx)
             .await

@@ -35,9 +35,9 @@ impl ChallengeRepository for ToastyChallengeRepo {
                 existing.delete().exec(&mut tx).await.map_err(toasty_err)?;
             }
             toasty::create!(YauthChallenge {
-                key: key,
-                value: value,
-                expires_at: expires_at,
+                key,
+                value,
+                expires_at,
             })
             .exec(&mut tx)
             .await

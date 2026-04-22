@@ -447,16 +447,10 @@ fn find_existing_file(
             None
         }
         yauth_migration::Orm::Toasty => {
-            // Generated paths: <migrations_dir>/models.rs
-            //                  <migrations_dir>/Toasty.toml
-            //                  <migrations_dir>/bin/toasty-dev.rs
-            // No timestamp prefix to strip — the scaffolding file names are
-            // stable — so just replay the exact relative path.
-            let rel = generated_path.strip_prefix(migrations_dir).ok()?;
-            let candidate = migrations_dir.join(rel);
-            if candidate.exists() {
-                return Some(candidate);
-            }
+            // Generated paths (models.rs, Toasty.toml, bin/toasty-dev.rs)
+            // have stable names — no timestamp/number prefix to reconcile.
+            // If the exact path didn't exist (handled by the top-of-function
+            // check), there is no fallback to find.
             None
         }
     }

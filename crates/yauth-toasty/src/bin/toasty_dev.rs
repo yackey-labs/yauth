@@ -239,8 +239,7 @@ async fn cmd_status() -> Result<()> {
     println!("Migrations ({}):", history.migrations.len());
     for entry in &history.migrations {
         let sql_path = migrations_dir().join(format!("{}.sql", entry.name));
-        let exists = sql_path.exists();
-        let status = if exists { "✓" } else { "✗ MISSING" };
+        let status = if sql_path.exists() { "✓" } else { "✗ MISSING" };
         println!("  {status} {} ({})", entry.name, entry.checksum);
     }
 
@@ -311,7 +310,7 @@ async fn cmd_backfill_json() -> Result<()> {
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
 
-    match args.get(1).map(|s| s.as_str()) {
+    match args.get(1).map(String::as_str) {
         Some("generate") => {
             let name = args
                 .iter()

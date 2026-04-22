@@ -1,3 +1,10 @@
+## 0.12.1 (2026-04-22)
+
+### Features
+
+- rewrite yauth-toasty entities with idiomatic Toasty patterns (#61)
+- add toasty migration system (M2) (#63)
+
 ## 0.12.0 (2026-04-18)
 
 ### Breaking Changes

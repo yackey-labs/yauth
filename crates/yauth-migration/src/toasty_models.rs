@@ -17,7 +17,7 @@
 //! from this crate.
 
 use crate::collector::YAuthSchema;
-use crate::types::{ColumnDef, ColumnType, ForeignKey, TableDef};
+use crate::types::{ColumnDef, ColumnType, TableDef};
 use std::collections::HashMap;
 
 /// Map an abstract column type to the idiomatic Toasty 0.4 Rust type.
@@ -88,11 +88,9 @@ fn table_attr(table_name: &str, prefix: &str) -> String {
 
 /// One back-reference from a parent table to a child FK. Stored per
 /// parent table in `build_child_map`.
-#[derive(Debug, Clone)]
 struct ChildRef {
     child_table: String,
     child_column: String,
-    _fk: ForeignKey,
 }
 
 /// Build a map from parent table name to the list of child references
@@ -112,7 +110,6 @@ fn build_child_map(schema: &YAuthSchema) -> HashMap<String, Vec<ChildRef>> {
                     .push(ChildRef {
                         child_table: table.name.clone(),
                         child_column: col.name.clone(),
-                        _fk: fk.clone(),
                     });
             }
         }

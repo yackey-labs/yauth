@@ -30,7 +30,7 @@ pub(crate) fn opt_chrono_to_jiff(dt: Option<NaiveDateTime>) -> Option<jiff::Time
     dt.map(chrono_to_jiff)
 }
 
-// -- JSON bridging (Vec<String> ↔ serde_json::Value) --
+// -- JSON bridging (typed Toasty fields ↔ serde_json::Value) --
 
 /// Deserialize a domain `serde_json::Value` into a typed Toasty field.
 ///

@@ -9,5 +9,18 @@
 	},
 	"enabledPlugins": {
 		"honeycomb@honeycomb-plugins": true
+	},
+	"hooks": {
+		"PreToolUse": [
+			{
+				"matcher": "Bash",
+				"hooks": [
+					{
+						"type": "command",
+						"command": "cmd=$(jq -r '.tool_input.command // \"\"'); case \"$cmd\" in \"git commit\"*) echo '[pre-commit] auto-fix pass' >&2; (bun run lint:fix >/tmp/yauth-precommit-lint.log 2>&1 || echo '[pre-commit] lint:fix exited non-zero (see /tmp/yauth-precommit-lint.log)' >&2); command -v cargo >/dev/null && cargo fmt || true; if ! git diff --quiet || ! git diff --cached --quiet; then git add -A && echo '[pre-commit] re-staged auto-fix changes' >&2; fi ;; esac"
+					}
+				]
+			}
+		]
 	}
 }

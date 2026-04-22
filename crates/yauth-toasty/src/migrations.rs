@@ -76,7 +76,7 @@ fn read_history() -> Result<History, RepoError> {
 /// ```rust,ignore
 /// let db = toasty::Db::builder()
 ///     .table_name_prefix("yauth_")
-///     .models(toasty::models!(yauth_toasty::*))
+///     .models(yauth_toasty::all_models!())
 ///     .connect("sqlite:./yauth.db")  // file-backed — NOT :memory:
 ///     .await?;
 ///

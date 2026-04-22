@@ -8,3 +8,9 @@ target/
 .DS_Store
 yauth-skill-workspace/
 yauth-skill/
+
+# yauth-toasty example databases
+crates/yauth-toasty/example.db
+crates/yauth-toasty/example.db-*
+example.db
+example.db-*

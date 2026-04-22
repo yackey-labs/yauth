@@ -68,6 +68,9 @@ serde_json = "1"
 tempfile = "3"
 jiff = "0.2"
 rusqlite = "0.39"
+# Examples serve a tiny Axum app / print via env_logger.
+axum = "0.8"
+env_logger = "0.11"
 # NOTE: yauth dev features are unified with the main dep via --features full.
 # Don't add features = ["full"] here — it forces openssl on ALL tests.
 yauth = { path = "../yauth", default-features = false }
@@ -85,3 +88,15 @@ required-features = ["full"]
 [[test]]
 name = "migrations"
 required-features = ["sqlite"]
+
+# Examples — built on demand with explicit features.
+# Use `email-password,sqlite` as the minimal feature set; `full,sqlite` also works.
+[[example]]
+name = "toasty_backend"
+path = "examples/toasty_backend.rs"
+required-features = ["email-password", "sqlite"]
+
+[[example]]
+name = "toasty_full_flow"
+path = "examples/toasty_full_flow.rs"
+required-features = ["email-password", "sqlite"]

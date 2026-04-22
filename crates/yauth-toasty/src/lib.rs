@@ -29,6 +29,29 @@ pub mod entities;
 pub mod migrations;
 pub use migrations::apply_migrations;
 
+/// Expand to a `toasty::schema::app::ModelSet` covering every yauth entity.
+///
+/// Use this when building a [`toasty::Db`] so every yauth table is registered
+/// without listing the 27 entity types by hand:
+///
+/// ```ignore
+/// let db = toasty::Db::builder()
+///     .table_name_prefix("yauth_")
+///     .models(yauth_toasty::all_models!())
+///     .connect("sqlite::memory:")
+///     .await?;
+/// ```
+///
+/// The macro expands to a call into Toasty's own `models!` macro rooted at
+/// `$crate::entities::*`, so it is usable from any downstream crate without
+/// re-exporting Toasty.
+#[macro_export]
+macro_rules! all_models {
+    () => {
+        ::toasty::models!(yauth_toasty::*)
+    };
+}
+
 /// Shared conversion helpers (jiff↔chrono bridging, error mapping).
 #[allow(dead_code)]
 pub(crate) mod helpers;
@@ -38,9 +61,15 @@ pub(crate) mod common;
 
 #[cfg(feature = "postgresql")]
 pub mod pg;
+#[cfg(feature = "postgresql")]
+pub use pg::ToastyPgBackend;
 
 #[cfg(feature = "mysql")]
 pub mod mysql;
+#[cfg(feature = "mysql")]
+pub use mysql::ToastyMysqlBackend;
 
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
+#[cfg(feature = "sqlite")]
+pub use sqlite::ToastySqliteBackend;

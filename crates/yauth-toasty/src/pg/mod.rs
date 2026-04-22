@@ -21,7 +21,10 @@ impl ToastyPgBackend {
         let mut builder = Db::builder();
         builder
             .table_name_prefix("yauth_")
-            .models(Self::all_models());
+            // NOTE: Inside yauth-toasty we use `toasty::models!(crate::*)`
+            // directly — it resolves via `env!("CARGO_PKG_NAME")`. External
+            // consumers should call [`crate::all_models!`] instead.
+            .models(toasty::models!(crate::*));
         builder.connect(url).await
     }
 
@@ -40,10 +43,6 @@ impl ToastyPgBackend {
             .push_schema()
             .await
             .map_err(|e| RepoError::Internal(format!("push_schema error: {e}").into()))
-    }
-
-    fn all_models() -> toasty::schema::app::ModelSet {
-        toasty::models!(crate::*)
     }
 }
 

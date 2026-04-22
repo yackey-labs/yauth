@@ -61,9 +61,15 @@ pub(crate) mod common;
 
 #[cfg(feature = "postgresql")]
 pub mod pg;
+#[cfg(feature = "postgresql")]
+pub use pg::ToastyPgBackend;
 
 #[cfg(feature = "mysql")]
 pub mod mysql;
+#[cfg(feature = "mysql")]
+pub use mysql::ToastyMysqlBackend;
 
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
+#[cfg(feature = "sqlite")]
+pub use sqlite::ToastySqliteBackend;

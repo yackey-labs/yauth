@@ -1,0 +1,26 @@
+# yauth-toasty migration configuration
+#
+# Used by the `toasty-dev` binary to generate migration files.
+# See src/bin/toasty_dev.rs for the developer workflow.
+
+[migration]
+# Where migration artifacts live (relative to crate root)
+path = "toasty"
+
+# Sequential numeric prefix: 0000_, 0001_, 0002_, ...
+# Chosen over timestamp for deterministic ordering in embedded builds.
+prefix_style = "Sequential"
+
+# Insert `-- #[toasty::breakpoint]` comments between DDL statements.
+# Required for the migration applier to split multi-statement files per-driver.
+statement_breakpoints = true
+
+# SHA-256 checksum stored in history.toml for each migration file.
+# Detects accidental edits to already-applied migrations.
+checksums = true
+
+[schema]
+# All yauth tables are always present regardless of plugin features.
+# Feature-gated models are always compiled into the dev binary (via --features full).
+# Unused plugin tables remain empty at runtime — this matches diesel/sqlx backends.
+table_name_prefix = "yauth_"

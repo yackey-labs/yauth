@@ -24,6 +24,11 @@
 /// Shared Toasty entity definitions used by all backends.
 pub mod entities;
 
+/// Embedded migration system — call [`apply_migrations()`] at startup for
+/// tracked, checksummed schema management in production.
+pub mod migrations;
+pub use migrations::apply_migrations;
+
 /// Shared conversion helpers (jiff↔chrono bridging, error mapping).
 #[allow(dead_code)]
 pub(crate) mod helpers;

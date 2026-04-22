@@ -31,6 +31,10 @@ impl ToastyMysqlBackend {
     }
 
     /// Create all tables using `push_schema()`.
+    ///
+    /// **For tests only.** This drops and recreates tables without tracking.
+    /// For production, use [`yauth_toasty::apply_migrations(&db)`](crate::apply_migrations)
+    /// instead, which provides tracked, checksummed, incremental migrations.
     pub async fn create_tables(&self) -> Result<(), RepoError> {
         self.db
             .push_schema()

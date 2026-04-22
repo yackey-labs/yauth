@@ -1,0 +1,4 @@
+[[migrations]]
+name = "0000_initial"
+checksum = "sha256:1431c6aa9891d0cd9468572511aef997e67879b2de6e1e5ca98b8d2553a28b70"
+created_at = "2026-04-22T03:20:04.853030933Z"

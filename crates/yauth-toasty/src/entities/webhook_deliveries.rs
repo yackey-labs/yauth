@@ -13,7 +13,7 @@ pub struct YauthWebhookDelivery {
     pub webhook_id: Uuid,
 
     #[belongs_to(key = webhook_id, references = id)]
-    pub webhook: toasty::BelongsTo<YauthWebhook>,
+    pub yauth_webhook: toasty::BelongsTo<YauthWebhook>,
 
     pub event_type: String,
 

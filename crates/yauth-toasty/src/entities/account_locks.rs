@@ -13,7 +13,7 @@ pub struct YauthAccountLock {
     pub user_id: Uuid,
 
     #[belongs_to(key = user_id, references = id)]
-    pub user: toasty::BelongsTo<YauthUser>,
+    pub yauth_user: toasty::BelongsTo<YauthUser>,
 
     pub failed_count: i32,
     pub locked_until: Option<jiff::Timestamp>,

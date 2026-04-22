@@ -18,7 +18,7 @@ pub struct YauthAuthorizationCode {
     pub user_id: Uuid,
 
     #[belongs_to(key = user_id, references = id)]
-    pub user: toasty::BelongsTo<YauthUser>,
+    pub yauth_user: toasty::BelongsTo<YauthUser>,
 
     #[serialize(json, nullable)]
     pub scopes: Option<serde_json::Value>,

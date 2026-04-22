@@ -13,7 +13,7 @@ pub struct YauthPasskey {
     pub user_id: Uuid,
 
     #[belongs_to(key = user_id, references = id)]
-    pub user: toasty::BelongsTo<YauthUser>,
+    pub yauth_user: toasty::BelongsTo<YauthUser>,
 
     pub name: String,
     pub aaguid: Option<String>,

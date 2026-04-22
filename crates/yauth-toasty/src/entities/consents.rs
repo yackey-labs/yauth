@@ -13,7 +13,7 @@ pub struct YauthConsent {
     pub user_id: Uuid,
 
     #[belongs_to(key = user_id, references = id)]
-    pub user: toasty::BelongsTo<YauthUser>,
+    pub yauth_user: toasty::BelongsTo<YauthUser>,
 
     pub client_id: String,
 

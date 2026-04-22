@@ -66,7 +66,8 @@ fn snapshots_dir() -> PathBuf {
 async fn build_db() -> Result<toasty::Db> {
     toasty::Db::builder()
         .table_name_prefix("yauth_")
-        .models(toasty::models!(yauth_toasty::*))
+        // External crate use of the public `all_models!` macro.
+        .models(yauth_toasty::all_models!())
         .connect("sqlite::memory:")
         .await
         .context("failed to build Db with yauth models")

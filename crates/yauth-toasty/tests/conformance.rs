@@ -1178,6 +1178,9 @@ fn oauth2_client_create_find() {
                     scopes: Some(json!(["openid", "profile"])),
                     is_public: false,
                     created_at: now(),
+                    token_endpoint_auth_method: None,
+                    public_key_pem: None,
+                    jwks_uri: None,
                 })
                 .await
                 .unwrap_or_else(|e| panic!("{name}: create oauth2 client: {e}"));

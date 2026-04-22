@@ -33,11 +33,17 @@ pub struct YauthUser {
     pub created_at: jiff::Timestamp,
     pub updated_at: jiff::Timestamp,
 
-    // 1:1 relationships
+    // 1:1 relationships. Both are OPTIONAL — yauth's domain model allows
+    // users without a password (OAuth-only, passkey-only) and without a
+    // TOTP secret (MFA is opt-in). Toasty 0.4 requires `HasOne<Option<T>>`
+    // (note: `Option` goes INSIDE `HasOne`) for nullable one-to-one
+    // associations; a plain `HasOne<T>` forces the child to be inserted
+    // at the same time as the parent and panics at
+    // `engine/lower/relation.rs:98` otherwise.
     #[has_one]
-    pub password: toasty::HasOne<super::YauthPassword>,
+    pub password: toasty::HasOne<Option<super::YauthPassword>>,
     #[has_one]
-    pub totp_secret: toasty::HasOne<super::YauthTotpSecret>,
+    pub totp_secret: toasty::HasOne<Option<super::YauthTotpSecret>>,
 
     // 1:N relationships
     #[has_many]

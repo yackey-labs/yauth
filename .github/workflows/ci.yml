@@ -198,7 +198,12 @@ jobs:
         run: cargo clippy --manifest-path crates/yauth-toasty/Cargo.toml --features full,${{ matrix.backend }} --all-targets -- -D warnings
 
       - name: Test (conformance)
-        run: cargo test --manifest-path crates/yauth-toasty/Cargo.toml --features full,${{ matrix.backend }} --test conformance
+        # --test-threads=1: the conformance harness shares a single
+        # `Repositories` per backend via OnceCell (see tests/conformance.rs
+        # header comment). Parallel execution has tests clobber each
+        # other's shared DB state. Per-test backend isolation is a
+        # follow-up; serialized tests finish in ~5s for sqlite.
+        run: cargo test --manifest-path crates/yauth-toasty/Cargo.toml --features full,${{ matrix.backend }} --test conformance -- --test-threads=1
 
       - name: Test (migrations — sqlite only)
         if: matrix.backend == 'sqlite'

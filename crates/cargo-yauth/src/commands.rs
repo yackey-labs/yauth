@@ -447,9 +447,13 @@ fn find_existing_file(
             None
         }
         yauth_migration::Orm::Toasty => {
-            // Generated: <migrations_dir>/models.rs (single file)
-            let file_name = generated_path.file_name()?;
-            let candidate = migrations_dir.join(file_name);
+            // Generated paths: <migrations_dir>/models.rs
+            //                  <migrations_dir>/Toasty.toml
+            //                  <migrations_dir>/bin/toasty-dev.rs
+            // No timestamp prefix to strip — the scaffolding file names are
+            // stable — so just replay the exact relative path.
+            let rel = generated_path.strip_prefix(migrations_dir).ok()?;
+            let candidate = migrations_dir.join(rel);
             if candidate.exists() {
                 return Some(candidate);
             }
@@ -507,7 +511,19 @@ fn print_next_steps(config: &YAuthConfig, migration: &generate::GeneratedMigrati
         }
         Orm::Toasty => {
             if migration_count > 0 {
-                println!("Use the generated model files with toasty::Db::push_schema()");
+                println!(
+                    "Toasty scaffolding generated. Next steps:\n\
+                     - Add `toasty = {{ version = \"0.4\", features = [\"jiff\"] }}` and\n\
+                       `jiff = \"0.2\"` to your Cargo.toml.\n\
+                     - Register the models and apply migrations at startup:\n\
+                       let db = toasty::Db::builder()\n\
+                           .table_name_prefix(\"yauth_\")\n\
+                           .models(toasty::models!(crate::*))\n\
+                           .connect(&database_url).await?;\n\
+                       yauth_toasty::apply_migrations(&db).await?;\n\
+                     - Generate migrations from future model changes with:\n\
+                       cargo run --bin toasty-dev --features dev-cli -- migration generate --name <name>"
+                );
             }
         }
     }

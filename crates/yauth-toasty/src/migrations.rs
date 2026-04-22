@@ -16,12 +16,14 @@ use yauth::repo::RepoError;
 static MIGRATIONS_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/toasty");
 
 /// A single migration entry from history.toml.
+///
+/// The TOML file also carries a `created_at` timestamp written by `toasty-dev`,
+/// but the runtime migration applier does not need it — serde silently ignores
+/// the extra field.
 #[derive(serde::Deserialize, Debug)]
 struct MigrationEntry {
     name: String,
     checksum: String,
-    #[allow(dead_code)]
-    created_at: String,
 }
 
 /// The history.toml structure.

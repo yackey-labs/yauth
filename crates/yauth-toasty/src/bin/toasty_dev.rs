@@ -64,13 +64,12 @@ fn snapshots_dir() -> PathBuf {
 /// Uses an in-memory SQLite database — no actual database connection needed
 /// for schema inspection and migration generation.
 async fn build_db() -> Result<toasty::Db> {
-    let db = toasty::Db::builder()
+    toasty::Db::builder()
         .table_name_prefix("yauth_")
         .models(toasty::models!(yauth_toasty::*))
         .connect("sqlite::memory:")
         .await
-        .context("failed to build Db with yauth models")?;
-    Ok(db)
+        .context("failed to build Db with yauth models")
 }
 
 /// Load previous history, or return an empty one.

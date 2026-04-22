@@ -27,7 +27,7 @@ When helping users integrate yauth, read these files — they contain complete, 
 | `yauth-entity` | Domain types (User, Session, Password, etc.) — ORM-agnostic, no migration dependency |
 | `yauth-migration` | Schema types, DDL generation, diff engine, migration file gen — **zero ORM deps**, build-time-only dep of `cargo-yauth` (NOT a dependency of `yauth` itself) |
 | `cargo-yauth` | CLI binary — `cargo yauth init/add-plugin/remove-plugin/status/generate` |
-| `yauth-toasty` | **Excluded from workspace.** Toasty ORM backends (experimental). Excluded because `toasty-driver-sqlite`'s `libsqlite3-sys` and `sqlx-sqlite`'s `libsqlite3-sys` both declare `links = "sqlite3"`, which Cargo forbids in a single resolved workspace graph. CI has a dedicated `toasty` matrix job that builds this crate via `--manifest-path`. |
+| `yauth-toasty` | Toasty ORM backend (experimental) — idiomatic entities with `#[belongs_to]` / `#[has_many]` relationships, `jiff::Timestamp`, embedded migrations via `apply_migrations(&db)`. Supports PG / MySQL / SQLite from a single entity set. **Excluded from workspace** because `toasty-driver-sqlite`'s `libsqlite3-sys` and `sqlx-sqlite`'s `libsqlite3-sys` both declare `links = "sqlite3"`, which Cargo forbids in a single resolved workspace graph. CI has a dedicated `toasty` matrix job that builds this crate via `--manifest-path`. |
 
 Key internal modules in `yauth`:
 - `backends/diesel_pg/` — PostgreSQL backend (`DieselPgBackend`)
@@ -107,6 +107,21 @@ cargo fmt --manifest-path crates/yauth-toasty/Cargo.toml --check
 cargo clippy --manifest-path crates/yauth-toasty/Cargo.toml --features full,sqlite --all-targets -- -D warnings
 cargo test --manifest-path crates/yauth-toasty/Cargo.toml --features full,sqlite --test conformance
 cargo test --manifest-path crates/yauth-toasty/Cargo.toml --features full,sqlite --test migrations
+
+# Runnable examples (smallest feature set; `full,sqlite` also works)
+cargo run --manifest-path crates/yauth-toasty/Cargo.toml \
+  --example toasty_backend --features email-password,sqlite
+cargo run --manifest-path crates/yauth-toasty/Cargo.toml \
+  --example toasty_full_flow --features email-password,sqlite
+
+# Rustdoc
+cargo doc --manifest-path crates/yauth-toasty/Cargo.toml \
+  --features full,sqlite --no-deps
+
+# Dev-only CLI for generating migrations from model changes
+cargo run --manifest-path crates/yauth-toasty/Cargo.toml \
+  --bin toasty-dev --features dev-cli,sqlite -- migration status
+
 # With services running (`docker compose up -d`) and DATABASE_URL / MYSQL_DATABASE_URL set:
 DATABASE_URL=postgres://yauth:yauth@127.0.0.1:5433/yauth_test \
   cargo test --manifest-path crates/yauth-toasty/Cargo.toml --features full,postgresql --test conformance
@@ -144,6 +159,8 @@ The suite covers three categories:
 | `sqlx-mysql-backend` | MySQL backend via sqlx | No |
 | `sqlx-sqlite-backend` | SQLite backend via sqlx | No |
 | `memory-backend` | Fully in-memory backend (no database required) | No |
+
+**Separate crate:** [`yauth-toasty`](crates/yauth-toasty/) provides the Toasty ORM backend (`ToastyPgBackend` / `ToastyMysqlBackend` / `ToastySqliteBackend`) as `--features postgresql,mysql,sqlite` on that crate. It is excluded from the `all-backends` feature on yauth because it ships its own `libsqlite3-sys` link target; CI covers it in a dedicated matrix job.
 
 ### Plugin Features
 
@@ -196,8 +213,13 @@ All backends accept pre-configured pools or connections — they do not create t
 | `SeaOrmMysqlBackend` | `backends::seaorm_mysql` | `from_connection(db)` | MySQL via SeaORM 2.0 |
 | `SeaOrmSqliteBackend` | `backends::seaorm_sqlite` | `from_connection(db)` | SQLite via SeaORM 2.0 |
 | `InMemoryBackend` | `backends::memory` | `new()` | Tests, prototyping, CI — no database required |
+| `ToastyPgBackend` | `yauth_toasty::pg` | `new(url)` / `from_db(db)` | PostgreSQL via Toasty (experimental, separate crate) |
+| `ToastyMysqlBackend` | `yauth_toasty::mysql` | `new(url)` / `from_db(db)` | MySQL via Toasty (experimental, separate crate) |
+| `ToastySqliteBackend` | `yauth_toasty::sqlite` | `new(url)` / `from_db(db)` | SQLite via Toasty (experimental, separate crate) |
 
 Redis (`with_redis()`) is a **caching decorator** that wraps repository traits for sub-millisecond session/rate-limit lookups. The database remains the source of truth. Redis is not a separate store backend.
+
+**Toasty backends** live in `yauth-toasty` rather than as feature flags on `yauth` because Toasty's SQLite driver declares its own `libsqlite3-sys` link target that conflicts with sqlx's. `yauth-toasty` embeds its own migration chain — call `yauth_toasty::apply_migrations(&db)` at startup instead of running `cargo yauth generate` — see [`crates/yauth-toasty/README.md`](crates/yauth-toasty/README.md) for the adoption path.
 
 ### Builder Pattern
 

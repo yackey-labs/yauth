@@ -39,8 +39,11 @@ Copy the backend-specific block from any section below, paste it where the comme
 | `SeaOrmMysqlBackend` | `seaorm-mysql-backend` | `from_connection(db)` | SeaORM + MySQL |
 | `SeaOrmSqliteBackend` | `seaorm-sqlite-backend` | `from_connection(db)` | SeaORM + SQLite |
 | `InMemoryBackend` | `memory-backend` | `new()` | Tests, prototyping |
+| `ToastyPgBackend` | `yauth-toasty`: `postgresql` | `from_db(db)` | PostgreSQL via Toasty (experimental, embedded migrations) |
+| `ToastyMysqlBackend` | `yauth-toasty`: `mysql` | `from_db(db)` | MySQL via Toasty (experimental, embedded migrations) |
+| `ToastySqliteBackend` | `yauth-toasty`: `sqlite` | `from_db(db)` | SQLite via Toasty (experimental, embedded migrations) |
 
-yauth does not run migrations. Use `cargo yauth generate` to produce migration files for your ORM, then apply them with your ORM's CLI (`diesel migration run`, `sqlx migrate run`, `sea-orm-cli migrate`) or via `diesel-async`'s `AsyncMigrationHarness` for a libpq-free alternative (see [Async Migrations](#async-migrations-diesel-backends)).
+yauth does not run migrations. Use `cargo yauth generate` to produce migration files for your ORM, then apply them with your ORM's CLI (`diesel migration run`, `sqlx migrate run`, `sea-orm-cli migrate`) or via `diesel-async`'s `AsyncMigrationHarness` for a libpq-free alternative (see [Async Migrations](#async-migrations-diesel-backends)). The Toasty backend is the exception — it embeds its own migration chain; call `yauth_toasty::apply_migrations(&db).await?` at startup instead of running `cargo yauth generate`.
 
 ## Diesel Backends
 
@@ -311,41 +314,59 @@ let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
 
 ## Toasty Backends (experimental)
 
-Toasty backends are in a separate `yauth-toasty` crate (due to a Cargo `links` conflict with sqlx).
+Toasty backends live in a separate [`yauth-toasty`](../crates/yauth-toasty/) crate (due to a Cargo `links` conflict with sqlx's SQLite driver). One crate covers PostgreSQL, MySQL, and SQLite — you pick the driver via feature flag and the rest of the code is identical.
 
 **Important:** Enable auth plugin features (e.g., `email-password`) on `yauth-toasty`, not on `yauth` directly. `yauth-toasty` re-exports yauth's features and needs them to compile its own repository implementations. If you enable `email-password` only on `yauth`, the `Repositories` struct will expect fields that `yauth-toasty` hasn't compiled, causing a build error.
 
 ```toml
 # Correct — features on yauth-toasty
 [dependencies]
-yauth = { path = "...", default-features = false }
-yauth-toasty = { path = "...", features = ["sqlite", "email-password"] }
+yauth = { version = "0.12", default-features = false }
+yauth-toasty = { path = "../yauth-toasty", features = ["sqlite", "email-password"] }
+toasty = { version = "0.4", default-features = false, features = ["sqlite"] }
 
 # Wrong — features on yauth but not yauth-toasty (will not compile)
-# yauth = { path = "...", features = ["email-password"] }
-# yauth-toasty = { path = "...", features = ["sqlite"] }
+# yauth = { version = "0.12", features = ["email-password"] }
+# yauth-toasty = { path = "../yauth-toasty", features = ["sqlite"] }
 ```
 
-**`create_tables()`** (which calls Toasty's `push_schema()`) creates or updates database tables. It is idempotent — safe to call on every startup. Unlike other backends where you run `cargo yauth generate` + your ORM's migration CLI, Toasty manages schema directly via `#[derive(toasty::Model)]` structs compiled into the crate.
+### Migrations: `apply_migrations` vs `push_schema`
 
-Each Toasty backend has a `new(url)` constructor that handles schema registration and connection internally, plus a `from_db(db)` for advanced cases where you share a `Db` with your own models. Call `create_tables()` after construction to run `push_schema()`.
+Unlike other backends where you run `cargo yauth generate` + your ORM's migration CLI, Toasty ships its own chain of embedded migrations inside `yauth-toasty`:
+
+- **Production / any file-backed database:** call `yauth_toasty::apply_migrations(&db).await?` once at startup. It creates a `__yauth_toasty_migrations` tracking table, applies pending migrations in sequential order, and validates checksums on previously-applied files. Idempotent — safe to call every start-up.
+- **Tests / ephemeral databases:** call `backend.create_tables()` (which delegates to Toasty's `push_schema()`). Faster, no tracking table, not intended for production.
+
+### Key differences from diesel / sqlx backends
+
+- **One crate, three databases.** Pick the driver via feature flag; entity definitions, repositories, and API surface are identical across PG / MySQL / SQLite.
+- **Embedded migrations.** `apply_migrations(&db)` is a single function call — no external CLI, no `diesel migration run` step. The migration files live under `crates/yauth-toasty/toasty/`.
+- **Code-first schema.** Models (`#[derive(toasty::Model)]` with `#[belongs_to]` / `#[has_many]` / `jiff::Timestamp`) are the source of truth. `cargo run --bin toasty-dev ... migration generate` diffs the models against the last snapshot and emits the next migration file.
+- **Shared `Db` support.** `Backend::from_db(db)` accepts a `toasty::Db` that also registers your own models, so yauth lives alongside application data under one connection.
 
 ### Toasty + PostgreSQL
 
 ```bash
 cargo add yauth --no-default-features
 cargo add yauth-toasty --git https://github.com/yackey-labs/yauth --features postgresql,email-password
-cargo add toasty@0.3 --no-default-features --features postgresql
+cargo add toasty@0.4 --no-default-features --features postgresql
 ```
 
 ```rust
 use yauth::prelude::*;
-use yauth_toasty::pg::ToastyPgBackend;
+use yauth_toasty::{ToastyPgBackend, apply_migrations};
 
 let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-let backend = ToastyPgBackend::new(&database_url).await.unwrap();
-backend.create_tables().await.unwrap(); // runs push_schema() — idempotent, safe on every startup
+let db = toasty::Db::builder()
+    .table_name_prefix("yauth_")
+    .models(yauth_toasty::all_models!())
+    .connect(&database_url)
+    .await?;
 
+// Production: apply tracked, checksummed migrations.
+apply_migrations(&db).await?;
+
+let backend = ToastyPgBackend::from_db(db);
 let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
     .with_email_password(EmailPasswordConfig::default())
     .build()
@@ -357,17 +378,23 @@ let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
 ```bash
 cargo add yauth --no-default-features
 cargo add yauth-toasty --git https://github.com/yackey-labs/yauth --features mysql,email-password
-cargo add toasty@0.3 --no-default-features --features mysql
+cargo add toasty@0.4 --no-default-features --features mysql
 ```
 
 ```rust
 use yauth::prelude::*;
-use yauth_toasty::mysql::ToastyMysqlBackend;
+use yauth_toasty::{ToastyMysqlBackend, apply_migrations};
 
 let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-let backend = ToastyMysqlBackend::new(&database_url).await.unwrap();
-backend.create_tables().await.unwrap();
+let db = toasty::Db::builder()
+    .table_name_prefix("yauth_")
+    .models(yauth_toasty::all_models!())
+    .connect(&database_url)
+    .await?;
 
+apply_migrations(&db).await?;
+
+let backend = ToastyMysqlBackend::from_db(db);
 let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
     .with_email_password(EmailPasswordConfig::default())
     .build()
@@ -379,32 +406,48 @@ let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
 ```bash
 cargo add yauth --no-default-features
 cargo add yauth-toasty --git https://github.com/yackey-labs/yauth --features sqlite,email-password
-cargo add toasty@0.3 --no-default-features --features sqlite
+cargo add toasty@0.4 --no-default-features --features sqlite
 ```
 
 ```rust
 use yauth::prelude::*;
-use yauth_toasty::sqlite::ToastySqliteBackend;
+use yauth_toasty::{ToastySqliteBackend, apply_migrations};
 
-let backend = ToastySqliteBackend::new("sqlite://yauth.db").await.unwrap();
-backend.create_tables().await.unwrap();
+// Use a file-backed DB in production — the SQLite driver opens a new
+// connection per query, so `:memory:` gives each query a blank schema.
+let db = toasty::Db::builder()
+    .table_name_prefix("yauth_")
+    .models(yauth_toasty::all_models!())
+    .connect("sqlite:./yauth.db")
+    .await?;
 
+apply_migrations(&db).await?;
+
+let backend = ToastySqliteBackend::from_db(db);
 let yauth = YAuthBuilder::new(backend, YAuthConfig::default())
     .with_email_password(EmailPasswordConfig::default())
     .build()
     .await?;
 ```
 
-For advanced usage (sharing a `Db` with your own Toasty models), use `from_db()`:
+For tests, skip `apply_migrations` and call `backend.create_tables()` on a fresh `:memory:` or tempfile-backed connection instead — it runs `push_schema()` without the tracking table.
+
+### Sharing a `Db` with your own models
+
+Mount yauth's models alongside your app's Toasty models in a single `Db`:
 
 ```rust
 let db = toasty::Db::builder()
     .table_name_prefix("yauth_")
-    .models(toasty::models!(crate::*, yauth_toasty::*))
+    .models(toasty::models!(crate::*, yauth_toasty::entities::*))
     .connect("sqlite://app.db")
     .await?;
+
+apply_migrations(&db).await?;
 let backend = ToastySqliteBackend::from_db(db);
 ```
+
+See [`crates/yauth-toasty/examples/toasty_backend.rs`](../crates/yauth-toasty/examples/toasty_backend.rs) for a complete runnable example and [`examples/toasty_full_flow.rs`](../crates/yauth-toasty/examples/toasty_full_flow.rs) for a repository-layer walkthrough.
 
 ## In-Memory (no database)
 

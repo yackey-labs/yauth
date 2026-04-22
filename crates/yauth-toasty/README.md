@@ -37,8 +37,8 @@ tokio = { version = "1", features = ["full"] }
 ```
 
 ```rust
-use yauth::{YAuthBuilder, YAuthConfig};
-use yauth::plugins::EmailPasswordConfig;
+use yauth::YAuthBuilder;
+use yauth::config::{EmailPasswordConfig, YAuthConfig};
 use yauth_toasty::{ToastySqliteBackend, apply_migrations};
 
 #[tokio::main]

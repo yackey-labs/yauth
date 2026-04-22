@@ -155,17 +155,33 @@ async fn cmd_generate(name: &str) -> Result<()> {
     let mut history = load_history();
 
     // Load the previous schema from the latest JSON snapshot so we produce
-    // incremental (not duplicate) DDL.  Falls back to empty when there is no
-    // prior snapshot (i.e. the very first migration).
-    let previous: toasty::schema::db::Schema = history
-        .migrations
-        .last()
-        .and_then(|last| {
+    // incremental (not duplicate) DDL. The fallback to an empty schema is
+    // *only* legal on the very first migration (history is empty). If
+    // history records a previous migration but the snapshot is missing or
+    // unreadable, fail loudly — otherwise the next "incremental" migration
+    // silently becomes a full recreate that the reviewer cannot tell apart
+    // from a clean initial migration.
+    let previous: toasty::schema::db::Schema = match history.migrations.last() {
+        None => toasty::schema::db::Schema::default(),
+        Some(last) => {
             let json_path = snapshots_dir().join(format!("{}_schema.json", last.name));
-            fs::read_to_string(&json_path).ok()
-        })
-        .and_then(|json| serde_json::from_str(&json).ok())
-        .unwrap_or_default();
+            let json = fs::read_to_string(&json_path).with_context(|| {
+                format!(
+                    "history records migration `{}` but its snapshot at `{}` is missing or \
+                     unreadable; refusing to silently regenerate from an empty schema",
+                    last.name,
+                    json_path.display(),
+                )
+            })?;
+            serde_json::from_str(&json).with_context(|| {
+                format!(
+                    "failed to parse snapshot `{}`; the file is corrupt — restore it from git \
+                     or delete history.toml to start over",
+                    json_path.display(),
+                )
+            })?
+        }
+    };
 
     let hints = toasty::schema::db::RenameHints::new();
     let diff = toasty::schema::db::SchemaDiff::from(&previous, target, &hints);

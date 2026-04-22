@@ -58,6 +58,43 @@ fn singularize(word: &str) -> String {
     }
 }
 
+/// Pluralize a word in the naive cases yauth actually uses. Only applied
+/// when the has_many parent-side field would otherwise be singular —
+/// e.g. `audit_log` → `audit_logs`. Names that already end in `s` are
+/// left alone.
+fn pluralize(word: &str) -> String {
+    if word.ends_with('s') {
+        word.to_string()
+    } else if word.ends_with('y') && word.len() > 1 {
+        // e.g. `entity` → `entities`
+        let (head, _) = word.split_at(word.len() - 1);
+        format!("{head}ies")
+    } else {
+        format!("{word}s")
+    }
+}
+
+/// snake_case of a PascalCase model name. `YauthUser` → `yauth_user`,
+/// `YauthWebhookDelivery` → `yauth_webhook_delivery`.
+///
+/// Used to name the child-side `#[belongs_to]` companion field so that
+/// `toasty::Model`'s derive macro finds the field where its generated
+/// code expects it (rustc E0599 explicitly suggests this form).
+fn to_snake_case(pascal: &str) -> String {
+    let mut out = String::with_capacity(pascal.len() + 4);
+    for (i, c) in pascal.chars().enumerate() {
+        if c.is_ascii_uppercase() {
+            if i > 0 {
+                out.push('_');
+            }
+            out.extend(c.to_lowercase());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// Convert a table name like `yauth_totp_secrets` to a PascalCase singular
 /// model name like `YauthTotpSecret`.
 fn model_name(table_name: &str) -> String {
@@ -133,16 +170,22 @@ fn is_has_one(schema: &YAuthSchema, child_table: &str, child_column: &str) -> bo
         .unwrap_or(false)
 }
 
-/// Build a singular field name for the parent side of a relationship.
+/// Build the field name for the parent side of a relationship.
 ///
-/// For `has_many`: plural singular — e.g. `sessions`, `api_keys`.
-/// For `has_one`: singularized child name — e.g. `password`, `totp_secret`.
+/// For `has_many`: plural — e.g. `sessions`, `api_keys`, `audit_logs`.
+/// Singular-looking child table names (like `audit_log`) are pluralized
+/// so the field doesn't collide with the item `toasty::Model`'s derive
+/// macro emits under the same bare-singular name (E0592 'duplicate
+/// definitions').
+///
+/// For `has_one`: singularized child name — e.g. `password`,
+/// `totp_secret`.
 fn parent_field_name(child_table: &str, prefix: &str, has_one: bool) -> String {
     let base = child_table.strip_prefix(prefix).unwrap_or(child_table);
     if has_one {
         singularize(base)
     } else {
-        base.to_string()
+        pluralize(base)
     }
 }
 
@@ -184,17 +227,20 @@ fn generate_model(
         out.push_str(&format!("    pub {}: {},\n", col.name, rust_ty));
 
         // BelongsTo virtual field on the child side.
+        //
+        // The field name MUST be snake_case of the parent model name
+        // (e.g. `YauthUser` → `yauth_user`). `toasty::Model`'s derive
+        // macro generates code that looks up the companion field by
+        // that exact name; a mismatched name triggers rustc E0599
+        // ("no method/field named X; help: did you mean ...") and
+        // breaks every has_many/has_one ↔ belongs_to pair.
         if let Some(fk) = col
             .foreign_key
             .as_ref()
             .filter(|fk| fk.references_table != table.name)
         {
             let parent_model = model_name(&fk.references_table);
-            let rel_field = col
-                .name
-                .strip_suffix("_id")
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| format!("{}_ref", col.name));
+            let rel_field = to_snake_case(&parent_model);
             out.push_str(&format!(
                 "    #[belongs_to(key = {}, references = {})]\n",
                 col.name, fk.references_column
@@ -386,13 +432,21 @@ mod tests {
         let files = generate_toasty_models(&schema, "yauth_");
         let content = file(&files, "models.rs");
 
-        // Child side: sessions.user_id → users.id
+        // Child side: sessions.user_id → users.id. The BelongsTo
+        // field is snake_case of the parent model name so toasty's
+        // derive finds it (E0599 otherwise).
         assert!(content.contains("#[belongs_to(key = user_id, references = id)]"));
-        assert!(content.contains("pub user: toasty::BelongsTo<YauthUser>"));
+        assert!(content.contains("pub yauth_user: toasty::BelongsTo<YauthUser>"));
 
         // Parent side: users has_many sessions
         assert!(content.contains("#[has_many]"));
         assert!(content.contains("pub sessions: toasty::HasMany<YauthSession>"));
+
+        // Singular-looking table names are pluralized on the parent side
+        // to avoid colliding with the item the derive macro emits
+        // (E0592 'duplicate definitions with name audit_log').
+        assert!(content.contains("pub audit_logs: toasty::HasMany<YauthAuditLog>"));
+        assert!(!content.contains("pub audit_log: toasty::HasMany<YauthAuditLog>"));
     }
 
     #[test]

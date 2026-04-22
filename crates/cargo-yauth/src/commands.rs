@@ -507,16 +507,22 @@ fn print_next_steps(config: &YAuthConfig, migration: &generate::GeneratedMigrati
             if migration_count > 0 {
                 println!(
                     "Toasty scaffolding generated. Next steps:\n\
-                     - Add `toasty = {{ version = \"0.4\", features = [\"jiff\"] }}` and\n\
-                       `jiff = \"0.2\"` to your Cargo.toml.\n\
+                     - Add the following to your Cargo.toml (the `serde` feature\n\
+                       on toasty is required by `#[serialize(json)]` on JSON\n\
+                       columns; `uuid` and `serde_json` are referenced directly\n\
+                       by the generated `models.rs`):\n\
+                         toasty = {{ version = \"0.4\", features = [\"jiff\", \"serde\"] }}\n\
+                         jiff = \"0.2\"\n\
+                         uuid = {{ version = \"1\", features = [\"v7\"] }}\n\
+                         serde_json = \"1\"\n\
                      - Register the models and apply migrations at startup:\n\
-                       let db = toasty::Db::builder()\n\
-                           .table_name_prefix(\"yauth_\")\n\
-                           .models(toasty::models!(crate::*))\n\
-                           .connect(&database_url).await?;\n\
-                       yauth_toasty::apply_migrations(&db).await?;\n\
+                         let db = toasty::Db::builder()\n\
+                             .table_name_prefix(\"yauth_\")\n\
+                             .models(toasty::models!(crate::*))\n\
+                             .connect(&database_url).await?;\n\
+                         yauth_toasty::apply_migrations(&db).await?;\n\
                      - Generate migrations from future model changes with:\n\
-                       cargo run --bin toasty-dev --features dev-cli -- migration generate --name <name>"
+                         cargo run --bin toasty-dev --features dev-cli -- migration generate --name <name>"
                 );
             }
         }

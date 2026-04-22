@@ -31,7 +31,7 @@ pub struct YauthUser {
     #[has_many]
     pub sessions: toasty::HasMany<YauthSession>,
     #[has_many]
-    pub audit_log: toasty::HasMany<YauthAuditLog>,
+    pub audit_logs: toasty::HasMany<YauthAuditLog>,
     #[has_one]
     pub password: toasty::HasOne<YauthPassword>,
     #[has_many]
@@ -185,7 +185,7 @@ pub struct YauthSession {
     pub id: uuid::Uuid,
     pub user_id: uuid::Uuid,
     #[belongs_to(key = user_id, references = id)]
-    pub user: toasty::BelongsTo<YauthUser>,
+    pub yauth_user: toasty::BelongsTo<YauthUser>,
     #[unique]
     pub token_hash: String,
     pub ip_address: Option<String>,
@@ -203,7 +203,7 @@ pub struct YauthAuditLog {
     pub id: uuid::Uuid,
     pub user_id: Option<uuid::Uuid>,
     #[belongs_to(key = user_id, references = id)]
-    pub user: toasty::BelongsTo<YauthUser>,
+    pub yauth_user: toasty::BelongsTo<YauthUser>,
     pub event_type: String,
     #[serialize(json)]
     pub metadata: Option<serde_json::Value>,
@@ -219,7 +219,7 @@ pub struct YauthPassword {
     #[auto]
     pub user_id: uuid::Uuid,
     #[belongs_to(key = user_id, references = id)]
-    pub user: toasty::BelongsTo<YauthUser>,
+    pub yauth_user: toasty::BelongsTo<YauthUser>,
     pub password_hash: String,
 }
 
@@ -232,7 +232,7 @@ pub struct YauthEmailVerification {
     pub id: uuid::Uuid,
     pub user_id: Option<uuid::Uuid>,
     #[belongs_to(key = user_id, references = id)]
-    pub user: toasty::BelongsTo<YauthUser>,
+    pub yauth_user: toasty::BelongsTo<YauthUser>,
     #[unique]
     pub token_hash: String,
     pub expires_at: jiff::Timestamp,
@@ -248,7 +248,7 @@ pub struct YauthPasswordReset {
     pub id: uuid::Uuid,
     pub user_id: Option<uuid::Uuid>,
     #[belongs_to(key = user_id, references = id)]
-    pub user: toasty::BelongsTo<YauthUser>,
+    pub yauth_user: toasty::BelongsTo<YauthUser>,
     #[unique]
     pub token_hash: String,
     pub expires_at: jiff::Timestamp,
@@ -265,7 +265,7 @@ pub struct YauthWebauthnCredential {
     pub id: uuid::Uuid,
     pub user_id: Option<uuid::Uuid>,
     #[belongs_to(key = user_id, references = id)]
-    pub user: toasty::BelongsTo<YauthUser>,
+    pub yauth_user: toasty::BelongsTo<YauthUser>,
     pub name: String,
     pub aaguid: Option<String>,
     pub device_name: Option<String>,
@@ -285,7 +285,7 @@ pub struct YauthTotpSecret {
     #[unique]
     pub user_id: Option<uuid::Uuid>,
     #[belongs_to(key = user_id, references = id)]
-    pub user: toasty::BelongsTo<YauthUser>,
+    pub yauth_user: toasty::BelongsTo<YauthUser>,
     pub encrypted_secret: String,
     pub verified: bool,
     pub created_at: jiff::Timestamp,
@@ -300,7 +300,7 @@ pub struct YauthBackupCode {
     pub id: uuid::Uuid,
     pub user_id: Option<uuid::Uuid>,
     #[belongs_to(key = user_id, references = id)]
-    pub user: toasty::BelongsTo<YauthUser>,
+    pub yauth_user: toasty::BelongsTo<YauthUser>,
     pub code_hash: String,
     pub used: bool,
     pub created_at: jiff::Timestamp,
@@ -315,7 +315,7 @@ pub struct YauthOauthAccount {
     pub id: uuid::Uuid,
     pub user_id: Option<uuid::Uuid>,
     #[belongs_to(key = user_id, references = id)]
-    pub user: toasty::BelongsTo<YauthUser>,
+    pub yauth_user: toasty::BelongsTo<YauthUser>,
     pub provider: String,
     pub provider_user_id: String,
     pub access_token_enc: Option<String>,
@@ -334,7 +334,7 @@ pub struct YauthRefreshToken {
     pub id: uuid::Uuid,
     pub user_id: Option<uuid::Uuid>,
     #[belongs_to(key = user_id, references = id)]
-    pub user: toasty::BelongsTo<YauthUser>,
+    pub yauth_user: toasty::BelongsTo<YauthUser>,
     #[unique]
     pub token_hash: String,
     pub family_id: uuid::Uuid,
@@ -352,7 +352,7 @@ pub struct YauthApiKey {
     pub id: uuid::Uuid,
     pub user_id: Option<uuid::Uuid>,
     #[belongs_to(key = user_id, references = id)]
-    pub user: toasty::BelongsTo<YauthUser>,
+    pub yauth_user: toasty::BelongsTo<YauthUser>,
     #[unique]
     pub key_prefix: String,
     pub key_hash: String,
@@ -376,7 +376,7 @@ pub struct YauthAuthorizationCode {
     pub client_id: String,
     pub user_id: Option<uuid::Uuid>,
     #[belongs_to(key = user_id, references = id)]
-    pub user: toasty::BelongsTo<YauthUser>,
+    pub yauth_user: toasty::BelongsTo<YauthUser>,
     #[serialize(json)]
     pub scopes: Option<serde_json::Value>,
     pub redirect_uri: String,
@@ -397,7 +397,7 @@ pub struct YauthConsent {
     pub id: uuid::Uuid,
     pub user_id: Option<uuid::Uuid>,
     #[belongs_to(key = user_id, references = id)]
-    pub user: toasty::BelongsTo<YauthUser>,
+    pub yauth_user: toasty::BelongsTo<YauthUser>,
     pub client_id: String,
     #[serialize(json)]
     pub scopes: Option<serde_json::Value>,
@@ -420,7 +420,7 @@ pub struct YauthDeviceCode {
     pub scopes: Option<serde_json::Value>,
     pub user_id: Option<uuid::Uuid>,
     #[belongs_to(key = user_id, references = id)]
-    pub user: toasty::BelongsTo<YauthUser>,
+    pub yauth_user: toasty::BelongsTo<YauthUser>,
     pub status: String,
     pub interval: i64,
     pub expires_at: jiff::Timestamp,
@@ -438,7 +438,7 @@ pub struct YauthAccountLock {
     #[unique]
     pub user_id: Option<uuid::Uuid>,
     #[belongs_to(key = user_id, references = id)]
-    pub user: toasty::BelongsTo<YauthUser>,
+    pub yauth_user: toasty::BelongsTo<YauthUser>,
     pub failed_count: i64,
     pub locked_until: Option<jiff::Timestamp>,
     pub lock_count: i64,
@@ -456,7 +456,7 @@ pub struct YauthUnlockToken {
     pub id: uuid::Uuid,
     pub user_id: Option<uuid::Uuid>,
     #[belongs_to(key = user_id, references = id)]
-    pub user: toasty::BelongsTo<YauthUser>,
+    pub yauth_user: toasty::BelongsTo<YauthUser>,
     #[unique]
     pub token_hash: String,
     pub expires_at: jiff::Timestamp,
@@ -472,7 +472,7 @@ pub struct YauthWebhookDelivery {
     pub id: uuid::Uuid,
     pub webhook_id: Option<uuid::Uuid>,
     #[belongs_to(key = webhook_id, references = id)]
-    pub webhook: toasty::BelongsTo<YauthWebhook>,
+    pub yauth_webhook: toasty::BelongsTo<YauthWebhook>,
     pub event_type: String,
     #[serialize(json)]
     pub payload: serde_json::Value,

@@ -252,6 +252,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09ec2f926cc3060f09db9ebc5b52823d85268d24bb917e472c0c4bea35780a7d"
 dependencies = [
  "bit-vec",
+ "serde",
 ]
 
 [[package]]
@@ -3436,6 +3437,7 @@ dependencies = [
  "indexmap",
  "jiff",
  "pluralizer",
+ "serde",
  "tokio-stream",
  "uuid",
 ]
@@ -4679,11 +4681,13 @@ dependencies = [
  "chrono",
  "include_dir",
  "jiff",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
  "toasty",
+ "toasty-core",
  "tokio",
  "toml",
  "uuid",

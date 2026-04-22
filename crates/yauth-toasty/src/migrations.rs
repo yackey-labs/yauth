@@ -75,10 +75,13 @@ fn read_history() -> Result<History, RepoError> {
 /// let db = toasty::Db::builder()
 ///     .table_name_prefix("yauth_")
 ///     .models(toasty::models!(yauth_toasty::*))
-///     .connect("sqlite::memory:")
+///     .connect("sqlite:./yauth.db")  // file-backed — NOT :memory:
 ///     .await?;
 ///
-/// // Apply schema migrations — idempotent, safe to call on every startup
+/// // Apply schema migrations — idempotent, safe to call on every startup.
+/// // NOTE: driver().connect() opens a new connection internally;
+/// // in-memory SQLite creates a separate database per connection,
+/// // so use a file-backed database to ensure migrations persist.
 /// yauth_toasty::apply_migrations(&db).await?;
 /// ```
 pub async fn apply_migrations(db: &toasty::Db) -> Result<(), RepoError> {

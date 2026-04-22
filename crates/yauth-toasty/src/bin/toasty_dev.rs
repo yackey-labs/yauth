@@ -150,11 +150,20 @@ async fn cmd_generate(name: &str) -> Result<()> {
     let full_schema = db.schema();
     let target = &full_schema.db;
 
-    // Load previous schema snapshot, or use empty.
-    // TODO: For subsequent migrations, load the previous snapshot from
-    // snapshots/NNNN_snapshot.toml instead of always diffing from empty.
     let mut history = load_history();
-    let previous = toasty::schema::db::Schema::default();
+
+    // Load the previous schema from the latest JSON snapshot so we produce
+    // incremental (not duplicate) DDL.  Falls back to empty when there is no
+    // prior snapshot (i.e. the very first migration).
+    let previous: toasty::schema::db::Schema = history
+        .migrations
+        .last()
+        .and_then(|last| {
+            let json_path = snapshots_dir().join(format!("{}_schema.json", last.name));
+            fs::read_to_string(&json_path).ok()
+        })
+        .and_then(|json| serde_json::from_str(&json).ok())
+        .unwrap_or_default();
 
     let hints = toasty::schema::db::RenameHints::new();
     let diff = toasty::schema::db::SchemaDiff::from(&previous, target, &hints);
@@ -183,11 +192,19 @@ async fn cmd_generate(name: &str) -> Result<()> {
     fs::write(&sql_path, &full_sql)?;
     println!("  Created {}", sql_path.display());
 
-    // Write snapshot
+    // Write human-readable TOML snapshot
     let snapshot = schema_to_snapshot(target);
     let snapshot_path = snapshots_dir().join(format!("{migration_name}_snapshot.toml"));
     fs::write(&snapshot_path, &snapshot)?;
     println!("  Created {}", snapshot_path.display());
+
+    // Write machine-readable JSON snapshot (used by subsequent migrations to
+    // compute incremental diffs instead of diffing from an empty schema).
+    let json_snapshot =
+        serde_json::to_string_pretty(target).context("failed to serialize schema to JSON")?;
+    let json_path = snapshots_dir().join(format!("{migration_name}_schema.json"));
+    fs::write(&json_path, &json_snapshot)?;
+    println!("  Created {}", json_path.display());
 
     // Update history
     let checksum = compute_checksum(&full_sql);
@@ -253,6 +270,42 @@ async fn cmd_status() -> Result<()> {
     Ok(())
 }
 
+/// Back-fill missing JSON schema snapshots for existing migrations.
+///
+/// For each migration entry in history.toml that has a TOML snapshot but no
+/// JSON counterpart, this command generates the JSON snapshot from the current
+/// model schema.  This is only correct when no model changes have occurred
+/// since the migration was generated — intended as a one-time upgrade path.
+async fn cmd_backfill_json() -> Result<()> {
+    let db = build_db().await?;
+    let full_schema = db.schema();
+    let target = &full_schema.db;
+    let history = load_history();
+
+    fs::create_dir_all(snapshots_dir())?;
+
+    let mut count = 0usize;
+    for entry in &history.migrations {
+        let json_path = snapshots_dir().join(format!("{}_schema.json", entry.name));
+        if json_path.exists() {
+            continue;
+        }
+        let json =
+            serde_json::to_string_pretty(target).context("failed to serialize schema to JSON")?;
+        fs::write(&json_path, &json)?;
+        println!("  Created {}", json_path.display());
+        count += 1;
+    }
+
+    if count == 0 {
+        println!("All JSON snapshots already exist. Nothing to do.");
+    } else {
+        println!("\nBack-filled {count} JSON snapshot(s).");
+    }
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -267,11 +320,15 @@ async fn main() -> Result<()> {
             cmd_generate(name).await
         }
         Some("status") => cmd_status().await,
+        Some("backfill-json") => cmd_backfill_json().await,
         _ => {
             println!("yauth-toasty migration developer tool\n");
             println!("Usage:");
             println!("  toasty-dev generate --name <name>  Generate a new migration");
             println!("  toasty-dev status                  Show migration status");
+            println!(
+                "  toasty-dev backfill-json            Generate JSON snapshots for existing migrations"
+            );
             Ok(())
         }
     }

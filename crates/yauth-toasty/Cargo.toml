@@ -41,7 +41,7 @@ full = [
 ]
 
 # Dev-only: CLI binary for generating migrations (not published)
-dev-cli = ["dep:anyhow"]
+dev-cli = ["dep:anyhow", "dep:toasty-core"]
 
 [dependencies]
 yauth = { path = "../yauth", default-features = false }
@@ -58,6 +58,7 @@ include_dir = "0.7"
 sha2 = "0.10"
 toml = "0.8"
 anyhow = { version = "1", optional = true }
+toasty-core = { version = "0.4.0", features = ["serde"], optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
@@ -66,6 +67,7 @@ chrono = "0.4"
 serde_json = "1"
 tempfile = "3"
 jiff = "0.2"
+rusqlite = "0.39"
 # NOTE: yauth dev features are unified with the main dep via --features full.
 # Don't add features = ["full"] here — it forces openssl on ALL tests.
 yauth = { path = "../yauth", default-features = false }

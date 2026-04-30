@@ -1,15 +1,28 @@
-# Migration to v0.1.0 — Cosmetic parity with the Rust yauth spec
+# Migration to v0.1.0 — Rust feature parity, Go-better shapes
 
 This release intentionally **breaks the public HTTP API** to align
-yauth-go with the Rust yauth crate's route names and JSON shapes. The
-`scripts/openapi-diff.py` cross-language conformance check is now a
-hard gate in CI; it returns 0 for this release.
+yauth-go with the Rust yauth crate. Every Rust capability is now
+accessible from yauth-go on the same path with the same operation.
+
+The shape of those responses, however, deliberately diverges where Go
+made the better engineering call:
+
+- **List endpoints are wrapped** with pagination metadata
+  (`{items, page, per_page, total}`), not bare arrays. Adding pagination
+  later without breaking clients was the goal.
+- **User responses are wrapped** in `{user: {...}}` envelopes. Future
+  fields like session metadata, permissions, or tenant context can land
+  alongside `user` non-breakingly.
+- **`POST /api-keys` returns `{api_key, secret}`** — the metadata is
+  loggable, the secret is the one-time leak. Logging the whole response
+  by accident leaks the secret; the split makes that mistake harder.
+- **`/mfa/totp/setup` keeps `qr_code`** — CLI/mobile clients render the
+  pre-baked data URL instead of importing a QR library.
 
 The behavioural contract is unchanged — every endpoint still does the
-same thing. Only paths, request field names, and response field names
-have moved.
+same thing.
 
-## Path renames
+## Path renames (Rust feature parity)
 
 ### MFA — every route now lives under `/mfa/`
 
@@ -86,46 +99,64 @@ The new paths take precedence over the OAuth client plugin's
 
 ## Response body changes
 
-Every `{user: {...}}` envelope is now flat. Several success bodies are
-now `{"message": "..."}` instead of `{"sent": true}` / `{"verified": true}` etc.
-
 | Endpoint | New shape |
 |---|---|
-| `GET /api-keys` | bare `[ApiKey]` array (was `{"keys": [...]}`) |
-| `POST /api-keys` | flat `{id, name, prefix, scopes, created_at, expires_at, key}` (was nested + `key` was `secret`) |
+| `GET /api-keys` | `{items: [...], page, per_page, total}` (paginated; was `{"keys": [...]}`) |
+| `POST /api-keys` | `{api_key: {id, name, prefix, scopes, created_at, expires_at}, secret}` (split metadata from one-time plaintext) |
 | `POST /change-password` | `{"message": "..."}` (was 204) |
 | `POST /forgot-password` | `{"message": "..."}` (was `{"sent": true}`) |
 | `POST /verify-email` | `{"message": "..."}` (was `{"verified": true}`) |
 | `POST /resend-verification` | `{"message": "..."}` (was `{"sent": true}`) |
 | `POST /reset-password` | `{"message": "..."}` (was `{"reset": true}`) |
-| `POST /register` | `{"message": "Account created."}` (was `{user: {...}}`) |
-| `GET /session` | flat `{id, email, display_name, email_verified, role, banned, auth_method, scopes}` (was `{user: {...}, expires_at}`) |
-| `PATCH /me` | same flat shape as `/session` |
+| `POST /register` | `{"message": "Account created."}` (cookie carries the session) |
+| `GET /session` | `{user: {id, email, ..., auth_method, scopes}, expires_at?}` |
+| `PATCH /me` | `{user: {...}}` (same wrapper as `/session`) |
 | `POST /magic-link/send` | `{"message": "..."}` (was `{"sent": true}`) |
-| `POST /magic-link/verify` | flat `{user_id, email, display_name, email_verified}` |
-| `GET /oauth/accounts` | bare `[OAuthAccount]` array (was `{"accounts": [...]}`) |
+| `POST /magic-link/verify` | `{user: {id, email, display_name, email_verified, role}}` |
+| `GET /oauth/accounts` | `{items: [...], page, per_page, total}` |
 | `POST /oauth/{provider}/link` | `{auth_url}` (was `{authorize_url}`) |
-| `GET /oauth/{provider}/callback`, `POST /oauth/{provider}/callback` | flat `{user_id, email, display_name, email_verified}` (was `{user, provider}`) |
-| `GET /passkeys` | bare `[Passkey]` array (was `{"passkeys": [...]}`) |
-| `POST /passkey/login/finish` | flat user fields (was `{user: {...}}`) |
-| `POST /admin/users/{id}/impersonate` | empty 200 (was `{user: {...}}`) |
+| `GET /oauth/{provider}/callback`, `POST /oauth/{provider}/callback` | `{user: {id, email, display_name, email_verified, role}}` |
+| `GET /passkeys` | `{items: [...], page, per_page, total}` |
+| `POST /passkey/login/finish` | `{user: {id, email, display_name, email_verified, role}}` |
+| `POST /admin/users/{id}/impersonate` | `{user: {...}}` (admin user shape) |
 | `POST /account/unlock`, `POST /account/request-unlock`, `POST /admin/users/{id}/unlock` | `{"message": "..."}` |
-| `GET /admin/users` | adds `page` and `per_page` alongside `total` |
-| `GET /admin/sessions` | adds `page` and `per_page` |
-| `GET /webhooks` | bare `[Webhook]` array |
-| `GET /webhooks/{id}` | `{webhook: {...}, recent_deliveries: [...]}` (deliveries trimmed to 10) |
-| `GET /webhooks/{id}/deliveries` | bare array |
-| `POST /webhooks/{id}/test` | empty 202 (was `{delivery_queued, event_type}`) |
+| `GET /admin/users` | `{users: [...], page, per_page, total}` |
+| `GET /admin/sessions` | `{sessions: [...], page, per_page, total}` |
+| `GET /webhooks` | `{items: [...], page, per_page, total}` |
+| `GET /webhooks/{id}` | `{webhook: {...}}` (no embedded deliveries — use `/deliveries`) |
+| `GET /webhooks/{id}/deliveries` | `{items: [...], page, per_page, total}` |
+| `POST /webhooks/{id}/test` | `{delivery_queued: id}` (200) |
 | `GET /mfa/backup-codes` | `{"remaining": N}` (was `{"unused": N}`) |
-| `POST /mfa/totp/setup` | drops `qr_code` (data-URL); only `secret`, `otpauth_url`, `backup_codes` remain |
+| `POST /mfa/totp/setup` | `{secret, otpauth_url, qr_code, backup_codes}` (qr_code is a data URL) |
 | `POST /mfa/totp/confirm`, `DELETE /mfa/totp` | `{"message": "..."}` (were 204) |
-| `POST /mfa/verify` | `{user_id, email, display_name, email_verified}` |
+| `POST /mfa/verify` | `{user: {id, email, display_name, email_verified, role}}` |
 
 ## Pagination
 
-`GET /admin/users` and `GET /admin/sessions` now accept either
-`?limit=&offset=` or `?page=&per_page=`. The two are translated
-internally; if both are supplied, `limit/offset` wins.
+All list endpoints (`GET /api-keys`, `/passkeys`, `/oauth/accounts`,
+`/webhooks`, `/webhooks/{id}/deliveries`, `/admin/users`,
+`/admin/sessions`) accept `?page=` (1-based) and `?per_page=` (default
+50, max 200). Responses include `page`, `per_page`, and `total`
+alongside the `items`/`users`/`sessions` array, so clients can render
+pagination UI without a second request.
+
+`/admin/users` and `/admin/sessions` also accept the legacy
+`?limit=&offset=`; if both are supplied, `limit/offset` wins.
+
+## Cross-language conformance
+
+`scripts/openapi-diff.py` is a hard CI gate for **feature parity**:
+
+- BREAKING (path missing in Go) → fails the check.
+- MISSING (operation missing in Go) → fails the check.
+- SHAPE (response/request field divergence) → reported as informational.
+  yauth-go intentionally diverges on shape; the goal is forward
+  compatibility, not byte parity.
+
+If you're moving from a Rust frontend to a Go backend, expect to update
+client code wherever the shape table above lists a wrapper or rename.
+TS clients generated from the Go `openapi.json` (via orval, in
+`packages/client`) already match.
 
 ## Documented divergences (Go superset)
 
@@ -136,7 +167,6 @@ informational:
 - `/oauth2/clients`, `/oauth2/clients/{id}`, `/oauth2/consent`
 - `/lockout/state`
 - `/status`
-- `/webhooks/{id}/deliveries`
 - `PATCH /admin/users/{id}` (kept alongside the new PUT)
 - `PATCH /webhooks/{id}` (kept alongside the new PUT)
 - `GET /oauth/{provider}/callback` (Rust only ships POST)

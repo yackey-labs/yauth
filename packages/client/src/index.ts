@@ -123,7 +123,14 @@ export function createYAuthClient(options: YAuthClientOptions) {
 
 	return {
 		// --- top-level helpers --------------------------------------
-		getSession: () => emailPasswordSession(),
+		// getSession unwraps the {user, expires_at?} envelope to a bare
+		// AuthUser for backwards-compatible UI code that expects the user
+		// directly. Embedders that want session metadata can call
+		// emailPassword.session() directly.
+		getSession: async () => {
+			const resp = await emailPasswordSession();
+			return resp?.user ?? null;
+		},
 		logout: () => emailPasswordLogout(),
 		status: () => status(),
 

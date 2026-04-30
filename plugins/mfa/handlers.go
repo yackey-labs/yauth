@@ -5,16 +5,19 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/pquerna/otp/totp"
+	"github.com/skip2/go-qrcode"
 
 	"github.com/yackey-labs/yauth-go/auth"
 	"github.com/yackey-labs/yauth-go/domain"
@@ -100,12 +103,26 @@ func hashBackupCode(code string) string {
 
 // --- POST /totp/setup ----------------------------------------------------
 
-// setupResponse mirrors the Rust shape: secret, otpauth_url, backup_codes.
-// QR code rendering is left to the client (the otpauth URL is sufficient).
+// setupResponse returns the TOTP shared secret + a data-URL-encoded QR
+// image alongside the raw otpauth URL. CLI/mobile clients render the
+// pre-baked QR; web clients can use either field.
 type setupResponse struct {
 	Secret      string   `json:"secret"`
 	OTPAuthURL  string   `json:"otpauth_url"`
+	QRCode      string   `json:"qr_code"`
 	BackupCodes []string `json:"backup_codes"`
+}
+
+// renderQRDataURL turns an otpauth URL into a `data:image/png;base64,…`
+// string. Returns "" on render failure (caller falls back silently —
+// the otpauth_url field is always present).
+func renderQRDataURL(otpauthURL string) string {
+	png, err := qrcode.Encode(otpauthURL, qrcode.Medium, 256)
+	if err != nil {
+		log.Printf("yauth/mfa: qrcode encode failed: %v", err)
+		return ""
+	}
+	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
 }
 
 func (p *mfaPlugin) handleSetup(host plugin.PluginHost) http.HandlerFunc {
@@ -178,6 +195,7 @@ func (p *mfaPlugin) handleSetup(host plugin.PluginHost) http.HandlerFunc {
 		writeJSON(w, http.StatusOK, setupResponse{
 			Secret:      secret,
 			OTPAuthURL:  key.URL(),
+			QRCode:      renderQRDataURL(key.URL()),
 			BackupCodes: plain,
 		})
 	}
@@ -332,12 +350,17 @@ type verifyRequest struct {
 	Code             string `json:"code"`
 }
 
-// verifyResponse mirrors the Rust shape: {user_id, email, display_name, email_verified}.
+// verifyResponse wraps the verified user under `user`.
 type verifyResponse struct {
-	UserID        string  `json:"user_id"`
+	User verifyUser `json:"user"`
+}
+
+type verifyUser struct {
+	ID            string  `json:"id"`
 	Email         string  `json:"email"`
 	DisplayName   *string `json:"display_name,omitempty"`
 	EmailVerified bool    `json:"email_verified"`
+	Role          string  `json:"role"`
 }
 
 func (p *mfaPlugin) handleVerify(host plugin.PluginHost) http.HandlerFunc {
@@ -392,11 +415,12 @@ func (p *mfaPlugin) handleVerify(host plugin.PluginHost) http.HandlerFunc {
 			raw,
 		))
 
-		resp := verifyResponse{UserID: userID}
+		resp := verifyResponse{User: verifyUser{ID: userID}}
 		if u, err := repoRef.GetUserByID(ctx, userID); err == nil && u != nil {
-			resp.Email = u.Email
-			resp.DisplayName = u.DisplayName
-			resp.EmailVerified = u.EmailVerified
+			resp.User.Email = u.Email
+			resp.User.DisplayName = u.DisplayName
+			resp.User.EmailVerified = u.EmailVerified
+			resp.User.Role = u.Role
 		}
 		writeJSON(w, http.StatusOK, resp)
 	}

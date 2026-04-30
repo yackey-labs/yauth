@@ -183,15 +183,14 @@ func addAPIKey(api *huma.OpenAPI) {
 	api.AddOperation(&huma.Operation{
 		Method: http.MethodGet, Path: "/api-keys",
 		Tags: []string{"api-key"}, OperationID: "apiKeyList",
-		Summary:  "List the caller's API keys (no secrets)",
-		Security: secAny(),
+		Summary:    "List the caller's API keys (no secrets)",
+		Security:   secAny(),
+		Parameters: []*huma.Param{
+			queryIntParam("page", "Page number (1-based)."),
+			queryIntParam("per_page", "Page size (default 50, max 200)."),
+		},
 		Responses: map[string]*huma.Response{
-			"200": {
-				Description: "List of keys.",
-				Content: map[string]*huma.MediaType{"application/json": {
-					Schema: &huma.Schema{Type: "array", Items: schemaRef(apiKeyJSON{})},
-				}},
-			},
+			"200": jsonResponse("Paginated list of keys.", apiKeyListResponse{}),
 			"401": errorResponse("Not authenticated."),
 		},
 	})
@@ -608,13 +607,12 @@ func addPasskey(api *huma.OpenAPI) {
 		Tags: []string{"passkey"}, OperationID: "passkeyList",
 		Summary:  "List the caller's stored passkeys",
 		Security: secCookie(),
+		Parameters: []*huma.Param{
+			queryIntParam("page", "Page number (1-based)."),
+			queryIntParam("per_page", "Page size (default 50, max 200)."),
+		},
 		Responses: map[string]*huma.Response{
-			"200": {
-				Description: "Passkeys.",
-				Content: map[string]*huma.MediaType{"application/json": {
-					Schema: &huma.Schema{Type: "array", Items: schemaRef(passkeyJSON{})},
-				}},
-			},
+			"200": jsonResponse("Paginated passkeys.", passkeyListResponse{}),
 			"401": errorResponse("Not authenticated."),
 		},
 	})
@@ -681,13 +679,12 @@ func addOAuth(api *huma.OpenAPI) {
 		Tags: []string{"oauth"}, OperationID: "oauthListAccounts",
 		Summary:  "List the caller's linked OAuth accounts",
 		Security: secCookie(),
+		Parameters: []*huma.Param{
+			queryIntParam("page", "Page number (1-based)."),
+			queryIntParam("per_page", "Page size (default 50, max 200)."),
+		},
 		Responses: map[string]*huma.Response{
-			"200": {
-				Description: "Linked accounts.",
-				Content: map[string]*huma.MediaType{"application/json": {
-					Schema: &huma.Schema{Type: "array", Items: schemaRef(oauthAccountJSON{})},
-				}},
-			},
+			"200": jsonResponse("Paginated linked accounts.", oauthListAccountsResponse{}),
 			"401": errorResponse("Not authenticated."),
 		},
 	})
@@ -726,13 +723,12 @@ func addWebhooks(api *huma.OpenAPI) {
 		Tags: []string{"webhooks"}, OperationID: "webhookList",
 		Summary:  "List webhooks (admin)",
 		Security: secCookie(),
+		Parameters: []*huma.Param{
+			queryIntParam("page", "Page number (1-based)."),
+			queryIntParam("per_page", "Page size (default 50, max 200)."),
+		},
 		Responses: map[string]*huma.Response{
-			"200": {
-				Description: "Webhooks.",
-				Content: map[string]*huma.MediaType{"application/json": {
-					Schema: &huma.Schema{Type: "array", Items: schemaRef(webhookJSON{})},
-				}},
-			},
+			"200": jsonResponse("Paginated webhooks.", webhookListResponse{}),
 			"403": errorResponse("Caller is not admin."),
 		},
 	})
@@ -751,11 +747,12 @@ func addWebhooks(api *huma.OpenAPI) {
 	api.AddOperation(&huma.Operation{
 		Method: http.MethodGet, Path: "/webhooks/{id}",
 		Tags: []string{"webhooks"}, OperationID: "webhookGet",
-		Summary:    "Fetch a single webhook with its recent_deliveries (no secret)",
-		Security:   secCookie(),
-		Parameters: []*huma.Param{idParam},
+		Summary:     "Fetch a single webhook (no secret)",
+		Description: "For delivery history, use GET /webhooks/{id}/deliveries.",
+		Security:    secCookie(),
+		Parameters:  []*huma.Param{idParam},
 		Responses: map[string]*huma.Response{
-			"200": jsonResponse("Webhook + recent_deliveries.", webhookShowResponse{}),
+			"200": jsonResponse("Webhook (without secret).", webhookShowResponse{}),
 			"403": errorResponse("Caller is not admin."),
 			"404": errorResponse("Not found."),
 		},
@@ -801,16 +798,15 @@ func addWebhooks(api *huma.OpenAPI) {
 	api.AddOperation(&huma.Operation{
 		Method: http.MethodGet, Path: "/webhooks/{id}/deliveries",
 		Tags: []string{"webhooks"}, OperationID: "webhookListDeliveries",
-		Summary:    "List recent delivery attempts for a webhook",
-		Security:   secCookie(),
-		Parameters: []*huma.Param{idParam, queryIntParam("limit", "Max rows (default 100, capped at 1000).")},
+		Summary:  "List recent delivery attempts for a webhook",
+		Security: secCookie(),
+		Parameters: []*huma.Param{
+			idParam,
+			queryIntParam("page", "Page number (1-based)."),
+			queryIntParam("per_page", "Page size (default 50, max 200)."),
+		},
 		Responses: map[string]*huma.Response{
-			"200": {
-				Description: "Delivery rows.",
-				Content: map[string]*huma.MediaType{"application/json": {
-					Schema: &huma.Schema{Type: "array", Items: schemaRef(webhookDeliveryJSON{})},
-				}},
-			},
+			"200": jsonResponse("Paginated delivery rows.", webhookListDeliveriesResponse{}),
 			"403": errorResponse("Caller is not admin."),
 			"404": errorResponse("Not found."),
 		},
@@ -822,7 +818,7 @@ func addWebhooks(api *huma.OpenAPI) {
 		Security:   secCookie(),
 		Parameters: []*huma.Param{idParam},
 		Responses: map[string]*huma.Response{
-			"202": emptyResponse("Delivery queued."),
+			"200": jsonResponse("Delivery queued; the returned id can be polled at /deliveries.", webhookTestResponse{}),
 			"403": errorResponse("Caller is not admin."),
 			"404": errorResponse("Not found."),
 			"503": errorResponse("Dispatcher shutting down."),
@@ -875,14 +871,9 @@ func addOAuth2Server(api *huma.OpenAPI) {
 		Summary:     "Register an OAuth2 client (RFC 7591)",
 		Description: "Public dynamic client registration endpoint. Disabled by default; opt in via plugin Config.DCREnabled. When DCRRequireInitialAccessToken is true (default), the request must carry an admin-issued Bearer token in the Authorization header.",
 		Security:    secNone(),
-		RequestBody: &huma.RequestBody{
-			Required: true,
-			Content: map[string]*huma.MediaType{
-				"application/json": {Schema: &huma.Schema{Type: "object"}},
-			},
-		},
+		RequestBody: jsonRequestBody(oauth2RegisterRequest{}, "Client metadata per RFC 7591 §2"),
 		Responses: map[string]*huma.Response{
-			"201": {Description: "Registered client + one-time client_secret (omitted for public clients) + registration_access_token."},
+			"201": jsonResponse("Registered client + one-time client_secret (omitted for public clients) + registration_access_token.", oauth2RegisterResponse{}),
 			"401": errorResponse("Missing or invalid initial access token."),
 			"400": errorResponse("Invalid client metadata."),
 			"404": errorResponse("DCR is disabled by configuration."),

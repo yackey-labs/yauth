@@ -259,15 +259,17 @@ func TestOAuthEndToEnd_NewUser(t *testing.T) {
 		t.Fatalf("session: expected 200, got %d (%s)", res2.StatusCode, drainBody(res2))
 	}
 	var sess struct {
-		Email         string `json:"email"`
-		EmailVerified bool   `json:"email_verified"`
+		User struct {
+			Email         string `json:"email"`
+			EmailVerified bool   `json:"email_verified"`
+		} `json:"user"`
 	}
 	_ = json.NewDecoder(res2.Body).Decode(&sess)
 	res2.Body.Close()
-	if sess.Email != "dora@example.com" {
-		t.Fatalf("session email: %q", sess.Email)
+	if sess.User.Email != "dora@example.com" {
+		t.Fatalf("session email: %q", sess.User.Email)
 	}
-	if !sess.EmailVerified {
+	if !sess.User.EmailVerified {
 		t.Fatalf("session: email_verified=false; provider said true")
 	}
 
@@ -279,13 +281,15 @@ func TestOAuthEndToEnd_NewUser(t *testing.T) {
 	if res3.StatusCode != http.StatusOK {
 		t.Fatalf("accounts: %d (%s)", res3.StatusCode, drainBody(res3))
 	}
-	var ar []struct {
-		Provider       string `json:"provider"`
-		ProviderUserID string `json:"provider_user_id"`
+	var ar struct {
+		Items []struct {
+			Provider       string `json:"provider"`
+			ProviderUserID string `json:"provider_user_id"`
+		} `json:"items"`
 	}
 	_ = json.NewDecoder(res3.Body).Decode(&ar)
 	res3.Body.Close()
-	if len(ar) != 1 || ar[0].Provider != "fake" || ar[0].ProviderUserID != "remote-1" {
+	if len(ar.Items) != 1 || ar.Items[0].Provider != "fake" || ar.Items[0].ProviderUserID != "remote-1" {
 		t.Fatalf("accounts: %+v", ar)
 	}
 
@@ -379,12 +383,14 @@ func TestOAuthFlow_LinksToExistingUserByEmail(t *testing.T) {
 	// /session matches the original user.
 	res4, _ := s.client.Get(s.srv.URL + "/api/auth/session")
 	var sess struct {
-		Email string `json:"email"`
+		User struct {
+			Email string `json:"email"`
+		} `json:"user"`
 	}
 	_ = json.NewDecoder(res4.Body).Decode(&sess)
 	res4.Body.Close()
-	if sess.Email != "georgia@example.com" {
-		t.Fatalf("session email: %q", sess.Email)
+	if sess.User.Email != "georgia@example.com" {
+		t.Fatalf("session email: %q", sess.User.Email)
 	}
 
 	// Unlink succeeds because the user still has a password.

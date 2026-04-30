@@ -477,10 +477,11 @@ func (p *emailPasswordPlugin) handleLogout(host plugin.PluginHost) http.HandlerF
 
 // --- /session -----------------------------------------------------------
 
-// sessionResponse mirrors the Rust shape: flat user fields, including
-// authentication-method metadata. It is also used by PATCH /me so the
-// two endpoints return identical structures.
-type sessionResponse struct {
+// sessionUserBody carries the per-user fields of the /session and
+// /me responses. Wrapping it under `user` (see sessionResponse below)
+// keeps the response forward-compatible — adding session metadata like
+// expires_at doesn't move user fields around.
+type sessionUserBody struct {
 	ID            string   `json:"id"`
 	Email         string   `json:"email"`
 	DisplayName   *string  `json:"display_name,omitempty"`
@@ -491,12 +492,19 @@ type sessionResponse struct {
 	Scopes        []string `json:"scopes"`
 }
 
-func toSessionResponse(au *domain.AuthUser) sessionResponse {
+// sessionResponse wraps the user under `user`. Future session fields
+// (expires_at, last_seen_at) belong at the top level alongside `user`.
+type sessionResponse struct {
+	User      sessionUserBody `json:"user"`
+	ExpiresAt *time.Time      `json:"expires_at,omitempty"`
+}
+
+func toSessionUserBody(au *domain.AuthUser) sessionUserBody {
 	method := au.Method
 	if method == "" {
 		method = domain.AuthMethodCookie
 	}
-	return sessionResponse{
+	return sessionUserBody{
 		ID:            au.User.ID,
 		Email:         au.User.Email,
 		DisplayName:   au.User.DisplayName,
@@ -506,6 +514,10 @@ func toSessionResponse(au *domain.AuthUser) sessionResponse {
 		AuthMethod:    method,
 		Scopes:        []string{},
 	}
+}
+
+func toSessionResponse(au *domain.AuthUser) sessionResponse {
+	return sessionResponse{User: toSessionUserBody(au)}
 }
 
 func (p *emailPasswordPlugin) handleSession(host plugin.PluginHost) http.HandlerFunc {

@@ -411,8 +411,16 @@ func (p *adminPlugin) handleImpersonate(host plugin.PluginHost) http.HandlerFunc
 			cookieOptionsFromHost(host, r, int(host.SessionTTL().Seconds())),
 			raw,
 		))
-		writeJSON(w, http.StatusOK, toUserJSON(*target))
+		writeJSON(w, http.StatusOK, impersonateResponse{User: toUserJSON(*target)})
 	}
+}
+
+// impersonateResponse wraps the target user under `user`. The
+// impersonator field is omitted in the v0.1.0 wire format but reserved
+// here so audit-aware clients can be added later without a breaking
+// change.
+type impersonateResponse struct {
+	User userJSON `json:"user"`
 }
 
 // --- DELETE /admin/users/{id}/sessions -----------------------------------

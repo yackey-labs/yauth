@@ -487,10 +487,11 @@ func (p *oauthPlugin) completeLogin(
 		http.Redirect(w, r, redirect, http.StatusFound)
 		return
 	}
-	resp := callbackResponse{UserID: userID, Email: email}
+	resp := callbackResponse{User: callbackUser{ID: userID, Email: email}}
 	if u, err := repoRef.GetUserByID(ctx, userID); err == nil && u != nil {
-		resp.DisplayName = u.DisplayName
-		resp.EmailVerified = u.EmailVerified
+		resp.User.DisplayName = u.DisplayName
+		resp.User.EmailVerified = u.EmailVerified
+		resp.User.Role = u.Role
 	}
 	_ = provider
 	writeJSON(w, http.StatusOK, resp)
@@ -559,10 +560,13 @@ func (p *oauthPlugin) completeLink(
 		return
 	}
 	writeJSON(w, http.StatusOK, callbackResponse{
-		UserID:        au.User.ID,
-		Email:         au.User.Email,
-		DisplayName:   au.User.DisplayName,
-		EmailVerified: au.User.EmailVerified,
+		User: callbackUser{
+			ID:            au.User.ID,
+			Email:         au.User.Email,
+			DisplayName:   au.User.DisplayName,
+			EmailVerified: au.User.EmailVerified,
+			Role:          au.User.Role,
+		},
 	})
 	_ = provider
 }
@@ -577,6 +581,15 @@ type accountJSON struct {
 }
 
 
+// listAccountsResponse wraps GET /oauth/accounts with pagination
+// metadata.
+type listAccountsResponse struct {
+	Items   []accountJSON `json:"items"`
+	Total   int64         `json:"total"`
+	Page    int           `json:"page"`
+	PerPage int           `json:"per_page"`
+}
+
 func (p *oauthPlugin) handleListAccounts(host plugin.PluginHost) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		au, ok := middleware.AuthUserFromContext(r.Context())
@@ -589,8 +602,19 @@ func (p *oauthPlugin) handleListAccounts(host plugin.PluginHost) http.HandlerFun
 			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to load accounts")
 			return
 		}
-		out := make([]accountJSON, 0, len(rows))
-		for _, a := range rows {
+		page, perPage := paginationFromQuery(r)
+		total := int64(len(rows))
+		start := (page - 1) * perPage
+		end := start + perPage
+		if start > len(rows) {
+			start = len(rows)
+		}
+		if end > len(rows) {
+			end = len(rows)
+		}
+		page1 := rows[start:end]
+		out := make([]accountJSON, 0, len(page1))
+		for _, a := range page1 {
 			out = append(out, accountJSON{
 				Provider:       a.Provider,
 				ProviderUserID: a.ProviderUserID,
@@ -598,9 +622,49 @@ func (p *oauthPlugin) handleListAccounts(host plugin.PluginHost) http.HandlerFun
 				ExpiresAt:      a.ExpiresAt,
 			})
 		}
-		writeJSON(w, http.StatusOK, out)
+		writeJSON(w, http.StatusOK, listAccountsResponse{
+			Items:   out,
+			Total:   total,
+			Page:    page,
+			PerPage: perPage,
+		})
 	}
 }
+
+func paginationFromQuery(r *http.Request) (page, perPage int) {
+	page = 1
+	perPage = 50
+	if v := r.URL.Query().Get("page"); v != "" {
+		if n, err := parsePositiveInt(v); err == nil && n > 0 {
+			page = n
+		}
+	}
+	if v := r.URL.Query().Get("per_page"); v != "" {
+		if n, err := parsePositiveInt(v); err == nil && n > 0 {
+			if n > 200 {
+				n = 200
+			}
+			perPage = n
+		}
+	}
+	return page, perPage
+}
+
+func parsePositiveInt(s string) (int, error) {
+	n := 0
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return 0, errParseInt
+		}
+		n = n*10 + int(c-'0')
+		if n > 1_000_000 {
+			return 0, errParseInt
+		}
+	}
+	return n, nil
+}
+
+var errParseInt = errors.New("parse int")
 
 // --- DELETE /oauth/{provider} ------------------------------------------
 
@@ -669,14 +733,19 @@ func (p *oauthPlugin) userHasAlternateAuth(ctx context.Context, r repo.Repositor
 
 // --- helpers -----------------------------------------------------------
 
-// callbackResponse mirrors the Rust shape (`OAuthAuthResponse`): flat
-// user identity fields. The session cookie carries the actual auth
-// state.
+// callbackResponse wraps the authenticated user under `user`. The
+// session cookie carries the actual auth state; this body just
+// identifies who.
 type callbackResponse struct {
-	UserID        string  `json:"user_id"`
+	User callbackUser `json:"user"`
+}
+
+type callbackUser struct {
+	ID            string  `json:"id"`
 	Email         string  `json:"email"`
 	DisplayName   *string `json:"display_name,omitempty"`
 	EmailVerified bool    `json:"email_verified"`
+	Role          string  `json:"role"`
 }
 
 func requestIP(r *http.Request) *string {

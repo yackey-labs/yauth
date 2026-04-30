@@ -87,6 +87,16 @@ func decodeJSON(r *http.Request, v any) error {
 
 // --- GET /api-keys ------------------------------------------------------
 
+// listResponse wraps the GET /api-keys collection with pagination
+// metadata. Wrapping (over a bare array) lets us add fields later
+// without breaking clients.
+type listResponse struct {
+	Items   []apiKeyJSON `json:"items"`
+	Total   int64        `json:"total"`
+	Page    int          `json:"page"`
+	PerPage int          `json:"per_page"`
+}
+
 func (p *apiKeyPlugin) handleList(host plugin.PluginHost) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		au, ok := middleware.AuthUserFromContext(r.Context())
@@ -95,20 +105,78 @@ func (p *apiKeyPlugin) handleList(host plugin.PluginHost) http.HandlerFunc {
 			return
 		}
 
+		page, perPage := paginationFromQuery(r)
+
 		rows, err := host.Repo().ListAPIKeysByUserID(r.Context(), au.User.ID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to list api keys")
 			return
 		}
-		out := make([]apiKeyJSON, 0, len(rows))
-		for _, k := range rows {
+		total := int64(len(rows))
+		// Repo currently returns the full list; slice in-memory for now.
+		// This matches the existing behavior — only the wire shape is
+		// changing here.
+		start := (page - 1) * perPage
+		end := start + perPage
+		if start > len(rows) {
+			start = len(rows)
+		}
+		if end > len(rows) {
+			end = len(rows)
+		}
+		page1 := rows[start:end]
+
+		out := make([]apiKeyJSON, 0, len(page1))
+		for _, k := range page1 {
 			if k == nil {
 				continue
 			}
 			out = append(out, toAPIKeyJSON(*k))
 		}
-		writeJSON(w, http.StatusOK, out)
+		writeJSON(w, http.StatusOK, listResponse{
+			Items:   out,
+			Total:   total,
+			Page:    page,
+			PerPage: perPage,
+		})
 	}
+}
+
+// paginationFromQuery parses ?page= and ?per_page= with sane defaults
+// (page 1, per_page 50 capped at 200). Invalid values fall back to the
+// defaults silently — the list is non-critical and we'd rather degrade
+// than 400 on a typo.
+func paginationFromQuery(r *http.Request) (page, perPage int) {
+	page = 1
+	perPage = 50
+	if v := r.URL.Query().Get("page"); v != "" {
+		if n, err := parsePositiveInt(v); err == nil && n > 0 {
+			page = n
+		}
+	}
+	if v := r.URL.Query().Get("per_page"); v != "" {
+		if n, err := parsePositiveInt(v); err == nil && n > 0 {
+			if n > 200 {
+				n = 200
+			}
+			perPage = n
+		}
+	}
+	return page, perPage
+}
+
+func parsePositiveInt(s string) (int, error) {
+	n := 0
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return 0, errors.New("not an integer")
+		}
+		n = n*10 + int(c-'0')
+		if n > 1_000_000 {
+			return 0, errors.New("too large")
+		}
+	}
+	return n, nil
 }
 
 // --- POST /api-keys -----------------------------------------------------
@@ -119,18 +187,14 @@ type createRequest struct {
 	ExpiresInDays *int     `json:"expires_in_days,omitempty"`
 }
 
-// createResponse returns the persisted key metadata flat plus the
-// one-time plaintext key. Mirrors the Rust shape (`key` field carries
-// the plaintext). The plaintext is shown ONCE and is unrecoverable
-// thereafter — callers must capture it from this response.
+// createResponse splits the persisted key metadata from the one-time
+// plaintext secret. Wrapping the metadata under `api_key` and exposing
+// the plaintext separately as `secret` keeps logging-vs-display
+// concerns clearly separated — clients can log api_key freely while
+// keeping `secret` out of structured logs.
 type createResponse struct {
-	ID        string     `json:"id"`
-	Name      string     `json:"name"`
-	Prefix    string     `json:"prefix"`
-	Scopes    []string   `json:"scopes"`
-	CreatedAt time.Time  `json:"created_at"`
-	ExpiresAt *time.Time `json:"expires_at,omitempty"`
-	Key       string     `json:"key"`
+	APIKey apiKeyJSON `json:"api_key"`
+	Secret string     `json:"secret"`
 }
 
 func (p *apiKeyPlugin) handleCreate(host plugin.PluginHost) http.HandlerFunc {
@@ -197,13 +261,15 @@ func (p *apiKeyPlugin) handleCreate(host plugin.PluginHost) http.HandlerFunc {
 		}
 
 		writeJSON(w, http.StatusCreated, createResponse{
-			ID:        input.ID,
-			Name:      input.Name,
-			Prefix:    input.KeyPrefix,
-			Scopes:    normalizeScopes(req.Scopes),
-			CreatedAt: input.CreatedAt,
-			ExpiresAt: input.ExpiresAt,
-			Key:       gen.Plaintext,
+			APIKey: apiKeyJSON{
+				ID:        input.ID,
+				Name:      input.Name,
+				Prefix:    input.KeyPrefix,
+				Scopes:    normalizeScopes(req.Scopes),
+				CreatedAt: input.CreatedAt,
+				ExpiresAt: input.ExpiresAt,
+			},
+			Secret: gen.Plaintext,
 		})
 	}
 }

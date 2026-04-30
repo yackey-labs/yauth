@@ -138,14 +138,16 @@ func TestEmailPasswordEndToEnd(t *testing.T) {
 		t.Fatalf("session after register: expected 200, got %d (%s)", res.StatusCode, drain(res))
 	}
 	var sessBody struct {
-		Email string `json:"email"`
+		User struct {
+			Email string `json:"email"`
+		} `json:"user"`
 	}
 	if err := json.NewDecoder(res.Body).Decode(&sessBody); err != nil {
 		t.Fatalf("decode session: %v", err)
 	}
 	res.Body.Close()
-	if sessBody.Email != email {
-		t.Fatalf("session: expected %q, got %q", email, sessBody.Email)
+	if sessBody.User.Email != email {
+		t.Fatalf("session: expected %q, got %q", email, sessBody.User.Email)
 	}
 
 	// 3. logout
@@ -613,14 +615,16 @@ func TestPatchMe_UpdatesDisplayName(t *testing.T) {
 		t.Fatalf("PATCH /me: want 200, got %d (%s)", res.StatusCode, drain(res))
 	}
 	var body struct {
-		DisplayName *string `json:"display_name"`
+		User struct {
+			DisplayName *string `json:"display_name"`
+		} `json:"user"`
 	}
 	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	res.Body.Close()
-	if body.DisplayName == nil || *body.DisplayName != "Patch User" {
-		t.Fatalf("display_name not updated: %+v", body.DisplayName)
+	if body.User.DisplayName == nil || *body.User.DisplayName != "Patch User" {
+		t.Fatalf("display_name not updated: %+v", body.User.DisplayName)
 	}
 }
 
@@ -684,14 +688,16 @@ func TestRegister_AutoAdminFirstUser(t *testing.T) {
 		t.Fatalf("session first: %d", res.StatusCode)
 	}
 	var firstBody struct {
-		Role string `json:"role"`
+		User struct {
+			Role string `json:"role"`
+		} `json:"user"`
 	}
 	if err := json.NewDecoder(res.Body).Decode(&firstBody); err != nil {
 		t.Fatalf("decode first: %v", err)
 	}
 	res.Body.Close()
-	if firstBody.Role != "admin" {
-		t.Fatalf("first user role: want admin, got %q", firstBody.Role)
+	if firstBody.User.Role != "admin" {
+		t.Fatalf("first user role: want admin, got %q", firstBody.User.Role)
 	}
 
 	cl2 := newJSONClient(t)
@@ -708,13 +714,15 @@ func TestRegister_AutoAdminFirstUser(t *testing.T) {
 		t.Fatalf("session second: %d", res.StatusCode)
 	}
 	var secondBody struct {
-		Role string `json:"role"`
+		User struct {
+			Role string `json:"role"`
+		} `json:"user"`
 	}
 	if err := json.NewDecoder(res.Body).Decode(&secondBody); err != nil {
 		t.Fatalf("decode second: %v", err)
 	}
 	res.Body.Close()
-	if secondBody.Role != "user" {
-		t.Fatalf("second user role: want user, got %q", secondBody.Role)
+	if secondBody.User.Role != "user" {
+		t.Fatalf("second user role: want user, got %q", secondBody.User.Role)
 	}
 }

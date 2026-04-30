@@ -327,9 +327,13 @@ type loginFinishRequest struct {
 	Credential  json.RawMessage `json:"credential"`
 }
 
-// loginFinishResponse mirrors the Rust shape: flat user fields with no
-// envelope. The session cookie is set in the response headers.
+// loginFinishResponse wraps the authenticated user under `user`. The
+// session cookie is set in the response headers.
 type loginFinishResponse struct {
+	User loginFinishUser `json:"user"`
+}
+
+type loginFinishUser struct {
 	ID            string  `json:"id"`
 	Email         string  `json:"email"`
 	DisplayName   *string `json:"display_name,omitempty"`
@@ -339,11 +343,13 @@ type loginFinishResponse struct {
 
 func toLoginFinishResponse(u domain.User) loginFinishResponse {
 	return loginFinishResponse{
-		ID:            u.ID,
-		Email:         u.Email,
-		DisplayName:   u.DisplayName,
-		EmailVerified: u.EmailVerified,
-		Role:          u.Role,
+		User: loginFinishUser{
+			ID:            u.ID,
+			Email:         u.Email,
+			DisplayName:   u.DisplayName,
+			EmailVerified: u.EmailVerified,
+			Role:          u.Role,
+		},
 	}
 }
 
@@ -498,6 +504,15 @@ type passkeyJSON struct {
 	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
 }
 
+// listResponse wraps GET /passkeys with pagination metadata so clients
+// can adopt paging without a breaking change.
+type listResponse struct {
+	Items   []passkeyJSON `json:"items"`
+	Total   int64         `json:"total"`
+	Page    int           `json:"page"`
+	PerPage int           `json:"per_page"`
+}
+
 func (p *passkeyPlugin) handleList(host plugin.PluginHost) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		au, ok := middleware.AuthUserFromContext(r.Context())
@@ -510,8 +525,19 @@ func (p *passkeyPlugin) handleList(host plugin.PluginHost) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to list passkeys")
 			return
 		}
-		out := make([]passkeyJSON, len(rows))
-		for i, row := range rows {
+		page, perPage := paginationFromQuery(r)
+		total := int64(len(rows))
+		start := (page - 1) * perPage
+		end := start + perPage
+		if start > len(rows) {
+			start = len(rows)
+		}
+		if end > len(rows) {
+			end = len(rows)
+		}
+		page1 := rows[start:end]
+		out := make([]passkeyJSON, len(page1))
+		for i, row := range page1 {
 			out[i] = passkeyJSON{
 				ID:         row.ID,
 				Name:       row.Name,
@@ -521,9 +547,49 @@ func (p *passkeyPlugin) handleList(host plugin.PluginHost) http.HandlerFunc {
 				LastUsedAt: row.LastUsedAt,
 			}
 		}
-		writeJSON(w, http.StatusOK, out)
+		writeJSON(w, http.StatusOK, listResponse{
+			Items:   out,
+			Total:   total,
+			Page:    page,
+			PerPage: perPage,
+		})
 	}
 }
+
+func paginationFromQuery(r *http.Request) (page, perPage int) {
+	page = 1
+	perPage = 50
+	if v := r.URL.Query().Get("page"); v != "" {
+		if n, err := parsePositiveInt(v); err == nil && n > 0 {
+			page = n
+		}
+	}
+	if v := r.URL.Query().Get("per_page"); v != "" {
+		if n, err := parsePositiveInt(v); err == nil && n > 0 {
+			if n > 200 {
+				n = 200
+			}
+			perPage = n
+		}
+	}
+	return page, perPage
+}
+
+func parsePositiveInt(s string) (int, error) {
+	n := 0
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return 0, errParseInt
+		}
+		n = n*10 + int(c-'0')
+		if n > 1_000_000 {
+			return 0, errParseInt
+		}
+	}
+	return n, nil
+}
+
+var errParseInt = errors.New("parse int")
 
 // --- /passkeys/{id} (delete) --------------------------------------------
 

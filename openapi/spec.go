@@ -113,6 +113,7 @@ func declareSchemas(r huma.Registry) {
 		reflect.TypeOf(bearerRevokeRequest{}),
 
 		reflect.TypeOf(apiKeyJSON{}),
+		reflect.TypeOf(apiKeyListResponse{}),
 		reflect.TypeOf(apiKeyCreateRequest{}),
 		reflect.TypeOf(apiKeyCreateResponse{}),
 
@@ -157,17 +158,22 @@ func declareSchemas(r huma.Registry) {
 		reflect.TypeOf(passkeyLoginFinishRequest{}),
 		reflect.TypeOf(passkeyLoginFinishResponse{}),
 		reflect.TypeOf(passkeyJSON{}),
+		reflect.TypeOf(passkeyListResponse{}),
 
 		reflect.TypeOf(oauthCallbackResponse{}),
 		reflect.TypeOf(oauthCallbackBody{}),
 		reflect.TypeOf(oauthAccountJSON{}),
+		reflect.TypeOf(oauthListAccountsResponse{}),
 		reflect.TypeOf(oauthLinkResponse{}),
 
 		reflect.TypeOf(webhookJSON{}),
 		reflect.TypeOf(webhookCreateRequest{}),
 		reflect.TypeOf(webhookUpdateRequest{}),
 		reflect.TypeOf(webhookDeliveryJSON{}),
+		reflect.TypeOf(webhookListResponse{}),
+		reflect.TypeOf(webhookListDeliveriesResponse{}),
 		reflect.TypeOf(webhookShowResponse{}),
+		reflect.TypeOf(webhookTestResponse{}),
 
 		reflect.TypeOf(jwksKey{}),
 		reflect.TypeOf(jwksDocument{}),
@@ -175,6 +181,8 @@ func declareSchemas(r huma.Registry) {
 		reflect.TypeOf(oidcDiscoveryDoc{}),
 		reflect.TypeOf(oidcUserInfoResponse{}),
 
+		reflect.TypeOf(oauth2RegisterRequest{}),
+		reflect.TypeOf(oauth2RegisterResponse{}),
 		reflect.TypeOf(oauth2ConsentClient{}),
 		reflect.TypeOf(oauth2ConsentPayload{}),
 		reflect.TypeOf(oauth2AuthorizeRedirect{}),

@@ -74,22 +74,22 @@ func TestHandleCreate_ReturnsPlaintextOnce(t *testing.T) {
 	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if out.Key == "" {
-		t.Fatalf("plaintext key missing from response")
+	if out.Secret == "" {
+		t.Fatalf("plaintext secret missing from response")
 	}
-	if out.Prefix == "" || out.ID == "" {
+	if out.APIKey.Prefix == "" || out.APIKey.ID == "" {
 		t.Fatalf("response metadata incomplete: %+v", out)
 	}
-	if len(out.Scopes) != 1 || out.Scopes[0] != "read:users" {
-		t.Errorf("scopes round-trip failed: %v", out.Scopes)
+	if len(out.APIKey.Scopes) != 1 || out.APIKey.Scopes[0] != "read:users" {
+		t.Errorf("scopes round-trip failed: %v", out.APIKey.Scopes)
 	}
 
 	// The plaintext must parse back to the stored prefix.
-	prefix, secret, ok := ParseHeader(out.Key, "yak")
+	prefix, secret, ok := ParseHeader(out.Secret, "yak")
 	if !ok {
-		t.Fatalf("returned key did not parse: %q", out.Key)
+		t.Fatalf("returned key did not parse: %q", out.Secret)
 	}
-	if prefix != out.Prefix {
+	if prefix != out.APIKey.Prefix {
 		t.Errorf("prefix mismatch between metadata and plaintext")
 	}
 	if secret == "" {
@@ -196,14 +196,17 @@ func TestHandleList_ReturnsOwnedKeys(t *testing.T) {
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("list: want 200, got %d", res.StatusCode)
 	}
-	var lst []apiKeyJSON
+	var lst listResponse
 	if err := json.NewDecoder(res.Body).Decode(&lst); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(lst) != 2 {
-		t.Fatalf("want 2 keys, got %d (%+v)", len(lst), lst)
+	if len(lst.Items) != 2 {
+		t.Fatalf("want 2 keys, got %d (%+v)", len(lst.Items), lst)
 	}
-	for _, k := range lst {
+	if lst.Total != 2 {
+		t.Errorf("total: want 2, got %d", lst.Total)
+	}
+	for _, k := range lst.Items {
 		if k.Name == "stranger" {
 			t.Errorf("list leaked another user's key: %+v", k)
 		}
@@ -227,7 +230,7 @@ func TestHandleDelete_OwnerCanDelete(t *testing.T) {
 	}
 	res.Body.Close()
 
-	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/api-keys/"+created.ID, nil)
+	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/api-keys/"+created.APIKey.ID, nil)
 	delRes, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("delete: %v", err)
@@ -238,7 +241,7 @@ func TestHandleDelete_OwnerCanDelete(t *testing.T) {
 	}
 
 	// Confirm gone.
-	if _, ok := repo.keyByID(created.ID); ok {
+	if _, ok := repo.keyByID(created.APIKey.ID); ok {
 		t.Errorf("key still present after delete")
 	}
 }
@@ -303,7 +306,7 @@ func TestHandleEndToEnd_CreateUseDelete(t *testing.T) {
 	host2 := newFakeHost(repo)
 	res2 := newResolver(host2, "yak")
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set(headerName, created.Key)
+	req.Header.Set(headerName, created.Secret)
 	au, recognized, err := res2.Resolve(req)
 	if err != nil || !recognized || au == nil {
 		t.Fatalf("resolve good key: au=%v recognized=%v err=%v", au, recognized, err)
@@ -313,7 +316,7 @@ func TestHandleEndToEnd_CreateUseDelete(t *testing.T) {
 	}
 
 	// 3. Delete the key via the management endpoint.
-	delReq, _ := http.NewRequest(http.MethodDelete, srv.URL+"/api-keys/"+created.ID, nil)
+	delReq, _ := http.NewRequest(http.MethodDelete, srv.URL+"/api-keys/"+created.APIKey.ID, nil)
 	delRes, err := http.DefaultClient.Do(delReq)
 	if err != nil {
 		t.Fatalf("delete: %v", err)

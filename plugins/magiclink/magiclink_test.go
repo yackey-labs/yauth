@@ -178,12 +178,14 @@ func TestVerify_SignupEnabled_CreatesUserAndIssuesSession(t *testing.T) {
 		t.Fatalf("verify: expected 200, got %d (%s)", res.StatusCode, drain(res))
 	}
 	var body struct {
-		Email string `json:"email"`
+		User struct {
+			Email string `json:"email"`
+		} `json:"user"`
 	}
 	_ = json.NewDecoder(res.Body).Decode(&body)
 	res.Body.Close()
-	if body.Email != email {
-		t.Fatalf("verify returned email %q, want %q", body.Email, email)
+	if body.User.Email != email {
+		t.Fatalf("verify returned email %q, want %q", body.User.Email, email)
 	}
 
 	// Cookie should be set on the jar.

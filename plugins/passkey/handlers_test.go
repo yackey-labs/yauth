@@ -221,11 +221,11 @@ func TestListAndDelete_OwnershipEnforced(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("list: expected 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	var lr []passkeyJSON
+	var lr listResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &lr); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if len(lr) != 1 || lr[0].ID != credID {
+	if len(lr.Items) != 1 || lr.Items[0].ID != credID {
 		t.Fatalf("unexpected list: %+v", lr)
 	}
 

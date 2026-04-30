@@ -212,22 +212,30 @@ type verifyRequest struct {
 	Token string `json:"token"`
 }
 
-// verifyResponse mirrors the Rust shape (`MagicLinkAuthResponse`): the
-// session cookie is set in the response headers; the body just carries
-// the authenticated user's identity.
+// verifyResponse wraps the verified user under `user`. The session
+// cookie is set in the response headers; the body just identifies who
+// just logged in.
 type verifyResponse struct {
-	UserID        string  `json:"user_id"`
+	User verifyUser `json:"user"`
+}
+
+type verifyUser struct {
+	ID            string  `json:"id"`
 	Email         string  `json:"email"`
 	DisplayName   *string `json:"display_name,omitempty"`
 	EmailVerified bool    `json:"email_verified"`
+	Role          string  `json:"role"`
 }
 
 func toVerifyResponse(u domain.User) verifyResponse {
 	return verifyResponse{
-		UserID:        u.ID,
-		Email:         u.Email,
-		DisplayName:   u.DisplayName,
-		EmailVerified: u.EmailVerified,
+		User: verifyUser{
+			ID:            u.ID,
+			Email:         u.Email,
+			DisplayName:   u.DisplayName,
+			EmailVerified: u.EmailVerified,
+			Role:          u.Role,
+		},
 	}
 }
 

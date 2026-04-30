@@ -106,6 +106,14 @@ func decodeEventsList(raw json.RawMessage) []string {
 
 // --- GET /webhooks ------------------------------------------------------
 
+// listResponse wraps GET /webhooks with pagination metadata.
+type listResponse struct {
+	Items   []webhookJSON `json:"items"`
+	Total   int64         `json:"total"`
+	Page    int           `json:"page"`
+	PerPage int           `json:"per_page"`
+}
+
 func (p *webhooksPlugin) handleList(host plugin.PluginHost) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		hooks, err := host.Repo().ListWebhooks(r.Context())
@@ -113,12 +121,47 @@ func (p *webhooksPlugin) handleList(host plugin.PluginHost) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to list webhooks")
 			return
 		}
-		out := make([]webhookJSON, 0, len(hooks))
-		for _, h := range hooks {
+		page, perPage := paginationFromQuery(r)
+		total := int64(len(hooks))
+		start := (page - 1) * perPage
+		end := start + perPage
+		if start > len(hooks) {
+			start = len(hooks)
+		}
+		if end > len(hooks) {
+			end = len(hooks)
+		}
+		page1 := hooks[start:end]
+		out := make([]webhookJSON, 0, len(page1))
+		for _, h := range page1 {
 			out = append(out, toWebhookJSON(*h, false))
 		}
-		writeJSON(w, http.StatusOK, out)
+		writeJSON(w, http.StatusOK, listResponse{
+			Items:   out,
+			Total:   total,
+			Page:    page,
+			PerPage: perPage,
+		})
 	}
+}
+
+func paginationFromQuery(r *http.Request) (page, perPage int) {
+	page = 1
+	perPage = 50
+	if v := r.URL.Query().Get("page"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			page = n
+		}
+	}
+	if v := r.URL.Query().Get("per_page"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			if n > 200 {
+				n = 200
+			}
+			perPage = n
+		}
+	}
+	return page, perPage
 }
 
 // --- POST /webhooks -----------------------------------------------------
@@ -197,14 +240,12 @@ func (p *webhooksPlugin) handleCreate(host plugin.PluginHost) http.HandlerFunc {
 
 // --- GET /webhooks/{id} -------------------------------------------------
 
-// recentDeliveryShowLimit caps the inline recent_deliveries list returned
-// by GET /webhooks/{id}. Larger histories are still available via
-// GET /webhooks/{id}/deliveries?limit=N.
-const recentDeliveryShowLimit = 10
-
+// webhookShowResponse returns the webhook on its own. For delivery
+// history, callers use GET /webhooks/{id}/deliveries — keeping the two
+// endpoints separate keeps response sizes predictable and lets clients
+// page deliveries independently.
 type webhookShowResponse struct {
-	Webhook          webhookJSON    `json:"webhook"`
-	RecentDeliveries []deliveryJSON `json:"recent_deliveries"`
+	Webhook webhookJSON `json:"webhook"`
 }
 
 func (p *webhooksPlugin) handleGet(host plugin.PluginHost) http.HandlerFunc {
@@ -219,25 +260,8 @@ func (p *webhooksPlugin) handleGet(host plugin.PluginHost) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to load webhook")
 			return
 		}
-
-		recent := make([]deliveryJSON, 0)
-		if rows, err := host.Repo().ListWebhookDeliveriesByWebhookID(r.Context(), id, recentDeliveryShowLimit); err == nil {
-			for _, d := range rows {
-				recent = append(recent, deliveryJSON{
-					ID:           d.ID,
-					WebhookID:    d.WebhookID,
-					EventType:    d.EventType,
-					StatusCode:   d.StatusCode,
-					ResponseBody: d.ResponseBody,
-					Success:      d.Success,
-					Attempt:      d.Attempt,
-					CreatedAt:    d.CreatedAt,
-				})
-			}
-		}
 		writeJSON(w, http.StatusOK, webhookShowResponse{
-			Webhook:          toWebhookJSON(*hook, false),
-			RecentDeliveries: recent,
+			Webhook: toWebhookJSON(*hook, false),
 		})
 	}
 }
@@ -328,6 +352,15 @@ type deliveryJSON struct {
 	CreatedAt    time.Time `json:"created_at"`
 }
 
+// listDeliveriesResponse wraps the delivery list with pagination
+// metadata.
+type listDeliveriesResponse struct {
+	Items   []deliveryJSON `json:"items"`
+	Total   int64          `json:"total"`
+	Page    int            `json:"page"`
+	PerPage int            `json:"per_page"`
+}
+
 func (p *webhooksPlugin) handleDeliveries(host plugin.PluginHost) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
@@ -342,20 +375,28 @@ func (p *webhooksPlugin) handleDeliveries(host plugin.PluginHost) http.HandlerFu
 			return
 		}
 
-		limit := recentDeliveryLimit
-		if v := r.URL.Query().Get("limit"); v != "" {
-			if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 1000 {
-				limit = n
-			}
-		}
-
-		rows, err := host.Repo().ListWebhookDeliveriesByWebhookID(r.Context(), id, limit)
+		page, perPage := paginationFromQuery(r)
+		// Fetch a generous window then paginate in-memory. The repo
+		// query uses a hard limit; for v0.1.0 we cap at 1000 rows of
+		// underlying data and slice the requested page out.
+		const fetchCap = 1000
+		rows, err := host.Repo().ListWebhookDeliveriesByWebhookID(r.Context(), id, fetchCap)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to list deliveries")
 			return
 		}
-		out := make([]deliveryJSON, 0, len(rows))
-		for _, d := range rows {
+		total := int64(len(rows))
+		start := (page - 1) * perPage
+		end := start + perPage
+		if start > len(rows) {
+			start = len(rows)
+		}
+		if end > len(rows) {
+			end = len(rows)
+		}
+		page1 := rows[start:end]
+		out := make([]deliveryJSON, 0, len(page1))
+		for _, d := range page1 {
 			out = append(out, deliveryJSON{
 				ID:           d.ID,
 				WebhookID:    d.WebhookID,
@@ -367,18 +408,30 @@ func (p *webhooksPlugin) handleDeliveries(host plugin.PluginHost) http.HandlerFu
 				CreatedAt:    d.CreatedAt,
 			})
 		}
-		writeJSON(w, http.StatusOK, out)
+		writeJSON(w, http.StatusOK, listDeliveriesResponse{
+			Items:   out,
+			Total:   total,
+			Page:    page,
+			PerPage: perPage,
+		})
 	}
 }
 
 // --- POST /webhooks/{id}/test -------------------------------------------
+
+// testResponse acknowledges a queued test delivery; clients can poll
+// /webhooks/{id}/deliveries to see the eventual result.
+type testResponse struct {
+	DeliveryQueued string `json:"delivery_queued"`
+}
 
 // handleTest enqueues a synthetic webhook.test event so operators can
 // verify their endpoint receives traffic and the signature validates.
 // The synthetic payload bypasses the active/events filter — even an
 // inactive or unsubscribed webhook will receive a /test fire.
 //
-// Mirrors the Rust shape: 202 with no body once the delivery is queued.
+// Returns 200 with the queued delivery id so callers can correlate
+// asynchronously without subscribing to webhooks.
 func (p *webhooksPlugin) handleTest(host plugin.PluginHost) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
@@ -411,6 +464,6 @@ func (p *webhooksPlugin) handleTest(host plugin.PluginHost) http.HandlerFunc {
 			writeError(w, http.StatusServiceUnavailable, "DISPATCHER_DOWN", "webhook dispatcher is shutting down")
 			return
 		}
-		w.WriteHeader(http.StatusAccepted)
+		writeJSON(w, http.StatusOK, testResponse{DeliveryQueued: testDeliveryID})
 	}
 }

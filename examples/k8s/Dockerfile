@@ -13,11 +13,13 @@ COPY . .
 RUN CGO_ENABLED=0 go build -o /out/yauth-app ./examples/config && \
     CGO_ENABLED=0 go build -o /out/yauth ./cmd/yauth
 
-FROM gcr.io/distroless/static AS app
+FROM gcr.io/distroless/static:nonroot AS app
 COPY --from=build /out/yauth-app /yauth-app
+USER nonroot:nonroot
 ENTRYPOINT ["/yauth-app"]
 CMD ["-c", "/etc/yauth/yauth.yaml"]
 
-FROM gcr.io/distroless/static AS cli
+FROM gcr.io/distroless/static:nonroot AS cli
 COPY --from=build /out/yauth /yauth
+USER nonroot:nonroot
 ENTRYPOINT ["/yauth"]

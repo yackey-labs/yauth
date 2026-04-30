@@ -55,7 +55,9 @@ func TestGenerateSessionToken_Unique(t *testing.T) {
 
 func TestHashToken_Stable(t *testing.T) {
 	const raw = "abc123"
-	if HashToken(raw) != HashToken(raw) {
+	first := HashToken(raw)
+	second := HashToken(raw)
+	if first != second {
 		t.Fatalf("HashToken not deterministic")
 	}
 	if HashToken(raw) == HashToken(raw+"x") {

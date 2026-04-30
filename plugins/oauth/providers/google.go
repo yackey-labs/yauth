@@ -71,13 +71,11 @@ type googleUserInfo struct {
 
 func (p *googleProvider) FetchUserInfo(ctx context.Context, tok *oauth2.Token) (*oauth.UserInfo, error) {
 	hc := p.cfg.HTTPClient
+	// When HTTPClient is nil (production), wrap with the OAuth2 client that
+	// auto-attaches the bearer token. When set (tests), use it as-is — test
+	// servers may inspect or short-circuit auth themselves.
 	if hc == nil {
 		hc = p.Config().Client(ctx, tok)
-	} else {
-		// HTTPClient overrides imply tests; do NOT auto-attach the
-		// bearer token because the test server may inspect or short-
-		// circuit auth. The caller is responsible for any auth
-		// hand-shaking they want.
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.cfg.UserInfoURL, nil)
 	if err != nil {

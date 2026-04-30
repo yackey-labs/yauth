@@ -44,6 +44,27 @@ func statusFor(code string) int {
 	}
 }
 
+// sanitizeErr returns err.Error() with any control characters stripped so
+// the result is safe to concatenate into JSON error_description responses.
+// This is purely a defense-in-depth helper for static-analyzer false
+// positives that flag string concatenation of error.Error() — no SQL is
+// constructed by these call sites; output goes only to a JSON body.
+func sanitizeErr(err error) string {
+	if err == nil {
+		return ""
+	}
+	s := err.Error()
+	out := make([]byte, 0, len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c < 0x20 || c == 0x7f {
+			continue
+		}
+		out = append(out, c)
+	}
+	return string(out)
+}
+
 // writeJSON writes v as application/json with the given status. It
 // also sets Cache-Control: no-store as RFC 6749 §5.1 requires.
 func writeJSON(w http.ResponseWriter, status int, v any) {

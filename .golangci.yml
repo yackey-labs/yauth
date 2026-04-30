@@ -1,0 +1,53 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+  settings:
+    errcheck:
+      # Errors from these functions in handlers/tests are deliberately ignored.
+      exclude-functions:
+        - (net/http.ResponseWriter).Write
+        - encoding/json.NewEncoder.Encode
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - fmt.Fprint
+        - (io.Closer).Close
+    staticcheck:
+      checks:
+        - all
+        # Stylistic — identical-field structs that could be type-converted.
+        # Several Repo input types intentionally mirror domain types for
+        # clarity at the call site; we keep the explicit struct literal.
+        - "-S1016"
+        # Stylistic — embedded-field selector "tx.Dialector.Name()" reads
+        # clearly and matches GORM idioms; we keep it explicit.
+        - "-QF1008"
+        # Stylistic — error message capitalization is intentional in user-
+        # facing JSON responses.
+        - "-ST1005"
+        # Documentation — package-comment requirement. Many small packages
+        # have a single self-evident purpose; we don't enforce a doc.go.
+        - "-ST1000"
+  exclusions:
+    rules:
+      # Test files: don't fail on unchecked errors in fake repos / smoke tests.
+      - path: _test\.go
+        linters:
+          - errcheck
+      # Test files: ignore staticcheck noise in fake repos.
+      - path: fake_test\.go
+        linters:
+          - staticcheck
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

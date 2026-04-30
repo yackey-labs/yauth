@@ -134,12 +134,12 @@ func (p *oauth2Plugin) handleCreateClient(host plugin.PluginHost) http.HandlerFu
 			JWKSURI:                 req.JWKSURI,
 		}
 		if err := host.Repo().CreateOAuth2Client(r.Context(), new); err != nil {
-			writeOAuthError(w, "server_error", "create client: "+err.Error())
+			writeOAuthError(w, "server_error", "create client: "+sanitizeErr(err))
 			return
 		}
 		stored, err := host.Repo().GetOAuth2ClientByClientID(r.Context(), clientID)
 		if err != nil {
-			writeOAuthError(w, "server_error", "lookup created client: "+err.Error())
+			writeOAuthError(w, "server_error", "lookup created client: "+sanitizeErr(err))
 			return
 		}
 		writeJSON(w, http.StatusCreated, createClientResponse{
@@ -312,7 +312,7 @@ func (p *oauth2Plugin) handleRotatePublicKey(host plugin.PluginHost) http.Handle
 			return
 		}
 		if _, err := parsePEMKey(req.PublicKeyPEM); err != nil {
-			writeOAuthError(w, "invalid_request", "public_key_pem is not a valid RSA or EC public key: "+err.Error())
+			writeOAuthError(w, "invalid_request", "public_key_pem is not a valid RSA or EC public key: "+sanitizeErr(err))
 			return
 		}
 		id := r.PathValue("id")

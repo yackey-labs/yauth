@@ -98,17 +98,6 @@ func loadCredentialsForUser(ctx context.Context, r repo.Repository, userID strin
 	return creds, rows, nil
 }
 
-// findStoredByCredentialID returns the stored row whose decoded webauthn.Credential.ID
-// matches the supplied raw ID, or nil if none.
-func findStoredByCredentialID(rows []*domain.WebauthnCredential, decoded []webauthn.Credential, credentialID []byte) *domain.WebauthnCredential {
-	for i, c := range decoded {
-		if bytes.Equal(c.ID, credentialID) {
-			return rows[i]
-		}
-	}
-	return nil
-}
-
 // --- /passkeys/register/begin -------------------------------------------
 
 type registerBeginResponse struct {

@@ -44,7 +44,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("NewFromConfig: %v", err)
 	}
-	defer ya.TelemetryShutdown(ctx)
+	defer func() { _ = ya.TelemetryShutdown(ctx) }()
 
 	mux := http.NewServeMux()
 	prefix := cfg.Server.Prefix

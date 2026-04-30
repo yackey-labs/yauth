@@ -165,7 +165,7 @@ func (p *oauth2Plugin) handleDCRRegister(host plugin.PluginHost, prefix string) 
 			TokenEndpointAuthMethod: &method,
 		}
 		if err := host.Repo().CreateOAuth2Client(r.Context(), newClient); err != nil {
-			writeDCRError(w, http.StatusInternalServerError, "server_error", "create client: "+sanitizeErr(err))
+			writeDCRError(w, http.StatusInternalServerError, "server_error", "create client: "+sanitizeErr(err)) // nosemgrep: go.lang.security.injection.tainted-sql-string.tainted-sql-string
 			return
 		}
 

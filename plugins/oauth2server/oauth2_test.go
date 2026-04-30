@@ -2,19 +2,27 @@ package oauth2server_test
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
 	yauth "github.com/yackey-labs/yauth-go"
 	"github.com/yackey-labs/yauth-go/auth"
 	"github.com/yackey-labs/yauth-go/domain"
+	"github.com/yackey-labs/yauth-go/plugins/asymjwt"
 	"github.com/yackey-labs/yauth-go/plugins/bearer"
 	"github.com/yackey-labs/yauth-go/plugins/oauth2server"
 	"github.com/yackey-labs/yauth-go/repo/gormrepo"
@@ -523,3 +531,366 @@ func TestConsentStorage_SkipsPromptOnSecondAuth(t *testing.T) {
 func pkceS256(verifier string) string {
 	return oauth2server.PKCEChallengeForTest(verifier)
 }
+
+// --- Gap 9 + RFC 8414 tests --------------------------------------------
+
+// adminPost sends an admin-authenticated POST with optional JSON body.
+func (h *harness) adminPost(t *testing.T, path, adminCookie, body string) (int, map[string]any) {
+	t.Helper()
+	var reader *strings.Reader
+	if body == "" {
+		reader = strings.NewReader("")
+	} else {
+		reader = strings.NewReader(body)
+	}
+	req, _ := http.NewRequest(http.MethodPost, h.srv.URL+path, reader)
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	req.AddCookie(&http.Cookie{Name: "yauth_session", Value: adminCookie})
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post %s: %v", path, err)
+	}
+	defer res.Body.Close()
+	var out map[string]any
+	_ = json.NewDecoder(res.Body).Decode(&out)
+	return res.StatusCode, out
+}
+
+func TestClientBan_RejectsTokenMint_AndUnbanRestores(t *testing.T) {
+	h := newHarness(t)
+	_, adminCookie := h.seedUser(t, "admin@idp.test", "admin")
+
+	body := `{"name":"banner","redirect_uris":[],"grant_types":["client_credentials"],"scopes":["read"],"is_public":false,"token_endpoint_auth_method":"client_secret_basic"}`
+	clientID, clientSecret, _ := h.createClient(t, adminCookie, body)
+
+	// Sanity: token mint succeeds before the ban.
+	form := url.Values{}
+	form.Set("grant_type", "client_credentials")
+	form.Set("scope", "read")
+	status, b := h.postForm(t, "/api/auth/oauth2/token", form, clientID, clientSecret)
+	if status != http.StatusOK {
+		t.Fatalf("pre-ban token: %d %v", status, b)
+	}
+
+	// Ban.
+	banBody := `{"reason":"abuse"}`
+	st, _ := h.adminPost(t, "/api/auth/oauth2/clients/"+clientID+"/ban", adminCookie, banBody)
+	if st != http.StatusOK {
+		t.Fatalf("ban: status=%d", st)
+	}
+
+	// Token mint must now fail invalid_client.
+	status, b = h.postForm(t, "/api/auth/oauth2/token", form, clientID, clientSecret)
+	if status != http.StatusUnauthorized {
+		t.Fatalf("expected 401 after ban, got %d %v", status, b)
+	}
+	if b["error"] != "invalid_client" {
+		t.Fatalf("expected invalid_client, got %v", b["error"])
+	}
+
+	// Audit log should record the ban event.
+	logs, err := h.repo.ListAuditLog(context.Background(), domain.ListAuditFilters{
+		EventType: stringPtr("oauth2.client.banned"),
+		Limit:     10,
+	})
+	if err != nil {
+		t.Fatalf("list audit: %v", err)
+	}
+	if len(logs) == 0 {
+		t.Fatalf("expected an oauth2.client.banned audit log row")
+	}
+
+	// Unban.
+	st, _ = h.adminPost(t, "/api/auth/oauth2/clients/"+clientID+"/unban", adminCookie, "")
+	if st != http.StatusOK {
+		t.Fatalf("unban: status=%d", st)
+	}
+
+	// Token mint succeeds again.
+	status, b = h.postForm(t, "/api/auth/oauth2/token", form, clientID, clientSecret)
+	if status != http.StatusOK {
+		t.Fatalf("post-unban token: %d %v", status, b)
+	}
+}
+
+func TestAuthServerMetadata_RFC8414(t *testing.T) {
+	h := newHarness(t)
+
+	res, err := http.Get(h.srv.URL + "/api/auth/.well-known/oauth-authorization-server")
+	if err != nil {
+		t.Fatalf("get metadata: %v", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", res.StatusCode)
+	}
+
+	var doc map[string]any
+	if err := json.NewDecoder(res.Body).Decode(&doc); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	want := map[string]string{
+		"issuer":                         "http://idp.test",
+		"authorization_endpoint":         "http://idp.test/api/auth/oauth2/authorize",
+		"token_endpoint":                 "http://idp.test/api/auth/oauth2/token",
+		"revocation_endpoint":            "http://idp.test/api/auth/oauth2/revoke",
+		"introspection_endpoint":         "http://idp.test/api/auth/oauth2/introspect",
+		"device_authorization_endpoint":  "http://idp.test/api/auth/oauth2/device_authorization",
+	}
+	for k, v := range want {
+		got, _ := doc[k].(string)
+		if got != v {
+			t.Fatalf("%s: got %q want %q", k, got, v)
+		}
+	}
+
+	// jwks_uri is omitted when no asymjwt signer is loaded.
+	if _, ok := doc["jwks_uri"]; ok {
+		t.Fatalf("jwks_uri should be omitted without asymjwt: %v", doc["jwks_uri"])
+	}
+
+	// response_types_supported = ["code"]
+	rts, _ := doc["response_types_supported"].([]any)
+	if len(rts) != 1 || rts[0] != "code" {
+		t.Fatalf("response_types_supported: %v", rts)
+	}
+
+	gts, _ := doc["grant_types_supported"].([]any)
+	wantGrants := map[string]bool{
+		"authorization_code":                              true,
+		"refresh_token":                                   true,
+		"client_credentials":                              true,
+		"urn:ietf:params:oauth:grant-type:device_code":    true,
+	}
+	for _, g := range gts {
+		delete(wantGrants, g.(string))
+	}
+	if len(wantGrants) != 0 {
+		t.Fatalf("missing grant types: %v", wantGrants)
+	}
+
+	pkce, _ := doc["code_challenge_methods_supported"].([]any)
+	if len(pkce) != 1 || pkce[0] != "S256" {
+		t.Fatalf("code_challenge_methods_supported: %v", pkce)
+	}
+
+	authMethods, _ := doc["token_endpoint_auth_methods_supported"].([]any)
+	wantMethods := map[string]bool{
+		"client_secret_basic": true,
+		"client_secret_post":  true,
+		"private_key_jwt":     true,
+		"none":                true,
+	}
+	for _, m := range authMethods {
+		delete(wantMethods, m.(string))
+	}
+	if len(wantMethods) != 0 {
+		t.Fatalf("missing auth methods: %v", wantMethods)
+	}
+}
+
+// --- Rotate-public-key + private_key_jwt test --------------------------
+
+// pkjwtHarness wraps a harness configured with asymjwt loaded so the
+// private_key_jwt path is enabled.
+type pkjwtHarness struct {
+	*harness
+}
+
+func newPKJWTHarness(t *testing.T) *pkjwtHarness {
+	t.Helper()
+	dsn := "file:" + uuid.NewString() + "?mode=memory&cache=shared&_pragma=foreign_keys(1)"
+	db, err := gormrepo.OpenSQLite(dsn)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	if err := gormrepo.Migrate(context.Background(), db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	r := gormrepo.New(db)
+
+	dir := t.TempDir()
+	priv, pub := writeServerRSAKeys(t, dir)
+	asym, err := asymjwt.New(asymjwt.Config{
+		KeyType: "RS256", PrivateKeyPath: priv, PublicKeyPath: pub, KID: "test-kid",
+	})
+	if err != nil {
+		t.Fatalf("asymjwt.New: %v", err)
+	}
+
+	jwtSecret := []byte("test-only-jwt-secret-please-change-32b")
+	ya, err := yauth.New(r, yauth.NewDefaultConfig()).
+		WithJWTSecret(jwtSecret).
+		WithPlugin(asym).
+		WithPlugin(bearer.New(bearer.Config{})).
+		WithPlugin(oauth2server.New(oauth2server.Config{
+			Issuer:      "http://idp.test",
+			BasePath:    "/api/auth",
+			AccessTTL:   5 * time.Minute,
+			AuthCodeTTL: 1 * time.Minute,
+		})).
+		Build()
+	if err != nil {
+		t.Fatalf("build yauth: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	mux.Handle("/api/auth/", http.StripPrefix("/api/auth", ya.Router()))
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return &pkjwtHarness{harness: &harness{srv: srv, repo: r}}
+}
+
+// writeServerRSAKeys generates an RSA-2048 keypair to disk for asymjwt.
+func writeServerRSAKeys(t *testing.T, dir string) (privPath, pubPath string) {
+	t.Helper()
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("gen rsa: %v", err)
+	}
+	privDER, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		t.Fatalf("marshal pkcs8: %v", err)
+	}
+	pubDER, err := x509.MarshalPKIXPublicKey(&priv.PublicKey)
+	if err != nil {
+		t.Fatalf("marshal pkix: %v", err)
+	}
+	privPath = filepath.Join(dir, "rsa.key")
+	pubPath = filepath.Join(dir, "rsa.pub")
+	_ = os.WriteFile(privPath, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privDER}), 0o600)
+	_ = os.WriteFile(pubPath, pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pubDER}), 0o644)
+	return privPath, pubPath
+}
+
+// makeClientRSA generates a fresh RSA client keypair and returns the
+// private key + the PEM-encoded public key.
+func makeClientRSA(t *testing.T) (*rsa.PrivateKey, string) {
+	t.Helper()
+	k, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("gen client rsa: %v", err)
+	}
+	der, err := x509.MarshalPKIXPublicKey(&k.PublicKey)
+	if err != nil {
+		t.Fatalf("marshal pubkey: %v", err)
+	}
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der})
+	return k, string(pemBytes)
+}
+
+// signPKJWTAssertion builds an RFC 7523 client_assertion signed with
+// the given RSA private key.
+func signPKJWTAssertion(t *testing.T, k *rsa.PrivateKey, clientID, audience string) string {
+	t.Helper()
+	now := time.Now().UTC()
+	claims := jwt.MapClaims{
+		"iss": clientID,
+		"sub": clientID,
+		"aud": audience,
+		"jti": uuid.NewString(),
+		"iat": now.Unix(),
+		"exp": now.Add(2 * time.Minute).Unix(),
+	}
+	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	signed, err := tok.SignedString(k)
+	if err != nil {
+		t.Fatalf("sign assertion: %v", err)
+	}
+	return signed
+}
+
+func TestRotatePublicKey_OldAssertionRejected_NewAccepted(t *testing.T) {
+	h := newPKJWTHarness(t)
+	_, adminCookie := h.seedUser(t, "admin@idp.test", "admin")
+
+	// Original keypair the client will sign assertions with.
+	oldKey, oldPEM := makeClientRSA(t)
+
+	body := map[string]any{
+		"name":                       "pkjwt-client",
+		"redirect_uris":              []string{},
+		"grant_types":                []string{"client_credentials"},
+		"scopes":                     []string{"read"},
+		"is_public":                  false,
+		"token_endpoint_auth_method": "private_key_jwt",
+		"public_key_pem":             oldPEM,
+	}
+	bb, _ := json.Marshal(body)
+	clientID, _, _ := h.createClient(t, adminCookie, string(bb))
+
+	audience := h.srv.URL + "/api/auth/oauth2/token"
+
+	// Sanity: the old key works before rotation.
+	form := url.Values{}
+	form.Set("grant_type", "client_credentials")
+	form.Set("client_id", clientID)
+	form.Set("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer")
+	form.Set("client_assertion", signPKJWTAssertion(t, oldKey, clientID, audience))
+	form.Set("scope", "read")
+	status, b := h.postForm(t, "/api/auth/oauth2/token", form, "", "")
+	if status != http.StatusOK {
+		t.Fatalf("pre-rotation: %d %v", status, b)
+	}
+
+	// Rotate: generate a new client keypair and POST the new public PEM.
+	newKey, newPEM := makeClientRSA(t)
+	rb, _ := json.Marshal(map[string]string{"public_key_pem": newPEM})
+	st, _ := h.adminPost(t, "/api/auth/oauth2/clients/"+clientID+"/rotate-public-key", adminCookie, string(rb))
+	if st != http.StatusOK {
+		t.Fatalf("rotate: %d", st)
+	}
+
+	// OLD-key assertion must now fail.
+	form2 := url.Values{}
+	form2.Set("grant_type", "client_credentials")
+	form2.Set("client_id", clientID)
+	form2.Set("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer")
+	form2.Set("client_assertion", signPKJWTAssertion(t, oldKey, clientID, audience))
+	form2.Set("scope", "read")
+	status, b = h.postForm(t, "/api/auth/oauth2/token", form2, "", "")
+	if status == http.StatusOK {
+		t.Fatalf("expected old assertion to fail post-rotation, got %v", b)
+	}
+	if b["error"] != "invalid_client" {
+		t.Fatalf("expected invalid_client, got %v", b)
+	}
+
+	// NEW-key assertion succeeds.
+	form3 := url.Values{}
+	form3.Set("grant_type", "client_credentials")
+	form3.Set("client_id", clientID)
+	form3.Set("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer")
+	form3.Set("client_assertion", signPKJWTAssertion(t, newKey, clientID, audience))
+	form3.Set("scope", "read")
+	status, b = h.postForm(t, "/api/auth/oauth2/token", form3, "", "")
+	if status != http.StatusOK {
+		t.Fatalf("new key: %d %v", status, b)
+	}
+	if _, ok := b["access_token"]; !ok {
+		t.Fatalf("missing access_token: %v", b)
+	}
+}
+
+func TestRotatePublicKey_RejectsInvalidPEM(t *testing.T) {
+	h := newHarness(t)
+	_, adminCookie := h.seedUser(t, "admin@idp.test", "admin")
+
+	body := `{"name":"x","redirect_uris":[],"grant_types":["client_credentials"],"scopes":["read"],"is_public":false,"token_endpoint_auth_method":"client_secret_basic"}`
+	clientID, _, _ := h.createClient(t, adminCookie, body)
+
+	bad := `{"public_key_pem":"-----BEGIN PUBLIC KEY-----\nbm90LXJlYWxseS1hLWtleQ==\n-----END PUBLIC KEY-----\n"}`
+	st, b := h.adminPost(t, "/api/auth/oauth2/clients/"+clientID+"/rotate-public-key", adminCookie, bad)
+	if st != http.StatusBadRequest {
+		t.Fatalf("expected 400 invalid PEM, got %d %v", st, b)
+	}
+	if b["error"] != "invalid_request" {
+		t.Fatalf("expected invalid_request, got %v", b["error"])
+	}
+}
+
+// stringPtr is a small helper used by the audit-log test.
+func stringPtr(s string) *string { return &s }

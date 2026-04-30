@@ -50,3 +50,21 @@ type NewPasswordReset struct {
 	ExpiresAt time.Time
 	CreatedAt time.Time
 }
+
+// PasswordHistory is one row of a user's previous-password log. The
+// PasswordHash is the PHC-formatted argon2id hash that was rotated
+// out of yauth_passwords; CreatedAt records when it was retired.
+type PasswordHistory struct {
+	ID           string
+	UserID       string
+	PasswordHash string
+	CreatedAt    time.Time
+}
+
+// NewPasswordHistory is the input for appending a password-history row.
+type NewPasswordHistory struct {
+	ID           string
+	UserID       string
+	PasswordHash string
+	CreatedAt    time.Time
+}

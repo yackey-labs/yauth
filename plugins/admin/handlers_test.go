@@ -252,7 +252,7 @@ func TestAdmin_BanUnban(t *testing.T) {
 	}
 
 	// Sessions revoked: the target should have zero sessions left.
-	left, _, err := env.repo.ListSessions(context.Background(), 100, 0)
+	left, _, err := env.repo.ListSessions(context.Background(), domain.ListSessionsFilters{Limit: 100})
 	if err != nil {
 		t.Fatalf("list sessions: %v", err)
 	}
@@ -409,6 +409,188 @@ func TestAdmin_ListAudit(t *testing.T) {
 		if e.EventType != "admin.test" {
 			t.Fatalf("unexpected event_type %q", e.EventType)
 		}
+	}
+}
+
+func TestAdmin_DeleteUser(t *testing.T) {
+	env := newEnv(t)
+	defer env.stop()
+
+	adminUser := env.seedUser(t, "admin@example.com", "admin")
+	target := env.seedUser(t, "target@example.com", "user")
+	tok := env.issueSession(t, adminUser.ID)
+
+	res := env.do(t, http.MethodDelete, "/api/auth/admin/users/"+target.ID, tok, map[string]any{
+		"reason": "violation",
+	})
+	if res.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete user: %d (%s)", res.StatusCode, drain(res))
+	}
+	res.Body.Close()
+
+	if _, err := env.repo.GetUserByID(context.Background(), target.ID); err == nil {
+		t.Fatalf("expected target to be gone")
+	}
+
+	// Audit row.
+	entries, err := env.repo.ListAuditLog(context.Background(), domain.ListAuditFilters{
+		Limit: 100,
+	})
+	if err != nil {
+		t.Fatalf("list audit: %v", err)
+	}
+	var seen bool
+	for _, e := range entries {
+		if e.EventType == "admin.user.deleted" {
+			seen = true
+			var meta map[string]any
+			if err := json.Unmarshal(e.Metadata, &meta); err != nil {
+				t.Fatalf("decode metadata: %v", err)
+			}
+			if meta["reason"] != "violation" {
+				t.Fatalf("audit reason=%v, want violation", meta["reason"])
+			}
+		}
+	}
+	if !seen {
+		t.Fatalf("audit log missing admin.user.deleted entry")
+	}
+}
+
+func TestAdmin_DeleteUser_RefusesSelfDelete(t *testing.T) {
+	env := newEnv(t)
+	defer env.stop()
+
+	adminUser := env.seedUser(t, "admin@example.com", "admin")
+	tok := env.issueSession(t, adminUser.ID)
+
+	res := env.do(t, http.MethodDelete, "/api/auth/admin/users/"+adminUser.ID, tok, nil)
+	if res.StatusCode != http.StatusConflict {
+		t.Fatalf("self-delete: expected 409, got %d (%s)", res.StatusCode, drain(res))
+	}
+	res.Body.Close()
+
+	if _, err := env.repo.GetUserByID(context.Background(), adminUser.ID); err != nil {
+		t.Fatalf("admin should still exist: %v", err)
+	}
+}
+
+func TestAdmin_ListSessions(t *testing.T) {
+	env := newEnv(t)
+	defer env.stop()
+
+	adminUser := env.seedUser(t, "admin@example.com", "admin")
+	target := env.seedUser(t, "target@example.com", "user")
+	other := env.seedUser(t, "other@example.com", "user")
+	_ = env.issueSession(t, target.ID)
+	_ = env.issueSession(t, target.ID)
+	_ = env.issueSession(t, other.ID)
+	tok := env.issueSession(t, adminUser.ID)
+
+	// All sessions: target(2) + other(1) + admin(1) = 4.
+	res := env.do(t, http.MethodGet, "/api/auth/admin/sessions", tok, nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("list sessions: %d (%s)", res.StatusCode, drain(res))
+	}
+	var all struct {
+		Sessions []struct {
+			ID     string `json:"id"`
+			UserID string `json:"user_id"`
+		} `json:"sessions"`
+		Total int64 `json:"total"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&all); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	res.Body.Close()
+	if all.Total != 4 {
+		t.Fatalf("expected total=4, got %d", all.Total)
+	}
+
+	// Filter by user_id.
+	res = env.do(t, http.MethodGet, "/api/auth/admin/sessions?user_id="+target.ID, tok, nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("list filtered: %d (%s)", res.StatusCode, drain(res))
+	}
+	var filtered struct {
+		Sessions []struct {
+			UserID string `json:"user_id"`
+		} `json:"sessions"`
+		Total int64 `json:"total"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&filtered); err != nil {
+		t.Fatalf("decode filtered: %v", err)
+	}
+	res.Body.Close()
+	if filtered.Total != 2 || len(filtered.Sessions) != 2 {
+		t.Fatalf("expected 2 sessions for target, got total=%d len=%d", filtered.Total, len(filtered.Sessions))
+	}
+	for _, s := range filtered.Sessions {
+		if s.UserID != target.ID {
+			t.Fatalf("filter leaked: %s", s.UserID)
+		}
+	}
+}
+
+func TestAdmin_DeleteSession(t *testing.T) {
+	env := newEnv(t)
+	defer env.stop()
+
+	adminUser := env.seedUser(t, "admin@example.com", "admin")
+	target := env.seedUser(t, "target@example.com", "user")
+	_ = env.issueSession(t, target.ID)
+	tok := env.issueSession(t, adminUser.ID)
+
+	// Look up the target's session id.
+	sessions, _, err := env.repo.ListSessions(context.Background(), domain.ListSessionsFilters{
+		UserID: &target.ID,
+		Limit:  10,
+	})
+	if err != nil || len(sessions) == 0 {
+		t.Fatalf("seed session: err=%v len=%d", err, len(sessions))
+	}
+	sid := sessions[0].ID
+
+	res := env.do(t, http.MethodDelete, "/api/auth/admin/sessions/"+sid, tok, nil)
+	if res.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete session: %d (%s)", res.StatusCode, drain(res))
+	}
+	res.Body.Close()
+
+	// Verify gone.
+	left, _, err := env.repo.ListSessions(context.Background(), domain.ListSessionsFilters{
+		UserID: &target.ID,
+		Limit:  10,
+	})
+	if err != nil {
+		t.Fatalf("list left: %v", err)
+	}
+	if len(left) != 0 {
+		t.Fatalf("expected target session deleted, found %d", len(left))
+	}
+
+	// 404 on unknown id.
+	res = env.do(t, http.MethodDelete, "/api/auth/admin/sessions/"+uuid.NewString(), tok, nil)
+	if res.StatusCode != http.StatusNotFound {
+		t.Fatalf("delete unknown session: expected 404, got %d", res.StatusCode)
+	}
+	res.Body.Close()
+
+	// Audit entry.
+	entries, err := env.repo.ListAuditLog(context.Background(), domain.ListAuditFilters{
+		Limit: 100,
+	})
+	if err != nil {
+		t.Fatalf("list audit: %v", err)
+	}
+	var seen bool
+	for _, e := range entries {
+		if e.EventType == "admin.session.terminated" {
+			seen = true
+		}
+	}
+	if !seen {
+		t.Fatalf("audit log missing admin.session.terminated entry")
 	}
 }
 

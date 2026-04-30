@@ -48,7 +48,10 @@ func newTestEnv(t *testing.T) (*testEnv, func()) {
 	}
 
 	ya, err := yauth.New(repo, yauth.NewDefaultConfig()).
-		WithPlugin(emailpassword.New(emailpassword.Config{})).
+		WithPlugin(emailpassword.New(emailpassword.Config{
+			HIBPCheck:    false,
+			HIBPCheckSet: true,
+		})).
 		WithPlugin(mfaPlugin).
 		Build()
 	if err != nil {

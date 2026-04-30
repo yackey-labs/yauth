@@ -10,6 +10,7 @@ import (
 
 	"github.com/yackey-labs/yauth-go/auth"
 	"github.com/yackey-labs/yauth-go/domain"
+	"github.com/yackey-labs/yauth-go/middleware"
 	"github.com/yackey-labs/yauth-go/plugin"
 	"github.com/yackey-labs/yauth-go/yautherr"
 )
@@ -224,6 +225,136 @@ func (p *oauth2Plugin) handlePatchClient(host plugin.PluginHost) http.HandlerFun
 		}
 		writeJSON(w, http.StatusOK, toClientJSON(*c))
 	}
+}
+
+// banRequest is the body for POST /oauth2/clients/{id}/ban.
+type banRequest struct {
+	Reason string `json:"reason"`
+}
+
+// rotatePublicKeyRequest is the body for POST /oauth2/clients/{id}/rotate-public-key.
+type rotatePublicKeyRequest struct {
+	PublicKeyPEM string `json:"public_key_pem"`
+}
+
+// handleBanClient bans a client and writes an "oauth2.client.banned"
+// audit log with the acting admin's id.
+func (p *oauth2Plugin) handleBanClient(host plugin.PluginHost) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req banRequest
+		r.Body = http.MaxBytesReader(nil, r.Body, 1<<20)
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeOAuthError(w, "invalid_request", err.Error())
+			return
+		}
+		id := r.PathValue("id")
+		now := time.Now().UTC()
+		var reason *string
+		if req.Reason != "" {
+			reason = &req.Reason
+		}
+		ok, err := host.Repo().SetOAuth2ClientBanned(r.Context(), id, &now, reason)
+		if err != nil {
+			writeOAuthError(w, "server_error", err.Error())
+			return
+		}
+		if !ok {
+			writeOAuthError(w, "invalid_request", "client not found")
+			return
+		}
+		c, err := host.Repo().GetOAuth2ClientByClientID(r.Context(), id)
+		if err != nil {
+			writeOAuthError(w, "server_error", err.Error())
+			return
+		}
+		logClientAuditEvent(r, host, "oauth2.client.banned", id, map[string]any{"reason": req.Reason})
+		writeJSON(w, http.StatusOK, toClientJSON(*c))
+	}
+}
+
+// handleUnbanClient clears banned_at and banned_reason on a client and
+// writes an "oauth2.client.unbanned" audit log.
+func (p *oauth2Plugin) handleUnbanClient(host plugin.PluginHost) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		ok, err := host.Repo().SetOAuth2ClientBanned(r.Context(), id, nil, nil)
+		if err != nil {
+			writeOAuthError(w, "server_error", err.Error())
+			return
+		}
+		if !ok {
+			writeOAuthError(w, "invalid_request", "client not found")
+			return
+		}
+		c, err := host.Repo().GetOAuth2ClientByClientID(r.Context(), id)
+		if err != nil {
+			writeOAuthError(w, "server_error", err.Error())
+			return
+		}
+		logClientAuditEvent(r, host, "oauth2.client.unbanned", id, nil)
+		writeJSON(w, http.StatusOK, toClientJSON(*c))
+	}
+}
+
+// handleRotatePublicKey replaces the client's registered public_key_pem
+// (used for private_key_jwt verification). The submitted PEM is parsed
+// to ensure it is a valid RSA or EC public key before persisting.
+func (p *oauth2Plugin) handleRotatePublicKey(host plugin.PluginHost) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req rotatePublicKeyRequest
+		r.Body = http.MaxBytesReader(nil, r.Body, 1<<20)
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeOAuthError(w, "invalid_request", err.Error())
+			return
+		}
+		if req.PublicKeyPEM == "" {
+			writeOAuthError(w, "invalid_request", "public_key_pem is required")
+			return
+		}
+		if _, err := parsePEMKey(req.PublicKeyPEM); err != nil {
+			writeOAuthError(w, "invalid_request", "public_key_pem is not a valid RSA or EC public key: "+err.Error())
+			return
+		}
+		id := r.PathValue("id")
+		pem := req.PublicKeyPEM
+		ok, err := host.Repo().RotateOAuth2ClientPublicKey(r.Context(), id, &pem)
+		if err != nil {
+			writeOAuthError(w, "server_error", err.Error())
+			return
+		}
+		if !ok {
+			writeOAuthError(w, "invalid_request", "client not found")
+			return
+		}
+		// Drop any cached JWKS for this client. Public-key path is keyed
+		// by jwks_uri, so it is unaffected here, but a safe no-op.
+		c, err := host.Repo().GetOAuth2ClientByClientID(r.Context(), id)
+		if err != nil {
+			writeOAuthError(w, "server_error", err.Error())
+			return
+		}
+		logClientAuditEvent(r, host, "oauth2.client.public_key_rotated", id, nil)
+		writeJSON(w, http.StatusOK, toClientJSON(*c))
+	}
+}
+
+// logClientAuditEvent records an OAuth2 client admin event. extra is
+// merged into the audit metadata alongside admin_id and client_id.
+func logClientAuditEvent(r *http.Request, host plugin.PluginHost, eventType, clientID string, extra map[string]any) {
+	meta := map[string]any{"client_id": clientID}
+	if au, ok := middleware.AuthUserFromContext(r.Context()); ok && au != nil {
+		meta["admin_id"] = au.User.ID
+	}
+	for k, v := range extra {
+		meta[k] = v
+	}
+	raw, _ := json.Marshal(meta)
+	_ = host.Repo().LogAuditEvent(r.Context(), domain.NewAuditLog{
+		ID:        uuid.NewString(),
+		EventType: eventType,
+		Metadata:  raw,
+		CreatedAt: time.Now().UTC(),
+	})
 }
 
 // handleDeleteClient soft-deletes (bans) a client. Hard delete is not

@@ -127,6 +127,7 @@ func (c *Config) ExpectedTables() []string {
 	if p.EmailPassword.Enabled {
 		base = append(base,
 			"yauth_passwords",
+			"yauth_password_history",
 			"yauth_email_verifications",
 			"yauth_password_resets",
 		)

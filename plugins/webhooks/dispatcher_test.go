@@ -94,6 +94,70 @@ func TestBuildPayload_OmitsNilFields(t *testing.T) {
 	}
 }
 
+func TestShouldRetry(t *testing.T) {
+	cases := []struct {
+		status int
+		want   bool
+	}{
+		{200, false},
+		{201, false},
+		{301, false},
+		{400, false},
+		{401, false},
+		{403, false},
+		{404, false},
+		{408, true},  // Request Timeout
+		{422, false}, // Unprocessable Entity
+		{429, true},  // Too Many Requests
+		{500, true},
+		{502, true},
+		{503, true},
+		{504, true},
+	}
+	for _, tc := range cases {
+		if got := shouldRetry(tc.status); got != tc.want {
+			t.Errorf("shouldRetry(%d) = %v, want %v", tc.status, got, tc.want)
+		}
+	}
+}
+
+func TestBackoffFor_GrowsExponentially(t *testing.T) {
+	d := &Dispatcher{
+		retry: RetryConfig{
+			InitialBackoff: 100 * time.Millisecond,
+			MaxBackoff:     10 * time.Second,
+			BackoffJitter:  0,
+		},
+	}
+	// attempt 1 → 100ms, 2 → 200ms, 3 → 400ms, 4 → 800ms
+	wants := []time.Duration{
+		100 * time.Millisecond,
+		200 * time.Millisecond,
+		400 * time.Millisecond,
+		800 * time.Millisecond,
+	}
+	for i, want := range wants {
+		got := d.backoffFor(i + 1)
+		if got != want {
+			t.Errorf("backoffFor(%d) = %v, want %v", i+1, got, want)
+		}
+	}
+}
+
+func TestBackoffFor_CapsAtMax(t *testing.T) {
+	d := &Dispatcher{
+		retry: RetryConfig{
+			InitialBackoff: 1 * time.Second,
+			MaxBackoff:     5 * time.Second,
+			BackoffJitter:  0,
+		},
+	}
+	// 2^10 * 1s = 1024s, must clamp to 5s.
+	if got := d.backoffFor(11); got != 5*time.Second {
+		t.Errorf("expected backoff capped to 5s, got %v", got)
+	}
+}
+
 func TestSubscribed(t *testing.T) {
 	cases := []struct {
 		name string

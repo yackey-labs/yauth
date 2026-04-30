@@ -82,6 +82,13 @@ func waitFor(t *testing.T, timeout time.Duration, fn func() bool) bool {
 }
 
 func newWebhooksTestServer(t *testing.T) (*httptest.Server, *yauth.YAuth) {
+	return newWebhooksTestServerWithConfig(t, webhooks.Config{
+		WorkerCount:     2,
+		DeliveryTimeout: 5 * time.Second,
+	})
+}
+
+func newWebhooksTestServerWithConfig(t *testing.T, cfg webhooks.Config) (*httptest.Server, *yauth.YAuth) {
 	t.Helper()
 	// Per-test in-memory DB. cache=shared scopes by name, so naming
 	// the DB after the test isolates it from sibling tests.
@@ -96,8 +103,11 @@ func newWebhooksTestServer(t *testing.T) (*httptest.Server, *yauth.YAuth) {
 	repo := gormrepo.New(db)
 
 	ya, err := yauth.New(repo, yauth.NewDefaultConfig()).
-		WithPlugin(emailpassword.New(emailpassword.Config{})).
-		WithPlugin(webhooks.New(webhooks.Config{WorkerCount: 2, DeliveryTimeout: 5 * time.Second})).
+		WithPlugin(emailpassword.New(emailpassword.Config{
+			HIBPCheck:    false,
+			HIBPCheckSet: true,
+		})).
+		WithPlugin(webhooks.New(cfg)).
 		Build()
 	if err != nil {
 		t.Fatalf("build yauth: %v", err)
@@ -108,7 +118,7 @@ func newWebhooksTestServer(t *testing.T) (*httptest.Server, *yauth.YAuth) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	t.Cleanup(func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = ya.Shutdown(shutdownCtx)
 	})
@@ -286,4 +296,255 @@ func computeHMAC(secret string, body []byte) string {
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write(body)
 	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// programmedReceiver returns a configured sequence of HTTP status codes
+// across consecutive deliveries. After the sequence is exhausted the
+// receiver returns the last code in the slice (or 200 if empty).
+type programmedReceiver struct {
+	srv    *httptest.Server
+	mu     sync.Mutex
+	hits   int
+	codes  []int
+	bodies [][]byte
+}
+
+func newProgrammedReceiver(t *testing.T, codes []int) *programmedReceiver {
+	t.Helper()
+	r := &programmedReceiver{codes: codes}
+	r.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		body, _ := io.ReadAll(req.Body)
+		r.mu.Lock()
+		idx := r.hits
+		r.hits++
+		r.bodies = append(r.bodies, body)
+		var code int
+		switch {
+		case len(r.codes) == 0:
+			code = http.StatusOK
+		case idx >= len(r.codes):
+			code = r.codes[len(r.codes)-1]
+		default:
+			code = r.codes[idx]
+		}
+		r.mu.Unlock()
+		w.WriteHeader(code)
+	}))
+	return r
+}
+
+func (r *programmedReceiver) Close() { r.srv.Close() }
+
+func (r *programmedReceiver) Hits() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.hits
+}
+
+// TestWebhookRetry_RecoversAfterTransientFailure: receiver returns 500
+// twice then 200; the third attempt should succeed and three delivery
+// rows should be persisted with attempts 1, 2, 3.
+func TestWebhookRetry_RecoversAfterTransientFailure(t *testing.T) {
+	rcv := newProgrammedReceiver(t, []int{500, 500, 200})
+	defer rcv.Close()
+
+	srv, ya := newWebhooksTestServerWithConfig(t, webhooks.Config{
+		WorkerCount:     2,
+		DeliveryTimeout: 2 * time.Second,
+		MaxAttempts:     5,
+		InitialBackoff:  20 * time.Millisecond,
+		MaxBackoff:      200 * time.Millisecond,
+		BackoffJitter:   -1, // disable jitter for deterministic timing
+	})
+	const secret = "retry-secret"
+	whID := seedWebhook(t, ya, rcv.srv.URL, secret, []string{"user.registered"})
+
+	body := map[string]string{
+		"email":    "retry@example.com",
+		"password": "correct horse battery staple",
+	}
+	buf, _ := json.Marshal(body)
+	res, err := http.Post(srv.URL+"/api/auth/register", "application/json", bytes.NewReader(buf))
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("register: expected 201, got %d", res.StatusCode)
+	}
+
+	if !waitFor(t, 5*time.Second, func() bool { return rcv.Hits() >= 3 }) {
+		t.Fatalf("expected receiver to record 3 hits, got %d", rcv.Hits())
+	}
+
+	// Wait for the success row to be persisted.
+	if !waitFor(t, 5*time.Second, func() bool {
+		rows, _ := ya.Repo().ListWebhookDeliveriesByWebhookID(context.Background(), whID, 10)
+		for _, row := range rows {
+			if row.Success {
+				return true
+			}
+		}
+		return false
+	}) {
+		t.Fatalf("expected at least one successful delivery row")
+	}
+
+	rows, err := ya.Repo().ListWebhookDeliveriesByWebhookID(context.Background(), whID, 10)
+	if err != nil {
+		t.Fatalf("list deliveries: %v", err)
+	}
+	if len(rows) < 3 {
+		t.Fatalf("expected >=3 delivery rows, got %d", len(rows))
+	}
+
+	// Walk attempts to ensure 1,2,3 are present and the third succeeded.
+	seen := map[int]*domain.WebhookDelivery{}
+	for _, r := range rows {
+		seen[r.Attempt] = r
+	}
+	for n := 1; n <= 3; n++ {
+		if _, ok := seen[n]; !ok {
+			t.Fatalf("missing delivery row for attempt %d (rows=%v)", n, rows)
+		}
+	}
+	if !seen[3].Success {
+		t.Fatalf("attempt 3 should be success=true, got %+v", seen[3])
+	}
+	if seen[1].Success || seen[2].Success {
+		t.Fatalf("attempts 1 and 2 should be success=false")
+	}
+}
+
+// TestWebhookRetry_DeadLetter: receiver always returns 500. After
+// MaxAttempts is reached, a dead-letter delivery row is persisted with
+// success=false and a DEAD_LETTER marker in the response_body.
+func TestWebhookRetry_DeadLetter(t *testing.T) {
+	rcv := newProgrammedReceiver(t, []int{500})
+	defer rcv.Close()
+
+	srv, ya := newWebhooksTestServerWithConfig(t, webhooks.Config{
+		WorkerCount:     2,
+		DeliveryTimeout: 2 * time.Second,
+		MaxAttempts:     3,
+		InitialBackoff:  10 * time.Millisecond,
+		MaxBackoff:      50 * time.Millisecond,
+		BackoffJitter:   -1,
+	})
+	const secret = "dead-letter-secret"
+	whID := seedWebhook(t, ya, rcv.srv.URL, secret, []string{"user.registered"})
+
+	body := map[string]string{
+		"email":    "deadletter@example.com",
+		"password": "correct horse battery staple",
+	}
+	buf, _ := json.Marshal(body)
+	res, err := http.Post(srv.URL+"/api/auth/register", "application/json", bytes.NewReader(buf))
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	res.Body.Close()
+
+	if !waitFor(t, 5*time.Second, func() bool { return rcv.Hits() >= 3 }) {
+		t.Fatalf("expected 3 attempts, got %d", rcv.Hits())
+	}
+
+	// Wait for dead-letter row to land.
+	if !waitFor(t, 5*time.Second, func() bool {
+		rows, _ := ya.Repo().ListWebhookDeliveriesByWebhookID(context.Background(), whID, 10)
+		for _, row := range rows {
+			if row.ResponseBody != nil && strings.Contains(*row.ResponseBody, "DEAD_LETTER") {
+				return true
+			}
+		}
+		return false
+	}) {
+		t.Fatalf("expected dead-letter row to be persisted")
+	}
+
+	rows, err := ya.Repo().ListWebhookDeliveriesByWebhookID(context.Background(), whID, 10)
+	if err != nil {
+		t.Fatalf("list deliveries: %v", err)
+	}
+	// 3 attempts + 1 dead-letter row.
+	if len(rows) < 4 {
+		t.Fatalf("expected >=4 rows (3 attempts + dead-letter), got %d", len(rows))
+	}
+	var dl *domain.WebhookDelivery
+	for _, r := range rows {
+		if r.ResponseBody != nil && strings.Contains(*r.ResponseBody, "DEAD_LETTER") {
+			dl = r
+			break
+		}
+	}
+	if dl == nil {
+		t.Fatalf("dead-letter row not found")
+	}
+	if dl.Success {
+		t.Fatalf("dead-letter row should be success=false")
+	}
+	if dl.StatusCode != nil {
+		t.Fatalf("dead-letter row should have nil status_code, got %v", *dl.StatusCode)
+	}
+}
+
+// TestWebhookRetry_4xxNoRetry: receiver returns 400. The dispatcher
+// should record exactly one attempt and not retry. No dead-letter row
+// either — 4xx (excl 408/429) is a terminal failure on the first try.
+func TestWebhookRetry_4xxNoRetry(t *testing.T) {
+	rcv := newProgrammedReceiver(t, []int{400})
+	defer rcv.Close()
+
+	srv, ya := newWebhooksTestServerWithConfig(t, webhooks.Config{
+		WorkerCount:     2,
+		DeliveryTimeout: 2 * time.Second,
+		MaxAttempts:     5,
+		InitialBackoff:  10 * time.Millisecond,
+		MaxBackoff:      50 * time.Millisecond,
+		BackoffJitter:   -1,
+	})
+	whID := seedWebhook(t, ya, rcv.srv.URL, "secret", []string{"user.registered"})
+
+	body := map[string]string{
+		"email":    "noretry@example.com",
+		"password": "correct horse battery staple",
+	}
+	buf, _ := json.Marshal(body)
+	res, err := http.Post(srv.URL+"/api/auth/register", "application/json", bytes.NewReader(buf))
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	res.Body.Close()
+
+	// Wait for one delivery row to land.
+	if !waitFor(t, 3*time.Second, func() bool {
+		rows, _ := ya.Repo().ListWebhookDeliveriesByWebhookID(context.Background(), whID, 10)
+		return len(rows) >= 1
+	}) {
+		t.Fatalf("expected at least one delivery row")
+	}
+
+	// Give the dispatcher generous time to (incorrectly) retry — if the
+	// retry policy is broken we want this assertion to fail.
+	time.Sleep(300 * time.Millisecond)
+
+	if got := rcv.Hits(); got != 1 {
+		t.Fatalf("expected exactly 1 receiver hit on 4xx, got %d", got)
+	}
+	rows, err := ya.Repo().ListWebhookDeliveriesByWebhookID(context.Background(), whID, 10)
+	if err != nil {
+		t.Fatalf("list deliveries: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected exactly 1 delivery row, got %d", len(rows))
+	}
+	if rows[0].Attempt != 1 {
+		t.Fatalf("expected attempt=1, got %d", rows[0].Attempt)
+	}
+	if rows[0].Success {
+		t.Fatalf("expected success=false on 4xx")
+	}
+	if rows[0].StatusCode == nil || *rows[0].StatusCode != 400 {
+		t.Fatalf("expected status_code=400, got %v", rows[0].StatusCode)
+	}
 }

@@ -2,15 +2,23 @@ package emailpassword
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/yackey-labs/yauth-go/auth"
+	"github.com/yackey-labs/yauth-go/auth/passwordpolicy"
 	"github.com/yackey-labs/yauth-go/domain"
 	"github.com/yackey-labs/yauth-go/events"
 	"github.com/yackey-labs/yauth-go/middleware"
@@ -116,18 +124,32 @@ func (p *emailPasswordPlugin) handleRegister(host plugin.PluginHost) http.Handle
 			writeError(w, http.StatusBadRequest, "INVALID_EMAIL", "email must contain '@'")
 			return
 		}
-		if len(req.Password) < p.cfg.MinPasswordLength {
-			writeError(w, http.StatusBadRequest, "WEAK_PASSWORD",
-				"password must be at least the configured minimum length")
+		if err := p.validatePasswordComplexity(req.Password); err != nil {
+			writeError(w, http.StatusBadRequest, "WEAK_PASSWORD", err.Error())
+			return
+		}
+		if pwned, msg := p.checkHIBP(r.Context(), req.Password); pwned {
+			writeError(w, http.StatusUnprocessableEntity, "PASSWORD_BREACHED", msg)
 			return
 		}
 
 		ctx := r.Context()
 		repo := host.Repo()
 
-		// Reject if a user already exists.
+		// Email-enumeration resistance: when the email already has an
+		// account, return the same shape as a successful "registration
+		// pending verification" response and email the user out-of-band.
+		// This matches the Rust reference implementation.
 		if existing, err := repo.GetUserByEmail(ctx, req.Email); err == nil && existing != nil {
-			writeError(w, http.StatusConflict, "USER_EXISTS", "user with this email already exists")
+			go func(email string) {
+				if err := p.cfg.Mailer.SendAccountExists(context.Background(), email); err != nil {
+					log.Printf("yauth: SendAccountExists failed for %s: %v", email, err)
+				}
+			}(req.Email)
+			writeJSON(w, http.StatusOK, pendingVerificationResponse{
+				Status:  "pending_verification",
+				Message: "If the email is available, an account has been created. Check your inbox.",
+			})
 			return
 		} else if err != nil && !errors.Is(err, yautherr.ErrNotFound) {
 			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to look up user")
@@ -144,7 +166,18 @@ func (p *emailPasswordPlugin) handleRegister(host plugin.PluginHost) http.Handle
 		})
 		if err != nil {
 			if errors.Is(err, yautherr.ErrUserExists) {
-				writeError(w, http.StatusConflict, "USER_EXISTS", "user with this email already exists")
+				// Race with a concurrent registration: same email got
+				// inserted between our lookup and CreateUser. Preserve
+				// enumeration resistance by responding success.
+				go func(email string) {
+					if err := p.cfg.Mailer.SendAccountExists(context.Background(), email); err != nil {
+						log.Printf("yauth: SendAccountExists failed for %s: %v", email, err)
+					}
+				}(req.Email)
+				writeJSON(w, http.StatusOK, pendingVerificationResponse{
+					Status:  "pending_verification",
+					Message: "If the email is available, an account has been created. Check your inbox.",
+				})
 				return
 			}
 			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to create user")
@@ -162,6 +195,13 @@ func (p *emailPasswordPlugin) handleRegister(host plugin.PluginHost) http.Handle
 		}); err != nil {
 			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to store password")
 			return
+		}
+
+		// Issue a verification token and email the link. Failures are
+		// logged but never bubble up — the account is usable, the user
+		// can request a fresh link via /resend-verification.
+		if err := p.issueVerificationEmail(ctx, repo, user.ID, user.Email); err != nil {
+			log.Printf("yauth: issue verification email for %s: %v", user.Email, err)
 		}
 
 		raw, _, err := auth.IssueSession(ctx, repo, user.ID, requestIP(r), requestUA(r), host.SessionTTL())
@@ -190,11 +230,21 @@ func (p *emailPasswordPlugin) handleRegister(host plugin.PluginHost) http.Handle
 	}
 }
 
+// pendingVerificationResponse is the enumeration-safe reply the
+// /register handler returns when the supplied email already maps to
+// an existing account. The shape mirrors a fresh-registration "check
+// your inbox" UX without admitting that anything actually happened.
+type pendingVerificationResponse struct {
+	Status  string `json:"status"`
+	Message string `json:"message"`
+}
+
 // --- /login -------------------------------------------------------------
 
 type loginRequest struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
+	Email      string `json:"email"`
+	Password   string `json:"password"`
+	RememberMe bool   `json:"remember_me,omitempty"`
 }
 
 type loginResponse struct {
@@ -311,14 +361,19 @@ func (p *emailPasswordPlugin) handleLogin(host plugin.PluginHost) http.HandlerFu
 			return
 		}
 
-		raw, _, err := auth.IssueSession(ctx, repo, user.ID, ip, requestUA(r), host.SessionTTL())
+		ttl := host.SessionTTL()
+		if req.RememberMe && p.cfg.RememberMeTTL > 0 {
+			ttl = p.cfg.RememberMeTTL
+		}
+
+		raw, _, err := auth.IssueSession(ctx, repo, user.ID, ip, requestUA(r), ttl)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to issue session")
 			return
 		}
 
 		http.SetCookie(w, auth.SessionCookie(
-			cookieOptionsFromHost(host, int(host.SessionTTL().Seconds())),
+			cookieOptionsFromHost(host, int(ttl.Seconds())),
 			raw,
 		))
 		writeJSON(w, http.StatusOK, loginResponse{User: toUserJSON(*user)})
@@ -432,9 +487,8 @@ func (p *emailPasswordPlugin) handleChangePassword(host plugin.PluginHost) http.
 			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 			return
 		}
-		if len(req.NewPassword) < p.cfg.MinPasswordLength {
-			writeError(w, http.StatusBadRequest, "WEAK_PASSWORD",
-				"new password must be at least the configured minimum length")
+		if err := p.validatePasswordComplexity(req.NewPassword); err != nil {
+			writeError(w, http.StatusBadRequest, "WEAK_PASSWORD", err.Error())
 			return
 		}
 
@@ -452,11 +506,32 @@ func (p *emailPasswordPlugin) handleChangePassword(host plugin.PluginHost) http.
 			return
 		}
 
+		// Reject reuse of the current password.
+		if same, _ := auth.VerifyPassword(req.NewPassword, pw.PasswordHash); same {
+			writeError(w, http.StatusBadRequest, "PASSWORD_REUSED",
+				"new password must differ from current password")
+			return
+		}
+
+		if err := p.checkHistory(ctx, repoRef, au.User.ID, req.NewPassword); err != nil {
+			writeError(w, http.StatusBadRequest, "PASSWORD_REUSED", err.Error())
+			return
+		}
+
+		if pwned, msg := p.checkHIBP(ctx, req.NewPassword); pwned {
+			writeError(w, http.StatusUnprocessableEntity, "PASSWORD_BREACHED", msg)
+			return
+		}
+
 		newHash, err := auth.HashPassword(req.NewPassword)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to hash password")
 			return
 		}
+
+		// Append the previous hash to history before overwriting.
+		p.recordHistory(ctx, repoRef, au.User.ID, pw.PasswordHash)
+
 		if err := repoRef.UpsertPassword(ctx, domain.NewPassword{
 			UserID:       au.User.ID,
 			PasswordHash: newHash,
@@ -541,4 +616,398 @@ func requestUA(r *http.Request) *string {
 		return nil
 	}
 	return &ua
+}
+
+// --- /verify-email ------------------------------------------------------
+
+type verifyEmailRequest struct {
+	Token string `json:"token"`
+}
+
+type verifyEmailResponse struct {
+	Verified bool `json:"verified"`
+}
+
+func (p *emailPasswordPlugin) handleVerifyEmail(host plugin.PluginHost) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req verifyEmailRequest
+		if err := decodeJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+			return
+		}
+		raw := strings.TrimSpace(req.Token)
+		if raw == "" {
+			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "token is required")
+			return
+		}
+
+		ctx := r.Context()
+		repoRef := host.Repo()
+		hash := hashTokenSHA256(raw)
+
+		ev, err := repoRef.ConsumeEmailVerification(ctx, hash)
+		if err != nil || ev == nil {
+			writeError(w, http.StatusUnauthorized, "INVALID_TOKEN", "token is invalid, expired, or already used")
+			return
+		}
+
+		now := time.Now().UTC()
+		verified := true
+		if _, err := repoRef.UpdateUser(ctx, ev.UserID, domain.UpdateUser{
+			EmailVerified: &verified,
+			UpdatedAt:     &now,
+		}); err != nil {
+			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to mark email verified")
+			return
+		}
+
+		uid := ev.UserID
+		_, _ = host.Emit(ctx, events.AuthEvent{
+			Type:      events.EventEmailVerified,
+			UserID:    &uid,
+			IPAddress: requestIP(r),
+		})
+
+		writeJSON(w, http.StatusOK, verifyEmailResponse{Verified: true})
+	}
+}
+
+// --- /resend-verification -----------------------------------------------
+
+type resendVerificationRequest struct {
+	Email string `json:"email"`
+}
+
+type resendVerificationResponse struct {
+	Sent bool `json:"sent"`
+}
+
+func (p *emailPasswordPlugin) handleResendVerification(host plugin.PluginHost) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req resendVerificationRequest
+		if err := decodeJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+			return
+		}
+		req.Email = strings.TrimSpace(strings.ToLower(req.Email))
+		if !validEmail(req.Email) {
+			writeError(w, http.StatusBadRequest, "INVALID_EMAIL", "email must contain '@'")
+			return
+		}
+
+		ctx := r.Context()
+		repoRef := host.Repo()
+
+		// Always 200 to prevent enumeration. Quietly skip when the
+		// account is missing or already verified.
+		user, err := repoRef.GetUserByEmail(ctx, req.Email)
+		if err != nil || user == nil {
+			writeJSON(w, http.StatusOK, resendVerificationResponse{Sent: true})
+			return
+		}
+		if user.EmailVerified {
+			writeJSON(w, http.StatusOK, resendVerificationResponse{Sent: true})
+			return
+		}
+		if err := p.issueVerificationEmail(ctx, repoRef, user.ID, user.Email); err != nil {
+			log.Printf("yauth: issue verification email for %s: %v", user.Email, err)
+		}
+		writeJSON(w, http.StatusOK, resendVerificationResponse{Sent: true})
+	}
+}
+
+// --- /forgot-password ---------------------------------------------------
+
+type forgotPasswordRequest struct {
+	Email string `json:"email"`
+}
+
+type forgotPasswordResponse struct {
+	Sent bool `json:"sent"`
+}
+
+func (p *emailPasswordPlugin) handleForgotPassword(host plugin.PluginHost) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req forgotPasswordRequest
+		if err := decodeJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+			return
+		}
+		req.Email = strings.TrimSpace(strings.ToLower(req.Email))
+		if !validEmail(req.Email) {
+			writeError(w, http.StatusBadRequest, "INVALID_EMAIL", "email must contain '@'")
+			return
+		}
+
+		ctx := r.Context()
+		repoRef := host.Repo()
+
+		user, err := repoRef.GetUserByEmail(ctx, req.Email)
+		if err != nil || user == nil {
+			writeJSON(w, http.StatusOK, forgotPasswordResponse{Sent: true})
+			return
+		}
+
+		raw, hash, err := generateRawToken()
+		if err != nil {
+			writeJSON(w, http.StatusOK, forgotPasswordResponse{Sent: true})
+			return
+		}
+		now := time.Now().UTC()
+		if err := repoRef.CreatePasswordReset(ctx, domain.NewPasswordReset{
+			ID:        uuid.NewString(),
+			UserID:    user.ID,
+			TokenHash: hash,
+			ExpiresAt: now.Add(p.cfg.PasswordResetTokenTTL),
+			CreatedAt: now,
+		}); err != nil {
+			writeJSON(w, http.StatusOK, forgotPasswordResponse{Sent: true})
+			return
+		}
+		link := buildLink(p.cfg.PasswordResetLinkBaseURL, raw)
+		if err := p.cfg.Mailer.SendPasswordReset(ctx, user.Email, link); err != nil {
+			log.Printf("yauth: SendPasswordReset for %s: %v", user.Email, err)
+		}
+		writeJSON(w, http.StatusOK, forgotPasswordResponse{Sent: true})
+	}
+}
+
+// --- /reset-password ----------------------------------------------------
+
+type resetPasswordRequest struct {
+	Token       string `json:"token"`
+	NewPassword string `json:"new_password"`
+}
+
+type resetPasswordResponse struct {
+	Reset bool `json:"reset"`
+}
+
+func (p *emailPasswordPlugin) handleResetPassword(host plugin.PluginHost) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req resetPasswordRequest
+		if err := decodeJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+			return
+		}
+		raw := strings.TrimSpace(req.Token)
+		if raw == "" {
+			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "token is required")
+			return
+		}
+		if err := p.validatePasswordComplexity(req.NewPassword); err != nil {
+			writeError(w, http.StatusBadRequest, "WEAK_PASSWORD", err.Error())
+			return
+		}
+
+		ctx := r.Context()
+		repoRef := host.Repo()
+		hash := hashTokenSHA256(raw)
+
+		pr, err := repoRef.ConsumePasswordReset(ctx, hash)
+		if err != nil || pr == nil {
+			writeError(w, http.StatusUnauthorized, "INVALID_TOKEN", "token is invalid, expired, or already used")
+			return
+		}
+
+		// Load current hash (if any) so we can compare and append to
+		// history. Missing password is OK — the user may have signed
+		// up via magic-link and is now setting a password.
+		var currentHash string
+		if cur, err := repoRef.GetPasswordByUserID(ctx, pr.UserID); err == nil && cur != nil {
+			currentHash = cur.PasswordHash
+		}
+		if currentHash != "" {
+			if same, _ := auth.VerifyPassword(req.NewPassword, currentHash); same {
+				writeError(w, http.StatusBadRequest, "PASSWORD_REUSED",
+					"new password must differ from current password")
+				return
+			}
+		}
+		if err := p.checkHistory(ctx, repoRef, pr.UserID, req.NewPassword); err != nil {
+			writeError(w, http.StatusBadRequest, "PASSWORD_REUSED", err.Error())
+			return
+		}
+		if pwned, msg := p.checkHIBP(ctx, req.NewPassword); pwned {
+			writeError(w, http.StatusUnprocessableEntity, "PASSWORD_BREACHED", msg)
+			return
+		}
+
+		newHash, err := auth.HashPassword(req.NewPassword)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to hash password")
+			return
+		}
+		if currentHash != "" {
+			p.recordHistory(ctx, repoRef, pr.UserID, currentHash)
+		}
+		if err := repoRef.UpsertPassword(ctx, domain.NewPassword{
+			UserID:       pr.UserID,
+			PasswordHash: newHash,
+		}); err != nil {
+			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to store password")
+			return
+		}
+
+		// Invalidate every session for this user — a /reset-password
+		// caller has not authenticated, so no session is preserved.
+		if _, err := repoRef.DeleteUserSessions(ctx, pr.UserID); err != nil {
+			log.Printf("yauth: delete sessions after reset for %s: %v", pr.UserID, err)
+		}
+
+		uid := pr.UserID
+		_, _ = host.Emit(ctx, events.AuthEvent{
+			Type:      events.EventPasswordReset,
+			UserID:    &uid,
+			IPAddress: requestIP(r),
+		})
+
+		writeJSON(w, http.StatusOK, resetPasswordResponse{Reset: true})
+	}
+}
+
+// --- helpers (emailpassword) --------------------------------------------
+
+// rawTokenBytes is the entropy for verification / reset tokens.
+const rawTokenBytes = 32
+
+// generateRawToken returns (raw, sha256hex, error).
+func generateRawToken() (string, string, error) {
+	buf := make([]byte, rawTokenBytes)
+	if _, err := rand.Read(buf); err != nil {
+		return "", "", fmt.Errorf("emailpassword: read random: %w", err)
+	}
+	rawToken := base64.RawURLEncoding.EncodeToString(buf)
+	return rawToken, hashTokenSHA256(rawToken), nil
+}
+
+func hashTokenSHA256(raw string) string {
+	sum := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(sum[:])
+}
+
+func buildLink(base, raw string) string {
+	if base == "" {
+		return raw
+	}
+	sep := "?"
+	if strings.Contains(base, "?") {
+		sep = "&"
+	}
+	return base + sep + "token=" + url.QueryEscape(raw)
+}
+
+// issueVerificationEmail mints a verification token, persists it,
+// and sends the link via the configured Mailer. Errors propagate so
+// callers can decide whether to surface them.
+func (p *emailPasswordPlugin) issueVerificationEmail(ctx context.Context, repoRef interface {
+	CreateEmailVerification(ctx context.Context, input domain.NewEmailVerification) error
+}, userID, email string) error {
+	raw, hash, err := generateRawToken()
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	if err := repoRef.CreateEmailVerification(ctx, domain.NewEmailVerification{
+		ID:        uuid.NewString(),
+		UserID:    userID,
+		TokenHash: hash,
+		ExpiresAt: now.Add(p.cfg.VerificationTokenTTL),
+		CreatedAt: now,
+	}); err != nil {
+		return err
+	}
+	link := buildLink(p.cfg.VerificationLinkBaseURL, raw)
+	return p.cfg.Mailer.SendVerification(ctx, email, link)
+}
+
+// validatePasswordComplexity runs the configured password policy
+// against password and falls back to MinPasswordLength when the
+// policy zero-value is in effect. Returns a user-facing error or nil.
+func (p *emailPasswordPlugin) validatePasswordComplexity(password string) error {
+	policy := p.cfg.PasswordPolicy
+	// MinPasswordLength acts as a baseline when the policy doesn't
+	// set one explicitly — preserves the historical contract.
+	if policy.MinLength == 0 {
+		policy.MinLength = p.cfg.MinPasswordLength
+	}
+	if violations := policy.Violations(password); len(violations) > 0 {
+		return violations[0]
+	}
+	return nil
+}
+
+// checkHIBP returns (true, message) when HIBPCheck is enabled, the
+// remote API responds, and the password is in a breach. Network
+// errors fail-open: callers receive (false, "") and a log line is
+// written.
+func (p *emailPasswordPlugin) checkHIBP(ctx context.Context, password string) (bool, string) {
+	if !p.cfg.HIBPCheck {
+		return false, ""
+	}
+	count, err := p.checker.CheckPwned(ctx, password)
+	if err != nil {
+		log.Printf("yauth: HIBP check failed (fail-open): %v", err)
+		return false, ""
+	}
+	if count <= 0 {
+		return false, ""
+	}
+	suffix := "es"
+	if count == 1 {
+		suffix = ""
+	}
+	return true, fmt.Sprintf("This password has been seen in %d data breach%s. Choose a different password.", count, suffix)
+}
+
+// checkHistory verifies password is not present in the last
+// PasswordPolicy.HistoryCount rotations for userID.
+func (p *emailPasswordPlugin) checkHistory(ctx context.Context, repoRef interface {
+	GetPasswordHistory(ctx context.Context, userID string, n int) ([]*domain.PasswordHistory, error)
+}, userID, password string) error {
+	n := p.cfg.PasswordPolicy.HistoryCount
+	if n <= 0 {
+		return nil
+	}
+	rows, err := repoRef.GetPasswordHistory(ctx, userID, n)
+	if err != nil || len(rows) == 0 {
+		return nil
+	}
+	hashes := make([]string, 0, len(rows))
+	for _, row := range rows {
+		hashes = append(hashes, row.PasswordHash)
+	}
+	if err := p.cfg.PasswordPolicy.CheckHistory(password, hashes); err != nil {
+		if errors.Is(err, passwordpolicy.ErrPolicyReused) {
+			return fmt.Errorf("new password must differ from your last %d passwords", n)
+		}
+		return err
+	}
+	return nil
+}
+
+// recordHistory appends a hash to the user's password history and
+// trims to PasswordPolicy.HistoryCount most-recent rows. Failures are
+// logged, never bubbled.
+func (p *emailPasswordPlugin) recordHistory(ctx context.Context, repoRef interface {
+	AppendPasswordHistory(ctx context.Context, input domain.NewPasswordHistory) error
+	TrimPasswordHistory(ctx context.Context, userID string, keep int) (int64, error)
+}, userID, oldHash string) {
+	n := p.cfg.PasswordPolicy.HistoryCount
+	if n <= 0 || oldHash == "" {
+		return
+	}
+	now := time.Now().UTC()
+	if err := repoRef.AppendPasswordHistory(ctx, domain.NewPasswordHistory{
+		ID:           uuid.NewString(),
+		UserID:       userID,
+		PasswordHash: oldHash,
+		CreatedAt:    now,
+	}); err != nil {
+		log.Printf("yauth: append password history for %s: %v", userID, err)
+		return
+	}
+	if _, err := repoRef.TrimPasswordHistory(ctx, userID, n); err != nil {
+		log.Printf("yauth: trim password history for %s: %v", userID, err)
+	}
 }

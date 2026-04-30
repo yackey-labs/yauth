@@ -36,13 +36,27 @@ type SessionRepository interface {
 	DeleteUserSessions(ctx context.Context, userID string) (int64, error)
 	DeleteOtherUserSessions(ctx context.Context, userID, keepTokenHash string) (int64, error)
 	DeleteExpiredSessions(ctx context.Context, now time.Time) (int64, error)
-	ListSessions(ctx context.Context, limit, offset int) ([]*domain.Session, int64, error)
+	ListSessions(ctx context.Context, filters domain.ListSessionsFilters) ([]*domain.Session, int64, error)
 }
 
 // PasswordRepository covers password hash storage.
 type PasswordRepository interface {
 	UpsertPassword(ctx context.Context, input domain.NewPassword) error
 	GetPasswordByUserID(ctx context.Context, userID string) (*domain.Password, error)
+}
+
+// PasswordHistoryRepository covers per-user password-reuse history. The
+// password-policy check queries the most-recent N rows; rotation is
+// driven by the password-rotating handler (register/change/reset)
+// recording the previous hash before it overwrites yauth_passwords.
+type PasswordHistoryRepository interface {
+	AppendPasswordHistory(ctx context.Context, input domain.NewPasswordHistory) error
+	// GetPasswordHistory returns at most n most-recent rows (newest
+	// first) for userID. n<=0 returns an empty slice without querying.
+	GetPasswordHistory(ctx context.Context, userID string, n int) ([]*domain.PasswordHistory, error)
+	// TrimPasswordHistory deletes rows beyond keep most-recent for
+	// userID. keep<=0 deletes every row. Returns the number deleted.
+	TrimPasswordHistory(ctx context.Context, userID string, keep int) (int64, error)
 }
 
 // EmailVerificationRepository covers email-verification tokens.
@@ -263,6 +277,7 @@ type Repository interface {
 	UserRepository
 	SessionRepository
 	PasswordRepository
+	PasswordHistoryRepository
 	EmailVerificationRepository
 	PasswordResetRepository
 	AuditLogRepository

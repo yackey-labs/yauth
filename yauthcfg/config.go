@@ -21,6 +21,7 @@ type Config struct {
 	Database  DatabaseConfig  `yaml:"database" toml:"database"`
 	Server    ServerConfig    `yaml:"server" toml:"server"`
 	Session   SessionConfig   `yaml:"session" toml:"session"`
+	RateLimit RateLimitConfig `yaml:"rate_limit" toml:"rate_limit"`
 	Telemetry TelemetryConfig `yaml:"telemetry" toml:"telemetry"`
 	Plugins   PluginsConfig   `yaml:"plugins" toml:"plugins"`
 }
@@ -53,6 +54,36 @@ type SessionConfig struct {
 	CookieDomain   string        `yaml:"cookie_domain" toml:"cookie_domain"`
 	CookiePath     string        `yaml:"cookie_path" toml:"cookie_path"`
 	CookieSameSite string        `yaml:"cookie_same_site" toml:"cookie_same_site"`
+
+	// BindIP enables IP-binding on cookie sessions: a request whose IP
+	// does not match the session's stored IPAddress will be handled per
+	// IPMismatchAction.
+	BindIP bool `yaml:"bind_ip" toml:"bind_ip"`
+	// BindUserAgent enables User-Agent binding on cookie sessions.
+	BindUserAgent bool `yaml:"bind_user_agent" toml:"bind_user_agent"`
+	// IPMismatchAction is "warn" (log + audit, allow) or "invalidate"
+	// (delete session, return unauthorized). Empty defaults to "warn".
+	IPMismatchAction string `yaml:"ip_mismatch_action" toml:"ip_mismatch_action"`
+	// UAMismatchAction is "warn" or "invalidate". Empty defaults to "warn".
+	UAMismatchAction string `yaml:"ua_mismatch_action" toml:"ua_mismatch_action"`
+}
+
+// RateLimitConfig is the per-operation rate-limit surface exposed in
+// yauth.yaml. A zero Max disables the limiter for that op. Defaults are
+// applied in NewFromConfig when the section is omitted.
+type RateLimitConfig struct {
+	Login          RateLimitRule `yaml:"login" toml:"login"`
+	Register       RateLimitRule `yaml:"register" toml:"register"`
+	ForgotPassword RateLimitRule `yaml:"forgot_password" toml:"forgot_password"`
+	MagicLinkSend  RateLimitRule `yaml:"magic_link_send" toml:"magic_link_send"`
+	UnlockRequest  RateLimitRule `yaml:"unlock_request" toml:"unlock_request"`
+	MFAVerify      RateLimitRule `yaml:"mfa_verify" toml:"mfa_verify"`
+}
+
+// RateLimitRule is one (max, window) pair.
+type RateLimitRule struct {
+	Max    int           `yaml:"max" toml:"max"`
+	Window time.Duration `yaml:"window" toml:"window"`
 }
 
 // TelemetryConfig wraps the OTel exporter settings.
@@ -84,9 +115,44 @@ type PluginsConfig struct {
 
 // EmailPasswordPluginConfig configures plugins/emailpassword.
 type EmailPasswordPluginConfig struct {
-	Enabled                  bool `yaml:"enabled" toml:"enabled"`
-	MinPasswordLength        int  `yaml:"min_password_length" toml:"min_password_length"`
-	RequireEmailVerification bool `yaml:"require_email_verification" toml:"require_email_verification"`
+	Enabled                  bool          `yaml:"enabled" toml:"enabled"`
+	MinPasswordLength        int           `yaml:"min_password_length" toml:"min_password_length"`
+	RequireEmailVerification bool          `yaml:"require_email_verification" toml:"require_email_verification"`
+	RememberMeTTL            time.Duration `yaml:"remember_me_ttl" toml:"remember_me_ttl"`
+
+	// HIBPCheck is a tri-state pointer: nil = default (true), &true =
+	// enabled, &false = explicitly disabled. The pointer shape lets
+	// operators turn the check off in air-gapped or test environments
+	// without leaving the field dropped in YAML.
+	HIBPCheck *bool `yaml:"hibp_check,omitempty" toml:"hibp_check,omitempty"`
+
+	// PasswordPolicy mirrors auth/passwordpolicy.Policy.
+	PasswordPolicy PasswordPolicyConfig `yaml:"password_policy" toml:"password_policy"`
+
+	// VerificationLinkBaseURL is the base URL for email-verification
+	// links delivered by the configured Mailer. Empty = raw token.
+	VerificationLinkBaseURL string `yaml:"verification_link_base_url" toml:"verification_link_base_url"`
+	// PasswordResetLinkBaseURL is the same for password-reset emails.
+	PasswordResetLinkBaseURL string `yaml:"password_reset_link_base_url" toml:"password_reset_link_base_url"`
+
+	// VerificationTokenTTL is the lifetime of email-verification
+	// tokens. Defaults to 24h when zero.
+	VerificationTokenTTL time.Duration `yaml:"verification_token_ttl" toml:"verification_token_ttl"`
+	// PasswordResetTokenTTL is the lifetime of password-reset tokens.
+	// Defaults to 1h when zero.
+	PasswordResetTokenTTL time.Duration `yaml:"password_reset_token_ttl" toml:"password_reset_token_ttl"`
+}
+
+// PasswordPolicyConfig mirrors auth/passwordpolicy.Policy.
+type PasswordPolicyConfig struct {
+	MinLength      int  `yaml:"min_length" toml:"min_length"`
+	MaxLength      int  `yaml:"max_length" toml:"max_length"`
+	RequireUpper   bool `yaml:"require_upper" toml:"require_upper"`
+	RequireLower   bool `yaml:"require_lower" toml:"require_lower"`
+	RequireDigit   bool `yaml:"require_digit" toml:"require_digit"`
+	RequireSpecial bool `yaml:"require_special" toml:"require_special"`
+	DisallowCommon bool `yaml:"disallow_common" toml:"disallow_common"`
+	HistoryCount   int  `yaml:"history_count" toml:"history_count"`
 }
 
 // BearerPluginConfig configures the JWT bearer token plugin.

@@ -157,6 +157,39 @@ jobs:
           kill $SERVER_PID || true
           wait $SERVER_PID 2>/dev/null || true
 
+  semgrep:
+    name: Semgrep static analysis
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    container:
+      image: semgrep/semgrep
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Semgrep
+        env:
+          SEMGREP_RULES: >-
+            p/default
+            p/security-audit
+            p/secrets
+            p/golang
+            p/owasp-top-ten
+        run: |
+          semgrep ci \
+            --sarif --output=semgrep.sarif \
+            --severity=ERROR \
+            --severity=WARNING \
+            --severity=INFO || true
+          # Re-run with --severity=ERROR-only and proper exit code so the job fails on HIGH+
+          semgrep ci --severity=ERROR
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: semgrep-sarif
+          path: semgrep.sarif
+          if-no-files-found: warn
+
   bench:
     name: Build benchmark (artifact)
     runs-on: ubuntu-latest

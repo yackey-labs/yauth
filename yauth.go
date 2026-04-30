@@ -95,7 +95,13 @@ func (b *YAuthBuilder) WithJWTSecret(secret []byte) *YAuthBuilder {
 // middleware, asks each plugin to register its routes onto an internal
 // ServeMux, and returns the assembled object.
 func (b *YAuthBuilder) Build() (*YAuth, error) {
-	mw := middleware.New(b.repo, middleware.Config{CookieName: b.cfg.CookieName})
+	mw := middleware.New(b.repo, middleware.Config{
+		CookieName:       b.cfg.CookieName,
+		BindIP:           b.cfg.SessionBinding.BindIP,
+		BindUA:           b.cfg.SessionBinding.BindUA,
+		IPMismatchAction: b.cfg.SessionBinding.IPMismatchAction,
+		UAMismatchAction: b.cfg.SessionBinding.UAMismatchAction,
+	})
 	mux := http.NewServeMux()
 
 	ya := &YAuth{
@@ -235,6 +241,13 @@ func (y *YAuth) SetJWTSigner(s plugin.JWTSigner) {
 	if y.jwtSigner == nil {
 		y.jwtSigner = s
 	}
+}
+
+// RateLimit implements plugin.PluginHost. It binds middleware.RateLimit
+// to the host's repository so plugins can wrap their handlers without
+// reaching into the repo themselves.
+func (y *YAuth) RateLimit(name string, max int, window time.Duration) func(http.Handler) http.Handler {
+	return middleware.RateLimit(y.repo, name, max, window)
 }
 
 // Compile-time check that *YAuth satisfies plugin.PluginHost.

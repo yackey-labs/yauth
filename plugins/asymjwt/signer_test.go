@@ -232,5 +232,8 @@ func (h *captureHost) JWTSecret() []byte                          { return nil }
 func (h *captureHost) Emit(_ context.Context, _ events.AuthEvent) (events.Decision, error) {
 	return events.Continue(), nil
 }
+func (h *captureHost) RateLimit(_ string, _ int, _ time.Duration) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler { return next }
+}
 
 var _ plugin.PluginHost = (*captureHost)(nil)

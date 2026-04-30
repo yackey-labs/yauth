@@ -70,6 +70,13 @@ type PluginHost interface {
 	// honoring the decision (writing a Block response, branching to MFA,
 	// etc.).
 	Emit(ctx context.Context, event events.AuthEvent) (events.Decision, error)
+
+	// RateLimit returns a middleware that enforces a fixed-window rate
+	// limit on the wrapped handler. Plugins call this to wrap their
+	// public-facing routes (login, register, forgot-password, etc.).
+	// max<=0 or window<=0 disables the limiter — callers can pass the
+	// configured rule without branching.
+	RateLimit(name string, max int, window time.Duration) func(http.Handler) http.Handler
 }
 
 // JWTSigner is the abstraction asymmetric-JWT and OIDC plugins use to

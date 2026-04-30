@@ -23,3 +23,12 @@ type NewSession struct {
 	ExpiresAt time.Time
 	CreatedAt time.Time
 }
+
+// ListSessionsFilters is the filter set for SessionRepository.ListSessions.
+// All fields are optional; nil pointers and zero values are treated as
+// "no filter".
+type ListSessionsFilters struct {
+	UserID *string
+	Limit  int
+	Offset int
+}

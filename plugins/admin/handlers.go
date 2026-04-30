@@ -407,6 +407,149 @@ func (p *adminPlugin) handleDeleteUserSessions(host plugin.PluginHost) http.Hand
 	}
 }
 
+// --- DELETE /admin/users/{id} --------------------------------------------
+
+type deleteUserRequest struct {
+	Reason string `json:"reason"`
+}
+
+func (p *adminPlugin) handleDeleteUser(host plugin.PluginHost) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+
+		// Self-delete protection. The acting admin's id is in context via
+		// RequireAdmin; refuse with 409 when targeting the same user.
+		if actor := actorIDFromCtx(r); actor != "" && actor == id {
+			writeError(w, http.StatusConflict, "SELF_DELETE", "admins cannot delete their own account")
+			return
+		}
+
+		// Body is optional but accepted for an audit-log reason. An empty
+		// or missing body is fine; we only reject malformed JSON.
+		var req deleteUserRequest
+		if r.ContentLength != 0 {
+			if err := decodeJSON(r, &req); err != nil {
+				writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+				return
+			}
+		}
+
+		ctx := r.Context()
+		if err := host.Repo().DeleteUser(ctx, id); err != nil {
+			if errors.Is(err, yautherr.ErrNotFound) {
+				writeError(w, http.StatusNotFound, "NOT_FOUND", "user not found")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to delete user")
+			return
+		}
+
+		actorID := actorIDFromCtx(r)
+		now := time.Now().UTC()
+		meta, _ := json.Marshal(map[string]any{
+			"admin_id":     actorID,
+			"deleted_user": id,
+			"reason":       req.Reason,
+		})
+		_ = host.Repo().LogAuditEvent(ctx, domain.NewAuditLog{
+			ID:        newID(),
+			EventType: "admin.user.deleted",
+			Metadata:  meta,
+			IPAddress: requestIP(r),
+			CreatedAt: now,
+		})
+
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// --- GET /admin/sessions --------------------------------------------------
+
+type sessionJSON struct {
+	ID        string    `json:"id"`
+	UserID    string    `json:"user_id"`
+	IPAddress *string   `json:"ip_address,omitempty"`
+	UserAgent *string   `json:"user_agent,omitempty"`
+	ExpiresAt time.Time `json:"expires_at"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type listSessionsResponse struct {
+	Sessions []sessionJSON `json:"sessions"`
+	Total    int64         `json:"total"`
+}
+
+func (p *adminPlugin) handleListSessions(host plugin.PluginHost) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		limit, offset := parseLimitOffset(r)
+
+		filters := domain.ListSessionsFilters{Limit: limit, Offset: offset}
+		if v := strings.TrimSpace(r.URL.Query().Get("user_id")); v != "" {
+			filters.UserID = &v
+		}
+
+		sessions, total, err := host.Repo().ListSessions(r.Context(), filters)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to list sessions")
+			return
+		}
+
+		out := make([]sessionJSON, 0, len(sessions))
+		for _, s := range sessions {
+			out = append(out, sessionJSON{
+				ID:        s.ID,
+				UserID:    s.UserID,
+				IPAddress: s.IPAddress,
+				UserAgent: s.UserAgent,
+				ExpiresAt: s.ExpiresAt,
+				CreatedAt: s.CreatedAt,
+			})
+		}
+		writeJSON(w, http.StatusOK, listSessionsResponse{Sessions: out, Total: total})
+	}
+}
+
+// --- DELETE /admin/sessions/{id} -----------------------------------------
+
+func (p *adminPlugin) handleDeleteSession(host plugin.PluginHost) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		ctx := r.Context()
+
+		// Capture user_id for the audit row before deleting.
+		var targetUser *string
+		if s, err := host.Repo().GetSessionByID(ctx, id); err == nil && s != nil {
+			uid := s.UserID
+			targetUser = &uid
+		}
+
+		if err := host.Repo().DeleteSessionByID(ctx, id); err != nil {
+			if errors.Is(err, yautherr.ErrNotFound) {
+				writeError(w, http.StatusNotFound, "NOT_FOUND", "session not found")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to delete session")
+			return
+		}
+
+		actorID := actorIDFromCtx(r)
+		meta, _ := json.Marshal(map[string]any{
+			"admin_id":   actorID,
+			"session_id": id,
+		})
+		_ = host.Repo().LogAuditEvent(ctx, domain.NewAuditLog{
+			ID:        newID(),
+			UserID:    targetUser,
+			EventType: "admin.session.terminated",
+			Metadata:  meta,
+			IPAddress: requestIP(r),
+			CreatedAt: time.Now().UTC(),
+		})
+
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
 // --- GET /admin/audit -----------------------------------------------------
 
 type auditEntryJSON struct {

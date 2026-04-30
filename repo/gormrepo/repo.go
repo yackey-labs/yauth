@@ -191,6 +191,56 @@ func (r *Repo) GetPasswordByUserID(ctx context.Context, userID string) (*domain.
 	return &d, nil
 }
 
+// --- PasswordHistory ---
+
+func (r *Repo) AppendPasswordHistory(ctx context.Context, input domain.NewPasswordHistory) error {
+	m := passwordHistoryFromDomain(input)
+	return r.ctx(ctx).Create(&m).Error
+}
+
+func (r *Repo) GetPasswordHistory(ctx context.Context, userID string, n int) ([]*domain.PasswordHistory, error) {
+	if n <= 0 {
+		return nil, nil
+	}
+	var rows []PasswordHistory
+	if err := r.ctx(ctx).
+		Where("user_id = ?", userID).
+		Order("created_at DESC").
+		Limit(n).
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]*domain.PasswordHistory, 0, len(rows))
+	for i := range rows {
+		d := rows[i].toDomain()
+		out = append(out, &d)
+	}
+	return out, nil
+}
+
+func (r *Repo) TrimPasswordHistory(ctx context.Context, userID string, keep int) (int64, error) {
+	if keep <= 0 {
+		res := r.ctx(ctx).Where("user_id = ?", userID).Delete(&PasswordHistory{})
+		return res.RowsAffected, res.Error
+	}
+	// Find IDs of the rows to keep, then delete everything else.
+	var keepIDs []string
+	if err := r.ctx(ctx).
+		Model(&PasswordHistory{}).
+		Where("user_id = ?", userID).
+		Order("created_at DESC").
+		Limit(keep).
+		Pluck("id", &keepIDs).Error; err != nil {
+		return 0, err
+	}
+	q := r.ctx(ctx).Where("user_id = ?", userID)
+	if len(keepIDs) > 0 {
+		q = q.Where("id NOT IN ?", keepIDs)
+	}
+	res := q.Delete(&PasswordHistory{})
+	return res.RowsAffected, res.Error
+}
+
 // --- EmailVerification ---
 
 func (r *Repo) CreateEmailVerification(ctx context.Context, input domain.NewEmailVerification) error {

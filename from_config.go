@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/yackey-labs/yauth-go/auth/passwordpolicy"
 	"github.com/yackey-labs/yauth-go/plugins/emailpassword"
 	"github.com/yackey-labs/yauth-go/repo/gormrepo"
 	"github.com/yackey-labs/yauth-go/telemetry"
@@ -68,10 +69,31 @@ func NewFromConfig(ctx context.Context, cfg *yauthcfg.Config) (*YAuth, error) {
 	}
 
 	if cfg.Plugins.EmailPassword.Enabled {
-		builder = builder.WithPlugin(emailpassword.New(emailpassword.Config{
-			MinPasswordLength:        cfg.Plugins.EmailPassword.MinPasswordLength,
-			RequireEmailVerification: cfg.Plugins.EmailPassword.RequireEmailVerification,
-		}))
+		ep := cfg.Plugins.EmailPassword
+		epCfg := emailpassword.Config{
+			MinPasswordLength:        ep.MinPasswordLength,
+			RequireEmailVerification: ep.RequireEmailVerification,
+			RememberMeTTL:            ep.RememberMeTTL,
+			VerificationTokenTTL:     ep.VerificationTokenTTL,
+			PasswordResetTokenTTL:    ep.PasswordResetTokenTTL,
+			VerificationLinkBaseURL:  ep.VerificationLinkBaseURL,
+			PasswordResetLinkBaseURL: ep.PasswordResetLinkBaseURL,
+			PasswordPolicy: passwordpolicy.Policy{
+				MinLength:      ep.PasswordPolicy.MinLength,
+				MaxLength:      ep.PasswordPolicy.MaxLength,
+				RequireUpper:   ep.PasswordPolicy.RequireUpper,
+				RequireLower:   ep.PasswordPolicy.RequireLower,
+				RequireDigit:   ep.PasswordPolicy.RequireDigit,
+				RequireSpecial: ep.PasswordPolicy.RequireSpecial,
+				DisallowCommon: ep.PasswordPolicy.DisallowCommon,
+				HistoryCount:   ep.PasswordPolicy.HistoryCount,
+			},
+		}
+		if ep.HIBPCheck != nil {
+			epCfg.HIBPCheck = *ep.HIBPCheck
+			epCfg.HIBPCheckSet = true
+		}
+		builder = builder.WithPlugin(emailpassword.New(epCfg))
 	}
 
 	// TODO(#10) bearer plugin wiring
@@ -210,5 +232,26 @@ func configToYAuthConfig(c *yauthcfg.Config) YAuthConfig {
 	if c.Session.CookieSameSite != "" {
 		out.CookieSameSite = c.Session.CookieSameSite
 	}
+	out.SessionBinding = SessionBindingConfig{
+		BindIP:           c.Session.BindIP,
+		BindUA:           c.Session.BindUserAgent,
+		IPMismatchAction: c.Session.IPMismatchAction,
+		UAMismatchAction: c.Session.UAMismatchAction,
+	}
+	overrideRule(&out.RateLimit.Login, c.RateLimit.Login)
+	overrideRule(&out.RateLimit.Register, c.RateLimit.Register)
+	overrideRule(&out.RateLimit.ForgotPassword, c.RateLimit.ForgotPassword)
+	overrideRule(&out.RateLimit.MagicLinkSend, c.RateLimit.MagicLinkSend)
+	overrideRule(&out.RateLimit.UnlockRequest, c.RateLimit.UnlockRequest)
+	overrideRule(&out.RateLimit.MFAVerify, c.RateLimit.MFAVerify)
 	return out
+}
+
+func overrideRule(dst *RateLimitRule, src yauthcfg.RateLimitRule) {
+	if src.Max > 0 {
+		dst.Max = src.Max
+	}
+	if src.Window > 0 {
+		dst.Window = src.Window
+	}
 }

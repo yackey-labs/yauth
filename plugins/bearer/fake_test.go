@@ -124,7 +124,7 @@ func (f *fakeRepo) DeleteOtherUserSessions(_ context.Context, _, _ string) (int6
 func (f *fakeRepo) DeleteExpiredSessions(_ context.Context, _ time.Time) (int64, error) {
 	return 0, nil
 }
-func (f *fakeRepo) ListSessions(_ context.Context, _, _ int) ([]*domain.Session, int64, error) {
+func (f *fakeRepo) ListSessions(_ context.Context, _ domain.ListSessionsFilters) ([]*domain.Session, int64, error) {
 	return nil, 0, nil
 }
 
@@ -140,6 +140,15 @@ func (f *fakeRepo) GetPasswordByUserID(_ context.Context, uid string) (*domain.P
 		return nil, yautherr.ErrNotFound
 	}
 	return &pw, nil
+}
+func (f *fakeRepo) AppendPasswordHistory(_ context.Context, _ domain.NewPasswordHistory) error {
+	return nil
+}
+func (f *fakeRepo) GetPasswordHistory(_ context.Context, _ string, _ int) ([]*domain.PasswordHistory, error) {
+	return nil, nil
+}
+func (f *fakeRepo) TrimPasswordHistory(_ context.Context, _ string, _ int) (int64, error) {
+	return 0, nil
 }
 
 // --- RefreshTokenRepository ---
@@ -439,6 +448,9 @@ func (h *fakeHost) JWTSigner() plugin.JWTSigner { return nil }
 func (h *fakeHost) JWTSecret() []byte           { return h.jwtSecret }
 func (h *fakeHost) Emit(_ context.Context, _ events.AuthEvent) (events.Decision, error) {
 	return events.Continue(), nil
+}
+func (h *fakeHost) RateLimit(name string, max int, window time.Duration) func(http.Handler) http.Handler {
+	return middleware.RateLimit(h.repo, name, max, window)
 }
 
 var _ plugin.PluginHost = (*fakeHost)(nil)

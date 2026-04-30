@@ -67,7 +67,10 @@ func newServer(t *testing.T, cfg lockout.Config) (*httptest.Server, *captureMail
 	}
 
 	ya, err := yauth.New(r, yauth.NewDefaultConfig()).
-		WithPlugin(emailpassword.New(emailpassword.Config{})).
+		WithPlugin(emailpassword.New(emailpassword.Config{
+			HIBPCheck:    false,
+			HIBPCheckSet: true,
+		})).
 		WithPlugin(lockout.New(cfg)).
 		Build()
 	if err != nil {

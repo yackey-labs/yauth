@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 	"github.com/lestrrat-go/jwx/v2/jwk"
 
 	"github.com/yackey-labs/yauth-go/auth"
@@ -79,7 +80,8 @@ func (p *oauth2Plugin) authenticateClient(
 		return nil, &authErr{"server_error", "client lookup failed"}
 	}
 	if client.BannedAt != nil {
-		return nil, &authErr{"invalid_client", "client is banned"}
+		logBannedClientRejection(ctx, host, client.ClientID)
+		return nil, &authErr{"invalid_client", "client banned"}
 	}
 
 	method := "client_secret_post"
@@ -161,7 +163,8 @@ func (p *oauth2Plugin) verifyPrivateKeyJWT(ctx context.Context, host plugin.Plug
 		return nil, &authErr{"invalid_client", "client not found"}
 	}
 	if client.BannedAt != nil {
-		return nil, &authErr{"invalid_client", "client is banned"}
+		logBannedClientRejection(ctx, host, client.ClientID)
+		return nil, &authErr{"invalid_client", "client banned"}
 	}
 
 	keys, err := p.resolveClientKeys(ctx, client)
@@ -291,6 +294,24 @@ func constantTimeStringEq(a, b string) bool {
 
 // stringPtr is a small helper used by client_admin.go.
 func stringPtr(s string) *string { return &s }
+
+// logBannedClientRejection records an audit log row when a banned
+// client is rejected at the token / introspect / revoke endpoints.
+// Errors from the audit-log call are intentionally swallowed because
+// the rejection itself is the security-relevant signal — a flaky audit
+// store must not be allowed to either succeed or fail authentication.
+func logBannedClientRejection(ctx context.Context, host plugin.PluginHost, clientID string) {
+	meta, _ := json.Marshal(map[string]any{
+		"client_id": clientID,
+		"reason":    "client banned",
+	})
+	_ = host.Repo().LogAuditEvent(ctx, domain.NewAuditLog{
+		ID:        uuid.NewString(),
+		EventType: "oauth2.client.banned_rejected",
+		Metadata:  meta,
+		CreatedAt: time.Now().UTC(),
+	})
+}
 
 // rawJSON is the JSON marshaler shortcut used in a couple of places.
 func rawJSON(v any) json.RawMessage {

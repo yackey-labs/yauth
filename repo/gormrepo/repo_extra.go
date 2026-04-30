@@ -95,18 +95,21 @@ func (r *Repo) DeleteOtherUserSessions(ctx context.Context, userID, keepTokenHas
 	return res.RowsAffected, res.Error
 }
 
-func (r *Repo) ListSessions(ctx context.Context, limit, offset int) ([]*domain.Session, int64, error) {
+func (r *Repo) ListSessions(ctx context.Context, filters domain.ListSessionsFilters) ([]*domain.Session, int64, error) {
 	q := r.ctx(ctx).Model(&Session{})
+	if filters.UserID != nil && *filters.UserID != "" {
+		q = q.Where("user_id = ?", *filters.UserID)
+	}
 	var total int64
 	if err := q.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 	page := q.Order("created_at DESC")
-	if limit > 0 {
-		page = page.Limit(limit)
+	if filters.Limit > 0 {
+		page = page.Limit(filters.Limit)
 	}
-	if offset > 0 {
-		page = page.Offset(offset)
+	if filters.Offset > 0 {
+		page = page.Offset(filters.Offset)
 	}
 	var rows []Session
 	if err := page.Find(&rows).Error; err != nil {

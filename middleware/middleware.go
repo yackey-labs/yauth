@@ -12,9 +12,14 @@ package middleware
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"log/slog"
+	"net"
 	"net/http"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/yackey-labs/yauth-go/auth"
 	"github.com/yackey-labs/yauth-go/domain"
@@ -27,7 +32,25 @@ import (
 // just to construct the middleware.
 type Config struct {
 	CookieName string
+
+	// BindIP enables IP-binding on cookie sessions: a request whose
+	// RemoteAddr does not match the session's stored IPAddress will be
+	// handled per IPMismatchAction.
+	BindIP bool
+	// BindUA enables User-Agent binding on cookie sessions.
+	BindUA bool
+	// IPMismatchAction is "warn" (log + audit, allow) or "invalidate"
+	// (delete session, return unauthorized). Empty defaults to "warn".
+	IPMismatchAction string
+	// UAMismatchAction is "warn" or "invalidate". Empty defaults to "warn".
+	UAMismatchAction string
 }
+
+// Mismatch action constants. Empty string is treated as MismatchActionWarn.
+const (
+	MismatchActionWarn       = "warn"
+	MismatchActionInvalidate = "invalidate"
+)
 
 // AuthResolver is an alternative identity-resolution path consulted by the
 // middleware after the session-cookie path fails. Plugins (bearer,
@@ -174,6 +197,10 @@ func (m *Middleware) resolveCookie(r *http.Request) (*domain.AuthUser, error) {
 		return nil, yautherr.ErrSessionExpired
 	}
 
+	if err := m.enforceBinding(r, sess, hash); err != nil {
+		return nil, err
+	}
+
 	user, err := m.repo.GetUserByID(r.Context(), sess.UserID)
 	if err != nil {
 		if errors.Is(err, yautherr.ErrNotFound) {
@@ -186,6 +213,106 @@ func (m *Middleware) resolveCookie(r *http.Request) (*domain.AuthUser, error) {
 	}
 
 	return &domain.AuthUser{User: *user, Session: *sess}, nil
+}
+
+// enforceBinding applies the configured session-binding policy. On a
+// mismatch with action=invalidate the session row is deleted and
+// ErrUnauthorized is returned; on action=warn a structured log line +
+// audit row is written and the request continues. If neither bind flag
+// is set this is a no-op.
+func (m *Middleware) enforceBinding(r *http.Request, sess *domain.Session, tokenHash string) error {
+	if !m.cfg.BindIP && !m.cfg.BindUA {
+		return nil
+	}
+
+	if m.cfg.BindIP && sess.IPAddress != nil {
+		reqIP := clientIP(r)
+		if reqIP != "" && reqIP != *sess.IPAddress {
+			if act := mismatchAction(m.cfg.IPMismatchAction); act == MismatchActionInvalidate {
+				m.invalidateAndAudit(r.Context(), sess, tokenHash, "session_ip_mismatch_invalidate", *sess.IPAddress, reqIP, "ip")
+				return yautherr.ErrUnauthorized
+			}
+			m.warnMismatch(r.Context(), sess, "session_ip_mismatch", *sess.IPAddress, reqIP, "ip")
+		}
+	}
+
+	if m.cfg.BindUA && sess.UserAgent != nil {
+		reqUA := r.UserAgent()
+		if reqUA != "" && reqUA != *sess.UserAgent {
+			if act := mismatchAction(m.cfg.UAMismatchAction); act == MismatchActionInvalidate {
+				m.invalidateAndAudit(r.Context(), sess, tokenHash, "session_ua_mismatch_invalidate", *sess.UserAgent, reqUA, "ua")
+				return yautherr.ErrUnauthorized
+			}
+			m.warnMismatch(r.Context(), sess, "session_ua_mismatch", *sess.UserAgent, reqUA, "ua")
+		}
+	}
+
+	return nil
+}
+
+// mismatchAction normalizes an action string. Empty/unknown defaults to warn.
+func mismatchAction(s string) string {
+	if s == MismatchActionInvalidate {
+		return MismatchActionInvalidate
+	}
+	return MismatchActionWarn
+}
+
+// clientIP returns the host portion of r.RemoteAddr, stripping the port.
+// Trusted-proxy / X-Forwarded-For handling is intentionally deferred —
+// the caller typically terminates TLS in a proxy that also rewrites
+// RemoteAddr.
+func clientIP(r *http.Request) string {
+	if r.RemoteAddr == "" {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
+func (m *Middleware) warnMismatch(ctx context.Context, sess *domain.Session, eventType, sessionVal, reqVal, kind string) {
+	slog.WarnContext(ctx, "yauth: session binding mismatch",
+		"event", eventType,
+		"session_id", sess.ID,
+		"user_id", sess.UserID,
+		"kind", kind,
+	)
+	m.auditMismatch(ctx, sess, eventType, sessionVal, reqVal, kind)
+}
+
+func (m *Middleware) invalidateAndAudit(ctx context.Context, sess *domain.Session, tokenHash, eventType, sessionVal, reqVal, kind string) {
+	slog.WarnContext(ctx, "yauth: invalidating session on binding mismatch",
+		"event", eventType,
+		"session_id", sess.ID,
+		"user_id", sess.UserID,
+		"kind", kind,
+	)
+	if _, err := m.repo.DeleteSession(ctx, tokenHash); err != nil {
+		slog.WarnContext(ctx, "yauth: failed to delete invalidated session", "err", err)
+	}
+	m.auditMismatch(ctx, sess, eventType, sessionVal, reqVal, kind)
+}
+
+func (m *Middleware) auditMismatch(ctx context.Context, sess *domain.Session, eventType, sessionVal, reqVal, kind string) {
+	meta, _ := json.Marshal(map[string]string{
+		"session_id":      sess.ID,
+		"binding":         kind,
+		"session_value":   sessionVal,
+		"request_value":   reqVal,
+	})
+	userID := sess.UserID
+	if err := m.repo.LogAuditEvent(ctx, domain.NewAuditLog{
+		ID:        uuid.NewString(),
+		UserID:    &userID,
+		EventType: eventType,
+		Metadata:  meta,
+		CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		slog.WarnContext(ctx, "yauth: failed to write binding-mismatch audit row", "err", err)
+	}
 }
 
 // RequireAuth wraps next so requests must carry a valid identity. On

@@ -175,6 +175,34 @@ func passwordResetFromDomain(in domain.NewPasswordReset) PasswordReset {
 	}
 }
 
+// PasswordHistory mirrors yauth_password_history.
+type PasswordHistory struct {
+	ID           string    `gorm:"column:id;primaryKey"`
+	UserID       string    `gorm:"column:user_id;index"`
+	PasswordHash string    `gorm:"column:password_hash;not null"`
+	CreatedAt    time.Time `gorm:"column:created_at;not null;index"`
+}
+
+func (PasswordHistory) TableName() string { return "yauth_password_history" }
+
+func (m *PasswordHistory) toDomain() domain.PasswordHistory {
+	return domain.PasswordHistory{
+		ID:           m.ID,
+		UserID:       m.UserID,
+		PasswordHash: m.PasswordHash,
+		CreatedAt:    m.CreatedAt.UTC(),
+	}
+}
+
+func passwordHistoryFromDomain(in domain.NewPasswordHistory) PasswordHistory {
+	return PasswordHistory{
+		ID:           in.ID,
+		UserID:       in.UserID,
+		PasswordHash: in.PasswordHash,
+		CreatedAt:    in.CreatedAt.UTC(),
+	}
+}
+
 // AuditLog mirrors yauth_audit_log. Metadata is stored as TEXT (JSON string).
 type AuditLog struct {
 	ID        string    `gorm:"column:id;primaryKey"`

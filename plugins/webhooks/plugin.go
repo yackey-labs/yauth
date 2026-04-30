@@ -29,8 +29,13 @@ import (
 )
 
 const (
-	defaultWorkerCount     = 4
-	defaultDeliveryTimeout = 10 * time.Second
+	defaultWorkerCount       = 4
+	defaultDeliveryTimeout   = 10 * time.Second
+	defaultMaxAttempts       = 5
+	defaultInitialBackoff    = 1 * time.Second
+	defaultMaxBackoff        = 5 * time.Minute
+	defaultBackoffJitter     = 0.2
+	defaultDeadLetterEnabled = true
 )
 
 // Config tunes plugin behaviour. Zero value yields safe defaults.
@@ -46,6 +51,27 @@ type Config struct {
 	// When nil, a client with Timeout=DeliveryTimeout is constructed.
 	// Tests can inject a client whose Transport routes to httptest.
 	HTTPClient *http.Client
+
+	// MaxAttempts is the maximum number of delivery attempts per job
+	// before the dispatcher gives up. Defaults to 5.
+	MaxAttempts int
+
+	// InitialBackoff is the delay before the second attempt; subsequent
+	// attempts double up to MaxBackoff. Defaults to 1s.
+	InitialBackoff time.Duration
+
+	// MaxBackoff caps the per-attempt backoff. Defaults to 5m.
+	MaxBackoff time.Duration
+
+	// BackoffJitter is the +/- proportion applied to each backoff
+	// (0.2 → ±20%). Defaults to 0.2. Set <0 to disable jitter.
+	BackoffJitter float64
+
+	// DeadLetterEnabled controls whether a final dead-letter delivery
+	// row is persisted when MaxAttempts is exhausted without success.
+	// Pointer so the zero value can default to true. Set to a pointer
+	// to false to disable.
+	DeadLetterEnabled *bool
 }
 
 // webhooksPlugin is an unexported implementation of plugin.Plugin and
@@ -62,6 +88,24 @@ func New(cfg Config) plugin.Plugin {
 	}
 	if cfg.DeliveryTimeout <= 0 {
 		cfg.DeliveryTimeout = defaultDeliveryTimeout
+	}
+	if cfg.MaxAttempts <= 0 {
+		cfg.MaxAttempts = defaultMaxAttempts
+	}
+	if cfg.InitialBackoff <= 0 {
+		cfg.InitialBackoff = defaultInitialBackoff
+	}
+	if cfg.MaxBackoff <= 0 {
+		cfg.MaxBackoff = defaultMaxBackoff
+	}
+	if cfg.BackoffJitter == 0 {
+		cfg.BackoffJitter = defaultBackoffJitter
+	} else if cfg.BackoffJitter < 0 {
+		cfg.BackoffJitter = 0
+	}
+	if cfg.DeadLetterEnabled == nil {
+		v := defaultDeadLetterEnabled
+		cfg.DeadLetterEnabled = &v
 	}
 	return &webhooksPlugin{cfg: cfg}
 }
@@ -80,7 +124,13 @@ func (p *webhooksPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux, pref
 		httpClient = &http.Client{Timeout: p.cfg.DeliveryTimeout}
 	}
 
-	p.dispatcher = NewDispatcher(host.Repo(), httpClient, p.cfg.WorkerCount)
+	p.dispatcher = NewDispatcher(host.Repo(), httpClient, p.cfg.WorkerCount, RetryConfig{
+		MaxAttempts:       p.cfg.MaxAttempts,
+		InitialBackoff:    p.cfg.InitialBackoff,
+		MaxBackoff:        p.cfg.MaxBackoff,
+		BackoffJitter:     p.cfg.BackoffJitter,
+		DeadLetterEnabled: *p.cfg.DeadLetterEnabled,
+	})
 	p.dispatcher.Start()
 
 	host.RegisterEventHandler(newEventHandler(host.Repo(), p.dispatcher))

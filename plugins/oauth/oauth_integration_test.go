@@ -140,7 +140,10 @@ func newStack(t *testing.T, info oauth.UserInfo) *stack {
 	}
 
 	ya, err := yauth.New(repo, yauth.NewDefaultConfig()).
-		WithPlugin(emailpassword.New(emailpassword.Config{})).
+		WithPlugin(emailpassword.New(emailpassword.Config{
+			HIBPCheck:    false,
+			HIBPCheckSet: true,
+		})).
 		WithPlugin(op).
 		Build()
 	if err != nil {

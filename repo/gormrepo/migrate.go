@@ -18,6 +18,7 @@ func Migrate(ctx context.Context, db *gorm.DB) error {
 		&User{},
 		&Session{},
 		&Password{},
+		&PasswordHistory{},
 		&EmailVerification{},
 		&PasswordReset{},
 		&AuditLog{},

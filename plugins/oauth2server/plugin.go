@@ -21,18 +21,22 @@
 //
 // Routes (relative to prefix):
 //
-//	GET    {prefix}/oauth2/clients                — admin: list clients (TODO)
+//	GET    {prefix}/oauth2/clients                — admin: list clients
 //	POST   {prefix}/oauth2/clients                — admin: register a client
 //	GET    {prefix}/oauth2/clients/{id}           — admin: fetch a client
 //	PATCH  {prefix}/oauth2/clients/{id}           — admin: ban/rotate-key
 //	DELETE {prefix}/oauth2/clients/{id}           — admin: ban (soft delete)
+//	POST   {prefix}/oauth2/clients/{id}/ban       — admin: ban with reason
+//	POST   {prefix}/oauth2/clients/{id}/unban     — admin: clear ban
+//	POST   {prefix}/oauth2/clients/{id}/rotate-public-key — admin: replace PKJWT key
 //	GET    {prefix}/oauth2/authorize              — return JSON consent payload
 //	POST   {prefix}/oauth2/consent                — approve/deny a pending request
 //	POST   {prefix}/oauth2/token                  — token endpoint (dispatch)
 //	POST   {prefix}/oauth2/revoke                 — RFC 7009
 //	POST   {prefix}/oauth2/introspect             — RFC 7662
 //	POST   {prefix}/oauth2/device_authorization   — RFC 8628 (device init)
-//	POST   {prefix}/oauth2/device                  — user enters user_code
+//	POST   {prefix}/oauth2/device                 — user enters user_code
+//	GET    {prefix}/.well-known/oauth-authorization-server — RFC 8414 metadata
 package oauth2server
 
 import (
@@ -136,6 +140,12 @@ func (p *oauth2Plugin) Routes(host plugin.PluginHost, mux *http.ServeMux, prefix
 	mux.Handle("GET "+prefix+"/oauth2/clients/{id}", mw.RequireAdmin(http.HandlerFunc(p.handleGetClient(host))))
 	mux.Handle("PATCH "+prefix+"/oauth2/clients/{id}", mw.RequireAdmin(http.HandlerFunc(p.handlePatchClient(host))))
 	mux.Handle("DELETE "+prefix+"/oauth2/clients/{id}", mw.RequireAdmin(http.HandlerFunc(p.handleDeleteClient(host))))
+	mux.Handle("POST "+prefix+"/oauth2/clients/{id}/ban", mw.RequireAdmin(http.HandlerFunc(p.handleBanClient(host))))
+	mux.Handle("POST "+prefix+"/oauth2/clients/{id}/unban", mw.RequireAdmin(http.HandlerFunc(p.handleUnbanClient(host))))
+	mux.Handle("POST "+prefix+"/oauth2/clients/{id}/rotate-public-key", mw.RequireAdmin(http.HandlerFunc(p.handleRotatePublicKey(host))))
+
+	// --- RFC 8414 authorization server metadata ---
+	mux.Handle("GET "+prefix+"/.well-known/oauth-authorization-server", http.HandlerFunc(p.handleAuthServerMetadata(host)))
 
 	// --- authorization-code + consent ---
 	// /authorize is a session-protected endpoint: the caller must be a

@@ -134,6 +134,15 @@ func (f *fakeRepo) UpsertPassword(_ context.Context, _ domain.NewPassword) error
 func (f *fakeRepo) GetPasswordByUserID(_ context.Context, _ string) (*domain.Password, error) {
 	return nil, yautherr.ErrNotFound
 }
+func (f *fakeRepo) AppendPasswordHistory(_ context.Context, _ domain.NewPasswordHistory) error {
+	return nil
+}
+func (f *fakeRepo) GetPasswordHistory(_ context.Context, _ string, _ int) ([]*domain.PasswordHistory, error) {
+	return nil, nil
+}
+func (f *fakeRepo) TrimPasswordHistory(_ context.Context, _ string, _ int) (int64, error) {
+	return 0, nil
+}
 func (f *fakeRepo) CreateEmailVerification(_ context.Context, _ domain.NewEmailVerification) error {
 	return nil
 }
@@ -172,7 +181,7 @@ func (f *fakeRepo) DeleteOtherUserSessions(_ context.Context, _, _ string) (int6
 	return 0, nil
 }
 
-func (f *fakeRepo) ListSessions(_ context.Context, _, _ int) ([]*domain.Session, int64, error) {
+func (f *fakeRepo) ListSessions(_ context.Context, _ domain.ListSessionsFilters) ([]*domain.Session, int64, error) {
 	return nil, 0, nil
 }
 
@@ -661,5 +670,182 @@ func TestResolveAuth_RecognizedErrorShortCircuits(t *testing.T) {
 	_, err := mw.ResolveAuth(httptest.NewRequest(http.MethodGet, "/", nil))
 	if !errors.Is(err, yautherr.ErrInvalidToken) {
 		t.Fatalf("expected ErrInvalidToken, got %v", err)
+	}
+}
+
+// auditCapturingRepo wraps fakeRepo to record audit log writes so
+// session-binding tests can assert on them without poking at internal
+// state.
+type auditCapturingRepo struct {
+	*fakeRepo
+	audits []domain.NewAuditLog
+}
+
+func (a *auditCapturingRepo) LogAuditEvent(ctx context.Context, in domain.NewAuditLog) error {
+	a.audits = append(a.audits, in)
+	return a.fakeRepo.LogAuditEvent(ctx, in)
+}
+
+func setupBindingHarness(t *testing.T, sessIP, sessUA string) (*auditCapturingRepo, string, string) {
+	t.Helper()
+	r := newFakeRepo()
+	cap := &auditCapturingRepo{fakeRepo: r}
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	user, err := r.CreateUser(ctx, domain.NewUser{
+		ID: uuid.NewString(), Email: "alice@example.com", Role: "user",
+		CreatedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+
+	var ipPtr, uaPtr *string
+	if sessIP != "" {
+		ipPtr = &sessIP
+	}
+	if sessUA != "" {
+		uaPtr = &sessUA
+	}
+	raw, _, err := auth.IssueSession(ctx, r, user.ID, ipPtr, uaPtr, time.Hour)
+	if err != nil {
+		t.Fatalf("IssueSession: %v", err)
+	}
+	tokenHash := auth.HashToken(raw)
+	return cap, raw, tokenHash
+}
+
+func TestRequireAuth_BindIP_Match(t *testing.T) {
+	cap, raw, _ := setupBindingHarness(t, "203.0.113.10", "")
+	mw := New(cap, Config{CookieName: "yauth_session", BindIP: true, IPMismatchAction: MismatchActionInvalidate})
+
+	hit := false
+	h := mw.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hit = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "203.0.113.10:55555"
+	req.AddCookie(&http.Cookie{Name: "yauth_session", Value: raw})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("matched IP should pass, got %d", rec.Code)
+	}
+	if !hit {
+		t.Fatalf("expected handler to be called")
+	}
+	if len(cap.audits) != 0 {
+		t.Errorf("expected zero audits on match, got %d", len(cap.audits))
+	}
+}
+
+func TestRequireAuth_BindIP_Warn(t *testing.T) {
+	cap, raw, _ := setupBindingHarness(t, "203.0.113.10", "")
+	mw := New(cap, Config{CookieName: "yauth_session", BindIP: true, IPMismatchAction: MismatchActionWarn})
+
+	hit := false
+	h := mw.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hit = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "203.0.113.99:55555"
+	req.AddCookie(&http.Cookie{Name: "yauth_session", Value: raw})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("warn-mode mismatch should still pass, got %d", rec.Code)
+	}
+	if !hit {
+		t.Fatalf("expected handler to run on warn-mode mismatch")
+	}
+	if len(cap.audits) != 1 || cap.audits[0].EventType != "session_ip_mismatch" {
+		t.Fatalf("expected one session_ip_mismatch audit, got %+v", cap.audits)
+	}
+}
+
+func TestRequireAuth_BindIP_Invalidate(t *testing.T) {
+	cap, raw, tokenHash := setupBindingHarness(t, "203.0.113.10", "")
+	mw := New(cap, Config{CookieName: "yauth_session", BindIP: true, IPMismatchAction: MismatchActionInvalidate})
+
+	hit := false
+	h := mw.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hit = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "203.0.113.99:55555"
+	req.AddCookie(&http.Cookie{Name: "yauth_session", Value: raw})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("invalidate-mode mismatch should 401, got %d", rec.Code)
+	}
+	if hit {
+		t.Fatalf("handler must not run on invalidated session")
+	}
+	if _, ok := cap.fakeRepo.sessions[tokenHash]; ok {
+		t.Fatalf("session row should be deleted on invalidate")
+	}
+	if len(cap.audits) != 1 || cap.audits[0].EventType != "session_ip_mismatch_invalidate" {
+		t.Fatalf("expected session_ip_mismatch_invalidate audit, got %+v", cap.audits)
+	}
+}
+
+func TestRequireAuth_BindUA_Mismatch(t *testing.T) {
+	cap, raw, tokenHash := setupBindingHarness(t, "", "Mozilla/5.0 (legit)")
+	mw := New(cap, Config{CookieName: "yauth_session", BindUA: true, UAMismatchAction: MismatchActionInvalidate})
+
+	h := mw.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "203.0.113.10:1"
+	req.Header.Set("User-Agent", "curl/8.0 (attacker)")
+	req.AddCookie(&http.Cookie{Name: "yauth_session", Value: raw})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("UA mismatch with invalidate should 401, got %d", rec.Code)
+	}
+	if _, ok := cap.fakeRepo.sessions[tokenHash]; ok {
+		t.Fatalf("session row should be deleted on UA-invalidate")
+	}
+	if len(cap.audits) != 1 || cap.audits[0].EventType != "session_ua_mismatch_invalidate" {
+		t.Fatalf("expected session_ua_mismatch_invalidate audit, got %+v", cap.audits)
+	}
+}
+
+func TestRequireAuth_BindIP_NilSessionIPSkipsCheck(t *testing.T) {
+	// Sessions issued before binding was enabled may have a nil IPAddress.
+	// The middleware must not invalidate them just because the session
+	// row pre-dates the policy.
+	cap, raw, _ := setupBindingHarness(t, "", "")
+	mw := New(cap, Config{CookieName: "yauth_session", BindIP: true, IPMismatchAction: MismatchActionInvalidate})
+
+	h := mw.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "203.0.113.10:1"
+	req.AddCookie(&http.Cookie{Name: "yauth_session", Value: raw})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("nil session IP should skip binding check, got %d", rec.Code)
+	}
+	if len(cap.audits) != 0 {
+		t.Errorf("expected no audits when session IP is nil, got %d", len(cap.audits))
 	}
 }

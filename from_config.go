@@ -10,6 +10,7 @@ import (
 
 	"github.com/yackey-labs/yauth-go/auth/passwordpolicy"
 	"github.com/yackey-labs/yauth-go/plugins/emailpassword"
+	smtpmailer "github.com/yackey-labs/yauth-go/plugins/mailer/smtp"
 	"github.com/yackey-labs/yauth-go/repo/gormrepo"
 	"github.com/yackey-labs/yauth-go/telemetry"
 	"github.com/yackey-labs/yauth-go/yauthcfg"
@@ -54,6 +55,14 @@ func NewFromConfig(ctx context.Context, cfg *yauthcfg.Config) (*YAuth, error) {
 	repo := gormrepo.New(db)
 	builder := New(repo, configToYAuthConfig(cfg))
 
+	// Build the host's mailer once and share it across plugins. Each
+	// plugin satisfies its own Mailer interface structurally — *smtp.Mailer
+	// has every method any of the three plugin interfaces require.
+	mailer, err := buildMailer(cfg.Mailer)
+	if err != nil {
+		return nil, err
+	}
+
 	if cfg.Telemetry.Enabled {
 		shutdown, err := telemetry.Init(ctx, telemetry.Config{
 			Enabled:     true,
@@ -92,6 +101,9 @@ func NewFromConfig(ctx context.Context, cfg *yauthcfg.Config) (*YAuth, error) {
 		if ep.HIBPCheck != nil {
 			epCfg.HIBPCheck = *ep.HIBPCheck
 			epCfg.HIBPCheckSet = true
+		}
+		if mailer != nil {
+			epCfg.Mailer = mailer
 		}
 		builder = builder.WithPlugin(emailpassword.New(epCfg))
 	}
@@ -232,6 +244,18 @@ func configToYAuthConfig(c *yauthcfg.Config) YAuthConfig {
 	if c.Session.CookieSameSite != "" {
 		out.CookieSameSite = c.Session.CookieSameSite
 	}
+	out.BaseURL = c.Server.BaseURL
+	if c.Server.AllowSignups != nil {
+		out.AllowSignups = *c.Server.AllowSignups
+	}
+	out.AutoAdminFirstUser = c.Server.AutoAdminFirstUser
+	out.CORS = CORSConfig{
+		AllowedOrigins:   c.Server.CORS.AllowedOrigins,
+		AllowedMethods:   c.Server.CORS.AllowedMethods,
+		AllowedHeaders:   c.Server.CORS.AllowedHeaders,
+		AllowCredentials: c.Server.CORS.AllowCredentials,
+		MaxAge:           c.Server.CORS.MaxAge,
+	}
 	out.SessionBinding = SessionBindingConfig{
 		BindIP:           c.Session.BindIP,
 		BindUA:           c.Session.BindUserAgent,
@@ -245,6 +269,42 @@ func configToYAuthConfig(c *yauthcfg.Config) YAuthConfig {
 	overrideRule(&out.RateLimit.UnlockRequest, c.RateLimit.UnlockRequest)
 	overrideRule(&out.RateLimit.MFAVerify, c.RateLimit.MFAVerify)
 	return out
+}
+
+// buildMailer translates the cfg into a concrete mailer. Returns nil when
+// no provider is configured (callers fall back to the plugin's default
+// LoggingMailer). The returned *smtp.Mailer satisfies the Mailer interface
+// of every plugin that needs a mailer.
+func buildMailer(cfg yauthcfg.MailerConfig) (*smtpmailer.Mailer, error) {
+	provider := strings.ToLower(strings.TrimSpace(cfg.Provider))
+	if provider == "" || provider == "logging" {
+		return nil, nil
+	}
+	if provider != "smtp" {
+		return nil, fmt.Errorf("yauth: unsupported mailer.provider %q (logging | smtp)", cfg.Provider)
+	}
+	if cfg.SMTP.Host == "" || cfg.SMTP.Port == 0 {
+		return nil, errors.New("yauth: mailer.smtp requires host and port")
+	}
+	if cfg.From == "" {
+		return nil, errors.New("yauth: mailer.from is required when provider=smtp")
+	}
+	user := ""
+	pass := ""
+	if cfg.SMTP.UsernameEnv != "" {
+		user = os.Getenv(cfg.SMTP.UsernameEnv)
+	}
+	if cfg.SMTP.PasswordEnv != "" {
+		pass = os.Getenv(cfg.SMTP.PasswordEnv)
+	}
+	return smtpmailer.New(smtpmailer.Mailer{
+		Host:     cfg.SMTP.Host,
+		Port:     cfg.SMTP.Port,
+		Username: user,
+		Password: pass,
+		From:     cfg.From,
+		TLS:      cfg.SMTP.TLS,
+	}), nil
 }
 
 func overrideRule(dst *RateLimitRule, src yauthcfg.RateLimitRule) {

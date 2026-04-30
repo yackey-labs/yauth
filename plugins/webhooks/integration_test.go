@@ -552,3 +552,171 @@ func TestWebhookRetry_4xxNoRetry(t *testing.T) {
 		t.Fatalf("expected status_code=400, got %v", rows[0].StatusCode)
 	}
 }
+
+// TestWebhookRetry_PersistsAcrossRestart exercises the crash-safe queue:
+// the first dispatcher writes a ScheduledWebhookRetry row after attempt
+// 1 fails, then the test shuts it down, constructs a second dispatcher
+// against the same repo, and verifies the second dispatcher claims the
+// row and fires attempt 2.
+func TestWebhookRetry_PersistsAcrossRestart(t *testing.T) {
+	rcv := newProgrammedReceiver(t, []int{500, 200})
+	defer rcv.Close()
+
+	// Per-test SQLite DB shared across the two dispatchers. cache=shared
+	// scopes by name, so identical DSNs in the same process talk to the
+	// same in-memory pages.
+	dsn := "file:" + t.Name() + "?mode=memory&cache=shared&_pragma=foreign_keys(1)"
+	db, err := gormrepo.OpenSQLite(dsn)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	if err := gormrepo.Migrate(context.Background(), db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	r := gormrepo.New(db)
+
+	const secret = "restart-secret"
+	whID := "wh-restart-" + randHex(t, 4)
+	rawEvents, _ := json.Marshal([]string{"user.registered"})
+	now := time.Now().UTC()
+	if err := r.CreateWebhook(context.Background(), domain.NewWebhook{
+		ID:        whID,
+		URL:       rcv.srv.URL,
+		Secret:    secret,
+		Events:    rawEvents,
+		Active:    true,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("create webhook: %v", err)
+	}
+
+	retryCfg := webhooks.RetryConfig{
+		MaxAttempts:       5,
+		InitialBackoff:    50 * time.Millisecond,
+		MaxBackoff:        100 * time.Millisecond,
+		BackoffJitter:     0,
+		DeadLetterEnabled: true,
+		// Disable the periodic claimer so the first dispatcher never
+		// picks the row back up; we want to assert it survives shutdown.
+		ClaimerInterval:  1 * time.Hour,
+		ClaimerBatchSize: 100,
+	}
+	httpClient := &http.Client{Timeout: 2 * time.Second}
+
+	// --- First dispatcher: fire attempt 1, watch it fail, observe the
+	// scheduled retry row land in the DB, then shut down.
+	d1 := webhooks.NewDispatcher(r, httpClient, 2, retryCfg)
+	d1.Start()
+
+	hook, err := r.GetWebhookByID(context.Background(), whID)
+	if err != nil || hook == nil {
+		t.Fatalf("get webhook: %v", err)
+	}
+	job := webhooks.NewDeliveryJobForTest(*hook, "user.registered", map[string]any{
+		"email": "restart@example.com",
+	})
+	if err := d1.Enqueue(job); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	// Wait for attempt 1 to land + scheduled retry row to be persisted.
+	if !waitFor(t, 5*time.Second, func() bool {
+		rows, _ := r.ListWebhookDeliveriesByWebhookID(context.Background(), whID, 10)
+		return len(rows) >= 1
+	}) {
+		t.Fatalf("expected attempt-1 delivery row after first dispatcher run")
+	}
+	if !waitFor(t, 5*time.Second, func() bool {
+		// Claim with a very-far-in-future "now" to peek at all rows
+		// would also delete them; use a probe by attempting to claim
+		// rows with not_before at most 1h from now (which is past the
+		// 50ms backoff). Then re-persist them so the second dispatcher
+		// can still see them.
+		rows, _ := r.ClaimDueRetries(context.Background(), time.Now().Add(time.Hour), 10)
+		if len(rows) == 0 {
+			return false
+		}
+		// Re-persist exactly what we just claimed so the second
+		// dispatcher's claim cycle still has work to do.
+		for _, row := range rows {
+			_ = r.CreateScheduledRetry(context.Background(), domain.NewScheduledWebhookRetry{
+				ID:        row.ID,
+				WebhookID: row.WebhookID,
+				EventType: row.EventType,
+				Payload:   row.Payload,
+				Attempt:   row.Attempt,
+				NotBefore: row.NotBefore,
+				CreatedAt: row.CreatedAt,
+			})
+		}
+		return true
+	}) {
+		t.Fatalf("expected scheduled retry row to be persisted after attempt 1")
+	}
+
+	hitsAfterFirstShutdown := rcv.Hits()
+	if hitsAfterFirstShutdown < 1 {
+		t.Fatalf("expected at least 1 receiver hit before first shutdown, got %d", hitsAfterFirstShutdown)
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := d1.Shutdown(shutdownCtx); err != nil {
+		t.Fatalf("shutdown d1: %v", err)
+	}
+
+	// Confirm the retry row still exists after shutdown — un-claimed
+	// rows must remain in the DB for the next process to pick up.
+	rowsBeforeRestart, err := r.ClaimDueRetries(context.Background(), time.Now().Add(time.Hour), 10)
+	if err != nil {
+		t.Fatalf("claim probe: %v", err)
+	}
+	if len(rowsBeforeRestart) == 0 {
+		t.Fatalf("expected retry row to survive shutdown")
+	}
+	// Re-persist (claim deletes them) so the new dispatcher can claim them.
+	for _, row := range rowsBeforeRestart {
+		if err := r.CreateScheduledRetry(context.Background(), domain.NewScheduledWebhookRetry{
+			ID:        row.ID,
+			WebhookID: row.WebhookID,
+			EventType: row.EventType,
+			Payload:   row.Payload,
+			Attempt:   row.Attempt,
+			NotBefore: row.NotBefore,
+			CreatedAt: row.CreatedAt,
+		}); err != nil {
+			t.Fatalf("re-persist retry: %v", err)
+		}
+	}
+
+	// --- Second dispatcher: same repo, fast claimer interval. It should
+	// claim the persisted retry row and fire attempt 2, which the
+	// programmed receiver answers with 200.
+	retryCfg2 := retryCfg
+	retryCfg2.ClaimerInterval = 50 * time.Millisecond
+	d2 := webhooks.NewDispatcher(r, httpClient, 2, retryCfg2)
+	d2.Start()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = d2.Shutdown(ctx)
+	})
+
+	if !waitFor(t, 5*time.Second, func() bool { return rcv.Hits() >= 2 }) {
+		t.Fatalf("expected second dispatcher to fire attempt 2 (got %d total hits)", rcv.Hits())
+	}
+
+	if !waitFor(t, 5*time.Second, func() bool {
+		rows, _ := r.ListWebhookDeliveriesByWebhookID(context.Background(), whID, 10)
+		for _, row := range rows {
+			if row.Success && row.Attempt >= 2 {
+				return true
+			}
+		}
+		return false
+	}) {
+		rows, _ := r.ListWebhookDeliveriesByWebhookID(context.Background(), whID, 10)
+		t.Fatalf("expected attempt >=2 success row from second dispatcher, got rows=%+v", rows)
+	}
+}

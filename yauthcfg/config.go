@@ -23,6 +23,7 @@ type Config struct {
 	Session   SessionConfig   `yaml:"session" toml:"session"`
 	RateLimit RateLimitConfig `yaml:"rate_limit" toml:"rate_limit"`
 	Telemetry TelemetryConfig `yaml:"telemetry" toml:"telemetry"`
+	Mailer    MailerConfig    `yaml:"mailer" toml:"mailer"`
 	Plugins   PluginsConfig   `yaml:"plugins" toml:"plugins"`
 }
 
@@ -44,6 +45,65 @@ type DatabaseConfig struct {
 type ServerConfig struct {
 	Addr   string `yaml:"addr" toml:"addr"`
 	Prefix string `yaml:"prefix" toml:"prefix"`
+
+	// BaseURL is the absolute URL the public API is reachable at,
+	// e.g. "https://app.example.com". Used by plugins that build
+	// outbound links (verification emails, password-reset links, OIDC
+	// issuer, etc.) when they have no local override.
+	BaseURL string `yaml:"base_url" toml:"base_url"`
+
+	// AllowSignups controls whether /register accepts new accounts.
+	// Defaults to true; flip to false to require admin-driven invites.
+	AllowSignups *bool `yaml:"allow_signups,omitempty" toml:"allow_signups,omitempty"`
+
+	// AutoAdminFirstUser, when true, promotes the first registered
+	// user to role "admin" automatically. Subsequent users register
+	// with the default role.
+	AutoAdminFirstUser bool `yaml:"auto_admin_first_user" toml:"auto_admin_first_user"`
+
+	// CORS controls cross-origin behaviour of the mounted Router. When
+	// AllowedOrigins is empty the CORS middleware is not installed.
+	CORS CORSConfig `yaml:"cors" toml:"cors"`
+}
+
+// CORSConfig configures the cross-origin middleware. Empty AllowedOrigins
+// disables CORS entirely.
+type CORSConfig struct {
+	// AllowedOrigins is the list of origins allowed to call the API.
+	// Use "*" to allow any origin (incompatible with AllowCredentials=true).
+	AllowedOrigins []string `yaml:"allowed_origins" toml:"allowed_origins"`
+	// AllowedMethods is the methods echoed back in
+	// Access-Control-Allow-Methods. Defaults to a sensible set when empty.
+	AllowedMethods []string `yaml:"allowed_methods" toml:"allowed_methods"`
+	// AllowedHeaders is the headers echoed back in
+	// Access-Control-Allow-Headers. Defaults to "Content-Type, Authorization".
+	AllowedHeaders []string `yaml:"allowed_headers" toml:"allowed_headers"`
+	// AllowCredentials sets Access-Control-Allow-Credentials. When true
+	// AllowedOrigins must not contain "*"; the middleware reflects the
+	// request's Origin instead.
+	AllowCredentials bool `yaml:"allow_credentials" toml:"allow_credentials"`
+	// MaxAge sets Access-Control-Max-Age on preflight responses.
+	MaxAge time.Duration `yaml:"max_age" toml:"max_age"`
+}
+
+// MailerConfig selects an outbound mailer for the host. Provider "logging"
+// (the default) writes deliveries to stderr; "smtp" routes through the
+// configured SMTP server.
+type MailerConfig struct {
+	Provider string         `yaml:"provider" toml:"provider"`
+	From     string         `yaml:"from" toml:"from"`
+	SMTP     SMTPConfig     `yaml:"smtp" toml:"smtp"`
+}
+
+// SMTPConfig holds SMTP connection details. Username/password are
+// resolved from environment variables to keep the config file safe to
+// commit.
+type SMTPConfig struct {
+	Host        string `yaml:"host" toml:"host"`
+	Port        int    `yaml:"port" toml:"port"`
+	UsernameEnv string `yaml:"username_env" toml:"username_env"`
+	PasswordEnv string `yaml:"password_env" toml:"password_env"`
+	TLS         bool   `yaml:"tls" toml:"tls"`
 }
 
 // SessionConfig mirrors the cookie/session knobs on yauth.YAuthConfig.
@@ -258,14 +318,16 @@ type OAuth2ServerPluginConfig struct {
 // Default returns a Config populated with sensible development defaults
 // and email_password enabled. Used by `yauth init`.
 func Default() *Config {
+	allowSignups := true
 	return &Config{
 		Database: DatabaseConfig{
 			Driver: "sqlite",
 			DSN:    "file:yauth.db?_pragma=foreign_keys(1)",
 		},
 		Server: ServerConfig{
-			Addr:   ":3000",
-			Prefix: "/api/auth",
+			Addr:         ":3000",
+			Prefix:       "/api/auth",
+			AllowSignups: &allowSignups,
 		},
 		Session: SessionConfig{
 			TTL:            30 * 24 * time.Hour,
@@ -278,6 +340,9 @@ func Default() *Config {
 			Enabled:      false,
 			ServiceName:  "yauth",
 			OTLPEndpoint: "http://localhost:4317",
+		},
+		Mailer: MailerConfig{
+			Provider: "logging",
 		},
 		Plugins: PluginsConfig{
 			EmailPassword: EmailPasswordPluginConfig{

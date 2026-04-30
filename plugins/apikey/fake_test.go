@@ -484,3 +484,17 @@ func (h *fakeHost) RateLimit(name string, max int, window time.Duration) func(ht
 }
 
 var _ plugin.PluginHost = (*fakeHost)(nil)
+
+// --- WebhookRetryRepository (no-op stubs; used only by webhooks plugin tests) ---
+
+func (f *fakeRepo) CreateScheduledRetry(_ context.Context, _ domain.NewScheduledWebhookRetry) error {
+	return nil
+}
+func (f *fakeRepo) ClaimDueRetries(_ context.Context, _ time.Time, _ int) ([]*domain.ScheduledWebhookRetry, error) {
+	return nil, nil
+}
+func (f *fakeRepo) DeleteScheduledRetry(_ context.Context, _ string) error { return nil }
+
+func (h *fakeHost) BaseURL() string            { return "" }
+func (h *fakeHost) AllowSignups() bool         { return true }
+func (h *fakeHost) AutoAdminFirstUser() bool   { return false }

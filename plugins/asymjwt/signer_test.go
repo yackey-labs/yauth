@@ -224,6 +224,9 @@ func (h *captureHost) CookieDomain() string                       { return "" }
 func (h *captureHost) CookieSecure() bool                         { return false }
 func (h *captureHost) CookiePath() string                         { return "/" }
 func (h *captureHost) CookieSameSite() http.SameSite              { return http.SameSiteLaxMode }
+func (h *captureHost) BaseURL() string                            { return "" }
+func (h *captureHost) AllowSignups() bool                         { return true }
+func (h *captureHost) AutoAdminFirstUser() bool                   { return false }
 func (h *captureHost) RegisterEventHandler(_ events.Handler)      {}
 func (h *captureHost) RegisterAuthResolver(_ plugin.AuthResolver) {}
 func (h *captureHost) PluginNames() []string                      { return nil }

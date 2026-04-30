@@ -116,6 +116,11 @@ type Repo struct {
 	// Webhooks keyed by ID.
 	webhooks          map[string]*domain.Webhook
 	webhookDeliveries []*domain.WebhookDelivery
+
+	// Scheduled webhook retries keyed by ID. Claimed rows are removed
+	// from the map under the same write lock that returned them, which
+	// is the in-memory analogue of FOR UPDATE SKIP LOCKED.
+	webhookRetries map[string]*domain.ScheduledWebhookRetry
 }
 
 // rateLimitState is a fixed-window counter row.
@@ -165,6 +170,7 @@ func New() *Repo {
 		unlockTokens:          make(map[string]*domain.UnlockToken),
 		unlockTokenHashIdx:    make(map[string]string),
 		webhooks:              make(map[string]*domain.Webhook),
+		webhookRetries:        make(map[string]*domain.ScheduledWebhookRetry),
 	}
 }
 

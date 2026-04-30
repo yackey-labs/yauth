@@ -114,6 +114,10 @@ type registerResponse struct {
 
 func (p *emailPasswordPlugin) handleRegister(host plugin.PluginHost) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !host.AllowSignups() {
+			writeError(w, http.StatusForbidden, "SIGNUPS_DISABLED", "public registration is disabled")
+			return
+		}
 		var req registerRequest
 		if err := decodeJSON(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
@@ -156,11 +160,23 @@ func (p *emailPasswordPlugin) handleRegister(host plugin.PluginHost) http.Handle
 			return
 		}
 
+		role := "user"
+		if host.AutoAdminFirstUser() {
+			// Promote the first user to admin. Race window: two concurrent
+			// first-registrations can both observe AnyUserExists=false and
+			// both become admin. Documented as acceptable for MVP — operators
+			// can downgrade extras manually via the admin plugin.
+			any, err := repo.AnyUserExists(ctx)
+			if err == nil && !any {
+				role = "admin"
+			}
+		}
+
 		now := time.Now().UTC()
 		user, err := repo.CreateUser(ctx, domain.NewUser{
 			ID:        uuid.NewString(),
 			Email:     req.Email,
-			Role:      "user",
+			Role:      role,
 			CreatedAt: now,
 			UpdatedAt: now,
 		})
@@ -568,6 +584,51 @@ func (p *emailPasswordPlugin) handleChangePassword(host plugin.PluginHost) http.
 		})
 
 		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// --- PATCH /me ---------------------------------------------------------
+
+type patchMeRequest struct {
+	DisplayName *string `json:"display_name,omitempty"`
+}
+
+type patchMeResponse struct {
+	User userJSON `json:"user"`
+}
+
+func (p *emailPasswordPlugin) handlePatchMe(host plugin.PluginHost) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		au, ok := middleware.AuthUserFromContext(r.Context())
+		if !ok || au == nil {
+			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "not authenticated")
+			return
+		}
+
+		var req patchMeRequest
+		if err := decodeJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+			return
+		}
+
+		changes := domain.UpdateUser{}
+		if req.DisplayName != nil {
+			trimmed := strings.TrimSpace(*req.DisplayName)
+			var newName *string
+			if trimmed != "" {
+				newName = &trimmed
+			}
+			changes.DisplayName = &newName
+		}
+		now := time.Now().UTC()
+		changes.UpdatedAt = &now
+
+		updated, err := host.Repo().UpdateUser(r.Context(), au.User.ID, changes)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to update user")
+			return
+		}
+		writeJSON(w, http.StatusOK, patchMeResponse{User: toUserJSON(updated)})
 	}
 }
 

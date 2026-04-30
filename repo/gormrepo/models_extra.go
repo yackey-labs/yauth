@@ -751,3 +751,50 @@ func webhookDeliveryFromDomain(in domain.NewWebhookDelivery) WebhookDelivery {
 		CreatedAt:    in.CreatedAt.UTC(),
 	}
 }
+
+// --- WebhookRetry ---
+
+// WebhookRetry mirrors yauth_webhook_retries — the persisted queue of
+// scheduled retries. NotBefore is the earliest time a claimer may pick
+// the row up; an index on it keeps ClaimDueRetries fast under load.
+type WebhookRetry struct {
+	ID        string    `gorm:"column:id;primaryKey"`
+	WebhookID string    `gorm:"column:webhook_id;index;not null"`
+	EventType string    `gorm:"column:event_type;not null"`
+	Payload   []byte    `gorm:"column:payload;not null"`
+	Attempt   int       `gorm:"column:attempt;not null"`
+	NotBefore time.Time `gorm:"column:not_before;not null;index"`
+	CreatedAt time.Time `gorm:"column:created_at;not null"`
+}
+
+func (WebhookRetry) TableName() string { return "yauth_webhook_retries" }
+
+func (m *WebhookRetry) toDomain() domain.ScheduledWebhookRetry {
+	out := domain.ScheduledWebhookRetry{
+		ID:        m.ID,
+		WebhookID: m.WebhookID,
+		EventType: m.EventType,
+		Attempt:   m.Attempt,
+		NotBefore: m.NotBefore.UTC(),
+		CreatedAt: m.CreatedAt.UTC(),
+	}
+	if len(m.Payload) > 0 {
+		out.Payload = append([]byte(nil), m.Payload...)
+	}
+	return out
+}
+
+func webhookRetryFromDomain(in domain.NewScheduledWebhookRetry) WebhookRetry {
+	row := WebhookRetry{
+		ID:        in.ID,
+		WebhookID: in.WebhookID,
+		EventType: in.EventType,
+		Attempt:   in.Attempt,
+		NotBefore: in.NotBefore.UTC(),
+		CreatedAt: in.CreatedAt.UTC(),
+	}
+	if len(in.Payload) > 0 {
+		row.Payload = append([]byte(nil), in.Payload...)
+	}
+	return row
+}

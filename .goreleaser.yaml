@@ -1,0 +1,104 @@
+version: 2
+
+project_name: yauth
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: yauth
+    main: ./cmd/yauth
+    binary: yauth
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.CommitDate}}
+    mod_timestamp: '{{ .CommitTimestamp }}'
+
+archives:
+  - id: yauth
+    ids:
+      - yauth
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+    formats:
+      - tar.gz
+    files:
+      - README.md
+      - LICENSE*
+
+checksum:
+  name_template: "SHA256SUMS"
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot-{{ .ShortCommit }}"
+
+changelog:
+  use: github
+  sort: asc
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: Bug fixes
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: Performance
+      regexp: '^.*?perf(\([[:word:]]+\))??!?:.+$'
+      order: 2
+    - title: Other
+      order: 999
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - '^ci:'
+      - Merge pull request
+      - Merge branch
+
+release:
+  github:
+    owner: yackey-labs
+    name: yauth-go
+  draft: false
+  prerelease: auto
+  mode: replace
+  name_template: "yauth-go {{ .Tag }}"
+
+dockers:
+  - id: yauth-cli
+    ids:
+      - yauth
+    image_templates:
+      - "ghcr.io/yackey-labs/yauth-cli:{{ .Tag }}"
+      - "ghcr.io/yackey-labs/yauth-cli:v{{ .Major }}"
+      - "ghcr.io/yackey-labs/yauth-cli:v{{ .Major }}.{{ .Minor }}"
+      - "ghcr.io/yackey-labs/yauth-cli:latest"
+    dockerfile: Dockerfile.cli
+    use: buildx
+    goos: linux
+    goarch: amd64
+    build_flag_templates:
+      - "--platform=linux/amd64"
+      - "--label=org.opencontainers.image.source=https://github.com/yackey-labs/yauth-go"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.created={{ .CommitDate }}"
+      - "--label=org.opencontainers.image.title=yauth-cli"
+    skip_push: '{{ if eq .Env.PUSH_DOCKER "true" }}false{{ else }}true{{ end }}'

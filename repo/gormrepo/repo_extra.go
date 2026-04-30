@@ -1337,3 +1337,68 @@ func (r *Repo) ListWebhookDeliveriesByWebhookID(ctx context.Context, webhookID s
 	}
 	return out, nil
 }
+
+// --- WebhookRetry ---
+
+func (r *Repo) CreateScheduledRetry(ctx context.Context, input domain.NewScheduledWebhookRetry) error {
+	m := webhookRetryFromDomain(input)
+	return r.ctx(ctx).Create(&m).Error
+}
+
+// ClaimDueRetries selects up to limit due rows, deletes them in the
+// same transaction, and returns the deleted rows. The locking strategy
+// per dialect:
+//
+//   - Postgres: SELECT … FOR UPDATE SKIP LOCKED so two concurrent
+//     dispatchers never see the same row.
+//   - SQLite: the surrounding Transaction() takes a RESERVED then EXCLUSIVE
+//     lock on commit, which is enough to serialise claimers on the
+//     single-writer engine.
+//
+// On any backend, deleting in the same tx as the SELECT means a row
+// can only be returned to one caller — even if a future caller reuses
+// the same not_before, it'll find no rows.
+func (r *Repo) ClaimDueRetries(ctx context.Context, now time.Time, limit int) ([]*domain.ScheduledWebhookRetry, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	var claimed []WebhookRetry
+	err := r.ctx(ctx).Transaction(func(tx *gorm.DB) error {
+		q := tx.Where("not_before <= ?", now.UTC()).
+			Order("not_before ASC, id ASC").
+			Limit(limit)
+		if tx.Dialector.Name() == "postgres" {
+			q = q.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"})
+		}
+		var rows []WebhookRetry
+		if err := q.Find(&rows).Error; err != nil {
+			return err
+		}
+		if len(rows) == 0 {
+			return nil
+		}
+		ids := make([]string, len(rows))
+		for i := range rows {
+			ids[i] = rows[i].ID
+		}
+		if err := tx.Where("id IN ?", ids).Delete(&WebhookRetry{}).Error; err != nil {
+			return err
+		}
+		claimed = rows
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*domain.ScheduledWebhookRetry, len(claimed))
+	for i := range claimed {
+		d := claimed[i].toDomain()
+		out[i] = &d
+	}
+	return out, nil
+}
+
+func (r *Repo) DeleteScheduledRetry(ctx context.Context, id string) error {
+	res := r.ctx(ctx).Where("id = ?", id).Delete(&WebhookRetry{})
+	return res.Error
+}

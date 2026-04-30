@@ -42,6 +42,20 @@ type PluginHost interface {
 	CookiePath() string
 	CookieSameSite() http.SameSite
 
+	// BaseURL returns the absolute URL the API is reachable at, e.g.
+	// "https://app.example.com". Empty when not configured. Plugins use
+	// it to build outbound links (verification emails, OIDC issuer)
+	// when they have no local override.
+	BaseURL() string
+
+	// AllowSignups reports whether public registration is enabled.
+	// /register returns 403 SIGNUPS_DISABLED when this is false.
+	AllowSignups() bool
+
+	// AutoAdminFirstUser reports whether the very first user registered
+	// should be promoted to role "admin" automatically.
+	AutoAdminFirstUser() bool
+
 	// RegisterEventHandler appends h to the host's auth-event pipeline.
 	// Handlers fire in registration order; the first non-Continue decision
 	// short-circuits the chain.

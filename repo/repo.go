@@ -272,6 +272,23 @@ type WebhookDeliveryRepository interface {
 	ListWebhookDeliveriesByWebhookID(ctx context.Context, webhookID string, limit int) ([]*domain.WebhookDelivery, error)
 }
 
+// WebhookRetryRepository covers persisted webhook retries — the
+// crash-safe queue that survives process restarts. ClaimDueRetries is
+// the linchpin: it MUST atomically remove each returned row from the
+// pool of rows other claimers can see, so two dispatchers running
+// against the same DB never run the same retry twice. Backends use
+// SELECT ... FOR UPDATE SKIP LOCKED on PostgreSQL and a transaction-
+// scoped delete-then-return on SQLite/in-memory.
+type WebhookRetryRepository interface {
+	CreateScheduledRetry(ctx context.Context, input domain.NewScheduledWebhookRetry) error
+	// ClaimDueRetries returns up to limit rows whose NotBefore <= now,
+	// removing them from the table so a parallel claimer cannot pick
+	// them up. The caller is responsible for re-persisting a fresh row
+	// if the retry fails again.
+	ClaimDueRetries(ctx context.Context, now time.Time, limit int) ([]*domain.ScheduledWebhookRetry, error)
+	DeleteScheduledRetry(ctx context.Context, id string) error
+}
+
 // Repository is the union of all repositories. Backends implement this.
 type Repository interface {
 	UserRepository
@@ -301,4 +318,5 @@ type Repository interface {
 	UnlockTokenRepository
 	WebhookRepository
 	WebhookDeliveryRepository
+	WebhookRetryRepository
 }

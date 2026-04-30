@@ -162,6 +162,80 @@ func (r *Repo) CreateWebhookDelivery(ctx context.Context, input domain.NewWebhoo
 	return nil
 }
 
+// --- ScheduledWebhookRetry ---
+
+func (r *Repo) CreateScheduledRetry(ctx context.Context, input domain.NewScheduledWebhookRetry) error {
+	_ = ensureCtx(ctx)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	created := input.CreatedAt
+	if created.IsZero() {
+		created = time.Now().UTC()
+	}
+	row := &domain.ScheduledWebhookRetry{
+		ID:        input.ID,
+		WebhookID: input.WebhookID,
+		EventType: input.EventType,
+		Attempt:   input.Attempt,
+		NotBefore: input.NotBefore.UTC(),
+		CreatedAt: created.UTC(),
+	}
+	if len(input.Payload) > 0 {
+		row.Payload = append([]byte(nil), input.Payload...)
+	}
+	r.webhookRetries[row.ID] = row
+	return nil
+}
+
+// ClaimDueRetries returns up to limit due rows and removes them from
+// the map atomically under the write lock — the in-memory equivalent
+// of FOR UPDATE SKIP LOCKED followed by DELETE in the same transaction.
+func (r *Repo) ClaimDueRetries(ctx context.Context, now time.Time, limit int) ([]*domain.ScheduledWebhookRetry, error) {
+	_ = ensureCtx(ctx)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	due := make([]*domain.ScheduledWebhookRetry, 0)
+	for _, row := range r.webhookRetries {
+		if !row.NotBefore.After(now.UTC()) {
+			due = append(due, row)
+		}
+	}
+	sort.Slice(due, func(i, j int) bool {
+		if !due[i].NotBefore.Equal(due[j].NotBefore) {
+			return due[i].NotBefore.Before(due[j].NotBefore)
+		}
+		return due[i].ID < due[j].ID
+	})
+	if limit > 0 && limit < len(due) {
+		due = due[:limit]
+	}
+	out := make([]*domain.ScheduledWebhookRetry, len(due))
+	for i, row := range due {
+		out[i] = cloneScheduledRetry(row)
+		delete(r.webhookRetries, row.ID)
+	}
+	return out, nil
+}
+
+func (r *Repo) DeleteScheduledRetry(ctx context.Context, id string) error {
+	_ = ensureCtx(ctx)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.webhookRetries, id)
+	return nil
+}
+
+func cloneScheduledRetry(row *domain.ScheduledWebhookRetry) *domain.ScheduledWebhookRetry {
+	if row == nil {
+		return nil
+	}
+	c := *row
+	if len(row.Payload) > 0 {
+		c.Payload = append([]byte(nil), row.Payload...)
+	}
+	return &c
+}
+
 func (r *Repo) ListWebhookDeliveriesByWebhookID(ctx context.Context, webhookID string, limit int) ([]*domain.WebhookDelivery, error) {
 	_ = ensureCtx(ctx)
 	r.mu.RLock()

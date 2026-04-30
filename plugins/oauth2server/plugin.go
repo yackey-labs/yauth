@@ -37,6 +37,7 @@
 //	POST   {prefix}/oauth2/device_authorization   — RFC 8628 (device init)
 //	POST   {prefix}/oauth2/device                 — user enters user_code
 //	GET    {prefix}/.well-known/oauth-authorization-server — RFC 8414 metadata
+//	POST   {prefix}/oauth2/register               — RFC 7591 dynamic client registration (opt-in: Config.DCREnabled)
 package oauth2server
 
 import (
@@ -78,6 +79,27 @@ type Config struct {
 	// a prior matching Consent record exists. Set true while developing
 	// or for clients with sensitive scopes.
 	ConsentRequired bool
+	// DCREnabled enables the RFC 7591 dynamic client registration
+	// endpoint at POST /oauth2/register. Default: false. Open public
+	// DCR is a footgun without an issuer policy; opt in explicitly.
+	DCREnabled bool
+	// DCRRequireInitialAccessToken, when non-nil, controls whether POST
+	// /oauth2/register requires an admin-issued Bearer token in the
+	// Authorization header. When nil (the default), the value is treated
+	// as true: open registration is opt-in only and must be enabled by
+	// explicitly setting this to a pointer to false. Documented as a
+	// pointer because the secure default differs from Go's zero value.
+	DCRRequireInitialAccessToken *bool
+}
+
+// dcrRequireInitialAccessToken resolves the effective value of the
+// DCRRequireInitialAccessToken pointer field, defaulting to true when
+// the operator did not set it.
+func (c Config) dcrRequireInitialAccessToken() bool {
+	if c.DCRRequireInitialAccessToken == nil {
+		return true
+	}
+	return *c.DCRRequireInitialAccessToken
 }
 
 // oauth2Plugin is the unexported plugin.Plugin implementation.
@@ -161,4 +183,9 @@ func (p *oauth2Plugin) Routes(host plugin.PluginHost, mux *http.ServeMux, prefix
 	// --- device flow ---
 	mux.Handle("POST "+prefix+"/oauth2/device_authorization", http.HandlerFunc(p.handleDeviceAuth(host)))
 	mux.Handle("POST "+prefix+"/oauth2/device", mw.RequireAuth(http.HandlerFunc(p.handleDeviceVerify(host))))
+
+	// --- RFC 7591 dynamic client registration (opt-in) ---
+	if p.cfg.DCREnabled {
+		mux.Handle("POST "+prefix+"/oauth2/register", http.HandlerFunc(p.handleDCRRegister(host, prefix)))
+	}
 }

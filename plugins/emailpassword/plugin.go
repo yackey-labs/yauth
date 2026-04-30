@@ -8,6 +8,7 @@
 //	POST {prefix}/logout               delete current session, clear cookie
 //	GET  {prefix}/session              return current AuthUser  (RequireAuth)
 //	POST {prefix}/change-password      rotate password           (RequireAuth)
+//	PATCH {prefix}/me                  update profile (display_name) (RequireAuth)
 //	POST {prefix}/verify-email         consume verification token
 //	POST {prefix}/resend-verification  email a fresh verification link
 //	POST {prefix}/forgot-password      email a password-reset link
@@ -145,6 +146,7 @@ func (p *emailPasswordPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux,
 	mux.Handle("POST "+prefix+"/logout", mw.RequireAuth(http.HandlerFunc(p.handleLogout(host))))
 	mux.Handle("GET "+prefix+"/session", mw.RequireAuth(http.HandlerFunc(p.handleSession(host))))
 	mux.Handle("POST "+prefix+"/change-password", mw.RequireAuth(http.HandlerFunc(p.handleChangePassword(host))))
+	mux.Handle("PATCH "+prefix+"/me", mw.RequireAuth(http.HandlerFunc(p.handlePatchMe(host))))
 
 	mux.Handle("POST "+prefix+"/verify-email", verifyEmailRL(http.HandlerFunc(p.handleVerifyEmail(host))))
 	mux.Handle("POST "+prefix+"/resend-verification", resendVerifyRL(http.HandlerFunc(p.handleResendVerification(host))))

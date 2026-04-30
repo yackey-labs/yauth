@@ -124,14 +124,25 @@ func (b *YAuthBuilder) Build() (*YAuth, error) {
 
 // Router returns the configured ServeMux, optionally wrapped with the
 // OpenTelemetry trace middleware when WithTelemetry was called on the
-// builder. Mount it under any prefix:
+// builder, and with the CORS middleware when CORS.AllowedOrigins is
+// non-empty. Mount it under any prefix:
 //
 //	http.Handle("/api/auth/", http.StripPrefix("/api/auth", ya.Router()))
 func (y *YAuth) Router() http.Handler {
-	if y.telemetryEnabled {
-		return middleware.TraceMiddleware(y.mux)
+	var h http.Handler = y.mux
+	if len(y.cfg.CORS.AllowedOrigins) > 0 {
+		h = middleware.CORS(middleware.CORSConfig{
+			AllowedOrigins:   y.cfg.CORS.AllowedOrigins,
+			AllowedMethods:   y.cfg.CORS.AllowedMethods,
+			AllowedHeaders:   y.cfg.CORS.AllowedHeaders,
+			AllowCredentials: y.cfg.CORS.AllowCredentials,
+			MaxAge:           y.cfg.CORS.MaxAge,
+		})(h)
 	}
-	return y.mux
+	if y.telemetryEnabled {
+		h = middleware.TraceMiddleware(h)
+	}
+	return h
 }
 
 // TelemetryShutdown flushes any pending OpenTelemetry spans by invoking
@@ -183,6 +194,15 @@ func (y *YAuth) SessionTTL() time.Duration { return y.cfg.SessionTTL }
 
 // CookieName implements plugin.PluginHost.
 func (y *YAuth) CookieName() string { return y.cfg.CookieName }
+
+// BaseURL implements plugin.PluginHost.
+func (y *YAuth) BaseURL() string { return y.cfg.BaseURL }
+
+// AllowSignups implements plugin.PluginHost.
+func (y *YAuth) AllowSignups() bool { return y.cfg.AllowSignups }
+
+// AutoAdminFirstUser implements plugin.PluginHost.
+func (y *YAuth) AutoAdminFirstUser() bool { return y.cfg.AutoAdminFirstUser }
 
 // CookieDomain implements plugin.PluginHost.
 func (y *YAuth) CookieDomain() string { return y.cfg.CookieDomain }

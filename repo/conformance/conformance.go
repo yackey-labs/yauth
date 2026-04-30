@@ -96,6 +96,7 @@ var groups = []group{
 	{name: "unlock_tokens", cases: unlockTokenCases},
 	{name: "webhooks", cases: webhookCases},
 	{name: "webhook_deliveries", cases: webhookDeliveryCases},
+	{name: "webhook_retries", cases: webhookRetryCases},
 }
 
 // ----- helpers -----
@@ -1267,6 +1268,65 @@ var webhookDeliveryCases = []testCase{
 		one, err := r.ListWebhookDeliveriesByWebhookID(ctx(), "w1", 1)
 		if err != nil || len(one) != 1 {
 			t.Fatalf("expected 1; got len=%d err=%v", len(one), err)
+		}
+	}},
+}
+
+// ----- webhook retries -----
+
+var webhookRetryCases = []testCase{
+	{"claim_returns_only_due_rows", func(t *testing.T, r repo.Repository) {
+		now := nowUTC()
+		_ = r.CreateScheduledRetry(ctx(), domain.NewScheduledWebhookRetry{
+			ID: "r1", WebhookID: "w1", EventType: "e", Payload: []byte(`{}`),
+			Attempt: 1, NotBefore: now.Add(-time.Second), CreatedAt: now,
+		})
+		_ = r.CreateScheduledRetry(ctx(), domain.NewScheduledWebhookRetry{
+			ID: "r2", WebhookID: "w1", EventType: "e", Payload: []byte(`{}`),
+			Attempt: 1, NotBefore: now.Add(time.Hour), CreatedAt: now,
+		})
+		got, err := r.ClaimDueRetries(ctx(), now, 10)
+		if err != nil {
+			t.Fatalf("claim: %v", err)
+		}
+		if len(got) != 1 || got[0].ID != "r1" {
+			t.Fatalf("expected only r1 to be due; got %+v", got)
+		}
+	}},
+	{"claim_removes_returned_rows", func(t *testing.T, r repo.Repository) {
+		now := nowUTC()
+		_ = r.CreateScheduledRetry(ctx(), domain.NewScheduledWebhookRetry{
+			ID: "r1", WebhookID: "w1", EventType: "e", Payload: []byte(`{}`),
+			Attempt: 1, NotBefore: now.Add(-time.Second), CreatedAt: now,
+		})
+		first, err := r.ClaimDueRetries(ctx(), now, 10)
+		if err != nil || len(first) != 1 {
+			t.Fatalf("first claim: len=%d err=%v", len(first), err)
+		}
+		// A second claim must not return the same row.
+		second, err := r.ClaimDueRetries(ctx(), now, 10)
+		if err != nil || len(second) != 0 {
+			t.Fatalf("second claim: len=%d err=%v", len(second), err)
+		}
+	}},
+	{"claim_respects_limit", func(t *testing.T, r repo.Repository) {
+		now := nowUTC()
+		for i, id := range []string{"r1", "r2", "r3"} {
+			_ = r.CreateScheduledRetry(ctx(), domain.NewScheduledWebhookRetry{
+				ID: id, WebhookID: "w1", EventType: "e", Payload: []byte(`{}`),
+				Attempt: 1, NotBefore: now.Add(time.Duration(-i) * time.Second), CreatedAt: now,
+			})
+		}
+		got, err := r.ClaimDueRetries(ctx(), now, 2)
+		if err != nil || len(got) != 2 {
+			t.Fatalf("expected 2; got len=%d err=%v", len(got), err)
+		}
+	}},
+	{"delete_idempotent", func(t *testing.T, r repo.Repository) {
+		// Deleting a non-existent row should not return an error —
+		// callers may invoke this opportunistically.
+		if err := r.DeleteScheduledRetry(ctx(), "missing"); err != nil {
+			t.Fatalf("expected no error for missing id; got %v", err)
 		}
 	}},
 }

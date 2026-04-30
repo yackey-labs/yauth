@@ -325,6 +325,46 @@ bun run --filter '*' build
 bun run --filter '*' typecheck
 ```
 
+## Releases
+
+Releases are cut by pushing an annotated tag matching `v*.*.*`. The
+`Release` workflow (`.github/workflows/release.yml`) runs
+[GoReleaser](https://goreleaser.com) against `.goreleaser.yaml` and
+publishes a GitHub Release with:
+
+- `cmd/yauth` binaries for `linux` and `darwin` × `amd64` and `arm64`
+  (4 archives, `tar.gz`).
+- `SHA256SUMS` checksum file.
+- An auto-generated changelog grouped by Conventional Commit type
+  (`feat`, `fix`, `perf`, other).
+- A `ghcr.io/yackey-labs/yauth-cli` Docker image tagged with the
+  release version (and `latest`). Requires `Dockerfile.cli` at the
+  repo root; the docker build step is skipped when `PUSH_DOCKER` is
+  not `true`.
+
+Cutting a release:
+
+```bash
+# 1. ensure main is green and openapi.json is in sync
+git checkout main && git pull
+
+# 2. tag and push
+git tag -a v0.1.0 -m "yauth-go v0.1.0"
+git push origin v0.1.0
+```
+
+Dry-run a release locally before tagging:
+
+```bash
+# Requires goreleaser installed (`brew install goreleaser`).
+goreleaser release --snapshot --clean --skip=publish,docker
+```
+
+The `openapi-fresh` CI job guards against `openapi.json` drift: it
+runs `go generate ./openapi/` and fails if the working tree is dirty.
+Always commit a regenerated `openapi.json` alongside any handler
+shape change.
+
 ## License
 
 MIT

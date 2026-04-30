@@ -2849,6 +2849,54 @@
         ]
       }
     },
+    "/me": {
+      "patch": {
+        "description": "Currently only display_name is mutable.",
+        "operationId": "emailPasswordPatchMe",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailPasswordPatchMeRequest"
+              }
+            }
+          },
+          "description": "Profile fields to update",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailPasswordPatchMeResponse"
+                }
+              }
+            },
+            "description": "Updated user."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Update the caller's profile",
+        "tags": [
+          "email-password"
+        ]
+      }
+    },
     "/oauth/accounts": {
       "get": {
         "operationId": "oauthListAccounts",
@@ -3705,6 +3753,70 @@
         },
         "security": [],
         "summary": "RFC 7662 token introspection",
+        "tags": [
+          "oauth2-server"
+        ]
+      }
+    },
+    "/oauth2/register": {
+      "post": {
+        "description": "Public dynamic client registration endpoint. Disabled by default; opt in via plugin Config.DCREnabled. When DCRRequireInitialAccessToken is true (default), the request must carry an admin-issued Bearer token in the Authorization header.",
+        "operationId": "oauth2DynamicClientRegister",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Oauth2RegisterRequest"
+              }
+            }
+          },
+          "description": "Client metadata per RFC 7591 §2",
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Oauth2RegisterResponse"
+                }
+              }
+            },
+            "description": "Registered client + one-time client_secret (omitted for public clients) + registration_access_token."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Invalid client metadata."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Missing or invalid initial access token."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "DCR is disabled by configuration."
+          }
+        },
+        "security": [],
+        "summary": "Register an OAuth2 client (RFC 7591)",
         "tags": [
           "oauth2-server"
         ]

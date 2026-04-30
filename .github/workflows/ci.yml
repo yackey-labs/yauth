@@ -198,6 +198,20 @@ jobs:
           path: semgrep.sarif
           if-no-files-found: warn
 
+  openapi-fresh:
+    name: OpenAPI freshness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+      - name: Regenerate openapi.json
+        run: go generate ./openapi/
+      - name: Verify openapi.json is up to date
+        run: git diff --exit-code openapi.json
+
   bench:
     name: Build benchmark (artifact)
     runs-on: ubuntu-latest

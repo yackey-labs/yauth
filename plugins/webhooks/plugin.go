@@ -36,6 +36,8 @@ const (
 	defaultMaxBackoff        = 5 * time.Minute
 	defaultBackoffJitter     = 0.2
 	defaultDeadLetterEnabled = true
+	defaultClaimerInterval   = 1 * time.Second
+	defaultClaimerBatchSize  = 100
 )
 
 // Config tunes plugin behaviour. Zero value yields safe defaults.
@@ -72,6 +74,16 @@ type Config struct {
 	// Pointer so the zero value can default to true. Set to a pointer
 	// to false to disable.
 	DeadLetterEnabled *bool
+
+	// ClaimerInterval is how often the claimer goroutine scans the
+	// retry queue for due rows. Defaults to 1s. Lower values reduce
+	// retry latency; higher values reduce DB load.
+	ClaimerInterval time.Duration
+
+	// ClaimerBatchSize caps the number of retries a single claim cycle
+	// pulls from the queue. Defaults to 100. Larger batches amortise
+	// the round-trip but bound the worst-case stall on shutdown.
+	ClaimerBatchSize int
 }
 
 // webhooksPlugin is an unexported implementation of plugin.Plugin and
@@ -107,6 +119,12 @@ func New(cfg Config) plugin.Plugin {
 		v := defaultDeadLetterEnabled
 		cfg.DeadLetterEnabled = &v
 	}
+	if cfg.ClaimerInterval <= 0 {
+		cfg.ClaimerInterval = defaultClaimerInterval
+	}
+	if cfg.ClaimerBatchSize <= 0 {
+		cfg.ClaimerBatchSize = defaultClaimerBatchSize
+	}
 	return &webhooksPlugin{cfg: cfg}
 }
 
@@ -130,6 +148,8 @@ func (p *webhooksPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux, pref
 		MaxBackoff:        p.cfg.MaxBackoff,
 		BackoffJitter:     p.cfg.BackoffJitter,
 		DeadLetterEnabled: *p.cfg.DeadLetterEnabled,
+		ClaimerInterval:   p.cfg.ClaimerInterval,
+		ClaimerBatchSize:  p.cfg.ClaimerBatchSize,
 	})
 	p.dispatcher.Start()
 

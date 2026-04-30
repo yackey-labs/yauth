@@ -15,7 +15,6 @@ import (
 	"net/http"
 	"os"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -70,13 +69,21 @@ type RetryConfig struct {
 	MaxBackoff        time.Duration
 	BackoffJitter     float64
 	DeadLetterEnabled bool
+
+	// ClaimerInterval is how often the claimer goroutine scans the
+	// retry queue for due rows. Defaults to 1s.
+	ClaimerInterval time.Duration
+	// ClaimerBatchSize caps the number of retries claimed per scan.
+	// Defaults to 100.
+	ClaimerBatchSize int
 }
 
 // Dispatcher fans deliveryJobs out to a fixed-size worker pool. Workers
 // sign each payload with the webhook's HMAC secret, POST it, and persist
 // a WebhookDelivery row recording the outcome. On retryable failures the
-// dispatcher schedules a delayed requeue via time.AfterFunc rather than
-// blocking the worker — the worker stays free to drain other jobs.
+// dispatcher writes a ScheduledWebhookRetry row to the repo and a
+// separate claimer goroutine periodically pulls due rows back into the
+// in-process worker channel — so retries survive a process restart.
 type Dispatcher struct {
 	repo       repo.Repository
 	httpClient *http.Client
@@ -96,12 +103,13 @@ type Dispatcher struct {
 	mu     sync.RWMutex
 	closed bool
 
-	// timers tracks pending retry timers so Shutdown can stop them
-	// before draining workers. Key is a unique handle (atomic counter),
-	// value is *time.Timer.
-	timers   sync.Map
-	timerSeq atomic.Uint64
-	logf     func(format string, args ...any)
+	// claimerStop signals the claimer goroutine to exit; closed once
+	// during Shutdown. claimerDone is closed by the claimer when it
+	// returns so Shutdown can wait for it.
+	claimerStop chan struct{}
+	claimerDone chan struct{}
+
+	logf func(format string, args ...any)
 }
 
 // NewDispatcher constructs a dispatcher with a buffered job channel
@@ -123,25 +131,36 @@ func NewDispatcher(r repo.Repository, client *http.Client, workers int, retry Re
 	if retry.BackoffJitter < 0 {
 		retry.BackoffJitter = 0
 	}
+	if retry.ClaimerInterval <= 0 {
+		retry.ClaimerInterval = defaultClaimerInterval
+	}
+	if retry.ClaimerBatchSize <= 0 {
+		retry.ClaimerBatchSize = defaultClaimerBatchSize
+	}
 	return &Dispatcher{
-		repo:       r,
-		httpClient: client,
-		workers:    workers,
-		retry:      retry,
-		jobs:       make(chan *deliveryJob, workers*8),
+		repo:        r,
+		httpClient:  client,
+		workers:     workers,
+		retry:       retry,
+		jobs:        make(chan *deliveryJob, workers*8),
+		claimerStop: make(chan struct{}),
+		claimerDone: make(chan struct{}),
 		logf: func(format string, args ...any) {
 			fmt.Fprintf(os.Stderr, format, args...)
 		},
 	}
 }
 
-// Start spawns the worker goroutines. Safe to call exactly once before
-// any Enqueue calls.
+// Start spawns the worker goroutines and the claimer goroutine. Safe to
+// call exactly once before any Enqueue calls. The claimer immediately
+// runs one scan to pick up any retries persisted by a prior process so
+// a crash mid-backoff doesn't drop them on the floor.
 func (d *Dispatcher) Start() {
 	for i := 0; i < d.workers; i++ {
 		d.wg.Add(1)
 		go d.worker()
 	}
+	go d.claimerLoop()
 }
 
 // Enqueue pushes a job into the channel. Returns an error if the
@@ -158,31 +177,31 @@ func (d *Dispatcher) Enqueue(job *deliveryJob) error {
 	return nil
 }
 
-// Shutdown closes the job channel, stops any pending retry timers, and
-// waits for workers to drain. If ctx expires before draining completes
-// Shutdown returns ctx.Err() while leaving the workers running — they
-// will exit on their own once they finish their current HTTP call, and
-// the buffered jobs that were never picked up are dropped at process
-// exit.
+// Shutdown closes the job channel, stops the claimer, and waits for
+// workers to drain. Un-claimed retry rows are intentionally left in the
+// DB so the next process picks them up. If ctx expires before draining
+// completes Shutdown returns ctx.Err() while leaving the workers
+// running — they will exit on their own once they finish their current
+// HTTP call, and the buffered jobs that were never picked up are
+// dropped at process exit.
 func (d *Dispatcher) Shutdown(ctx context.Context) error {
 	d.mu.Lock()
+	alreadyClosed := d.closed
 	d.closed = true
 	d.mu.Unlock()
 
-	// Stop any pending retry timers so they don't try to push onto a
-	// closed channel. The closure registered with AfterFunc races with
-	// us: it calls LoadAndDelete on the same map entry, so whichever
-	// side wins removes the key. If we win, we Stop the timer; if the
-	// closure wins, it'll attempt Enqueue and fail cleanly because
-	// d.closed is already true.
-	d.timers.Range(func(k, v any) bool {
-		if _, loaded := d.timers.LoadAndDelete(k); loaded {
-			if t, ok := v.(*time.Timer); ok {
-				t.Stop()
-			}
-		}
-		return true
-	})
+	if !alreadyClosed {
+		close(d.claimerStop)
+	}
+
+	// Wait for the claimer to stop pushing new jobs before we close the
+	// jobs channel, otherwise the claimer could race with closeOnce and
+	// write to a closed channel.
+	select {
+	case <-d.claimerDone:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 
 	d.closeOnce.Do(func() { close(d.jobs) })
 
@@ -200,11 +219,91 @@ func (d *Dispatcher) Shutdown(ctx context.Context) error {
 	}
 }
 
+// claimerLoop runs claim cycles until claimerStop is closed. Each cycle
+// reads up to ClaimerBatchSize due rows and pushes them onto the worker
+// channel. A scan immediately at startup catches retries persisted by a
+// prior process; the periodic ticker covers retries scheduled by the
+// current process.
+func (d *Dispatcher) claimerLoop() {
+	defer close(d.claimerDone)
+	d.runClaim()
+	t := time.NewTicker(d.retry.ClaimerInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-d.claimerStop:
+			return
+		case <-t.C:
+			d.runClaim()
+		}
+	}
+}
+
+// runClaim performs a single claim cycle. Errors are logged and
+// swallowed — the next tick will retry. Each claimed row is mapped
+// back to the originating webhook (so we can sign with the current
+// secret) and pushed onto the job channel. If the webhook has been
+// deleted since the retry was scheduled the row is dropped.
+func (d *Dispatcher) runClaim() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	rows, err := d.repo.ClaimDueRetries(ctx, time.Now().UTC(), d.retry.ClaimerBatchSize)
+	if err != nil {
+		d.logf("yauth-go webhooks: claim due retries: %v\n", err)
+		return
+	}
+	for _, row := range rows {
+		hook, err := d.repo.GetWebhookByID(ctx, row.WebhookID)
+		if err != nil || hook == nil {
+			// Webhook deleted while a retry was queued; drop it silently.
+			continue
+		}
+		var env payloadEnvelope
+		if err := json.Unmarshal(row.Payload, &env); err != nil {
+			d.logf("yauth-go webhooks: decode retry payload: %v\n", err)
+			continue
+		}
+		job := &deliveryJob{
+			webhook:   *hook,
+			eventType: row.EventType,
+			payload:   env,
+			attempt:   row.Attempt,
+		}
+		if err := d.Enqueue(job); err != nil {
+			// Dispatcher closed mid-claim. Re-persist so the next
+			// process picks it up — losing a claimed-but-not-enqueued
+			// row would silently drop a delivery.
+			d.repersist(ctx, job, row.NotBefore)
+			return
+		}
+	}
+}
+
+// repersist writes a retry row back to the repo with the same
+// not_before. Used when a claim succeeds but Enqueue fails because the
+// dispatcher is shutting down.
+func (d *Dispatcher) repersist(ctx context.Context, job *deliveryJob, notBefore time.Time) {
+	body, err := json.Marshal(job.payload)
+	if err != nil {
+		return
+	}
+	_ = d.repo.CreateScheduledRetry(ctx, domain.NewScheduledWebhookRetry{
+		ID:        uuid.NewString(),
+		WebhookID: job.webhook.ID,
+		EventType: job.eventType,
+		Payload:   body,
+		Attempt:   job.attempt,
+		NotBefore: notBefore.UTC(),
+		CreatedAt: time.Now().UTC(),
+	})
+}
+
 // worker pulls jobs off the channel until it is closed. Each delivery
 // is a single HTTP attempt; the worker classifies the outcome and
-// either schedules a delayed retry via time.AfterFunc or lets the job
-// drop. The worker itself never blocks on backoff — that keeps the
-// pool responsive under heavy retry load.
+// either persists a ScheduledWebhookRetry row for later pickup or
+// records a dead-letter delivery. The worker itself never blocks on
+// backoff — that's the claimer's job — keeping the pool responsive
+// under heavy retry load.
 func (d *Dispatcher) worker() {
 	defer d.wg.Done()
 	for job := range d.jobs {
@@ -221,7 +320,7 @@ func (d *Dispatcher) worker() {
 			d.recordDeadLetter(context.Background(), job, outcome)
 			continue
 		}
-		d.scheduleRetry(job)
+		d.scheduleRetry(context.Background(), job)
 	}
 }
 
@@ -297,29 +396,30 @@ func shouldRetry(statusCode int) bool {
 	return false
 }
 
-// scheduleRetry computes the delay for the next attempt and arms a
-// time.AfterFunc that requeues the job when it fires. The timer is
-// tracked in d.timers so Shutdown can stop pending retries cleanly.
-func (d *Dispatcher) scheduleRetry(job *deliveryJob) {
+// scheduleRetry computes the delay for the next attempt and persists a
+// ScheduledWebhookRetry row with not_before = now + delay. The claimer
+// will pick it up once due. Persistence is what makes this crash-safe:
+// killing the process between deliver() and the next attempt no longer
+// loses the retry — the row sits in the DB until any dispatcher claims it.
+func (d *Dispatcher) scheduleRetry(ctx context.Context, job *deliveryJob) {
 	delay := d.backoffFor(job.attempt)
-
-	handle := d.timerSeq.Add(1)
-
-	timer := time.AfterFunc(delay, func() {
-		// On fire: remove from the tracking map and try to requeue. If
-		// Shutdown won the race for this entry it has stopped (or is
-		// stopping) the timer, but the closure still runs once if
-		// Stop() loses the race; in that case the LoadAndDelete here
-		// returns !loaded and we exit.
-		if _, loaded := d.timers.LoadAndDelete(handle); !loaded {
-			return
-		}
-		if err := d.Enqueue(job); err != nil {
-			// Dispatcher closed before requeue landed — drop the job.
-			d.logf("yauth-go webhooks: dropping retry for webhook %s after shutdown\n", job.webhook.ID)
-		}
-	})
-	d.timers.Store(handle, timer)
+	body, err := json.Marshal(job.payload)
+	if err != nil {
+		d.logf("yauth-go webhooks: marshal retry payload: %v\n", err)
+		return
+	}
+	now := time.Now().UTC()
+	if err := d.repo.CreateScheduledRetry(ctx, domain.NewScheduledWebhookRetry{
+		ID:        uuid.NewString(),
+		WebhookID: job.webhook.ID,
+		EventType: job.eventType,
+		Payload:   body,
+		Attempt:   job.attempt,
+		NotBefore: now.Add(delay),
+		CreatedAt: now,
+	}); err != nil {
+		d.logf("yauth-go webhooks: persist retry: %v\n", err)
+	}
 }
 
 // backoffFor returns the backoff duration for the *next* attempt given

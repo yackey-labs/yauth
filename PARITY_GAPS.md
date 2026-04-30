@@ -93,8 +93,14 @@ Rust ships **14 backends** (Diesel/sqlx/SeaORM/Toasty × PG/MySQL/SQLite + libsq
 | Suite | Status | Notes |
 |---|---|---|
 | Repo conformance | ✅ | Done — 74 cases × 2 backends. Add gorm-postgres in CI when DATABASE_URL is set (already wired in `test-postgres` job). |
-| Pentest / OWASP suite | **Open** | Rust has `tests/pentest.rs` (662 LOC); Go has none. Semgrep covers some surface but not e.g. timing attacks, IDOR, request-tampering. Worth a follow-up. |
+| Pentest / OWASP suite | ✅ | Ported to `pentest_test.go` at repo root. 22 cases pass + 2 documented skips (HIBP exercised elsewhere; OAuth open-redirect — see below). |
 | Cross-language route conformance | **Open** | Compare `openapi.json` between Rust + Go in CI; fail if shapes drift. Niche but useful. |
+
+### Security gaps surfaced by the pentest port
+
+| Gap | Severity | Notes |
+|---|---|---|
+| **Open redirect on `/oauth/{provider}/authorize`** | Medium | `redirect_url` query parameter is accepted verbatim and returned in the callback redirect. No allow-list. Should add `oauth.AllowedRedirectURLs []string` (or a per-provider allow-list) and reject anything not on it. Pentest case is `TestPentest_OAuthOpenRedirect_NotEnforced` — `t.Skip`-ed pending fix. |
 
 ### Infrastructure
 

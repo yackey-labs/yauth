@@ -79,6 +79,39 @@ type emailPasswordChangePasswordRequest struct {
 	NewPassword string `json:"new_password"`
 }
 
+type emailPasswordPatchMeRequest struct {
+	DisplayName *string `json:"display_name,omitempty"`
+}
+
+type emailPasswordPatchMeResponse struct {
+	User userJSON `json:"user"`
+}
+
+type oauth2RegisterRequest struct {
+	RedirectURIs            []string `json:"redirect_uris"`
+	ClientName              string   `json:"client_name,omitempty"`
+	GrantTypes              []string `json:"grant_types,omitempty"`
+	ResponseTypes           []string `json:"response_types,omitempty"`
+	Scope                   string   `json:"scope,omitempty"`
+	TokenEndpointAuthMethod string   `json:"token_endpoint_auth_method,omitempty"`
+	JWKSURI                 string   `json:"jwks_uri,omitempty"`
+}
+
+type oauth2RegisterResponse struct {
+	ClientID                string   `json:"client_id"`
+	ClientSecret            string   `json:"client_secret,omitempty"`
+	ClientIDIssuedAt        int64    `json:"client_id_issued_at"`
+	ClientSecretExpiresAt   int64    `json:"client_secret_expires_at"`
+	RedirectURIs            []string `json:"redirect_uris"`
+	ClientName              string   `json:"client_name,omitempty"`
+	GrantTypes              []string `json:"grant_types"`
+	ResponseTypes           []string `json:"response_types"`
+	Scope                   string   `json:"scope,omitempty"`
+	TokenEndpointAuthMethod string   `json:"token_endpoint_auth_method"`
+	RegistrationAccessToken string   `json:"registration_access_token,omitempty"`
+	RegistrationClientURI   string   `json:"registration_client_uri,omitempty"`
+}
+
 // --- bearer -----------------------------------------------------------
 
 type bearerTokenRequest struct {

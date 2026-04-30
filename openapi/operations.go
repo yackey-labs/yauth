@@ -65,6 +65,18 @@ func addEmailPassword(api *huma.OpenAPI) {
 		},
 	})
 	api.AddOperation(&huma.Operation{
+		Method: http.MethodPatch, Path: "/me",
+		Tags: []string{"email-password"}, OperationID: "emailPasswordPatchMe",
+		Summary:     "Update the caller's profile",
+		Description: "Currently only display_name is mutable.",
+		Security:    secCookie(),
+		RequestBody: jsonRequestBody(emailPasswordPatchMeRequest{}, "Profile fields to update"),
+		Responses: map[string]*huma.Response{
+			"200": jsonResponse("Updated user.", emailPasswordPatchMeResponse{}),
+			"401": errorResponse("Not authenticated."),
+		},
+	})
+	api.AddOperation(&huma.Operation{
 		Method: http.MethodPost, Path: "/change-password",
 		Tags: []string{"email-password"}, OperationID: "emailPasswordChangePassword",
 		Summary:     "Rotate the caller's password",
@@ -676,6 +688,20 @@ func addOIDC(api *huma.OpenAPI) {
 func addOAuth2Server(api *huma.OpenAPI) {
 	idParam := pathParam("id", "client_id")
 
+	api.AddOperation(&huma.Operation{
+		Method: http.MethodPost, Path: "/oauth2/register",
+		Tags: []string{"oauth2-server"}, OperationID: "oauth2DynamicClientRegister",
+		Summary:     "Register an OAuth2 client (RFC 7591)",
+		Description: "Public dynamic client registration endpoint. Disabled by default; opt in via plugin Config.DCREnabled. When DCRRequireInitialAccessToken is true (default), the request must carry an admin-issued Bearer token in the Authorization header.",
+		Security:    secNone(),
+		RequestBody: jsonRequestBody(oauth2RegisterRequest{}, "Client metadata per RFC 7591 §2"),
+		Responses: map[string]*huma.Response{
+			"201": jsonResponse("Registered client + one-time client_secret (omitted for public clients) + registration_access_token.", oauth2RegisterResponse{}),
+			"401": errorResponse("Missing or invalid initial access token."),
+			"400": errorResponse("Invalid client metadata."),
+			"404": errorResponse("DCR is disabled by configuration."),
+		},
+	})
 	api.AddOperation(&huma.Operation{
 		Method: http.MethodGet, Path: "/oauth2/clients",
 		Tags: []string{"oauth2-server"}, OperationID: "oauth2ListBannedClients",

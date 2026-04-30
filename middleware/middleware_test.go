@@ -849,3 +849,13 @@ func TestRequireAuth_BindIP_NilSessionIPSkipsCheck(t *testing.T) {
 		t.Errorf("expected no audits when session IP is nil, got %d", len(cap.audits))
 	}
 }
+
+// --- WebhookRetryRepository (no-op stubs; used only by webhooks plugin tests) ---
+
+func (f *fakeRepo) CreateScheduledRetry(_ context.Context, _ domain.NewScheduledWebhookRetry) error {
+	return nil
+}
+func (f *fakeRepo) ClaimDueRetries(_ context.Context, _ time.Time, _ int) ([]*domain.ScheduledWebhookRetry, error) {
+	return nil, nil
+}
+func (f *fakeRepo) DeleteScheduledRetry(_ context.Context, _ string) error { return nil }

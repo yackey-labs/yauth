@@ -61,3 +61,28 @@ type NewWebhookDelivery struct {
 	Attempt      int
 	CreatedAt    time.Time
 }
+
+// ScheduledWebhookRetry is a persisted webhook retry waiting for its
+// not_before deadline. The dispatcher's claimer atomically reserves due
+// rows, runs them, and deletes them — so the queue survives a process
+// restart instead of being lost to in-memory time.AfterFunc timers.
+type ScheduledWebhookRetry struct {
+	ID        string
+	WebhookID string
+	EventType string
+	Payload   []byte
+	Attempt   int
+	NotBefore time.Time
+	CreatedAt time.Time
+}
+
+// NewScheduledWebhookRetry is the input for persisting a retry row.
+type NewScheduledWebhookRetry struct {
+	ID        string
+	WebhookID string
+	EventType string
+	Payload   []byte
+	Attempt   int
+	NotBefore time.Time
+	CreatedAt time.Time
+}

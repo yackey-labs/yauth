@@ -76,6 +76,24 @@ func (j *jsonClient) post(t *testing.T, url string, body any) *http.Response {
 	return res
 }
 
+func (j *jsonClient) patch(t *testing.T, url string, body any) *http.Response {
+	t.Helper()
+	buf, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	req, err := http.NewRequest(http.MethodPatch, url, bytes.NewReader(buf))
+	if err != nil {
+		t.Fatalf("new req: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := j.c.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	return res
+}
+
 func (j *jsonClient) get(t *testing.T, url string) *http.Response {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodGet, url, nil)
@@ -536,5 +554,165 @@ func TestRegister_DuplicateEmail_DoesNotLeak(t *testing.T) {
 		if c.Name == "yauth_session" && c.Value != "" {
 			t.Fatalf("dup register leaked a session cookie: %v", c)
 		}
+	}
+}
+
+// newTestServerWithConfig is a thin wrapper over the default builder that
+// lets a test override yauth.YAuthConfig (allow_signups,
+// auto_admin_first_user, …) before Build. Uses a per-test in-memory DSN
+// so the AutoAdminFirstUser path sees a truly empty user table.
+func newTestServerWithConfig(t *testing.T, customize func(c *yauth.YAuthConfig)) (*httptest.Server, func()) {
+	t.Helper()
+
+	dsn := "file:" + t.Name() + "?mode=memory&cache=private&_pragma=foreign_keys(1)"
+	db, err := gormrepo.OpenSQLite(dsn)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	if err := gormrepo.Migrate(context.Background(), db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	repo := gormrepo.New(db)
+
+	cfg := yauth.NewDefaultConfig()
+	if customize != nil {
+		customize(&cfg)
+	}
+	ya, err := yauth.New(repo, cfg).
+		WithPlugin(emailpassword.New(emailpassword.Config{
+			HIBPCheck:    false,
+			HIBPCheckSet: true,
+		})).
+		Build()
+	if err != nil {
+		t.Fatalf("build yauth: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	mux.Handle("/api/auth/", http.StripPrefix("/api/auth", ya.Router()))
+	srv := httptest.NewServer(mux)
+	return srv, func() { srv.Close() }
+}
+
+func TestPatchMe_UpdatesDisplayName(t *testing.T) {
+	srv, stop := newTestServer(t)
+	defer stop()
+
+	cl := newJSONClient(t)
+	res := cl.post(t, srv.URL+"/api/auth/register", map[string]string{
+		"email":    "patch@example.com",
+		"password": "correct horse battery staple",
+	})
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("register: %d (%s)", res.StatusCode, drain(res))
+	}
+	res.Body.Close()
+
+	res = cl.patch(t, srv.URL+"/api/auth/me", map[string]any{
+		"display_name": "Patch User",
+	})
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("PATCH /me: want 200, got %d (%s)", res.StatusCode, drain(res))
+	}
+	var body struct {
+		User struct {
+			DisplayName *string `json:"display_name"`
+		} `json:"user"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	res.Body.Close()
+	if body.User.DisplayName == nil || *body.User.DisplayName != "Patch User" {
+		t.Fatalf("display_name not updated: %+v", body.User.DisplayName)
+	}
+}
+
+func TestPatchMe_RequiresAuth(t *testing.T) {
+	srv, stop := newTestServer(t)
+	defer stop()
+
+	cl := newJSONClient(t)
+	res := cl.patch(t, srv.URL+"/api/auth/me", map[string]any{"display_name": "x"})
+	if res.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("PATCH /me without auth: want 401, got %d", res.StatusCode)
+	}
+	res.Body.Close()
+}
+
+func TestRegister_AllowSignupsFalse_Returns403(t *testing.T) {
+	srv, stop := newTestServerWithConfig(t, func(c *yauth.YAuthConfig) {
+		c.AllowSignups = false
+	})
+	defer stop()
+
+	cl := newJSONClient(t)
+	res := cl.post(t, srv.URL+"/api/auth/register", map[string]string{
+		"email":    "blocked@example.com",
+		"password": "correct horse battery staple",
+	})
+	if res.StatusCode != http.StatusForbidden {
+		t.Fatalf("register w/ signups disabled: want 403, got %d (%s)", res.StatusCode, drain(res))
+	}
+	var body struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	res.Body.Close()
+	if body.Error.Code != "SIGNUPS_DISABLED" {
+		t.Fatalf("error code: want SIGNUPS_DISABLED, got %q", body.Error.Code)
+	}
+}
+
+func TestRegister_AutoAdminFirstUser(t *testing.T) {
+	srv, stop := newTestServerWithConfig(t, func(c *yauth.YAuthConfig) {
+		c.AutoAdminFirstUser = true
+	})
+	defer stop()
+
+	cl1 := newJSONClient(t)
+	res := cl1.post(t, srv.URL+"/api/auth/register", map[string]string{
+		"email":    "first@example.com",
+		"password": "correct horse battery staple",
+	})
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("register first: %d (%s)", res.StatusCode, drain(res))
+	}
+	var firstBody struct {
+		User struct {
+			Role string `json:"role"`
+		} `json:"user"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&firstBody); err != nil {
+		t.Fatalf("decode first: %v", err)
+	}
+	res.Body.Close()
+	if firstBody.User.Role != "admin" {
+		t.Fatalf("first user role: want admin, got %q", firstBody.User.Role)
+	}
+
+	cl2 := newJSONClient(t)
+	res = cl2.post(t, srv.URL+"/api/auth/register", map[string]string{
+		"email":    "second@example.com",
+		"password": "correct horse battery staple",
+	})
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("register second: %d", res.StatusCode)
+	}
+	var secondBody struct {
+		User struct {
+			Role string `json:"role"`
+		} `json:"user"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&secondBody); err != nil {
+		t.Fatalf("decode second: %v", err)
+	}
+	res.Body.Close()
+	if secondBody.User.Role != "user" {
+		t.Fatalf("second user role: want user, got %q", secondBody.User.Role)
 	}
 }

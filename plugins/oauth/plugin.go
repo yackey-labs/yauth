@@ -47,6 +47,21 @@ type Config struct {
 	// StateTTL bounds how long an authorization-code flow may take from
 	// /authorize to /callback. Defaults to 10 minutes if zero.
 	StateTTL time.Duration
+
+	// AllowedRedirectURLs is the allow-list of post-login redirect targets
+	// the plugin will honor on the redirect_url query parameter of
+	// /authorize and /link. Each entry is matched as an exact-prefix on
+	// the incoming URL after trimming whitespace; relative paths (starting
+	// with "/") are always accepted.
+	//
+	// Empty / nil slice means "redirect_url is ignored entirely" — the
+	// callback always lands at the host's BaseURL. This is the safest
+	// default and matches the open-redirect mitigation surfaced by the
+	// pentest suite (TestPentest_OAuthOpenRedirect_NotEnforced).
+	//
+	// Operators who want flexible post-login redirects MUST supply this
+	// list explicitly: e.g. AllowedRedirectURLs: []string{"https://app.example.com"}.
+	AllowedRedirectURLs []string
 }
 
 // oauthPlugin implements plugin.Plugin.

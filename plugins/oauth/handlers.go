@@ -83,6 +83,43 @@ const (
 	linkModeLink  = "link"
 )
 
+// safeRedirect filters the incoming redirect_url against the plugin's
+// AllowedRedirectURLs allow-list. Returns the empty string for any URL
+// that isn't on the list — the callback then falls back to its default
+// landing page rather than honoring an attacker-controlled URL. Relative
+// paths (starting with "/") are always allowed since they cannot escape
+// the host.
+//
+// This closes the open-redirect surface flagged by
+// TestPentest_OAuthOpenRedirect_NotEnforced.
+func (p *oauthPlugin) safeRedirect(in string) string {
+	in = strings.TrimSpace(in)
+	if in == "" {
+		return ""
+	}
+	if strings.HasPrefix(in, "/") && !strings.HasPrefix(in, "//") {
+		return in
+	}
+	for _, allowed := range p.cfg.AllowedRedirectURLs {
+		if allowed == "" {
+			continue
+		}
+		if in == allowed {
+			return in
+		}
+		// Strict prefix: the byte after the prefix must be a path
+		// terminator so "https://app.example.com" cannot match
+		// "https://app.example.com.evil.com/...".
+		if strings.HasPrefix(in, allowed) {
+			rest := in[len(allowed):]
+			if rest == "" || rest[0] == '/' || rest[0] == '?' || rest[0] == '#' {
+				return in
+			}
+		}
+	}
+	return ""
+}
+
 // stateMetadata serialises into the OAuthState.RedirectURL field as
 // "<mode>|<userID>|<redirect>". The schema does not give us a dedicated
 // column for the link-mode user ID, so we piggy-back on the redirect-URL
@@ -118,7 +155,7 @@ func (p *oauthPlugin) handleAuthorize(host plugin.PluginHost) http.HandlerFunc {
 			return
 		}
 
-		redirect := strings.TrimSpace(r.URL.Query().Get("redirect_url"))
+		redirect := p.safeRedirect(r.URL.Query().Get("redirect_url"))
 
 		state, err := generateState()
 		if err != nil {
@@ -179,7 +216,7 @@ func (p *oauthPlugin) handleLink(host plugin.PluginHost) http.HandlerFunc {
 			return
 		}
 
-		redirect := strings.TrimSpace(r.URL.Query().Get("redirect_url"))
+		redirect := p.safeRedirect(r.URL.Query().Get("redirect_url"))
 
 		state, err := generateState()
 		if err != nil {

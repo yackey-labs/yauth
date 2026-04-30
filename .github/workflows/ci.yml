@@ -48,11 +48,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version: '1.25'
           cache: true
-      - uses: golangci/golangci-lint-action@v6
+      - uses: golangci/golangci-lint-action@v8
         with:
-          version: latest
+          version: v2.5.0
           args: --timeout=5m
 
   test-sqlite:
@@ -150,9 +150,11 @@ jobs:
           done
           # register endpoint smoke
           set -e
+          # Random per-run password keeps the smoke immune to HIBP defaults.
+          PW="ci-smoke-$(openssl rand -hex 16)-Aa1!"
           curl -fsS -X POST http://127.0.0.1:3000/api/auth/register \
             -H 'Content-Type: application/json' \
-            -d '{"email":"alice@example.com","password":"correct horse battery staple"}' \
+            -d "{\"email\":\"alice@example.com\",\"password\":\"$PW\"}" \
             -o /dev/null -w "register: %{http_code}\n"
           kill $SERVER_PID || true
           wait $SERVER_PID 2>/dev/null || true
@@ -167,7 +169,7 @@ jobs:
       image: semgrep/semgrep
     steps:
       - uses: actions/checkout@v4
-      - name: Run Semgrep
+      - name: Run Semgrep (full SARIF, non-fatal)
         env:
           SEMGREP_RULES: >-
             p/default
@@ -175,14 +177,20 @@ jobs:
             p/secrets
             p/golang
             p/owasp-top-ten
+        # `semgrep ci` exits non-zero on any blocking finding; we want a SARIF artifact
+        # for code-scanning ingestion regardless, so don't fail this step.
         run: |
-          semgrep ci \
-            --sarif --output=semgrep.sarif \
-            --severity=ERROR \
-            --severity=WARNING \
-            --severity=INFO || true
-          # Re-run with --severity=ERROR-only and proper exit code so the job fails on HIGH+
-          semgrep ci --severity=ERROR
+          semgrep ci --sarif --sarif-output=semgrep.sarif || true
+      - name: Fail on ERROR-severity findings
+        env:
+          SEMGREP_RULES: >-
+            p/default
+            p/security-audit
+            p/secrets
+            p/golang
+            p/owasp-top-ten
+        # `semgrep scan` honors --severity; re-scan with ERROR only and gate the job here.
+        run: semgrep scan --error --severity=ERROR
       - uses: actions/upload-artifact@v4
         if: always()
         with:

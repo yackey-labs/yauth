@@ -445,12 +445,15 @@ func TestWebhookRetry_DeadLetter(t *testing.T) {
 	}
 	res.Body.Close()
 
-	if !waitFor(t, 5*time.Second, func() bool { return rcv.Hits() >= 3 }) {
+	if !waitFor(t, 15*time.Second, func() bool { return rcv.Hits() >= 3 }) {
 		t.Fatalf("expected 3 attempts, got %d", rcv.Hits())
 	}
 
-	// Wait for dead-letter row to land.
-	if !waitFor(t, 5*time.Second, func() bool {
+	// Wait for dead-letter row to land. Give CI hardware extra slack —
+	// the row creation runs on a worker goroutine after the 3rd attempt
+	// returns, and slow CI runners with argon2 hashing in-flight can
+	// push the recordDeadLetter call to the tail of the budget.
+	if !waitFor(t, 15*time.Second, func() bool {
 		rows, _ := ya.Repo().ListWebhookDeliveriesByWebhookID(context.Background(), whID, 10)
 		for _, row := range rows {
 			if row.ResponseBody != nil && strings.Contains(*row.ResponseBody, "DEAD_LETTER") {
@@ -459,7 +462,8 @@ func TestWebhookRetry_DeadLetter(t *testing.T) {
 		}
 		return false
 	}) {
-		t.Fatalf("expected dead-letter row to be persisted")
+		rows, _ := ya.Repo().ListWebhookDeliveriesByWebhookID(context.Background(), whID, 10)
+		t.Fatalf("expected dead-letter row to be persisted (have %d rows)", len(rows))
 	}
 
 	rows, err := ya.Repo().ListWebhookDeliveriesByWebhookID(context.Background(), whID, 10)

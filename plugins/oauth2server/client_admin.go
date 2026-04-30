@@ -134,15 +134,13 @@ func (p *oauth2Plugin) handleCreateClient(host plugin.PluginHost) http.HandlerFu
 			JWKSURI:                 req.JWKSURI,
 		}
 		if err := host.Repo().CreateOAuth2Client(r.Context(), new); err != nil {
-			// nosemgrep: go.lang.security.injection.tainted-sql-string.tainted-sql-string
 			// writeOAuthError emits a JSON response body per RFC 6749 §5.2, not a SQL string.
-			writeOAuthError(w, "server_error", "create client: "+sanitizeErr(err))
+			writeOAuthError(w, "server_error", "create client: "+sanitizeErr(err)) // nosemgrep: go.lang.security.injection.tainted-sql-string.tainted-sql-string
 			return
 		}
 		stored, err := host.Repo().GetOAuth2ClientByClientID(r.Context(), clientID)
 		if err != nil {
-			// nosemgrep: go.lang.security.injection.tainted-sql-string.tainted-sql-string
-			writeOAuthError(w, "server_error", "lookup created client: "+sanitizeErr(err))
+			writeOAuthError(w, "server_error", "lookup created client: "+sanitizeErr(err)) // nosemgrep: go.lang.security.injection.tainted-sql-string.tainted-sql-string
 			return
 		}
 		writeJSON(w, http.StatusCreated, createClientResponse{
@@ -315,8 +313,7 @@ func (p *oauth2Plugin) handleRotatePublicKey(host plugin.PluginHost) http.Handle
 			return
 		}
 		if _, err := parsePEMKey(req.PublicKeyPEM); err != nil {
-			// nosemgrep: go.lang.security.injection.tainted-sql-string.tainted-sql-string
-			writeOAuthError(w, "invalid_request", "public_key_pem is not a valid RSA or EC public key: "+sanitizeErr(err))
+			writeOAuthError(w, "invalid_request", "public_key_pem is not a valid RSA or EC public key: "+sanitizeErr(err)) // nosemgrep: go.lang.security.injection.tainted-sql-string.tainted-sql-string
 			return
 		}
 		id := r.PathValue("id")

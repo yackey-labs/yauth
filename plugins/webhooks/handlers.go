@@ -21,10 +21,6 @@ import (
 // for HMAC-SHA256 and short enough to copy/paste.
 const secretBytes = 32
 
-// recentDeliveryLimit caps the rows returned by GET /webhooks/{id}/deliveries.
-// 100 is the same default the Rust plugin uses.
-const recentDeliveryLimit = 100
-
 // errorBody mirrors the email-password plugin's canonical error shape:
 //
 //	{"error": {"code": "...", "message": "..."}}

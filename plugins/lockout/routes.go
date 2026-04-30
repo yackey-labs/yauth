@@ -85,8 +85,10 @@ type unlockRequest struct {
 }
 
 type unlockResponse struct {
-	Unlocked bool `json:"unlocked"`
+	Message string `json:"message"`
 }
+
+const unlockMessage = "Account unlocked."
 
 func (p *lockoutPlugin) handleUnlock(host plugin.PluginHost) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -119,7 +121,7 @@ func (p *lockoutPlugin) handleUnlock(host plugin.PluginHost) http.HandlerFunc {
 			_ = repo.AutoUnlockAccount(ctx, lock.ID, now)
 			_ = repo.ResetAccountLockFailedCount(ctx, lock.ID, now)
 		}
-		writeJSON(w, http.StatusOK, unlockResponse{Unlocked: true})
+		writeJSON(w, http.StatusOK, unlockResponse{Message: unlockMessage})
 	}
 }
 
@@ -130,8 +132,10 @@ type unlockRequestRequest struct {
 }
 
 type unlockRequestResponse struct {
-	Sent bool `json:"sent"`
+	Message string `json:"message"`
 }
+
+const unlockRequestMessage = "If the email exists, an unlock link has been sent."
 
 func (p *lockoutPlugin) handleUnlockRequest(host plugin.PluginHost) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -152,17 +156,17 @@ func (p *lockoutPlugin) handleUnlockRequest(host plugin.PluginHost) http.Handler
 		user, err := repo.GetUserByEmail(ctx, req.Email)
 		if err != nil && !errors.Is(err, yautherr.ErrNotFound) {
 			// Fail-open with 200 to preserve enumeration resistance.
-			writeJSON(w, http.StatusOK, unlockRequestResponse{Sent: true})
+			writeJSON(w, http.StatusOK, unlockRequestResponse{Message: unlockRequestMessage})
 			return
 		}
 		if user == nil {
-			writeJSON(w, http.StatusOK, unlockRequestResponse{Sent: true})
+			writeJSON(w, http.StatusOK, unlockRequestResponse{Message: unlockRequestMessage})
 			return
 		}
 
 		raw, hash, err := generateToken()
 		if err != nil {
-			writeJSON(w, http.StatusOK, unlockRequestResponse{Sent: true})
+			writeJSON(w, http.StatusOK, unlockRequestResponse{Message: unlockRequestMessage})
 			return
 		}
 		now := time.Now().UTC()
@@ -173,14 +177,38 @@ func (p *lockoutPlugin) handleUnlockRequest(host plugin.PluginHost) http.Handler
 			ExpiresAt: now.Add(p.cfg.UnlockTokenTTL),
 			CreatedAt: now,
 		}); err != nil {
-			writeJSON(w, http.StatusOK, unlockRequestResponse{Sent: true})
+			writeJSON(w, http.StatusOK, unlockRequestResponse{Message: unlockRequestMessage})
 			return
 		}
 
 		link := buildLink(p.cfg.LinkBaseURL, raw)
 		_ = p.cfg.Mailer.SendUnlockToken(ctx, req.Email, link)
 
-		writeJSON(w, http.StatusOK, unlockRequestResponse{Sent: true})
+		writeJSON(w, http.StatusOK, unlockRequestResponse{Message: unlockRequestMessage})
+	}
+}
+
+// --- POST /admin/users/{id}/unlock (admin force-unlock) -----------------
+
+func (p *lockoutPlugin) handleAdminUnlock(host plugin.PluginHost) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := strings.TrimSpace(r.PathValue("id"))
+		if userID == "" {
+			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "user id is required")
+			return
+		}
+		ctx := r.Context()
+		repo := host.Repo()
+
+		now := time.Now().UTC()
+		lock, err := repo.GetAccountLockByUserID(ctx, userID)
+		if err != nil || lock == nil {
+			writeJSON(w, http.StatusOK, unlockResponse{Message: unlockMessage})
+			return
+		}
+		_ = repo.AutoUnlockAccount(ctx, lock.ID, now)
+		_ = repo.ResetAccountLockFailedCount(ctx, lock.ID, now)
+		writeJSON(w, http.StatusOK, unlockResponse{Message: unlockMessage})
 	}
 }
 

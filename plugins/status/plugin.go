@@ -5,6 +5,7 @@
 // Routes registered by Plugin.Routes (relative to the prefix passed in):
 //
 //	GET {prefix}/status   admin-only — returns {plugins: [...names], version: "..."}
+//	GET {prefix}/config   admin-only — returns subset of host config (Rust parity)
 package status
 
 import (
@@ -29,4 +30,5 @@ func (p *statusPlugin) Name() string { return "status" }
 func (p *statusPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux, prefix string) {
 	mw := host.Middleware()
 	mux.Handle("GET "+prefix+"/status", mw.RequireAdmin(http.HandlerFunc(p.handleStatus(host))))
+	mux.Handle("GET "+prefix+"/config", mw.RequireAdmin(http.HandlerFunc(p.handleConfig(host))))
 }

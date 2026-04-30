@@ -176,11 +176,11 @@ func TestEmailPasswordEndToEnd(t *testing.T) {
 
 	// 6. change password
 	res = cl.post(t, srv.URL+"/api/auth/change-password", map[string]string{
-		"old_password": oldPW,
-		"new_password": newPW,
+		"current_password": oldPW,
+		"new_password":     newPW,
 	})
-	if res.StatusCode != http.StatusNoContent {
-		t.Fatalf("change-password: expected 204, got %d (%s)", res.StatusCode, drain(res))
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("change-password: expected 200, got %d (%s)", res.StatusCode, drain(res))
 	}
 	res.Body.Close()
 
@@ -393,8 +393,8 @@ func TestForgotPassword_ResetPassword_RoundTrip(t *testing.T) {
 	token := extractToken(t, mail.link)
 
 	res = cl.post(t, srv.URL+"/api/auth/reset-password", map[string]string{
-		"token":        token,
-		"new_password": newPW,
+		"token":    token,
+		"password": newPW,
 	})
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("reset-password: %d (%s)", res.StatusCode, drain(res))
@@ -423,8 +423,8 @@ func TestForgotPassword_ResetPassword_RoundTrip(t *testing.T) {
 
 	// Replay reset must fail.
 	res = cl2.post(t, srv.URL+"/api/auth/reset-password", map[string]string{
-		"token":        token,
-		"new_password": newPW,
+		"token":    token,
+		"password": newPW,
 	})
 	if res.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("reset-password replay: want 401, got %d", res.StatusCode)
@@ -682,6 +682,11 @@ func TestRegister_AutoAdminFirstUser(t *testing.T) {
 	if res.StatusCode != http.StatusCreated {
 		t.Fatalf("register first: %d (%s)", res.StatusCode, drain(res))
 	}
+	res.Body.Close()
+	res = cl1.get(t, srv.URL+"/api/auth/session")
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("session first: %d", res.StatusCode)
+	}
 	var firstBody struct {
 		User struct {
 			Role string `json:"role"`
@@ -702,6 +707,11 @@ func TestRegister_AutoAdminFirstUser(t *testing.T) {
 	})
 	if res.StatusCode != http.StatusCreated {
 		t.Fatalf("register second: %d", res.StatusCode)
+	}
+	res.Body.Close()
+	res = cl2.get(t, srv.URL+"/api/auth/session")
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("session second: %d", res.StatusCode)
 	}
 	var secondBody struct {
 		User struct {

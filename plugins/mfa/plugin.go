@@ -6,12 +6,12 @@
 //
 // Routes registered by Plugin.Routes (relative to the prefix passed in):
 //
-//	POST   {prefix}/totp/setup              create unverified secret  (RequireAuth)
-//	POST   {prefix}/totp/confirm            verify + activate secret  (RequireAuth)
-//	DELETE {prefix}/totp                    remove secret + codes     (RequireAuth)
-//	GET    {prefix}/backup-codes            unused-count              (RequireAuth)
-//	POST   {prefix}/backup-codes/regenerate replace codes             (RequireAuth)
-//	POST   {prefix}/verify                  consume pending session
+//	POST   {prefix}/mfa/totp/setup              create unverified secret  (RequireAuth)
+//	POST   {prefix}/mfa/totp/confirm            verify + activate secret  (RequireAuth)
+//	DELETE {prefix}/mfa/totp                    remove secret + codes     (RequireAuth)
+//	GET    {prefix}/mfa/backup-codes            unused-count              (RequireAuth)
+//	POST   {prefix}/mfa/backup-codes/regenerate replace codes             (RequireAuth)
+//	POST   {prefix}/mfa/verify                  consume pending session
 //
 // The plugin also registers an events.Handler that intercepts
 // login.succeeded events: when the authenticating user has a verified
@@ -67,10 +67,10 @@ func (p *mfaPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux, prefix st
 		pendingSessionTTL: pendingSessionTTL,
 	})
 
-	mux.Handle("POST "+prefix+"/totp/setup", mw.RequireAuth(http.HandlerFunc(p.handleSetup(host))))
-	mux.Handle("POST "+prefix+"/totp/confirm", mw.RequireAuth(http.HandlerFunc(p.handleConfirm(host))))
-	mux.Handle("DELETE "+prefix+"/totp", mw.RequireAuth(http.HandlerFunc(p.handleDelete(host))))
-	mux.Handle("GET "+prefix+"/backup-codes", mw.RequireAuth(http.HandlerFunc(p.handleBackupCodesCount(host))))
-	mux.Handle("POST "+prefix+"/backup-codes/regenerate", mw.RequireAuth(http.HandlerFunc(p.handleRegenerateBackupCodes(host))))
-	mux.Handle("POST "+prefix+"/verify", http.HandlerFunc(p.handleVerify(host)))
+	mux.Handle("POST "+prefix+"/mfa/totp/setup", mw.RequireAuth(http.HandlerFunc(p.handleSetup(host))))
+	mux.Handle("POST "+prefix+"/mfa/totp/confirm", mw.RequireAuth(http.HandlerFunc(p.handleConfirm(host))))
+	mux.Handle("DELETE "+prefix+"/mfa/totp", mw.RequireAuth(http.HandlerFunc(p.handleDelete(host))))
+	mux.Handle("GET "+prefix+"/mfa/backup-codes", mw.RequireAuth(http.HandlerFunc(p.handleBackupCodesCount(host))))
+	mux.Handle("POST "+prefix+"/mfa/backup-codes/regenerate", mw.RequireAuth(http.HandlerFunc(p.handleRegenerateBackupCodes(host))))
+	mux.Handle("POST "+prefix+"/mfa/verify", http.HandlerFunc(p.handleVerify(host)))
 }

@@ -26,6 +26,14 @@ export interface AdminDeleteSessionsResponse {
   deleted: number;
 }
 
+export interface UserJSON {
+  display_name?: string;
+  email: string;
+  email_verified: boolean;
+  id: string;
+  role: string;
+}
+
 export interface AdminUserJSON {
   banned: boolean;
   banned_reason?: string;
@@ -40,6 +48,7 @@ export interface AdminUserJSON {
 }
 
 export interface AdminImpersonateResponse {
+  impersonator?: UserJSON;
   user: AdminUserJSON;
 }
 
@@ -48,7 +57,26 @@ export interface AdminListAuditResponse {
   entries: AdminAuditEntryJSON[] | null;
 }
 
+export interface AdminSessionJSON {
+  created_at: string;
+  expires_at: string;
+  id: string;
+  ip_address?: string;
+  user_agent?: string;
+  user_id: string;
+}
+
+export interface AdminListSessionsResponse {
+  page: number;
+  per_page: number;
+  /** @nullable */
+  sessions: AdminSessionJSON[] | null;
+  total: number;
+}
+
 export interface AdminListUsersResponse {
+  page: number;
+  per_page: number;
   total: number;
   /** @nullable */
   users: AdminUserJSON[] | null;
@@ -56,11 +84,12 @@ export interface AdminListUsersResponse {
 
 export interface AdminPatchUserRequest {
   display_name?: string;
+  email_verified?: boolean;
   role?: string;
 }
 
 export interface ApiKeyCreateRequest {
-  expires_at?: string;
+  expires_in_days?: number;
   name: string;
   /** @nullable */
   scopes?: string[] | null;
@@ -79,12 +108,15 @@ export interface ApiKeyJSON {
 
 export interface ApiKeyCreateResponse {
   api_key: ApiKeyJSON;
-  key: string;
+  secret: string;
 }
 
 export interface ApiKeyListResponse {
   /** @nullable */
-  keys: ApiKeyJSON[] | null;
+  items: ApiKeyJSON[] | null;
+  page: number;
+  per_page: number;
+  total: number;
 }
 
 export interface BearerRefreshRequest {
@@ -98,6 +130,7 @@ export interface BearerRevokeRequest {
 export interface BearerTokenRequest {
   email: string;
   password: string;
+  scope?: string;
 }
 
 export interface BearerTokenResponse {
@@ -107,9 +140,26 @@ export interface BearerTokenResponse {
   token_type: string;
 }
 
+export interface ConfigResponse {
+  allow_signups: boolean;
+  require_email_verification: boolean;
+}
+
+export interface EmailForgotPasswordRequest {
+  email: string;
+}
+
+export interface EmailForgotPasswordResponse {
+  message: string;
+}
+
 export interface EmailPasswordChangePasswordRequest {
+  current_password: string;
   new_password: string;
-  old_password: string;
+}
+
+export interface EmailPasswordChangePasswordResponse {
+  message: string;
 }
 
 export interface EmailPasswordLoginMfaResponse {
@@ -120,32 +170,72 @@ export interface EmailPasswordLoginMfaResponse {
 export interface EmailPasswordLoginRequest {
   email: string;
   password: string;
-}
-
-export interface UserJSON {
-  display_name?: string;
-  email: string;
-  email_verified: boolean;
-  id: string;
-  role: string;
+  remember_me?: boolean;
 }
 
 export interface EmailPasswordLoginResponse {
   user: UserJSON;
 }
 
+export interface EmailPasswordPatchMeRequest {
+  display_name?: string;
+}
+
+export interface SessionUserJSON {
+  auth_method: string;
+  banned: boolean;
+  display_name?: string;
+  email: string;
+  email_verified: boolean;
+  id: string;
+  role: string;
+  /** @nullable */
+  scopes: string[] | null;
+}
+
+export interface EmailPasswordPatchMeResponse {
+  user: SessionUserJSON;
+}
+
 export interface EmailPasswordRegisterRequest {
+  display_name?: string;
   email: string;
   password: string;
 }
 
 export interface EmailPasswordRegisterResponse {
-  user: UserJSON;
+  message?: string;
+  user?: UserJSON;
 }
 
 export interface EmailPasswordSessionResponse {
-  expires_at: string;
-  user: UserJSON;
+  expires_at?: string;
+  user: SessionUserJSON;
+}
+
+export interface EmailResendVerificationRequest {
+  email: string;
+}
+
+export interface EmailResendVerificationResponse {
+  message: string;
+}
+
+export interface EmailResetPasswordRequest {
+  password: string;
+  token: string;
+}
+
+export interface EmailResetPasswordResponse {
+  message: string;
+}
+
+export interface EmailVerifyRequest {
+  token: string;
+}
+
+export interface EmailVerifyResponse {
+  message: string;
 }
 
 export interface ErrorPayload {
@@ -193,7 +283,7 @@ export interface LockoutUnlockReqRequest {
 }
 
 export interface LockoutUnlockReqResponse {
-  sent: boolean;
+  message: string;
 }
 
 export interface LockoutUnlockRequest {
@@ -201,16 +291,15 @@ export interface LockoutUnlockRequest {
 }
 
 export interface LockoutUnlockResponse {
-  unlocked: boolean;
+  message: string;
 }
 
 export interface MagicLinkSendRequest {
   email: string;
-  redirect_url?: string;
 }
 
 export interface MagicLinkSendResponse {
-  sent: boolean;
+  message: string;
 }
 
 export interface MagicLinkVerifyRequest {
@@ -222,11 +311,15 @@ export interface MagicLinkVerifyResponse {
 }
 
 export interface MfaBackupCodesCountResponse {
-  unused: number;
+  remaining: number;
 }
 
 export interface MfaConfirmRequest {
   code: string;
+}
+
+export interface MfaMessageResponse {
+  message: string;
 }
 
 export interface MfaRegenerateResponse {
@@ -248,7 +341,7 @@ export interface MfaVerifyRequest {
 }
 
 export interface MfaVerifyResponse {
-  user_id: string;
+  user: UserJSON;
 }
 
 export interface Oauth2AuthorizeRedirect {
@@ -350,6 +443,37 @@ export interface Oauth2PatchClientRequest {
   public_key_pem?: string;
 }
 
+export interface Oauth2RegisterRequest {
+  client_name?: string;
+  /** @nullable */
+  grant_types?: string[] | null;
+  jwks_uri?: string;
+  /** @nullable */
+  redirect_uris: string[] | null;
+  /** @nullable */
+  response_types?: string[] | null;
+  scope?: string;
+  token_endpoint_auth_method?: string;
+}
+
+export interface Oauth2RegisterResponse {
+  client_id: string;
+  client_id_issued_at: number;
+  client_name?: string;
+  client_secret?: string;
+  client_secret_expires_at: number;
+  /** @nullable */
+  grant_types: string[] | null;
+  /** @nullable */
+  redirect_uris: string[] | null;
+  registration_access_token?: string;
+  registration_client_uri?: string;
+  /** @nullable */
+  response_types: string[] | null;
+  scope?: string;
+  token_endpoint_auth_method: string;
+}
+
 export interface Oauth2TokenResponse {
   access_token: string;
   expires_in: number;
@@ -366,23 +490,25 @@ export interface OauthAccountJSON {
   provider_user_id: string;
 }
 
-export interface OauthCallbackResponseUserStruct {
-  email: string;
-  id: string;
+export interface OauthCallbackBody {
+  code: string;
+  state: string;
 }
 
 export interface OauthCallbackResponse {
-  provider: string;
-  user: OauthCallbackResponseUserStruct;
+  user: UserJSON;
 }
 
 export interface OauthLinkResponse {
-  authorize_url: string;
+  auth_url: string;
 }
 
 export interface OauthListAccountsResponse {
   /** @nullable */
-  accounts: OauthAccountJSON[] | null;
+  items: OauthAccountJSON[] | null;
+  page: number;
+  per_page: number;
+  total: number;
 }
 
 export interface OidcDiscoveryDoc {
@@ -422,7 +548,10 @@ export interface PasskeyJSON {
 
 export interface PasskeyListResponse {
   /** @nullable */
-  passkeys: PasskeyJSON[] | null;
+  items: PasskeyJSON[] | null;
+  page: number;
+  per_page: number;
+  total: number;
 }
 
 export interface PasskeyLoginBeginRequest {
@@ -432,15 +561,15 @@ export interface PasskeyLoginBeginRequest {
 export type PasskeyLoginBeginResponseOptions = {[key: string]: unknown};
 
 export interface PasskeyLoginBeginResponse {
+  challenge_id: string;
   options: PasskeyLoginBeginResponseOptions;
-  request_id: string;
 }
 
-export type PasskeyLoginFinishRequestResponse = {[key: string]: unknown};
+export type PasskeyLoginFinishRequestCredential = {[key: string]: unknown};
 
 export interface PasskeyLoginFinishRequest {
-  request_id: string;
-  response: PasskeyLoginFinishRequestResponse;
+  challenge_id: string;
+  credential: PasskeyLoginFinishRequestCredential;
 }
 
 export interface PasskeyLoginFinishResponse {
@@ -450,17 +579,15 @@ export interface PasskeyLoginFinishResponse {
 export type PasskeyRegisterBeginResponseOptions = {[key: string]: unknown};
 
 export interface PasskeyRegisterBeginResponse {
+  challenge_id: string;
   options: PasskeyRegisterBeginResponseOptions;
-  request_id: string;
 }
 
-export type PasskeyRegisterFinishRequestResponse = {[key: string]: unknown};
+export type PasskeyRegisterFinishRequestCredential = {[key: string]: unknown};
 
 export interface PasskeyRegisterFinishRequest {
-  device_name?: string;
+  credential: PasskeyRegisterFinishRequestCredential;
   name?: string;
-  request_id: string;
-  response: PasskeyRegisterFinishRequestResponse;
 }
 
 export interface PasskeyRegisterFinishResponse {
@@ -476,9 +603,9 @@ export interface StatusResponse {
 }
 
 export interface WebhookCreateRequest {
-  active?: boolean;
   /** @nullable */
   events: string[] | null;
+  secret?: string;
   url: string;
 }
 
@@ -499,30 +626,38 @@ export interface WebhookJSON {
   /** @nullable */
   events: string[] | null;
   id: string;
-  secret?: string;
   updated_at: string;
   url: string;
 }
 
 export interface WebhookListDeliveriesResponse {
   /** @nullable */
-  deliveries: WebhookDeliveryJSON[] | null;
+  items: WebhookDeliveryJSON[] | null;
+  page: number;
+  per_page: number;
+  total: number;
 }
 
 export interface WebhookListResponse {
   /** @nullable */
-  webhooks: WebhookJSON[] | null;
+  items: WebhookJSON[] | null;
+  page: number;
+  per_page: number;
+  total: number;
+}
+
+export interface WebhookShowResponse {
+  webhook: WebhookJSON;
 }
 
 export interface WebhookTestResponse {
-  delivery_queued: boolean;
-  event_type: string;
+  delivery_queued: string;
 }
 
 export interface WebhookUpdateRequest {
   active?: boolean;
   events?: string[];
-  rotate_secret?: boolean;
+  secret?: string;
   url?: string;
 }
 
@@ -545,6 +680,21 @@ user_id?: string;
 type?: string;
 };
 
+export type AdminListSessionsParams = {
+/**
+ * Filter to a single user.
+ */
+user_id?: string;
+/**
+ * Page size.
+ */
+limit?: number;
+/**
+ * Pagination offset.
+ */
+offset?: number;
+};
+
 export type AdminListUsersParams = {
 /**
  * Page size (default 50, capped at 100).
@@ -555,34 +705,39 @@ limit?: number;
  */
 offset?: number;
 /**
+ * Page number (alternate to limit/offset; 1-based).
+ */
+page?: number;
+/**
+ * Page size (alternate to limit).
+ */
+per_page?: number;
+/**
  * Substring match on email or display_name.
  */
 search?: string;
 };
 
-export type OauthAuthorizeParams = {
+export type ApiKeyListParams = {
 /**
- * Optional URL to navigate to after callback.
+ * Page number (1-based).
  */
-redirect_url?: string;
+page?: number;
+/**
+ * Page size (default 50, max 200).
+ */
+per_page?: number;
 };
 
-export type OauthCallbackParams = {
+export type OauthListAccountsParams = {
 /**
- * Authorization code.
+ * Page number (1-based).
  */
-code?: string;
+page?: number;
 /**
- * State stored at /authorize.
+ * Page size (default 50, max 200).
  */
-state?: string;
-};
-
-export type OauthLinkParams = {
-/**
- * Optional URL to navigate to after callback.
- */
-redirect_url?: string;
+per_page?: number;
 };
 
 export type Oauth2AuthorizeParams = {
@@ -620,6 +775,14 @@ nonce?: string;
 scope?: string;
 };
 
+export type Oauth2AuthorizePostBodyOne = { [key: string]: unknown };
+
+export type Oauth2AuthorizePostBodyTwo = { [key: string]: unknown };
+
+export type Oauth2DeviceVerifyBodyOne = { [key: string]: unknown };
+
+export type Oauth2DeviceVerifyBodyTwo = { [key: string]: unknown };
+
 export type Oauth2DeviceAuthorizationBody = { [key: string]: unknown };
 
 export type Oauth2IntrospectBody = { [key: string]: unknown };
@@ -630,11 +793,62 @@ export type Oauth2TokenBodyOne = { [key: string]: unknown };
 
 export type Oauth2TokenBodyTwo = { [key: string]: unknown };
 
+export type OauthAuthorizeParams = {
+/**
+ * Optional URL to navigate to after callback.
+ */
+redirect_url?: string;
+};
+
+export type OauthCallbackParams = {
+/**
+ * Authorization code.
+ */
+code?: string;
+/**
+ * State stored at /authorize.
+ */
+state?: string;
+};
+
+export type OauthLinkParams = {
+/**
+ * Optional URL to navigate to after callback.
+ */
+redirect_url?: string;
+};
+
+export type PasskeyListParams = {
+/**
+ * Page number (1-based).
+ */
+page?: number;
+/**
+ * Page size (default 50, max 200).
+ */
+per_page?: number;
+};
+
+export type WebhookListParams = {
+/**
+ * Page number (1-based).
+ */
+page?: number;
+/**
+ * Page size (default 50, max 200).
+ */
+per_page?: number;
+};
+
 export type WebhookListDeliveriesParams = {
 /**
- * Max rows (default 100, capped at 1000).
+ * Page number (1-based).
  */
-limit?: number;
+page?: number;
+/**
+ * Page size (default 50, max 200).
+ */
+per_page?: number;
 };
 
 /**
@@ -649,9 +863,33 @@ export const getAsymJWKSUrl = () => {
   return `/.well-known/jwks.json`
 }
 
-export const asymJWKS = async ( options?: RequestInit): Promise<JwksDocument> => {
+export const asymJWKS = async ( options?: RequestInit): Promise<void> => {
 
-  return customFetch<JwksDocument>(getAsymJWKSUrl(),
+  return customFetch<void>(getAsymJWKSUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+/**
+ * @summary RFC 8414 authorization server metadata
+ */
+export const getOauth2AuthServerMetadataUrl = () => {
+
+
+
+
+  return `/.well-known/oauth-authorization-server`
+}
+
+export const oauth2AuthServerMetadata = async ( options?: RequestInit): Promise<void> => {
+
+  return customFetch<void>(getOauth2AuthServerMetadataUrl(),
   {
     ...options,
     method: 'GET'
@@ -673,14 +911,65 @@ export const getOidcDiscoveryUrl = () => {
   return `/.well-known/openid-configuration`
 }
 
-export const oidcDiscovery = async ( options?: RequestInit): Promise<OidcDiscoveryDoc> => {
+export const oidcDiscovery = async ( options?: RequestInit): Promise<void> => {
 
-  return customFetch<OidcDiscoveryDoc>(getOidcDiscoveryUrl(),
+  return customFetch<void>(getOidcDiscoveryUrl(),
   {
     ...options,
     method: 'GET'
 
 
+  }
+);}
+
+
+
+/**
+ * Always responds 200 to prevent user enumeration.
+ * @summary Email a single-use unlock token
+ */
+export const getLockoutUnlockRequestUrl = () => {
+
+
+
+
+  return `/account/request-unlock`
+}
+
+export const lockoutUnlockRequest = async (lockoutUnlockReqRequest: LockoutUnlockReqRequest, options?: RequestInit): Promise<LockoutUnlockReqResponse> => {
+
+  return customFetch<LockoutUnlockReqResponse>(getLockoutUnlockRequestUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      lockoutUnlockReqRequest,)
+  }
+);}
+
+
+
+/**
+ * @summary Consume an unlock token to clear an account lock
+ */
+export const getLockoutUnlockUrl = () => {
+
+
+
+
+  return `/account/unlock`
+}
+
+export const lockoutUnlock = async (lockoutUnlockRequest: LockoutUnlockRequest, options?: RequestInit): Promise<LockoutUnlockResponse> => {
+
+  return customFetch<LockoutUnlockResponse>(getLockoutUnlockUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      lockoutUnlockRequest,)
   }
 );}
 
@@ -718,6 +1007,61 @@ export const adminListAudit = async (params?: AdminListAuditParams, options?: Re
 
 
 /**
+ * @summary List sessions, optionally filtered by user_id
+ */
+export const getAdminListSessionsUrl = (params?: AdminListSessionsParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString())
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/admin/sessions?${stringifiedParams}` : `/admin/sessions`
+}
+
+export const adminListSessions = async (params?: AdminListSessionsParams, options?: RequestInit): Promise<AdminListSessionsResponse> => {
+
+  return customFetch<AdminListSessionsResponse>(getAdminListSessionsUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+/**
+ * @summary Terminate a single session by id
+ */
+export const getAdminDeleteSessionUrl = (id: string,) => {
+
+
+
+
+  return `/admin/sessions/${id}`
+}
+
+export const adminDeleteSession = async (id: string, options?: RequestInit): Promise<void> => {
+
+  return customFetch<void>(getAdminDeleteSessionUrl(id),
+  {
+    ...options,
+    method: 'DELETE'
+
+
+  }
+);}
+
+
+
+/**
  * @summary List users with optional search/pagination
  */
 export const getAdminListUsersUrl = (params?: AdminListUsersParams,) => {
@@ -741,6 +1085,30 @@ export const adminListUsers = async (params?: AdminListUsersParams, options?: Re
   {
     ...options,
     method: 'GET'
+
+
+  }
+);}
+
+
+
+/**
+ * @summary Hard-delete a user (refuses self-delete)
+ */
+export const getAdminDeleteUserUrl = (id: string,) => {
+
+
+
+
+  return `/admin/users/${id}`
+}
+
+export const adminDeleteUser = async (id: string, options?: RequestInit): Promise<void> => {
+
+  return customFetch<void>(getAdminDeleteUserUrl(id),
+  {
+    ...options,
+    method: 'DELETE'
 
 
   }
@@ -799,6 +1167,32 @@ export const adminPatchUser = async (id: string,
 
 
 /**
+ * @summary Alias for PATCH /admin/users/{id} (Rust parity)
+ */
+export const getAdminPutUserUrl = (id: string,) => {
+
+
+
+
+  return `/admin/users/${id}`
+}
+
+export const adminPutUser = async (id: string,
+    adminPatchUserRequest: AdminPatchUserRequest, options?: RequestInit): Promise<AdminUserJSON> => {
+
+  return customFetch<AdminUserJSON>(getAdminPutUserUrl(id),
+  {
+    ...options,
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      adminPatchUserRequest,)
+  }
+);}
+
+
+
+/**
  * @summary Ban a user; revokes their sessions
  */
 export const getAdminBanUserUrl = (id: string,) => {
@@ -835,9 +1229,9 @@ export const getAdminImpersonateUrl = (id: string,) => {
   return `/admin/users/${id}/impersonate`
 }
 
-export const adminImpersonate = async (id: string, options?: RequestInit): Promise<AdminImpersonateResponse> => {
+export const adminImpersonate = async (id: string, options?: RequestInit): Promise<void> => {
 
-  return customFetch<AdminImpersonateResponse>(getAdminImpersonateUrl(id),
+  return customFetch<void>(getAdminImpersonateUrl(id),
   {
     ...options,
     method: 'POST'
@@ -897,19 +1291,50 @@ export const adminUnbanUser = async (id: string, options?: RequestInit): Promise
 
 
 /**
- * @summary List the caller's API keys (no secrets)
+ * @summary Force-unlock a user (admin)
  */
-export const getApiKeyListUrl = () => {
+export const getLockoutAdminUnlockUrl = (id: string,) => {
 
 
 
 
-  return `/api-keys`
+  return `/admin/users/${id}/unlock`
 }
 
-export const apiKeyList = async ( options?: RequestInit): Promise<ApiKeyListResponse> => {
+export const lockoutAdminUnlock = async (id: string, options?: RequestInit): Promise<LockoutUnlockResponse> => {
 
-  return customFetch<ApiKeyListResponse>(getApiKeyListUrl(),
+  return customFetch<LockoutUnlockResponse>(getLockoutAdminUnlockUrl(id),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+/**
+ * @summary List the caller's API keys (no secrets)
+ */
+export const getApiKeyListUrl = (params?: ApiKeyListParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString())
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api-keys?${stringifiedParams}` : `/api-keys`
+}
+
+export const apiKeyList = async (params?: ApiKeyListParams, options?: RequestInit): Promise<ApiKeyListResponse> => {
+
+  return customFetch<ApiKeyListResponse>(getApiKeyListUrl(params),
   {
     ...options,
     method: 'GET'
@@ -921,7 +1346,7 @@ export const apiKeyList = async ( options?: RequestInit): Promise<ApiKeyListResp
 
 
 /**
- * @summary Create a new API key (plaintext returned once)
+ * @summary Create a new API key (plaintext secret returned once)
  */
 export const getApiKeyCreateUrl = () => {
 
@@ -970,19 +1395,45 @@ export const apiKeyDelete = async (id: string, options?: RequestInit): Promise<v
 
 
 /**
- * @summary Return the count of unused backup codes
+ * Verifies the current password, stores the new hash, revokes other sessions, re-issues a fresh cookie for the caller.
+ * @summary Rotate the caller's password
  */
-export const getMfaBackupCodesCountUrl = () => {
+export const getEmailPasswordChangePasswordUrl = () => {
 
 
 
 
-  return `/backup-codes`
+  return `/change-password`
 }
 
-export const mfaBackupCodesCount = async ( options?: RequestInit): Promise<MfaBackupCodesCountResponse> => {
+export const emailPasswordChangePassword = async (emailPasswordChangePasswordRequest: EmailPasswordChangePasswordRequest, options?: RequestInit): Promise<EmailPasswordChangePasswordResponse> => {
 
-  return customFetch<MfaBackupCodesCountResponse>(getMfaBackupCodesCountUrl(),
+  return customFetch<EmailPasswordChangePasswordResponse>(getEmailPasswordChangePasswordUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      emailPasswordChangePasswordRequest,)
+  }
+);}
+
+
+
+/**
+ * @summary Return the host configuration subset exposed for clients
+ */
+export const getConfigUrl = () => {
+
+
+
+
+  return `/config`
+}
+
+export const config = async ( options?: RequestInit): Promise<ConfigResponse> => {
+
+  return customFetch<ConfigResponse>(getConfigUrl(),
   {
     ...options,
     method: 'GET'
@@ -994,50 +1445,26 @@ export const mfaBackupCodesCount = async ( options?: RequestInit): Promise<MfaBa
 
 
 /**
- * @summary Replace the user's backup codes; returns the new set once
+ * Always responds 200 to prevent user enumeration.
+ * @summary Email a single-use password-reset token
  */
-export const getMfaRegenerateBackupCodesUrl = () => {
+export const getEmailPasswordForgotPasswordUrl = () => {
 
 
 
 
-  return `/backup-codes/regenerate`
+  return `/forgot-password`
 }
 
-export const mfaRegenerateBackupCodes = async ( options?: RequestInit): Promise<MfaRegenerateResponse> => {
+export const emailPasswordForgotPassword = async (emailForgotPasswordRequest: EmailForgotPasswordRequest, options?: RequestInit): Promise<EmailForgotPasswordResponse> => {
 
-  return customFetch<MfaRegenerateResponse>(getMfaRegenerateBackupCodesUrl(),
-  {
-    ...options,
-    method: 'POST'
-
-
-  }
-);}
-
-
-
-/**
- * Verifies the old password, stores the new hash, revokes other sessions, re-issues a fresh cookie for the caller.
- * @summary Rotate the caller's password
- */
-export const getEmailPasswordChangePasswordUrl = () => {
-
-
-
-
-  return `/change-password`
-}
-
-export const emailPasswordChangePassword = async (emailPasswordChangePasswordRequest: EmailPasswordChangePasswordRequest, options?: RequestInit): Promise<void> => {
-
-  return customFetch<void>(getEmailPasswordChangePasswordUrl(),
+  return customFetch<EmailForgotPasswordResponse>(getEmailPasswordForgotPasswordUrl(),
   {
     ...options,
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...options?.headers },
     body: JSON.stringify(
-      emailPasswordChangePasswordRequest,)
+      emailForgotPasswordRequest,)
   }
 );}
 
@@ -1154,9 +1581,9 @@ export const getMagicLinkVerifyUrl = () => {
   return `/magic-link/verify`
 }
 
-export const magicLinkVerify = async (magicLinkVerifyRequest: MagicLinkVerifyRequest, options?: RequestInit): Promise<MagicLinkVerifyResponse> => {
+export const magicLinkVerify = async (magicLinkVerifyRequest: MagicLinkVerifyRequest, options?: RequestInit): Promise<void> => {
 
-  return customFetch<MagicLinkVerifyResponse>(getMagicLinkVerifyUrl(),
+  return customFetch<void>(getMagicLinkVerifyUrl(),
   {
     ...options,
     method: 'POST',
@@ -1169,24 +1596,443 @@ export const magicLinkVerify = async (magicLinkVerifyRequest: MagicLinkVerifyReq
 
 
 /**
- * @summary List the caller's linked OAuth accounts
+ * Currently only display_name is mutable.
+ * @summary Update the caller's profile
  */
-export const getOauthListAccountsUrl = () => {
+export const getEmailPasswordPatchMeUrl = () => {
 
 
 
 
-  return `/oauth/accounts`
+  return `/me`
 }
 
-export const oauthListAccounts = async ( options?: RequestInit): Promise<OauthListAccountsResponse> => {
+export const emailPasswordPatchMe = async (emailPasswordPatchMeRequest: EmailPasswordPatchMeRequest, options?: RequestInit): Promise<EmailPasswordPatchMeResponse> => {
 
-  return customFetch<OauthListAccountsResponse>(getOauthListAccountsUrl(),
+  return customFetch<EmailPasswordPatchMeResponse>(getEmailPasswordPatchMeUrl(),
+  {
+    ...options,
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      emailPasswordPatchMeRequest,)
+  }
+);}
+
+
+
+/**
+ * @summary Return the count of unused backup codes
+ */
+export const getMfaBackupCodesCountUrl = () => {
+
+
+
+
+  return `/mfa/backup-codes`
+}
+
+export const mfaBackupCodesCount = async ( options?: RequestInit): Promise<MfaBackupCodesCountResponse> => {
+
+  return customFetch<MfaBackupCodesCountResponse>(getMfaBackupCodesCountUrl(),
   {
     ...options,
     method: 'GET'
 
 
+  }
+);}
+
+
+
+/**
+ * @summary Replace the user's backup codes; returns the new set once
+ */
+export const getMfaRegenerateBackupCodesUrl = () => {
+
+
+
+
+  return `/mfa/backup-codes/regenerate`
+}
+
+export const mfaRegenerateBackupCodes = async ( options?: RequestInit): Promise<MfaRegenerateResponse> => {
+
+  return customFetch<MfaRegenerateResponse>(getMfaRegenerateBackupCodesUrl(),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+/**
+ * @summary Remove the user's TOTP secret + backup codes
+ */
+export const getMfaTOTPDeleteUrl = () => {
+
+
+
+
+  return `/mfa/totp`
+}
+
+export const mfaTOTPDelete = async ( options?: RequestInit): Promise<MfaMessageResponse> => {
+
+  return customFetch<MfaMessageResponse>(getMfaTOTPDeleteUrl(),
+  {
+    ...options,
+    method: 'DELETE'
+
+
+  }
+);}
+
+
+
+/**
+ * @summary Verify the freshly-provisioned TOTP and activate it
+ */
+export const getMfaTOTPConfirmUrl = () => {
+
+
+
+
+  return `/mfa/totp/confirm`
+}
+
+export const mfaTOTPConfirm = async (mfaConfirmRequest: MfaConfirmRequest, options?: RequestInit): Promise<MfaMessageResponse> => {
+
+  return customFetch<MfaMessageResponse>(getMfaTOTPConfirmUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      mfaConfirmRequest,)
+  }
+);}
+
+
+
+/**
+ * Wipes any prior secret/backup codes for this user, then issues a fresh QR + backup-code set.
+ * @summary Provision a new TOTP secret + backup codes (unverified)
+ */
+export const getMfaTOTPSetupUrl = () => {
+
+
+
+
+  return `/mfa/totp/setup`
+}
+
+export const mfaTOTPSetup = async ( options?: RequestInit): Promise<MfaSetupResponse> => {
+
+  return customFetch<MfaSetupResponse>(getMfaTOTPSetupUrl(),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+/**
+ * @summary Consume a pending session (TOTP or backup code)
+ */
+export const getMfaVerifyUrl = () => {
+
+
+
+
+  return `/mfa/verify`
+}
+
+export const mfaVerify = async (mfaVerifyRequest: MfaVerifyRequest, options?: RequestInit): Promise<MfaVerifyResponse> => {
+
+  return customFetch<MfaVerifyResponse>(getMfaVerifyUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      mfaVerifyRequest,)
+  }
+);}
+
+
+
+/**
+ * @summary List the caller's linked OAuth accounts
+ */
+export const getOauthListAccountsUrl = (params?: OauthListAccountsParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString())
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/oauth/accounts?${stringifiedParams}` : `/oauth/accounts`
+}
+
+export const oauthListAccounts = async (params?: OauthListAccountsParams, options?: RequestInit): Promise<OauthListAccountsResponse> => {
+
+  return customFetch<OauthListAccountsResponse>(getOauthListAccountsUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+/**
+ * @summary Authorization endpoint — returns either a redirect URL or a consent payload
+ */
+export const getOauth2AuthorizeUrl = (params?: Oauth2AuthorizeParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString())
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/oauth/authorize?${stringifiedParams}` : `/oauth/authorize`
+}
+
+export const oauth2Authorize = async (params?: Oauth2AuthorizeParams, options?: RequestInit): Promise<Oauth2AuthorizeRedirect | Oauth2ConsentPayload> => {
+
+  return customFetch<Oauth2AuthorizeRedirect | Oauth2ConsentPayload>(getOauth2AuthorizeUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+/**
+ * Identical semantics to the GET form; some clients prefer to submit the request as application/x-www-form-urlencoded.
+ * @summary POST variant of /oauth/authorize (Rust parity)
+ */
+export const getOauth2AuthorizePostUrl = () => {
+
+
+
+
+  return `/oauth/authorize`
+}
+
+export const oauth2AuthorizePost = async (oauth2AuthorizePostBody: Oauth2AuthorizePostBodyOne | Oauth2AuthorizePostBodyTwo, options?: RequestInit): Promise<void> => {
+
+  return customFetch<void>(getOauth2AuthorizePostUrl(),
+  {
+    ...options,
+    method: 'POST'
+    ,
+    body: JSON.stringify(
+      oauth2AuthorizePostBody,)
+  }
+);}
+
+
+
+/**
+ * Renders or proxies the user-facing prompt where the user enters the user_code printed on the device. Body shape is implementation-defined.
+ * @summary Browser landing for the device flow user-code prompt (Rust parity)
+ */
+export const getOauth2DeviceVerifyGetUrl = () => {
+
+
+
+
+  return `/oauth/device`
+}
+
+export const oauth2DeviceVerifyGet = async ( options?: RequestInit): Promise<void> => {
+
+  return customFetch<void>(getOauth2DeviceVerifyGetUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+/**
+ * @summary User-facing endpoint to enter a user_code (RFC 8628)
+ */
+export const getOauth2DeviceVerifyUrl = () => {
+
+
+
+
+  return `/oauth/device`
+}
+
+export const oauth2DeviceVerify = async (oauth2DeviceVerifyBody: Oauth2DeviceVerifyBodyOne | Oauth2DeviceVerifyBodyTwo, options?: RequestInit): Promise<void> => {
+
+  return customFetch<void>(getOauth2DeviceVerifyUrl(),
+  {
+    ...options,
+    method: 'POST'
+    ,
+    body: JSON.stringify(
+      oauth2DeviceVerifyBody,)
+  }
+);}
+
+
+
+/**
+ * @summary RFC 8628 device-authorization endpoint
+ */
+export const getOauth2DeviceAuthorizationUrl = () => {
+
+
+
+
+  return `/oauth/device/code`
+}
+
+export const oauth2DeviceAuthorization = async (oauth2DeviceAuthorizationBody: Oauth2DeviceAuthorizationBody, options?: RequestInit): Promise<void> => {
+    const formUrlEncoded = new URLSearchParams();
+
+  return customFetch<void>(getOauth2DeviceAuthorizationUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...options?.headers },
+    body:
+      formUrlEncoded,
+  }
+);}
+
+
+
+/**
+ * Caller authenticates as a confidential client.
+ * @summary RFC 7662 token introspection
+ */
+export const getOauth2IntrospectUrl = () => {
+
+
+
+
+  return `/oauth/introspect`
+}
+
+export const oauth2Introspect = async (oauth2IntrospectBody: Oauth2IntrospectBody, options?: RequestInit): Promise<void> => {
+    const formUrlEncoded = new URLSearchParams();
+
+  return customFetch<void>(getOauth2IntrospectUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...options?.headers },
+    body:
+      formUrlEncoded,
+  }
+);}
+
+
+
+/**
+ * Public dynamic client registration endpoint. Disabled by default; opt in via plugin Config.DCREnabled. When DCRRequireInitialAccessToken is true (default), the request must carry an admin-issued Bearer token in the Authorization header.
+ * @summary Register an OAuth2 client (RFC 7591)
+ */
+export const getOauth2DynamicClientRegisterUrl = () => {
+
+
+
+
+  return `/oauth/register`
+}
+
+export const oauth2DynamicClientRegister = async (oauth2RegisterRequest: Oauth2RegisterRequest, options?: RequestInit): Promise<Oauth2RegisterResponse> => {
+
+  return customFetch<Oauth2RegisterResponse>(getOauth2DynamicClientRegisterUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      oauth2RegisterRequest,)
+  }
+);}
+
+
+
+/**
+ * Idempotent: unknown / already-revoked / malformed tokens still return 200.
+ * @summary RFC 7009 revocation
+ */
+export const getOauth2RevokeUrl = () => {
+
+
+
+
+  return `/oauth/revoke`
+}
+
+export const oauth2Revoke = async (oauth2RevokeBody: Oauth2RevokeBody, options?: RequestInit): Promise<void> => {
+    const formUrlEncoded = new URLSearchParams();
+
+  return customFetch<void>(getOauth2RevokeUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...options?.headers },
+    body:
+      formUrlEncoded,
+  }
+);}
+
+
+
+/**
+ * Accepts authorization_code, refresh_token, client_credentials, and urn:ietf:params:oauth:grant-type:device_code grants. Body is application/x-www-form-urlencoded or application/json.
+ * @summary Token endpoint (RFC 6749 §3.2)
+ */
+export const getOauth2TokenUrl = () => {
+
+
+
+
+  return `/oauth/token`
+}
+
+export const oauth2Token = async (oauth2TokenBody: Oauth2TokenBodyOne | Oauth2TokenBodyTwo, options?: RequestInit): Promise<void> => {
+
+  return customFetch<void>(getOauth2TokenUrl(),
+  {
+    ...options,
+    method: 'POST'
+    ,
+    body: JSON.stringify(
+      oauth2TokenBody,)
   }
 );}
 
@@ -1284,6 +2130,33 @@ export const oauthCallback = async (provider: string,
 
 
 /**
+ * Used by SPAs that prefer to POST the {code, state} pair from a hash fragment rather than appearing in the URL. Body is application/json or application/x-www-form-urlencoded.
+ * @summary JSON-body variant of GET /oauth/{provider}/callback (Rust parity)
+ */
+export const getOauthCallbackPostUrl = (provider: string,) => {
+
+
+
+
+  return `/oauth/${provider}/callback`
+}
+
+export const oauthCallbackPost = async (provider: string,
+    oauthCallbackBody: OauthCallbackBody, options?: RequestInit): Promise<OauthCallbackResponse> => {
+
+  return customFetch<OauthCallbackResponse>(getOauthCallbackPostUrl(provider),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      oauthCallbackBody,)
+  }
+);}
+
+
+
+/**
  * @summary Start a link flow for an already-authenticated user
  */
 export const getOauthLinkUrl = (provider: string,
@@ -1309,37 +2182,6 @@ export const oauthLink = async (provider: string,
   {
     ...options,
     method: 'POST'
-
-
-  }
-);}
-
-
-
-/**
- * @summary Authorization endpoint — returns either a redirect URL or a consent payload
- */
-export const getOauth2AuthorizeUrl = (params?: Oauth2AuthorizeParams,) => {
-  const normalizedParams = new URLSearchParams();
-
-  Object.entries(params || {}).forEach(([key, value]) => {
-
-    if (value !== undefined) {
-      normalizedParams.append(key, value === null ? 'null' : value.toString())
-    }
-  });
-
-  const stringifiedParams = normalizedParams.toString();
-
-  return stringifiedParams.length > 0 ? `/oauth2/authorize?${stringifiedParams}` : `/oauth2/authorize`
-}
-
-export const oauth2Authorize = async (params?: Oauth2AuthorizeParams, options?: RequestInit): Promise<Oauth2AuthorizeRedirect | Oauth2ConsentPayload> => {
-
-  return customFetch<Oauth2AuthorizeRedirect | Oauth2ConsentPayload>(getOauth2AuthorizeUrl(params),
-  {
-    ...options,
-    method: 'GET'
 
 
   }
@@ -1499,137 +2341,6 @@ export const oauth2Consent = async (oauth2ConsentRequest: Oauth2ConsentRequest, 
 
 
 /**
- * @summary User-facing endpoint to enter a user_code (RFC 8628)
- */
-export const getOauth2DeviceVerifyUrl = () => {
-
-
-
-
-  return `/oauth2/device`
-}
-
-export const oauth2DeviceVerify = async (oauth2DeviceVerifyRequest: Oauth2DeviceVerifyRequest, options?: RequestInit): Promise<Oauth2DeviceVerifyResponse> => {
-
-  return customFetch<Oauth2DeviceVerifyResponse>(getOauth2DeviceVerifyUrl(),
-  {
-    ...options,
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...options?.headers },
-    body: JSON.stringify(
-      oauth2DeviceVerifyRequest,)
-  }
-);}
-
-
-
-/**
- * @summary RFC 8628 device-authorization endpoint
- */
-export const getOauth2DeviceAuthorizationUrl = () => {
-
-
-
-
-  return `/oauth2/device_authorization`
-}
-
-export const oauth2DeviceAuthorization = async (oauth2DeviceAuthorizationBody: Oauth2DeviceAuthorizationBody, options?: RequestInit): Promise<Oauth2DeviceAuthResponse> => {
-    const formUrlEncoded = new URLSearchParams();
-
-  return customFetch<Oauth2DeviceAuthResponse>(getOauth2DeviceAuthorizationUrl(),
-  {
-    ...options,
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...options?.headers },
-    body:
-      formUrlEncoded,
-  }
-);}
-
-
-
-/**
- * Caller authenticates as a confidential client.
- * @summary RFC 7662 token introspection
- */
-export const getOauth2IntrospectUrl = () => {
-
-
-
-
-  return `/oauth2/introspect`
-}
-
-export const oauth2Introspect = async (oauth2IntrospectBody: Oauth2IntrospectBody, options?: RequestInit): Promise<Oauth2IntrospectResponse> => {
-    const formUrlEncoded = new URLSearchParams();
-
-  return customFetch<Oauth2IntrospectResponse>(getOauth2IntrospectUrl(),
-  {
-    ...options,
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...options?.headers },
-    body:
-      formUrlEncoded,
-  }
-);}
-
-
-
-/**
- * Idempotent: unknown / already-revoked / malformed tokens still return 200.
- * @summary RFC 7009 revocation
- */
-export const getOauth2RevokeUrl = () => {
-
-
-
-
-  return `/oauth2/revoke`
-}
-
-export const oauth2Revoke = async (oauth2RevokeBody: Oauth2RevokeBody, options?: RequestInit): Promise<void> => {
-    const formUrlEncoded = new URLSearchParams();
-
-  return customFetch<void>(getOauth2RevokeUrl(),
-  {
-    ...options,
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...options?.headers },
-    body:
-      formUrlEncoded,
-  }
-);}
-
-
-
-/**
- * Accepts authorization_code, refresh_token, client_credentials, and urn:ietf:params:oauth:grant-type:device_code grants. Body is application/x-www-form-urlencoded or application/json.
- * @summary Token endpoint (RFC 6749 §3.2)
- */
-export const getOauth2TokenUrl = () => {
-
-
-
-
-  return `/oauth2/token`
-}
-
-export const oauth2Token = async (oauth2TokenBody: Oauth2TokenBodyOne | Oauth2TokenBodyTwo, options?: RequestInit): Promise<Oauth2TokenResponse> => {
-
-  return customFetch<Oauth2TokenResponse>(getOauth2TokenUrl(),
-  {
-    ...options,
-    method: 'POST'
-    ,
-    body: JSON.stringify(
-      oauth2TokenBody,)
-  }
-);}
-
-
-
-/**
  * @summary Start a passkey assertion; supports discoverable flow
  */
 export const getPasskeyLoginBeginUrl = () => {
@@ -1640,9 +2351,9 @@ export const getPasskeyLoginBeginUrl = () => {
   return `/passkey/login/begin`
 }
 
-export const passkeyLoginBegin = async (passkeyLoginBeginRequest: PasskeyLoginBeginRequest, options?: RequestInit): Promise<PasskeyLoginBeginResponse> => {
+export const passkeyLoginBegin = async (passkeyLoginBeginRequest: PasskeyLoginBeginRequest, options?: RequestInit): Promise<void> => {
 
-  return customFetch<PasskeyLoginBeginResponse>(getPasskeyLoginBeginUrl(),
+  return customFetch<void>(getPasskeyLoginBeginUrl(),
   {
     ...options,
     method: 'POST',
@@ -1665,9 +2376,9 @@ export const getPasskeyLoginFinishUrl = () => {
   return `/passkey/login/finish`
 }
 
-export const passkeyLoginFinish = async (passkeyLoginFinishRequest: PasskeyLoginFinishRequest, options?: RequestInit): Promise<PasskeyLoginFinishResponse> => {
+export const passkeyLoginFinish = async (passkeyLoginFinishRequest: PasskeyLoginFinishRequest, options?: RequestInit): Promise<void> => {
 
-  return customFetch<PasskeyLoginFinishResponse>(getPasskeyLoginFinishUrl(),
+  return customFetch<void>(getPasskeyLoginFinishUrl(),
   {
     ...options,
     method: 'POST',
@@ -1682,17 +2393,24 @@ export const passkeyLoginFinish = async (passkeyLoginFinishRequest: PasskeyLogin
 /**
  * @summary List the caller's stored passkeys
  */
-export const getPasskeyListUrl = () => {
+export const getPasskeyListUrl = (params?: PasskeyListParams,) => {
+  const normalizedParams = new URLSearchParams();
 
+  Object.entries(params || {}).forEach(([key, value]) => {
 
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString())
+    }
+  });
 
+  const stringifiedParams = normalizedParams.toString();
 
-  return `/passkeys`
+  return stringifiedParams.length > 0 ? `/passkeys?${stringifiedParams}` : `/passkeys`
 }
 
-export const passkeyList = async ( options?: RequestInit): Promise<PasskeyListResponse> => {
+export const passkeyList = async (params?: PasskeyListParams, options?: RequestInit): Promise<PasskeyListResponse> => {
 
-  return customFetch<PasskeyListResponse>(getPasskeyListUrl(),
+  return customFetch<PasskeyListResponse>(getPasskeyListUrl(params),
   {
     ...options,
     method: 'GET'
@@ -1714,9 +2432,9 @@ export const getPasskeyRegisterBeginUrl = () => {
   return `/passkeys/register/begin`
 }
 
-export const passkeyRegisterBegin = async ( options?: RequestInit): Promise<PasskeyRegisterBeginResponse> => {
+export const passkeyRegisterBegin = async ( options?: RequestInit): Promise<void> => {
 
-  return customFetch<PasskeyRegisterBeginResponse>(getPasskeyRegisterBeginUrl(),
+  return customFetch<void>(getPasskeyRegisterBeginUrl(),
   {
     ...options,
     method: 'POST'
@@ -1738,9 +2456,9 @@ export const getPasskeyRegisterFinishUrl = () => {
   return `/passkeys/register/finish`
 }
 
-export const passkeyRegisterFinish = async (passkeyRegisterFinishRequest: PasskeyRegisterFinishRequest, options?: RequestInit): Promise<PasskeyRegisterFinishResponse> => {
+export const passkeyRegisterFinish = async (passkeyRegisterFinishRequest: PasskeyRegisterFinishRequest, options?: RequestInit): Promise<void> => {
 
-  return customFetch<PasskeyRegisterFinishResponse>(getPasskeyRegisterFinishUrl(),
+  return customFetch<void>(getPasskeyRegisterFinishUrl(),
   {
     ...options,
     method: 'POST',
@@ -1797,6 +2515,57 @@ export const emailPasswordRegister = async (emailPasswordRegisterRequest: EmailP
     headers: { 'Content-Type': 'application/json', ...options?.headers },
     body: JSON.stringify(
       emailPasswordRegisterRequest,)
+  }
+);}
+
+
+
+/**
+ * Always responds 200 to prevent user enumeration.
+ * @summary Email a fresh verification link
+ */
+export const getEmailPasswordResendVerificationUrl = () => {
+
+
+
+
+  return `/resend-verification`
+}
+
+export const emailPasswordResendVerification = async (emailResendVerificationRequest: EmailResendVerificationRequest, options?: RequestInit): Promise<EmailResendVerificationResponse> => {
+
+  return customFetch<EmailResendVerificationResponse>(getEmailPasswordResendVerificationUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      emailResendVerificationRequest,)
+  }
+);}
+
+
+
+/**
+ * @summary Consume a password-reset token and set a new password
+ */
+export const getEmailPasswordResetPasswordUrl = () => {
+
+
+
+
+  return `/reset-password`
+}
+
+export const emailPasswordResetPassword = async (emailResetPasswordRequest: EmailResetPasswordRequest, options?: RequestInit): Promise<EmailResetPasswordResponse> => {
+
+  return customFetch<EmailResetPasswordResponse>(getEmailPasswordResetPasswordUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      emailResetPasswordRequest,)
   }
 );}
 
@@ -1927,131 +2696,6 @@ export const bearerRevoke = async (bearerRevokeRequest: BearerRevokeRequest, opt
 
 
 /**
- * @summary Remove the user's TOTP secret + backup codes
- */
-export const getMfaTOTPDeleteUrl = () => {
-
-
-
-
-  return `/totp`
-}
-
-export const mfaTOTPDelete = async ( options?: RequestInit): Promise<void> => {
-
-  return customFetch<void>(getMfaTOTPDeleteUrl(),
-  {
-    ...options,
-    method: 'DELETE'
-
-
-  }
-);}
-
-
-
-/**
- * @summary Verify the freshly-provisioned TOTP and activate it
- */
-export const getMfaTOTPConfirmUrl = () => {
-
-
-
-
-  return `/totp/confirm`
-}
-
-export const mfaTOTPConfirm = async (mfaConfirmRequest: MfaConfirmRequest, options?: RequestInit): Promise<void> => {
-
-  return customFetch<void>(getMfaTOTPConfirmUrl(),
-  {
-    ...options,
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...options?.headers },
-    body: JSON.stringify(
-      mfaConfirmRequest,)
-  }
-);}
-
-
-
-/**
- * Wipes any prior secret/backup codes for this user, then issues a fresh QR + backup-code set.
- * @summary Provision a new TOTP secret + backup codes (unverified)
- */
-export const getMfaTOTPSetupUrl = () => {
-
-
-
-
-  return `/totp/setup`
-}
-
-export const mfaTOTPSetup = async ( options?: RequestInit): Promise<MfaSetupResponse> => {
-
-  return customFetch<MfaSetupResponse>(getMfaTOTPSetupUrl(),
-  {
-    ...options,
-    method: 'POST'
-
-
-  }
-);}
-
-
-
-/**
- * @summary Consume an unlock token to clear an account lock
- */
-export const getLockoutUnlockUrl = () => {
-
-
-
-
-  return `/unlock`
-}
-
-export const lockoutUnlock = async (lockoutUnlockRequest: LockoutUnlockRequest, options?: RequestInit): Promise<LockoutUnlockResponse> => {
-
-  return customFetch<LockoutUnlockResponse>(getLockoutUnlockUrl(),
-  {
-    ...options,
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...options?.headers },
-    body: JSON.stringify(
-      lockoutUnlockRequest,)
-  }
-);}
-
-
-
-/**
- * Always responds 200 to prevent user enumeration.
- * @summary Email a single-use unlock token
- */
-export const getLockoutUnlockRequestUrl = () => {
-
-
-
-
-  return `/unlock/request`
-}
-
-export const lockoutUnlockRequest = async (lockoutUnlockReqRequest: LockoutUnlockReqRequest, options?: RequestInit): Promise<LockoutUnlockReqResponse> => {
-
-  return customFetch<LockoutUnlockReqResponse>(getLockoutUnlockRequestUrl(),
-  {
-    ...options,
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...options?.headers },
-    body: JSON.stringify(
-      lockoutUnlockReqRequest,)
-  }
-);}
-
-
-
-/**
  * @summary Standard OIDC UserInfo for the authenticated caller
  */
 export const getOidcUserInfoUrl = () => {
@@ -2062,9 +2706,9 @@ export const getOidcUserInfoUrl = () => {
   return `/userinfo`
 }
 
-export const oidcUserInfo = async ( options?: RequestInit): Promise<OidcUserInfoResponse> => {
+export const oidcUserInfo = async ( options?: RequestInit): Promise<void> => {
 
-  return customFetch<OidcUserInfoResponse>(getOidcUserInfoUrl(),
+  return customFetch<void>(getOidcUserInfoUrl(),
   {
     ...options,
     method: 'GET'
@@ -2076,25 +2720,25 @@ export const oidcUserInfo = async ( options?: RequestInit): Promise<OidcUserInfo
 
 
 /**
- * @summary Consume a pending session (TOTP or backup code)
+ * @summary Consume a verification token issued by /resend-verification
  */
-export const getMfaVerifyUrl = () => {
+export const getEmailPasswordVerifyEmailUrl = () => {
 
 
 
 
-  return `/verify`
+  return `/verify-email`
 }
 
-export const mfaVerify = async (mfaVerifyRequest: MfaVerifyRequest, options?: RequestInit): Promise<MfaVerifyResponse> => {
+export const emailPasswordVerifyEmail = async (emailVerifyRequest: EmailVerifyRequest, options?: RequestInit): Promise<EmailVerifyResponse> => {
 
-  return customFetch<MfaVerifyResponse>(getMfaVerifyUrl(),
+  return customFetch<EmailVerifyResponse>(getEmailPasswordVerifyEmailUrl(),
   {
     ...options,
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...options?.headers },
     body: JSON.stringify(
-      mfaVerifyRequest,)
+      emailVerifyRequest,)
   }
 );}
 
@@ -2103,17 +2747,24 @@ export const mfaVerify = async (mfaVerifyRequest: MfaVerifyRequest, options?: Re
 /**
  * @summary List webhooks (admin)
  */
-export const getWebhookListUrl = () => {
+export const getWebhookListUrl = (params?: WebhookListParams,) => {
+  const normalizedParams = new URLSearchParams();
 
+  Object.entries(params || {}).forEach(([key, value]) => {
 
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString())
+    }
+  });
 
+  const stringifiedParams = normalizedParams.toString();
 
-  return `/webhooks`
+  return stringifiedParams.length > 0 ? `/webhooks?${stringifiedParams}` : `/webhooks`
 }
 
-export const webhookList = async ( options?: RequestInit): Promise<WebhookListResponse> => {
+export const webhookList = async (params?: WebhookListParams, options?: RequestInit): Promise<WebhookListResponse> => {
 
-  return customFetch<WebhookListResponse>(getWebhookListUrl(),
+  return customFetch<WebhookListResponse>(getWebhookListUrl(params),
   {
     ...options,
     method: 'GET'
@@ -2174,6 +2825,7 @@ export const webhookDelete = async (id: string, options?: RequestInit): Promise<
 
 
 /**
+ * For delivery history, use GET /webhooks/{id}/deliveries.
  * @summary Fetch a single webhook (no secret)
  */
 export const getWebhookGetUrl = (id: string,) => {
@@ -2184,9 +2836,9 @@ export const getWebhookGetUrl = (id: string,) => {
   return `/webhooks/${id}`
 }
 
-export const webhookGet = async (id: string, options?: RequestInit): Promise<WebhookJSON> => {
+export const webhookGet = async (id: string, options?: RequestInit): Promise<WebhookShowResponse> => {
 
-  return customFetch<WebhookJSON>(getWebhookGetUrl(id),
+  return customFetch<WebhookShowResponse>(getWebhookGetUrl(id),
   {
     ...options,
     method: 'GET'
@@ -2215,6 +2867,32 @@ export const webhookUpdate = async (id: string,
   {
     ...options,
     method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      webhookUpdateRequest,)
+  }
+);}
+
+
+
+/**
+ * @summary Alias for PATCH /webhooks/{id} (Rust parity)
+ */
+export const getWebhookPutUrl = (id: string,) => {
+
+
+
+
+  return `/webhooks/${id}`
+}
+
+export const webhookPut = async (id: string,
+    webhookUpdateRequest: WebhookUpdateRequest, options?: RequestInit): Promise<WebhookJSON> => {
+
+  return customFetch<WebhookJSON>(getWebhookPutUrl(id),
+  {
+    ...options,
+    method: 'PUT',
     headers: { 'Content-Type': 'application/json', ...options?.headers },
     body: JSON.stringify(
       webhookUpdateRequest,)

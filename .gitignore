@@ -32,3 +32,6 @@ packages/*/node_modules/
 # Env
 .env
 .env.local
+
+# Local agent state
+.claude/

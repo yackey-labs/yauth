@@ -74,8 +74,8 @@ func TestHandleCreate_ReturnsPlaintextOnce(t *testing.T) {
 	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if out.Key == "" {
-		t.Fatalf("plaintext key missing from response")
+	if out.Secret == "" {
+		t.Fatalf("plaintext secret missing from response")
 	}
 	if out.APIKey.Prefix == "" || out.APIKey.ID == "" {
 		t.Fatalf("response metadata incomplete: %+v", out)
@@ -85,9 +85,9 @@ func TestHandleCreate_ReturnsPlaintextOnce(t *testing.T) {
 	}
 
 	// The plaintext must parse back to the stored prefix.
-	prefix, secret, ok := ParseHeader(out.Key, "yak")
+	prefix, secret, ok := ParseHeader(out.Secret, "yak")
 	if !ok {
-		t.Fatalf("returned key did not parse: %q", out.Key)
+		t.Fatalf("returned key did not parse: %q", out.Secret)
 	}
 	if prefix != out.APIKey.Prefix {
 		t.Errorf("prefix mismatch between metadata and plaintext")
@@ -200,10 +200,13 @@ func TestHandleList_ReturnsOwnedKeys(t *testing.T) {
 	if err := json.NewDecoder(res.Body).Decode(&lst); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(lst.Keys) != 2 {
-		t.Fatalf("want 2 keys, got %d (%+v)", len(lst.Keys), lst.Keys)
+	if len(lst.Items) != 2 {
+		t.Fatalf("want 2 keys, got %d (%+v)", len(lst.Items), lst)
 	}
-	for _, k := range lst.Keys {
+	if lst.Total != 2 {
+		t.Errorf("total: want 2, got %d", lst.Total)
+	}
+	for _, k := range lst.Items {
 		if k.Name == "stranger" {
 			t.Errorf("list leaked another user's key: %+v", k)
 		}
@@ -303,7 +306,7 @@ func TestHandleEndToEnd_CreateUseDelete(t *testing.T) {
 	host2 := newFakeHost(repo)
 	res2 := newResolver(host2, "yak")
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set(headerName, created.Key)
+	req.Header.Set(headerName, created.Secret)
 	au, recognized, err := res2.Resolve(req)
 	if err != nil || !recognized || au == nil {
 		t.Fatalf("resolve good key: au=%v recognized=%v err=%v", au, recognized, err)

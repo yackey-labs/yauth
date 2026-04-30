@@ -36,24 +36,6 @@ type errorPayload struct {
 	Message string `json:"message"`
 }
 
-type userJSON struct {
-	ID            string  `json:"id"`
-	Email         string  `json:"email"`
-	DisplayName   *string `json:"display_name,omitempty"`
-	EmailVerified bool    `json:"email_verified"`
-	Role          string  `json:"role"`
-}
-
-func toUserJSON(u domain.User) userJSON {
-	return userJSON{
-		ID:            u.ID,
-		Email:         u.Email,
-		DisplayName:   u.DisplayName,
-		EmailVerified: u.EmailVerified,
-		Role:          u.Role,
-	}
-}
-
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
@@ -153,13 +135,17 @@ func buildLink(base, raw string) string {
 // --- /magic-link/send -----------------------------------------------------
 
 type sendRequest struct {
-	Email       string `json:"email"`
-	RedirectURL string `json:"redirect_url,omitempty"`
+	Email string `json:"email"`
 }
 
+// sendResponse mirrors the Rust shape — a generic message that does not
+// admit whether the email was registered. The actual link is delivered
+// out-of-band via the configured Mailer.
 type sendResponse struct {
-	Sent bool `json:"sent"`
+	Message string `json:"message"`
 }
+
+const magicLinkSendMessage = "If the email exists, a magic link has been sent."
 
 func (p *magicLinkPlugin) handleSend(host plugin.PluginHost) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -184,20 +170,20 @@ func (p *magicLinkPlugin) handleSend(host plugin.PluginHost) http.HandlerFunc {
 		if err != nil && !errors.Is(err, yautherr.ErrNotFound) {
 			// Backend failure: we still respond 200 to preserve enumeration
 			// resistance; the operator sees the error in logs.
-			writeJSON(w, http.StatusOK, sendResponse{Sent: true})
+			writeJSON(w, http.StatusOK, sendResponse{Message: magicLinkSendMessage})
 			return
 		}
 
 		// Issue the token only if the user exists OR signup is enabled. In
 		// both other cases we skip persistence/email but still return 200.
 		if !userExists && !p.cfg.SignupEnabled {
-			writeJSON(w, http.StatusOK, sendResponse{Sent: true})
+			writeJSON(w, http.StatusOK, sendResponse{Message: magicLinkSendMessage})
 			return
 		}
 
 		raw, hash, err := generateToken()
 		if err != nil {
-			writeJSON(w, http.StatusOK, sendResponse{Sent: true})
+			writeJSON(w, http.StatusOK, sendResponse{Message: magicLinkSendMessage})
 			return
 		}
 
@@ -209,14 +195,14 @@ func (p *magicLinkPlugin) handleSend(host plugin.PluginHost) http.HandlerFunc {
 			ExpiresAt: now.Add(p.cfg.TokenTTL),
 			CreatedAt: now,
 		}); err != nil {
-			writeJSON(w, http.StatusOK, sendResponse{Sent: true})
+			writeJSON(w, http.StatusOK, sendResponse{Message: magicLinkSendMessage})
 			return
 		}
 
 		link := buildLink(p.cfg.LinkBaseURL, raw)
 		_ = p.cfg.Mailer.SendMagicLink(ctx, req.Email, link)
 
-		writeJSON(w, http.StatusOK, sendResponse{Sent: true})
+		writeJSON(w, http.StatusOK, sendResponse{Message: magicLinkSendMessage})
 	}
 }
 
@@ -226,8 +212,31 @@ type verifyRequest struct {
 	Token string `json:"token"`
 }
 
+// verifyResponse wraps the verified user under `user`. The session
+// cookie is set in the response headers; the body just identifies who
+// just logged in.
 type verifyResponse struct {
-	User userJSON `json:"user"`
+	User verifyUser `json:"user"`
+}
+
+type verifyUser struct {
+	ID            string  `json:"id"`
+	Email         string  `json:"email"`
+	DisplayName   *string `json:"display_name,omitempty"`
+	EmailVerified bool    `json:"email_verified"`
+	Role          string  `json:"role"`
+}
+
+func toVerifyResponse(u domain.User) verifyResponse {
+	return verifyResponse{
+		User: verifyUser{
+			ID:            u.ID,
+			Email:         u.Email,
+			DisplayName:   u.DisplayName,
+			EmailVerified: u.EmailVerified,
+			Role:          u.Role,
+		},
+	}
 }
 
 func (p *magicLinkPlugin) handleVerify(host plugin.PluginHost) http.HandlerFunc {
@@ -320,6 +329,6 @@ func (p *magicLinkPlugin) handleVerify(host plugin.PluginHost) http.HandlerFunc 
 			cookieOptionsFromHost(host, r, int(host.SessionTTL().Seconds())),
 			raw2,
 		))
-		writeJSON(w, http.StatusOK, verifyResponse{User: toUserJSON(*user)})
+		writeJSON(w, http.StatusOK, toVerifyResponse(*user))
 	}
 }

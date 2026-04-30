@@ -139,7 +139,7 @@ func (h *harness) authorizeAndConsent(t *testing.T, cookie, clientID, redirectUR
 		q.Set("nonce", nonce)
 	}
 
-	req, _ := http.NewRequest(http.MethodGet, h.srv.URL+"/api/auth/oauth2/authorize?"+q.Encode(), nil)
+	req, _ := http.NewRequest(http.MethodGet, h.srv.URL+"/api/auth/oauth/authorize?"+q.Encode(), nil)
 	req.AddCookie(&http.Cookie{Name: "yauth_session", Value: cookie})
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -232,7 +232,7 @@ func TestAuthorizationCodeGrant_PKCE_HappyPath(t *testing.T) {
 	form.Set("client_secret", clientSecret)
 	form.Set("code_verifier", verifier)
 
-	status, body2 := h.postForm(t, "/api/auth/oauth2/token", form, "", "")
+	status, body2 := h.postForm(t, "/api/auth/oauth/token", form, "", "")
 	if status != http.StatusOK {
 		t.Fatalf("token: status=%d body=%v", status, body2)
 	}
@@ -267,7 +267,7 @@ func TestAuthorizationCodeGrant_PKCEMismatch(t *testing.T) {
 	form.Set("client_secret", clientSecret)
 	form.Set("code_verifier", "the-WRONG-verifier-but-also-43-chars-long-okay")
 
-	status, b := h.postForm(t, "/api/auth/oauth2/token", form, "", "")
+	status, b := h.postForm(t, "/api/auth/oauth/token", form, "", "")
 	if status != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d body=%v", status, b)
 	}
@@ -295,7 +295,7 @@ func TestRefreshTokenGrant_RotatesAndOldRevoked(t *testing.T) {
 	form.Set("client_id", clientID)
 	form.Set("client_secret", clientSecret)
 	form.Set("code_verifier", verifier)
-	status, body1 := h.postForm(t, "/api/auth/oauth2/token", form, "", "")
+	status, body1 := h.postForm(t, "/api/auth/oauth/token", form, "", "")
 	if status != http.StatusOK {
 		t.Fatalf("first token: %d %v", status, body1)
 	}
@@ -307,7 +307,7 @@ func TestRefreshTokenGrant_RotatesAndOldRevoked(t *testing.T) {
 	rform.Set("refresh_token", first)
 	rform.Set("client_id", clientID)
 	rform.Set("client_secret", clientSecret)
-	status, body2 := h.postForm(t, "/api/auth/oauth2/token", rform, "", "")
+	status, body2 := h.postForm(t, "/api/auth/oauth/token", rform, "", "")
 	if status != http.StatusOK {
 		t.Fatalf("rotate: %d %v", status, body2)
 	}
@@ -317,7 +317,7 @@ func TestRefreshTokenGrant_RotatesAndOldRevoked(t *testing.T) {
 	}
 
 	// Reuse the OLD refresh — should fail invalid_grant.
-	status, body3 := h.postForm(t, "/api/auth/oauth2/token", rform, "", "")
+	status, body3 := h.postForm(t, "/api/auth/oauth/token", rform, "", "")
 	if status == http.StatusOK {
 		t.Fatalf("expected reuse to fail, got 200 %v", body3)
 	}
@@ -334,7 +334,7 @@ func TestClientCredentialsGrant_BasicAuth(t *testing.T) {
 	form.Set("grant_type", "client_credentials")
 	form.Set("scope", "read")
 
-	status, b := h.postForm(t, "/api/auth/oauth2/token", form, clientID, clientSecret)
+	status, b := h.postForm(t, "/api/auth/oauth/token", form, clientID, clientSecret)
 	if status != http.StatusOK {
 		t.Fatalf("client_credentials: %d %v", status, b)
 	}
@@ -358,7 +358,7 @@ func TestDeviceCodeGrant_EndToEnd(t *testing.T) {
 	df := url.Values{}
 	df.Set("client_id", clientID)
 	df.Set("scope", "read")
-	status, da := h.postForm(t, "/api/auth/oauth2/device_authorization", df, "", "")
+	status, da := h.postForm(t, "/api/auth/oauth/device/code", df, "", "")
 	if status != http.StatusOK {
 		t.Fatalf("device_authorization: %d %v", status, da)
 	}
@@ -370,14 +370,14 @@ func TestDeviceCodeGrant_EndToEnd(t *testing.T) {
 	pf.Set("grant_type", "urn:ietf:params:oauth:grant-type:device_code")
 	pf.Set("device_code", deviceCode)
 	pf.Set("client_id", clientID)
-	status, pb := h.postForm(t, "/api/auth/oauth2/token", pf, "", "")
+	status, pb := h.postForm(t, "/api/auth/oauth/token", pf, "", "")
 	if status != http.StatusBadRequest || pb["error"] != "authorization_pending" {
 		t.Fatalf("expected authorization_pending, got %d %v", status, pb)
 	}
 
 	// User approves.
 	body2, _ := json.Marshal(map[string]any{"user_code": userCode})
-	req, _ := http.NewRequest(http.MethodPost, h.srv.URL+"/api/auth/oauth2/device", strings.NewReader(string(body2)))
+	req, _ := http.NewRequest(http.MethodPost, h.srv.URL+"/api/auth/oauth/device", strings.NewReader(string(body2)))
 	req.Header.Set("Content-Type", "application/json")
 	req.AddCookie(&http.Cookie{Name: "yauth_session", Value: userCookie})
 	res, err := http.DefaultClient.Do(req)
@@ -390,7 +390,7 @@ func TestDeviceCodeGrant_EndToEnd(t *testing.T) {
 	res.Body.Close()
 
 	// Poll again → tokens.
-	status, fb := h.postForm(t, "/api/auth/oauth2/token", pf, "", "")
+	status, fb := h.postForm(t, "/api/auth/oauth/token", pf, "", "")
 	if status != http.StatusOK {
 		t.Fatalf("device exchange: %d %v", status, fb)
 	}
@@ -399,7 +399,7 @@ func TestDeviceCodeGrant_EndToEnd(t *testing.T) {
 	}
 
 	// Second poll on consumed code → invalid_grant.
-	status, db := h.postForm(t, "/api/auth/oauth2/token", pf, "", "")
+	status, db := h.postForm(t, "/api/auth/oauth/token", pf, "", "")
 	if status == http.StatusOK {
 		t.Fatalf("consumed device_code should not re-issue: %v", db)
 	}
@@ -423,7 +423,7 @@ func TestRevokeAndIntrospect(t *testing.T) {
 	form.Set("client_id", clientID)
 	form.Set("client_secret", clientSecret)
 	form.Set("code_verifier", verifier)
-	status, tok := h.postForm(t, "/api/auth/oauth2/token", form, "", "")
+	status, tok := h.postForm(t, "/api/auth/oauth/token", form, "", "")
 	if status != http.StatusOK {
 		t.Fatalf("token: %d %v", status, tok)
 	}
@@ -435,7 +435,7 @@ func TestRevokeAndIntrospect(t *testing.T) {
 	iform.Set("token", access)
 	iform.Set("client_id", clientID)
 	iform.Set("client_secret", clientSecret)
-	status, ib := h.postForm(t, "/api/auth/oauth2/introspect", iform, "", "")
+	status, ib := h.postForm(t, "/api/auth/oauth/introspect", iform, "", "")
 	if status != http.StatusOK {
 		t.Fatalf("introspect: %d %v", status, ib)
 	}
@@ -448,7 +448,7 @@ func TestRevokeAndIntrospect(t *testing.T) {
 	rform.Set("token", refresh)
 	rform.Set("client_id", clientID)
 	rform.Set("client_secret", clientSecret)
-	status, _ = h.postForm(t, "/api/auth/oauth2/revoke", rform, "", "")
+	status, _ = h.postForm(t, "/api/auth/oauth/revoke", rform, "", "")
 	if status != http.StatusOK {
 		t.Fatalf("revoke status=%d", status)
 	}
@@ -458,7 +458,7 @@ func TestRevokeAndIntrospect(t *testing.T) {
 	iform2.Set("token", refresh)
 	iform2.Set("client_id", clientID)
 	iform2.Set("client_secret", clientSecret)
-	status, ib2 := h.postForm(t, "/api/auth/oauth2/introspect", iform2, "", "")
+	status, ib2 := h.postForm(t, "/api/auth/oauth/introspect", iform2, "", "")
 	if status != http.StatusOK {
 		t.Fatalf("introspect refresh: %d %v", status, ib2)
 	}
@@ -487,7 +487,7 @@ func TestConsentStorage_SkipsPromptOnSecondAuth(t *testing.T) {
 	q.Set("state", "s1")
 	q.Set("code_challenge", challenge)
 	q.Set("code_challenge_method", "S256")
-	req, _ := http.NewRequest(http.MethodGet, h.srv.URL+"/api/auth/oauth2/authorize?"+q.Encode(), nil)
+	req, _ := http.NewRequest(http.MethodGet, h.srv.URL+"/api/auth/oauth/authorize?"+q.Encode(), nil)
 	req.AddCookie(&http.Cookie{Name: "yauth_session", Value: userCookie})
 	res, _ := http.DefaultClient.Do(req)
 	var p1 map[string]any
@@ -510,7 +510,7 @@ func TestConsentStorage_SkipsPromptOnSecondAuth(t *testing.T) {
 	cres.Body.Close()
 
 	// Second /authorize for same scopes → redirect_url, no consent prompt.
-	req2, _ := http.NewRequest(http.MethodGet, h.srv.URL+"/api/auth/oauth2/authorize?"+q.Encode(), nil)
+	req2, _ := http.NewRequest(http.MethodGet, h.srv.URL+"/api/auth/oauth/authorize?"+q.Encode(), nil)
 	req2.AddCookie(&http.Cookie{Name: "yauth_session", Value: userCookie})
 	res2, err2 := http.DefaultClient.Do(req2)
 	if err2 != nil {
@@ -569,7 +569,7 @@ func TestClientBan_RejectsTokenMint_AndUnbanRestores(t *testing.T) {
 	form := url.Values{}
 	form.Set("grant_type", "client_credentials")
 	form.Set("scope", "read")
-	status, b := h.postForm(t, "/api/auth/oauth2/token", form, clientID, clientSecret)
+	status, b := h.postForm(t, "/api/auth/oauth/token", form, clientID, clientSecret)
 	if status != http.StatusOK {
 		t.Fatalf("pre-ban token: %d %v", status, b)
 	}
@@ -582,7 +582,7 @@ func TestClientBan_RejectsTokenMint_AndUnbanRestores(t *testing.T) {
 	}
 
 	// Token mint must now fail invalid_client.
-	status, b = h.postForm(t, "/api/auth/oauth2/token", form, clientID, clientSecret)
+	status, b = h.postForm(t, "/api/auth/oauth/token", form, clientID, clientSecret)
 	if status != http.StatusUnauthorized {
 		t.Fatalf("expected 401 after ban, got %d %v", status, b)
 	}
@@ -609,7 +609,7 @@ func TestClientBan_RejectsTokenMint_AndUnbanRestores(t *testing.T) {
 	}
 
 	// Token mint succeeds again.
-	status, b = h.postForm(t, "/api/auth/oauth2/token", form, clientID, clientSecret)
+	status, b = h.postForm(t, "/api/auth/oauth/token", form, clientID, clientSecret)
 	if status != http.StatusOK {
 		t.Fatalf("post-unban token: %d %v", status, b)
 	}
@@ -634,11 +634,11 @@ func TestAuthServerMetadata_RFC8414(t *testing.T) {
 
 	want := map[string]string{
 		"issuer":                         "http://idp.test",
-		"authorization_endpoint":         "http://idp.test/api/auth/oauth2/authorize",
-		"token_endpoint":                 "http://idp.test/api/auth/oauth2/token",
-		"revocation_endpoint":            "http://idp.test/api/auth/oauth2/revoke",
-		"introspection_endpoint":         "http://idp.test/api/auth/oauth2/introspect",
-		"device_authorization_endpoint":  "http://idp.test/api/auth/oauth2/device_authorization",
+		"authorization_endpoint":         "http://idp.test/api/auth/oauth/authorize",
+		"token_endpoint":                 "http://idp.test/api/auth/oauth/token",
+		"revocation_endpoint":            "http://idp.test/api/auth/oauth/revoke",
+		"introspection_endpoint":         "http://idp.test/api/auth/oauth/introspect",
+		"device_authorization_endpoint":  "http://idp.test/api/auth/oauth/device/code",
 	}
 	for k, v := range want {
 		got, _ := doc[k].(string)
@@ -822,7 +822,7 @@ func TestRotatePublicKey_OldAssertionRejected_NewAccepted(t *testing.T) {
 	bb, _ := json.Marshal(body)
 	clientID, _, _ := h.createClient(t, adminCookie, string(bb))
 
-	audience := h.srv.URL + "/api/auth/oauth2/token"
+	audience := h.srv.URL + "/api/auth/oauth/token"
 
 	// Sanity: the old key works before rotation.
 	form := url.Values{}
@@ -831,7 +831,7 @@ func TestRotatePublicKey_OldAssertionRejected_NewAccepted(t *testing.T) {
 	form.Set("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer")
 	form.Set("client_assertion", signPKJWTAssertion(t, oldKey, clientID, audience))
 	form.Set("scope", "read")
-	status, b := h.postForm(t, "/api/auth/oauth2/token", form, "", "")
+	status, b := h.postForm(t, "/api/auth/oauth/token", form, "", "")
 	if status != http.StatusOK {
 		t.Fatalf("pre-rotation: %d %v", status, b)
 	}
@@ -851,7 +851,7 @@ func TestRotatePublicKey_OldAssertionRejected_NewAccepted(t *testing.T) {
 	form2.Set("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer")
 	form2.Set("client_assertion", signPKJWTAssertion(t, oldKey, clientID, audience))
 	form2.Set("scope", "read")
-	status, b = h.postForm(t, "/api/auth/oauth2/token", form2, "", "")
+	status, b = h.postForm(t, "/api/auth/oauth/token", form2, "", "")
 	if status == http.StatusOK {
 		t.Fatalf("expected old assertion to fail post-rotation, got %v", b)
 	}
@@ -866,7 +866,7 @@ func TestRotatePublicKey_OldAssertionRejected_NewAccepted(t *testing.T) {
 	form3.Set("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer")
 	form3.Set("client_assertion", signPKJWTAssertion(t, newKey, clientID, audience))
 	form3.Set("scope", "read")
-	status, b = h.postForm(t, "/api/auth/oauth2/token", form3, "", "")
+	status, b = h.postForm(t, "/api/auth/oauth/token", form3, "", "")
 	if status != http.StatusOK {
 		t.Fatalf("new key: %d %v", status, b)
 	}

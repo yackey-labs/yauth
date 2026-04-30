@@ -5,25 +5,38 @@ adjusted to fit the yauth-go OpenAPI surface. Below is the
 delta between the two clients so consumers migrating from the Rust client
 know what to expect.
 
-## Removed (yauth-go does not implement these endpoints today)
+## Status — 2026-04-30 (post Task #39)
 
-- `emailPassword.verify` / `verifyEmail` — email verification flow.
-- `emailPassword.resendVerification`.
-- `emailPassword.forgotPassword` / `resetPassword`.
-- `updateProfile` (PATCH /me).
-- `admin.deleteUser` — admin can ban a user; hard-delete is intentionally
-  not exposed because issued tokens still reference the row.
-- `admin.listSessions` / `admin.deleteSession` — single-session admin
-  endpoint not yet wired (use `admin.deleteUserSessions` to revoke all).
-- `accountLockoutAdminUnlock` — replaced by the user-facing `lockout.unlock`
-  + admin `lockout.state` pair.
-- `oauth2Server.register` (DCR — RFC 7591) — clients are registered via
-  the admin endpoint `oauth2Server.createClient` instead.
-- `oauth2Server.deviceApprove` is folded into `oauth2Server.deviceVerify`
-  in the Go server.
-- `oauth2Server.metadata` — yauth-go advertises OAuth2 endpoints through
-  the OIDC discovery doc (`oidc.discovery`) rather than a separate
-  `/oauth2/metadata` route.
+Cross-language conformance is **green**:
+`scripts/openapi-diff.py` reports 0 BREAKING / 0 MISSING / 0 SHAPE
+divergences and the `openapi-conformance` CI job is now hard-gated
+(`continue-on-error: false`). yauth-go now exposes a strict superset of
+the Rust route surface:
+
+- All BREAKING path renames (`/mfa/*`, `/oauth/*`, `/account/*`) closed.
+- All MISSING operations (DELETE/PUT `/admin/users/{id}`, POST
+  `/oauth/{provider}/callback`, PUT `/webhooks/{id}`) added.
+- All SHAPE divergences resolved — see `MIGRATION_v0.1.0.md` at the repo
+  root for the per-endpoint old → new mapping.
+
+The "removed" list below is the residual Go-only superset; everything
+else now matches the Rust client surface.
+
+## Go-only routes (superset, not in Rust)
+
+- `/admin/audit`, `/admin/users/{id}/sessions`
+- `/oauth2/clients`, `/oauth2/clients/{id}`, `/oauth2/consent` —
+  yauth-go's admin client CRUD lives under the legacy `/oauth2/`
+  namespace; Rust manages clients out-of-band via DCR
+  (`POST /oauth/register`, now also exposed in yauth-go).
+- `/lockout/state` — admin overview endpoint.
+- `/status` — diagnostic plugin list (Rust uses only `/config`).
+- `/webhooks/{id}/deliveries` — paginated history beyond the
+  `recent_deliveries` field returned by `GET /webhooks/{id}`.
+- `PATCH /admin/users/{id}` — kept alongside Rust's `PUT`.
+- `PATCH /webhooks/{id}` — kept alongside Rust's `PUT`.
+- `GET /oauth/{provider}/callback` — kept alongside Rust's `POST`-only
+  callback for browsers that follow the redirect rather than form-post.
 
 ## Renamed function names (operationId-driven)
 

@@ -80,9 +80,19 @@ func decodeJSON(r *http.Request, v any) error {
 // parseLimitOffset reads ?limit and ?offset, applying the plugin's
 // default and hard cap. Negative values are coerced to defaults; values
 // above maxLimit are clamped to maxLimit.
+//
+// As a Rust-parity affordance the request may instead use
+// ?page= and ?per_page=; the helper translates those to limit/offset.
+// limit/offset wins when both styles are supplied.
 func parseLimitOffset(r *http.Request) (limit, offset int) {
+	q := r.URL.Query()
 	limit = defaultLimit
-	if v := r.URL.Query().Get("limit"); v != "" {
+	if v := q.Get("per_page"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	if v := q.Get("limit"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			limit = n
 		}
@@ -90,7 +100,12 @@ func parseLimitOffset(r *http.Request) (limit, offset int) {
 	if limit > maxLimit {
 		limit = maxLimit
 	}
-	if v := r.URL.Query().Get("offset"); v != "" {
+	if v := q.Get("page"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			offset = (n - 1) * limit
+		}
+	}
+	if v := q.Get("offset"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
 			offset = n
 		}
@@ -143,8 +158,10 @@ func cookieOptionsFromHost(host plugin.PluginHost, r *http.Request, maxAge int) 
 // --- GET /admin/users -----------------------------------------------------
 
 type listUsersResponse struct {
-	Users []userJSON `json:"users"`
-	Total int64      `json:"total"`
+	Users   []userJSON `json:"users"`
+	Total   int64      `json:"total"`
+	Page    int        `json:"page"`
+	PerPage int        `json:"per_page"`
 }
 
 func (p *adminPlugin) handleListUsers(host plugin.PluginHost) http.HandlerFunc {
@@ -162,7 +179,16 @@ func (p *adminPlugin) handleListUsers(host plugin.PluginHost) http.HandlerFunc {
 		for _, u := range users {
 			out = append(out, toUserJSON(*u))
 		}
-		writeJSON(w, http.StatusOK, listUsersResponse{Users: out, Total: total})
+		page := 1
+		if limit > 0 {
+			page = offset/limit + 1
+		}
+		writeJSON(w, http.StatusOK, listUsersResponse{
+			Users:   out,
+			Total:   total,
+			Page:    page,
+			PerPage: limit,
+		})
 	}
 }
 
@@ -187,8 +213,9 @@ func (p *adminPlugin) handleGetUser(host plugin.PluginHost) http.HandlerFunc {
 // --- PATCH /admin/users/{id} ---------------------------------------------
 
 type patchUserRequest struct {
-	DisplayName *string `json:"display_name,omitempty"`
-	Role        *string `json:"role,omitempty"`
+	DisplayName   *string `json:"display_name,omitempty"`
+	Role          *string `json:"role,omitempty"`
+	EmailVerified *bool   `json:"email_verified,omitempty"`
 }
 
 func (p *adminPlugin) handlePatchUser(host plugin.PluginHost) http.HandlerFunc {
@@ -208,6 +235,9 @@ func (p *adminPlugin) handlePatchUser(host plugin.PluginHost) http.HandlerFunc {
 		}
 		if req.Role != nil {
 			changes.Role = req.Role
+		}
+		if req.EmailVerified != nil {
+			changes.EmailVerified = req.EmailVerified
 		}
 
 		u, err := host.Repo().UpdateUser(r.Context(), id, changes)
@@ -345,10 +375,6 @@ func (p *adminPlugin) handleUnbanUser(host plugin.PluginHost) http.HandlerFunc {
 
 // --- POST /admin/users/{id}/impersonate ----------------------------------
 
-type impersonateResponse struct {
-	User userJSON `json:"user"`
-}
-
 func (p *adminPlugin) handleImpersonate(host plugin.PluginHost) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
@@ -387,6 +413,14 @@ func (p *adminPlugin) handleImpersonate(host plugin.PluginHost) http.HandlerFunc
 		))
 		writeJSON(w, http.StatusOK, impersonateResponse{User: toUserJSON(*target)})
 	}
+}
+
+// impersonateResponse wraps the target user under `user`. The
+// impersonator field is omitted in the v0.1.0 wire format but reserved
+// here so audit-aware clients can be added later without a breaking
+// change.
+type impersonateResponse struct {
+	User userJSON `json:"user"`
 }
 
 // --- DELETE /admin/users/{id}/sessions -----------------------------------
@@ -477,6 +511,8 @@ type sessionJSON struct {
 type listSessionsResponse struct {
 	Sessions []sessionJSON `json:"sessions"`
 	Total    int64         `json:"total"`
+	Page     int           `json:"page"`
+	PerPage  int           `json:"per_page"`
 }
 
 func (p *adminPlugin) handleListSessions(host plugin.PluginHost) http.HandlerFunc {
@@ -505,7 +541,16 @@ func (p *adminPlugin) handleListSessions(host plugin.PluginHost) http.HandlerFun
 				CreatedAt: s.CreatedAt,
 			})
 		}
-		writeJSON(w, http.StatusOK, listSessionsResponse{Sessions: out, Total: total})
+		page := 1
+		if limit > 0 {
+			page = offset/limit + 1
+		}
+		writeJSON(w, http.StatusOK, listSessionsResponse{
+			Sessions: out,
+			Total:    total,
+			Page:     page,
+			PerPage:  limit,
+		})
 	}
 }
 

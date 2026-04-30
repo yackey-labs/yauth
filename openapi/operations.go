@@ -80,13 +80,62 @@ func addEmailPassword(api *huma.OpenAPI) {
 		Method: http.MethodPost, Path: "/change-password",
 		Tags: []string{"email-password"}, OperationID: "emailPasswordChangePassword",
 		Summary:     "Rotate the caller's password",
-		Description: "Verifies the old password, stores the new hash, revokes other sessions, re-issues a fresh cookie for the caller.",
+		Description: "Verifies the current password, stores the new hash, revokes other sessions, re-issues a fresh cookie for the caller.",
 		Security:    secCookie(),
-		RequestBody: jsonRequestBody(emailPasswordChangePasswordRequest{}, "Old + new password"),
+		RequestBody: jsonRequestBody(emailPasswordChangePasswordRequest{}, "Current + new password"),
 		Responses: map[string]*huma.Response{
-			"204": emptyResponse("Password changed."),
+			"200": jsonResponse("Password changed.", emailPasswordChangePasswordResponse{}),
 			"400": errorResponse("New password too weak."),
-			"401": errorResponse("Old password incorrect."),
+			"401": errorResponse("Current password incorrect."),
+		},
+	})
+
+	// --- email verification + password reset (cluster I) ---
+	api.AddOperation(&huma.Operation{
+		Method: http.MethodPost, Path: "/verify-email",
+		Tags: []string{"email-password"}, OperationID: "emailPasswordVerifyEmail",
+		Summary:     "Consume a verification token issued by /resend-verification",
+		Security:    secNone(),
+		RequestBody: jsonRequestBody(emailVerifyRequest{}, "Token"),
+		Responses: map[string]*huma.Response{
+			"200": jsonResponse("Email verified.", emailVerifyResponse{}),
+			"401": errorResponse("Token invalid or expired."),
+		},
+	})
+	api.AddOperation(&huma.Operation{
+		Method: http.MethodPost, Path: "/resend-verification",
+		Tags: []string{"email-password"}, OperationID: "emailPasswordResendVerification",
+		Summary:     "Email a fresh verification link",
+		Description: "Always responds 200 to prevent user enumeration.",
+		Security:    secNone(),
+		RequestBody: jsonRequestBody(emailResendVerificationRequest{}, "Email"),
+		Responses: map[string]*huma.Response{
+			"200": jsonResponse("Acknowledged.", emailResendVerificationResponse{}),
+			"400": errorResponse("Invalid email."),
+		},
+	})
+	api.AddOperation(&huma.Operation{
+		Method: http.MethodPost, Path: "/forgot-password",
+		Tags: []string{"email-password"}, OperationID: "emailPasswordForgotPassword",
+		Summary:     "Email a single-use password-reset token",
+		Description: "Always responds 200 to prevent user enumeration.",
+		Security:    secNone(),
+		RequestBody: jsonRequestBody(emailForgotPasswordRequest{}, "Email"),
+		Responses: map[string]*huma.Response{
+			"200": jsonResponse("Acknowledged.", emailForgotPasswordResponse{}),
+			"400": errorResponse("Invalid email."),
+		},
+	})
+	api.AddOperation(&huma.Operation{
+		Method: http.MethodPost, Path: "/reset-password",
+		Tags: []string{"email-password"}, OperationID: "emailPasswordResetPassword",
+		Summary:     "Consume a password-reset token and set a new password",
+		Security:    secNone(),
+		RequestBody: jsonRequestBody(emailResetPasswordRequest{}, "Token + new password"),
+		Responses: map[string]*huma.Response{
+			"200": jsonResponse("Password reset.", emailResetPasswordResponse{}),
+			"401": errorResponse("Token invalid or expired."),
+			"400": errorResponse("Password too weak."),
 		},
 	})
 }
@@ -134,21 +183,25 @@ func addAPIKey(api *huma.OpenAPI) {
 	api.AddOperation(&huma.Operation{
 		Method: http.MethodGet, Path: "/api-keys",
 		Tags: []string{"api-key"}, OperationID: "apiKeyList",
-		Summary:  "List the caller's API keys (no secrets)",
-		Security: secAny(),
+		Summary:    "List the caller's API keys (no secrets)",
+		Security:   secAny(),
+		Parameters: []*huma.Param{
+			queryIntParam("page", "Page number (1-based)."),
+			queryIntParam("per_page", "Page size (default 50, max 200)."),
+		},
 		Responses: map[string]*huma.Response{
-			"200": jsonResponse("List of keys.", apiKeyListResponse{}),
+			"200": jsonResponse("Paginated list of keys.", apiKeyListResponse{}),
 			"401": errorResponse("Not authenticated."),
 		},
 	})
 	api.AddOperation(&huma.Operation{
 		Method: http.MethodPost, Path: "/api-keys",
 		Tags: []string{"api-key"}, OperationID: "apiKeyCreate",
-		Summary:     "Create a new API key (plaintext returned once)",
+		Summary:     "Create a new API key (plaintext secret returned once)",
 		Security:    secAny(),
-		RequestBody: jsonRequestBody(apiKeyCreateRequest{}, "Name, optional scopes, optional expiry"),
+		RequestBody: jsonRequestBody(apiKeyCreateRequest{}, "Name, optional scopes, optional expires_in_days"),
 		Responses: map[string]*huma.Response{
-			"201": jsonResponse("Key created. The `key` field is the plaintext, shown once.", apiKeyCreateResponse{}),
+			"201": jsonResponse("Key created. The `secret` field is the plaintext, shown once.", apiKeyCreateResponse{}),
 			"400": errorResponse("Missing name or invalid expiry."),
 			"401": errorResponse("Not authenticated."),
 			"409": errorResponse("Per-user key cap reached."),
@@ -188,7 +241,7 @@ func addMagicLink(api *huma.OpenAPI) {
 		Security:    secNone(),
 		RequestBody: jsonRequestBody(magicLinkVerifyRequest{}, "Magic-link token"),
 		Responses: map[string]*huma.Response{
-			"200": jsonResponse("Session issued; cookie set.", magicLinkVerifyResponse{}),
+			"200": {Description: "Session issued; cookie set."},
 			"401": errorResponse("Token invalid, expired, or already consumed."),
 			"403": errorResponse("User banned."),
 		},
@@ -197,7 +250,7 @@ func addMagicLink(api *huma.OpenAPI) {
 
 func addLockout(api *huma.OpenAPI) {
 	api.AddOperation(&huma.Operation{
-		Method: http.MethodPost, Path: "/unlock",
+		Method: http.MethodPost, Path: "/account/unlock",
 		Tags: []string{"lockout"}, OperationID: "lockoutUnlock",
 		Summary:     "Consume an unlock token to clear an account lock",
 		Security:    secNone(),
@@ -208,7 +261,7 @@ func addLockout(api *huma.OpenAPI) {
 		},
 	})
 	api.AddOperation(&huma.Operation{
-		Method: http.MethodPost, Path: "/unlock/request",
+		Method: http.MethodPost, Path: "/account/request-unlock",
 		Tags: []string{"lockout"}, OperationID: "lockoutUnlockRequest",
 		Summary:     "Email a single-use unlock token",
 		Description: "Always responds 200 to prevent user enumeration.",
@@ -217,6 +270,17 @@ func addLockout(api *huma.OpenAPI) {
 		Responses: map[string]*huma.Response{
 			"200": jsonResponse("Acknowledged.", lockoutUnlockReqResponse{}),
 			"400": errorResponse("Invalid email."),
+		},
+	})
+	api.AddOperation(&huma.Operation{
+		Method: http.MethodPost, Path: "/admin/users/{id}/unlock",
+		Tags: []string{"lockout"}, OperationID: "lockoutAdminUnlock",
+		Summary:    "Force-unlock a user (admin)",
+		Security:   secCookie(),
+		Parameters: []*huma.Param{pathParam("id", "User id")},
+		Responses: map[string]*huma.Response{
+			"200": jsonResponse("Account unlocked.", lockoutUnlockResponse{}),
+			"403": errorResponse("Caller is not admin."),
 		},
 	})
 	api.AddOperation(&huma.Operation{
@@ -244,13 +308,31 @@ func addStatus(api *huma.OpenAPI) {
 			"403": errorResponse("Caller is not admin."),
 		},
 	})
+	api.AddOperation(&huma.Operation{
+		Method: http.MethodGet, Path: "/config",
+		Tags: []string{"status"}, OperationID: "config",
+		Summary:  "Return the host configuration subset exposed for clients",
+		Security: secCookie(),
+		Responses: map[string]*huma.Response{
+			"200": jsonResponse("Config subset.", configResponse{}),
+			"401": errorResponse("Not authenticated."),
+			"403": errorResponse("Caller is not admin."),
+		},
+	})
 }
 
 func addAdmin(api *huma.OpenAPI) {
 	listParams := []*huma.Param{
 		queryIntParam("limit", "Page size (default 50, capped at 100)."),
 		queryIntParam("offset", "Pagination offset."),
+		queryIntParam("page", "Page number (alternate to limit/offset; 1-based)."),
+		queryIntParam("per_page", "Page size (alternate to limit)."),
 		queryStringParam("search", "Substring match on email or display_name."),
+	}
+	sessionListParams := []*huma.Param{
+		queryStringParam("user_id", "Filter to a single user."),
+		queryIntParam("limit", "Page size."),
+		queryIntParam("offset", "Pagination offset."),
 	}
 	auditParams := []*huma.Param{
 		queryIntParam("limit", "Page size."),
@@ -297,6 +379,32 @@ func addAdmin(api *huma.OpenAPI) {
 		},
 	})
 	api.AddOperation(&huma.Operation{
+		Method: http.MethodPut, Path: "/admin/users/{id}",
+		Tags: []string{"admin"}, OperationID: "adminPutUser",
+		Summary:     "Alias for PATCH /admin/users/{id} (Rust parity)",
+		Security:    secCookie(),
+		Parameters:  []*huma.Param{idParam},
+		RequestBody: jsonRequestBody(adminPatchUserRequest{}, "Fields to update"),
+		Responses: map[string]*huma.Response{
+			"200": jsonResponse("Updated user.", adminUserJSON{}),
+			"403": errorResponse("Caller is not admin."),
+			"404": errorResponse("User not found."),
+		},
+	})
+	api.AddOperation(&huma.Operation{
+		Method: http.MethodDelete, Path: "/admin/users/{id}",
+		Tags: []string{"admin"}, OperationID: "adminDeleteUser",
+		Summary:    "Hard-delete a user (refuses self-delete)",
+		Security:   secCookie(),
+		Parameters: []*huma.Param{idParam},
+		Responses: map[string]*huma.Response{
+			"204": emptyResponse("User deleted."),
+			"400": errorResponse("Invalid id or self-delete."),
+			"403": errorResponse("Caller is not admin."),
+			"404": errorResponse("User not found."),
+		},
+	})
+	api.AddOperation(&huma.Operation{
 		Method: http.MethodPost, Path: "/admin/users/{id}/ban",
 		Tags: []string{"admin"}, OperationID: "adminBanUser",
 		Summary:     "Ban a user; revokes their sessions",
@@ -329,7 +437,7 @@ func addAdmin(api *huma.OpenAPI) {
 		Security:   secCookie(),
 		Parameters: []*huma.Param{idParam},
 		Responses: map[string]*huma.Response{
-			"200": jsonResponse("Session issued for the target user.", adminImpersonateResponse{}),
+			"200": {Description: "Session issued for the target user."},
 			"403": errorResponse("Caller is not admin."),
 			"404": errorResponse("User not found."),
 		},
@@ -343,6 +451,29 @@ func addAdmin(api *huma.OpenAPI) {
 		Responses: map[string]*huma.Response{
 			"200": jsonResponse("Number of revoked sessions.", adminDeleteSessionsResponse{}),
 			"403": errorResponse("Caller is not admin."),
+		},
+	})
+	api.AddOperation(&huma.Operation{
+		Method: http.MethodGet, Path: "/admin/sessions",
+		Tags: []string{"admin"}, OperationID: "adminListSessions",
+		Summary:    "List sessions, optionally filtered by user_id",
+		Security:   secCookie(),
+		Parameters: sessionListParams,
+		Responses: map[string]*huma.Response{
+			"200": jsonResponse("Sessions.", adminListSessionsResponse{}),
+			"403": errorResponse("Caller is not admin."),
+		},
+	})
+	api.AddOperation(&huma.Operation{
+		Method: http.MethodDelete, Path: "/admin/sessions/{id}",
+		Tags: []string{"admin"}, OperationID: "adminDeleteSession",
+		Summary:    "Terminate a single session by id",
+		Security:   secCookie(),
+		Parameters: []*huma.Param{pathParam("id", "Session id")},
+		Responses: map[string]*huma.Response{
+			"204": emptyResponse("Session deleted."),
+			"403": errorResponse("Caller is not admin."),
+			"404": errorResponse("Session not found."),
 		},
 	})
 	api.AddOperation(&huma.Operation{
@@ -360,7 +491,7 @@ func addAdmin(api *huma.OpenAPI) {
 
 func addMFA(api *huma.OpenAPI) {
 	api.AddOperation(&huma.Operation{
-		Method: http.MethodPost, Path: "/totp/setup",
+		Method: http.MethodPost, Path: "/mfa/totp/setup",
 		Tags: []string{"mfa"}, OperationID: "mfaTOTPSetup",
 		Summary:     "Provision a new TOTP secret + backup codes (unverified)",
 		Description: "Wipes any prior secret/backup codes for this user, then issues a fresh QR + backup-code set.",
@@ -371,29 +502,29 @@ func addMFA(api *huma.OpenAPI) {
 		},
 	})
 	api.AddOperation(&huma.Operation{
-		Method: http.MethodPost, Path: "/totp/confirm",
+		Method: http.MethodPost, Path: "/mfa/totp/confirm",
 		Tags: []string{"mfa"}, OperationID: "mfaTOTPConfirm",
 		Summary:     "Verify the freshly-provisioned TOTP and activate it",
 		Security:    secCookie(),
 		RequestBody: jsonRequestBody(mfaConfirmRequest{}, "Six-digit TOTP code"),
 		Responses: map[string]*huma.Response{
-			"204": emptyResponse("TOTP activated."),
+			"200": jsonResponse("TOTP activated.", mfaMessageResponse{}),
 			"400": errorResponse("No pending setup."),
 			"401": errorResponse("Invalid code."),
 		},
 	})
 	api.AddOperation(&huma.Operation{
-		Method: http.MethodDelete, Path: "/totp",
+		Method: http.MethodDelete, Path: "/mfa/totp",
 		Tags: []string{"mfa"}, OperationID: "mfaTOTPDelete",
 		Summary:  "Remove the user's TOTP secret + backup codes",
 		Security: secCookie(),
 		Responses: map[string]*huma.Response{
-			"204": emptyResponse("Removed."),
+			"200": jsonResponse("Removed.", mfaMessageResponse{}),
 			"401": errorResponse("Not authenticated."),
 		},
 	})
 	api.AddOperation(&huma.Operation{
-		Method: http.MethodGet, Path: "/backup-codes",
+		Method: http.MethodGet, Path: "/mfa/backup-codes",
 		Tags: []string{"mfa"}, OperationID: "mfaBackupCodesCount",
 		Summary:  "Return the count of unused backup codes",
 		Security: secCookie(),
@@ -403,7 +534,7 @@ func addMFA(api *huma.OpenAPI) {
 		},
 	})
 	api.AddOperation(&huma.Operation{
-		Method: http.MethodPost, Path: "/backup-codes/regenerate",
+		Method: http.MethodPost, Path: "/mfa/backup-codes/regenerate",
 		Tags: []string{"mfa"}, OperationID: "mfaRegenerateBackupCodes",
 		Summary:  "Replace the user's backup codes; returns the new set once",
 		Security: secCookie(),
@@ -413,7 +544,7 @@ func addMFA(api *huma.OpenAPI) {
 		},
 	})
 	api.AddOperation(&huma.Operation{
-		Method: http.MethodPost, Path: "/verify",
+		Method: http.MethodPost, Path: "/mfa/verify",
 		Tags: []string{"mfa"}, OperationID: "mfaVerify",
 		Summary:     "Consume a pending session (TOTP or backup code)",
 		Security:    secNone(),
@@ -432,7 +563,7 @@ func addPasskey(api *huma.OpenAPI) {
 		Summary:  "Start passkey registration; return CredentialCreation options",
 		Security: secCookie(),
 		Responses: map[string]*huma.Response{
-			"200": jsonResponse("Options.", passkeyRegisterBeginResponse{}),
+			"200": {Description: "Options."},
 			"401": errorResponse("Not authenticated."),
 		},
 	})
@@ -441,9 +572,9 @@ func addPasskey(api *huma.OpenAPI) {
 		Tags: []string{"passkey"}, OperationID: "passkeyRegisterFinish",
 		Summary:     "Verify attestation and store the new credential",
 		Security:    secCookie(),
-		RequestBody: jsonRequestBody(passkeyRegisterFinishRequest{}, "Authenticator response"),
+		RequestBody: jsonRequestBody(passkeyRegisterFinishRequest{}, "Authenticator credential + name"),
 		Responses: map[string]*huma.Response{
-			"201": jsonResponse("Stored credential.", passkeyRegisterFinishResponse{}),
+			"201": {Description: "Stored credential."},
 			"400": errorResponse("Invalid attestation or expired challenge."),
 			"401": errorResponse("Not authenticated."),
 		},
@@ -455,7 +586,7 @@ func addPasskey(api *huma.OpenAPI) {
 		Security:    secNone(),
 		RequestBody: jsonRequestBody(passkeyLoginBeginRequest{}, "Optional email hint"),
 		Responses: map[string]*huma.Response{
-			"200": jsonResponse("Options.", passkeyLoginBeginResponse{}),
+			"200": {Description: "Options."},
 		},
 	})
 	api.AddOperation(&huma.Operation{
@@ -463,9 +594,9 @@ func addPasskey(api *huma.OpenAPI) {
 		Tags: []string{"passkey"}, OperationID: "passkeyLoginFinish",
 		Summary:     "Verify the assertion and start a session",
 		Security:    secNone(),
-		RequestBody: jsonRequestBody(passkeyLoginFinishRequest{}, "Authenticator response"),
+		RequestBody: jsonRequestBody(passkeyLoginFinishRequest{}, "Authenticator credential + challenge_id"),
 		Responses: map[string]*huma.Response{
-			"200": jsonResponse("Session issued.", passkeyLoginFinishResponse{}),
+			"200": {Description: "Session issued."},
 			"400": errorResponse("Invalid challenge or response."),
 			"401": errorResponse("Verification failed."),
 			"403": errorResponse("User banned."),
@@ -476,8 +607,12 @@ func addPasskey(api *huma.OpenAPI) {
 		Tags: []string{"passkey"}, OperationID: "passkeyList",
 		Summary:  "List the caller's stored passkeys",
 		Security: secCookie(),
+		Parameters: []*huma.Param{
+			queryIntParam("page", "Page number (1-based)."),
+			queryIntParam("per_page", "Page size (default 50, max 200)."),
+		},
 		Responses: map[string]*huma.Response{
-			"200": jsonResponse("Passkeys.", passkeyListResponse{}),
+			"200": jsonResponse("Paginated passkeys.", passkeyListResponse{}),
 			"401": errorResponse("Not authenticated."),
 		},
 	})
@@ -524,12 +659,32 @@ func addOAuth(api *huma.OpenAPI) {
 		},
 	})
 	api.AddOperation(&huma.Operation{
+		Method: http.MethodPost, Path: "/oauth/{provider}/callback",
+		Tags: []string{"oauth"}, OperationID: "oauthCallbackPost",
+		Summary:     "JSON-body variant of GET /oauth/{provider}/callback (Rust parity)",
+		Description: "Used by SPAs that prefer to POST the {code, state} pair from a hash fragment rather than appearing in the URL. Body is application/json or application/x-www-form-urlencoded.",
+		Security:    secNone(),
+		Parameters:  []*huma.Param{providerParam},
+		RequestBody: jsonRequestBody(oauthCallbackBody{}, "code + state"),
+		Responses: map[string]*huma.Response{
+			"200": jsonResponse("Linked or new user; session cookie set.", oauthCallbackResponse{}),
+			"302": emptyResponse("Redirect (when redirect_url was supplied at /authorize)."),
+			"400": errorResponse("Invalid request, state, or provider error."),
+			"403": errorResponse("User banned or user mismatch on link flow."),
+			"502": errorResponse("Provider exchange or userinfo failed."),
+		},
+	})
+	api.AddOperation(&huma.Operation{
 		Method: http.MethodGet, Path: "/oauth/accounts",
 		Tags: []string{"oauth"}, OperationID: "oauthListAccounts",
 		Summary:  "List the caller's linked OAuth accounts",
 		Security: secCookie(),
+		Parameters: []*huma.Param{
+			queryIntParam("page", "Page number (1-based)."),
+			queryIntParam("per_page", "Page size (default 50, max 200)."),
+		},
 		Responses: map[string]*huma.Response{
-			"200": jsonResponse("Linked accounts.", oauthListAccountsResponse{}),
+			"200": jsonResponse("Paginated linked accounts.", oauthListAccountsResponse{}),
 			"401": errorResponse("Not authenticated."),
 		},
 	})
@@ -568,8 +723,12 @@ func addWebhooks(api *huma.OpenAPI) {
 		Tags: []string{"webhooks"}, OperationID: "webhookList",
 		Summary:  "List webhooks (admin)",
 		Security: secCookie(),
+		Parameters: []*huma.Param{
+			queryIntParam("page", "Page number (1-based)."),
+			queryIntParam("per_page", "Page size (default 50, max 200)."),
+		},
 		Responses: map[string]*huma.Response{
-			"200": jsonResponse("Webhooks.", webhookListResponse{}),
+			"200": jsonResponse("Paginated webhooks.", webhookListResponse{}),
 			"403": errorResponse("Caller is not admin."),
 		},
 	})
@@ -588,11 +747,12 @@ func addWebhooks(api *huma.OpenAPI) {
 	api.AddOperation(&huma.Operation{
 		Method: http.MethodGet, Path: "/webhooks/{id}",
 		Tags: []string{"webhooks"}, OperationID: "webhookGet",
-		Summary:    "Fetch a single webhook (no secret)",
-		Security:   secCookie(),
-		Parameters: []*huma.Param{idParam},
+		Summary:     "Fetch a single webhook (no secret)",
+		Description: "For delivery history, use GET /webhooks/{id}/deliveries.",
+		Security:    secCookie(),
+		Parameters:  []*huma.Param{idParam},
 		Responses: map[string]*huma.Response{
-			"200": jsonResponse("Webhook.", webhookJSON{}),
+			"200": jsonResponse("Webhook (without secret).", webhookShowResponse{}),
 			"403": errorResponse("Caller is not admin."),
 			"404": errorResponse("Not found."),
 		},
@@ -606,6 +766,19 @@ func addWebhooks(api *huma.OpenAPI) {
 		RequestBody: jsonRequestBody(webhookUpdateRequest{}, "Partial update"),
 		Responses: map[string]*huma.Response{
 			"200": jsonResponse("Updated webhook (rotated secret returned only when rotate_secret=true).", webhookJSON{}),
+			"403": errorResponse("Caller is not admin."),
+			"404": errorResponse("Not found."),
+		},
+	})
+	api.AddOperation(&huma.Operation{
+		Method: http.MethodPut, Path: "/webhooks/{id}",
+		Tags: []string{"webhooks"}, OperationID: "webhookPut",
+		Summary:     "Alias for PATCH /webhooks/{id} (Rust parity)",
+		Security:    secCookie(),
+		Parameters:  []*huma.Param{idParam},
+		RequestBody: jsonRequestBody(webhookUpdateRequest{}, "Partial update"),
+		Responses: map[string]*huma.Response{
+			"200": jsonResponse("Updated webhook.", webhookJSON{}),
 			"403": errorResponse("Caller is not admin."),
 			"404": errorResponse("Not found."),
 		},
@@ -625,11 +798,15 @@ func addWebhooks(api *huma.OpenAPI) {
 	api.AddOperation(&huma.Operation{
 		Method: http.MethodGet, Path: "/webhooks/{id}/deliveries",
 		Tags: []string{"webhooks"}, OperationID: "webhookListDeliveries",
-		Summary:    "List recent delivery attempts for a webhook",
-		Security:   secCookie(),
-		Parameters: []*huma.Param{idParam, queryIntParam("limit", "Max rows (default 100, capped at 1000).")},
+		Summary:  "List recent delivery attempts for a webhook",
+		Security: secCookie(),
+		Parameters: []*huma.Param{
+			idParam,
+			queryIntParam("page", "Page number (1-based)."),
+			queryIntParam("per_page", "Page size (default 50, max 200)."),
+		},
 		Responses: map[string]*huma.Response{
-			"200": jsonResponse("Delivery rows.", webhookListDeliveriesResponse{}),
+			"200": jsonResponse("Paginated delivery rows.", webhookListDeliveriesResponse{}),
 			"403": errorResponse("Caller is not admin."),
 			"404": errorResponse("Not found."),
 		},
@@ -641,7 +818,7 @@ func addWebhooks(api *huma.OpenAPI) {
 		Security:   secCookie(),
 		Parameters: []*huma.Param{idParam},
 		Responses: map[string]*huma.Response{
-			"202": jsonResponse("Delivery queued.", webhookTestResponse{}),
+			"200": jsonResponse("Delivery queued; the returned id can be polled at /deliveries.", webhookTestResponse{}),
 			"403": errorResponse("Caller is not admin."),
 			"404": errorResponse("Not found."),
 			"503": errorResponse("Dispatcher shutting down."),
@@ -657,7 +834,7 @@ func addAsymJWT(api *huma.OpenAPI) {
 		Description: "Returned even when no caller is authenticated; suited to relying parties verifying tokens out of band.",
 		Security:    secNone(),
 		Responses: map[string]*huma.Response{
-			"200": jsonResponse("JWKS.", jwksDocument{}),
+			"200": {Description: "JWKS."},
 			"500": errorResponse("Signer unavailable."),
 		},
 	})
@@ -670,7 +847,7 @@ func addOIDC(api *huma.OpenAPI) {
 		Summary:  "OpenID Provider discovery document",
 		Security: secNone(),
 		Responses: map[string]*huma.Response{
-			"200": jsonResponse("Discovery.", oidcDiscoveryDoc{}),
+			"200": {Description: "Discovery."},
 		},
 	})
 	api.AddOperation(&huma.Operation{
@@ -679,7 +856,7 @@ func addOIDC(api *huma.OpenAPI) {
 		Summary:  "Standard OIDC UserInfo for the authenticated caller",
 		Security: secAny(),
 		Responses: map[string]*huma.Response{
-			"200": jsonResponse("UserInfo.", oidcUserInfoResponse{}),
+			"200": {Description: "UserInfo."},
 			"401": errorResponse("Not authenticated."),
 		},
 	})
@@ -689,7 +866,7 @@ func addOAuth2Server(api *huma.OpenAPI) {
 	idParam := pathParam("id", "client_id")
 
 	api.AddOperation(&huma.Operation{
-		Method: http.MethodPost, Path: "/oauth2/register",
+		Method: http.MethodPost, Path: "/oauth/register",
 		Tags: []string{"oauth2-server"}, OperationID: "oauth2DynamicClientRegister",
 		Summary:     "Register an OAuth2 client (RFC 7591)",
 		Description: "Public dynamic client registration endpoint. Disabled by default; opt in via plugin Config.DCREnabled. When DCRRequireInitialAccessToken is true (default), the request must carry an admin-issued Bearer token in the Authorization header.",
@@ -700,6 +877,18 @@ func addOAuth2Server(api *huma.OpenAPI) {
 			"401": errorResponse("Missing or invalid initial access token."),
 			"400": errorResponse("Invalid client metadata."),
 			"404": errorResponse("DCR is disabled by configuration."),
+		},
+	})
+	// /.well-known/oauth-authorization-server (RFC 8414): the route exists
+	// in code under plugins/oauth2server/metadata.go; document it here so
+	// the conformance check sees parity with Rust.
+	api.AddOperation(&huma.Operation{
+		Method: http.MethodGet, Path: "/.well-known/oauth-authorization-server",
+		Tags: []string{"oauth2-server"}, OperationID: "oauth2AuthServerMetadata",
+		Summary:  "RFC 8414 authorization server metadata",
+		Security: secNone(),
+		Responses: map[string]*huma.Response{
+			"200": {Description: "Metadata document."},
 		},
 	})
 	api.AddOperation(&huma.Operation{
@@ -765,7 +954,25 @@ func addOAuth2Server(api *huma.OpenAPI) {
 	})
 
 	api.AddOperation(&huma.Operation{
-		Method: http.MethodGet, Path: "/oauth2/authorize",
+		Method: http.MethodPost, Path: "/oauth/authorize",
+		Tags: []string{"oauth2-server"}, OperationID: "oauth2AuthorizePost",
+		Summary:     "POST variant of /oauth/authorize (Rust parity)",
+		Description: "Identical semantics to the GET form; some clients prefer to submit the request as application/x-www-form-urlencoded.",
+		Security:    secCookie(),
+		RequestBody: &huma.RequestBody{
+			Required: true,
+			Content: map[string]*huma.MediaType{
+				"application/x-www-form-urlencoded": {Schema: &huma.Schema{Type: "object"}},
+				"application/json":                  {Schema: &huma.Schema{Type: "object"}},
+			},
+		},
+		Responses: map[string]*huma.Response{
+			"200": {Description: "Either {redirect_url} or a consent payload."},
+			"401": errorResponse("Not authenticated."),
+		},
+	})
+	api.AddOperation(&huma.Operation{
+		Method: http.MethodGet, Path: "/oauth/authorize",
 		Tags: []string{"oauth2-server"}, OperationID: "oauth2Authorize",
 		Summary:  "Authorization endpoint — returns either a redirect URL or a consent payload",
 		Security: secCookie(),
@@ -781,7 +988,7 @@ func addOAuth2Server(api *huma.OpenAPI) {
 		},
 		Responses: map[string]*huma.Response{
 			"200": {
-				Description: "Either {redirect_url} (consent already granted) or a consent payload that the UI must POST back via /oauth2/consent.",
+				Description: "Either {redirect_url} (consent already granted) or a consent payload that the UI must POST back via POST /oauth2/consent (Go-specific consent split).",
 				Content: map[string]*huma.MediaType{"application/json": {Schema: &huma.Schema{
 					OneOf: []*huma.Schema{schemaRef(oauth2AuthorizeRedirect{}), schemaRef(oauth2ConsentPayload{})},
 				}}},
@@ -801,7 +1008,7 @@ func addOAuth2Server(api *huma.OpenAPI) {
 		},
 	})
 	api.AddOperation(&huma.Operation{
-		Method: http.MethodPost, Path: "/oauth2/token",
+		Method: http.MethodPost, Path: "/oauth/token",
 		Tags: []string{"oauth2-server"}, OperationID: "oauth2Token",
 		Summary:     "Token endpoint (RFC 6749 §3.2)",
 		Description: "Accepts authorization_code, refresh_token, client_credentials, and urn:ietf:params:oauth:grant-type:device_code grants. Body is application/x-www-form-urlencoded or application/json.",
@@ -815,13 +1022,13 @@ func addOAuth2Server(api *huma.OpenAPI) {
 			},
 		},
 		Responses: map[string]*huma.Response{
-			"200": jsonResponse("Token bundle.", oauth2TokenResponse{}),
+			"200": {Description: "Token bundle."},
 			"400": errorResponse("invalid_request / unsupported_grant_type / etc."),
 			"401": errorResponse("invalid_client."),
 		},
 	})
 	api.AddOperation(&huma.Operation{
-		Method: http.MethodPost, Path: "/oauth2/revoke",
+		Method: http.MethodPost, Path: "/oauth/revoke",
 		Tags: []string{"oauth2-server"}, OperationID: "oauth2Revoke",
 		Summary:     "RFC 7009 revocation",
 		Description: "Idempotent: unknown / already-revoked / malformed tokens still return 200.",
@@ -836,7 +1043,7 @@ func addOAuth2Server(api *huma.OpenAPI) {
 		},
 	})
 	api.AddOperation(&huma.Operation{
-		Method: http.MethodPost, Path: "/oauth2/introspect",
+		Method: http.MethodPost, Path: "/oauth/introspect",
 		Tags: []string{"oauth2-server"}, OperationID: "oauth2Introspect",
 		Summary:     "RFC 7662 token introspection",
 		Description: "Caller authenticates as a confidential client.",
@@ -846,12 +1053,12 @@ func addOAuth2Server(api *huma.OpenAPI) {
 			Content:  map[string]*huma.MediaType{"application/x-www-form-urlencoded": {Schema: &huma.Schema{Type: "object"}}},
 		},
 		Responses: map[string]*huma.Response{
-			"200": jsonResponse("Introspection result.", oauth2IntrospectResponse{}),
+			"200": {Description: "Introspection result."},
 			"401": errorResponse("invalid_client."),
 		},
 	})
 	api.AddOperation(&huma.Operation{
-		Method: http.MethodPost, Path: "/oauth2/device_authorization",
+		Method: http.MethodPost, Path: "/oauth/device/code",
 		Tags: []string{"oauth2-server"}, OperationID: "oauth2DeviceAuthorization",
 		Summary:  "RFC 8628 device-authorization endpoint",
 		Security: secNone(),
@@ -860,20 +1067,37 @@ func addOAuth2Server(api *huma.OpenAPI) {
 			Content:  map[string]*huma.MediaType{"application/x-www-form-urlencoded": {Schema: &huma.Schema{Type: "object"}}},
 		},
 		Responses: map[string]*huma.Response{
-			"200": jsonResponse("device_code + user_code pair.", oauth2DeviceAuthResponse{}),
+			"200": {Description: "device_code + user_code pair."},
 			"400": errorResponse("invalid_request."),
 			"401": errorResponse("invalid_client."),
 		},
 	})
 	api.AddOperation(&huma.Operation{
-		Method: http.MethodPost, Path: "/oauth2/device",
+		Method: http.MethodPost, Path: "/oauth/device",
 		Tags: []string{"oauth2-server"}, OperationID: "oauth2DeviceVerify",
-		Summary:     "User-facing endpoint to enter a user_code (RFC 8628)",
-		Security:    secCookie(),
-		RequestBody: jsonRequestBody(oauth2DeviceVerifyRequest{}, "user_code"),
+		Summary:  "User-facing endpoint to enter a user_code (RFC 8628)",
+		Security: secCookie(),
+		RequestBody: &huma.RequestBody{
+			Required: true,
+			Content: map[string]*huma.MediaType{
+				"application/x-www-form-urlencoded": {Schema: &huma.Schema{Type: "object"}},
+				"application/json":                  {Schema: &huma.Schema{Type: "object"}},
+			},
+		},
 		Responses: map[string]*huma.Response{
-			"200": jsonResponse("Approved.", oauth2DeviceVerifyResponse{}),
+			"200": {Description: "Approved."},
 			"400": errorResponse("invalid_request."),
+			"401": errorResponse("Not authenticated."),
+		},
+	})
+	api.AddOperation(&huma.Operation{
+		Method: http.MethodGet, Path: "/oauth/device",
+		Tags: []string{"oauth2-server"}, OperationID: "oauth2DeviceVerifyGet",
+		Summary:     "Browser landing for the device flow user-code prompt (Rust parity)",
+		Description: "Renders or proxies the user-facing prompt where the user enters the user_code printed on the device. Body shape is implementation-defined.",
+		Security:    secCookie(),
+		Responses: map[string]*huma.Response{
+			"200": {Description: "Prompt rendered."},
 			"401": errorResponse("Not authenticated."),
 		},
 	})

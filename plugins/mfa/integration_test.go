@@ -148,14 +148,13 @@ func (e *testEnv) register(t *testing.T) {
 // raw TOTP secret and the displayed backup codes.
 func (e *testEnv) setupAndConfirmMFA(t *testing.T) (secret string, backupCodes []string) {
 	t.Helper()
-	res := e.post(t, "/api/auth/totp/setup", nil)
+	res := e.post(t, "/api/auth/mfa/totp/setup", nil)
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("setup: %d (%s)", res.StatusCode, drain(res))
 	}
 	var setup struct {
 		Secret      string   `json:"secret"`
 		OTPAuthURL  string   `json:"otpauth_url"`
-		QRCode      string   `json:"qr_code"`
 		BackupCodes []string `json:"backup_codes"`
 	}
 	if err := json.NewDecoder(res.Body).Decode(&setup); err != nil {
@@ -168,9 +167,6 @@ func (e *testEnv) setupAndConfirmMFA(t *testing.T) (secret string, backupCodes [
 	if setup.OTPAuthURL == "" {
 		t.Fatalf("setup: empty otpauth_url")
 	}
-	if len(setup.QRCode) < 32 || setup.QRCode[:22] != "data:image/png;base64," {
-		t.Fatalf("setup: missing/short qr data url: %q", setup.QRCode)
-	}
 	if len(setup.BackupCodes) != 10 {
 		t.Fatalf("setup: expected 10 backup codes, got %d", len(setup.BackupCodes))
 	}
@@ -179,8 +175,8 @@ func (e *testEnv) setupAndConfirmMFA(t *testing.T) (secret string, backupCodes [
 	if err != nil {
 		t.Fatalf("generate totp code: %v", err)
 	}
-	res = e.post(t, "/api/auth/totp/confirm", map[string]string{"code": code})
-	if res.StatusCode != http.StatusNoContent {
+	res = e.post(t, "/api/auth/mfa/totp/confirm", map[string]string{"code": code})
+	if res.StatusCode != http.StatusOK {
 		t.Fatalf("confirm: %d (%s)", res.StatusCode, drain(res))
 	}
 	res.Body.Close()
@@ -214,7 +210,7 @@ func TestMFA_FullSetupConfirmLoginVerifyTOTP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generate code: %v", err)
 	}
-	res := postJSONWith(t, cl, env.srv.URL+"/api/auth/verify", map[string]string{
+	res := postJSONWith(t, cl, env.srv.URL+"/api/auth/mfa/verify", map[string]string{
 		"pending_session_id": pid,
 		"code":               code,
 	})
@@ -245,7 +241,7 @@ func TestMFA_VerifyWithBackupCode_ConsumesIt(t *testing.T) {
 	// First login: consume backup code [0].
 	cl := env.noCookieClient(t)
 	pid := env.loginExpectMFAWith(t, cl)
-	res := postJSONWith(t, cl, env.srv.URL+"/api/auth/verify", map[string]string{
+	res := postJSONWith(t, cl, env.srv.URL+"/api/auth/mfa/verify", map[string]string{
 		"pending_session_id": pid,
 		"code":               codes[0],
 	})
@@ -255,17 +251,17 @@ func TestMFA_VerifyWithBackupCode_ConsumesIt(t *testing.T) {
 	res.Body.Close()
 
 	// the backup-code count should now be 9 — auth via the cookie just set
-	res = getWith(t, cl, env.srv.URL+"/api/auth/backup-codes")
+	res = getWith(t, cl, env.srv.URL+"/api/auth/mfa/backup-codes")
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("backup-codes count: %d (%s)", res.StatusCode, drain(res))
 	}
 	var count struct {
-		Unused int `json:"unused"`
+		Remaining int `json:"remaining"`
 	}
 	_ = json.NewDecoder(res.Body).Decode(&count)
 	res.Body.Close()
-	if count.Unused != 9 {
-		t.Fatalf("expected 9 unused, got %d", count.Unused)
+	if count.Remaining != 9 {
+		t.Fatalf("expected 9 unused, got %d", count.Remaining)
 	}
 
 	// Logout, login again — second attempt with the SAME backup code
@@ -274,7 +270,7 @@ func TestMFA_VerifyWithBackupCode_ConsumesIt(t *testing.T) {
 	res.Body.Close()
 	cl2 := env.noCookieClient(t)
 	pid2 := env.loginExpectMFAWith(t, cl2)
-	res = postJSONWith(t, cl2, env.srv.URL+"/api/auth/verify", map[string]string{
+	res = postJSONWith(t, cl2, env.srv.URL+"/api/auth/mfa/verify", map[string]string{
 		"pending_session_id": pid2,
 		"code":               codes[0],
 	})
@@ -297,7 +293,7 @@ func TestMFA_PendingSessionConsumedOnce(t *testing.T) {
 
 	// First verify succeeds.
 	code, _ := totp.GenerateCode(secret, time.Now())
-	res := postJSONWith(t, cl, env.srv.URL+"/api/auth/verify", map[string]string{
+	res := postJSONWith(t, cl, env.srv.URL+"/api/auth/mfa/verify", map[string]string{
 		"pending_session_id": pid,
 		"code":               code,
 	})
@@ -309,7 +305,7 @@ func TestMFA_PendingSessionConsumedOnce(t *testing.T) {
 	// Re-using the same pending_session_id with a new code must fail.
 	cl2 := env.noCookieClient(t)
 	code2, _ := totp.GenerateCode(secret, time.Now().Add(31*time.Second))
-	res = postJSONWith(t, cl2, env.srv.URL+"/api/auth/verify", map[string]string{
+	res = postJSONWith(t, cl2, env.srv.URL+"/api/auth/mfa/verify", map[string]string{
 		"pending_session_id": pid,
 		"code":               code2,
 	})
@@ -325,7 +321,7 @@ func TestMFA_LoginWithoutVerifiedTOTP_StillIssuesSession(t *testing.T) {
 
 	env.register(t)
 	// setup but DO NOT confirm
-	res := env.post(t, "/api/auth/totp/setup", nil)
+	res := env.post(t, "/api/auth/mfa/totp/setup", nil)
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("setup: %d (%s)", res.StatusCode, drain(res))
 	}
@@ -364,24 +360,24 @@ func TestMFA_DeleteRemovesTOTPAndBackupCodes(t *testing.T) {
 		t.Fatalf("expected 10 codes, got %d", len(codes))
 	}
 
-	res := env.delete(t, "/api/auth/totp")
-	if res.StatusCode != http.StatusNoContent {
+	res := env.delete(t, "/api/auth/mfa/totp")
+	if res.StatusCode != http.StatusOK {
 		t.Fatalf("delete: %d (%s)", res.StatusCode, drain(res))
 	}
 	res.Body.Close()
 
 	// backup-codes count is now 0
-	res = env.get(t, "/api/auth/backup-codes")
+	res = env.get(t, "/api/auth/mfa/backup-codes")
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("backup-codes: %d (%s)", res.StatusCode, drain(res))
 	}
 	var count struct {
-		Unused int `json:"unused"`
+		Remaining int `json:"remaining"`
 	}
 	_ = json.NewDecoder(res.Body).Decode(&count)
 	res.Body.Close()
-	if count.Unused != 0 {
-		t.Fatalf("expected 0 unused after delete, got %d", count.Unused)
+	if count.Remaining != 0 {
+		t.Fatalf("expected 0 unused after delete, got %d", count.Remaining)
 	}
 
 	// login again — should NOT require mfa now
@@ -415,7 +411,7 @@ func TestMFA_RegenerateBackupCodes_RotatesAndInvalidatesOld(t *testing.T) {
 	env.register(t)
 	_, oldCodes := env.setupAndConfirmMFA(t)
 
-	res := env.post(t, "/api/auth/backup-codes/regenerate", nil)
+	res := env.post(t, "/api/auth/mfa/backup-codes/regenerate", nil)
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("regenerate: %d (%s)", res.StatusCode, drain(res))
 	}
@@ -444,7 +440,7 @@ func TestMFA_RegenerateBackupCodes_RotatesAndInvalidatesOld(t *testing.T) {
 	env.logout(t)
 	cl := env.noCookieClient(t)
 	pid := env.loginExpectMFAWith(t, cl)
-	res = postJSONWith(t, cl, env.srv.URL+"/api/auth/verify", map[string]string{
+	res = postJSONWith(t, cl, env.srv.URL+"/api/auth/mfa/verify", map[string]string{
 		"pending_session_id": pid,
 		"code":               oldCodes[0],
 	})

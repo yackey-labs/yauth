@@ -52,8 +52,8 @@ func (p *oidcPlugin) handleDiscovery(host plugin.PluginHost) http.HandlerFunc {
 		}
 
 		if hasPlugin(host, "oauth2-server") {
-			doc.AuthorizationEndpoint = base + "/oauth2/authorize"
-			doc.TokenEndpoint = base + "/oauth2/token"
+			doc.AuthorizationEndpoint = base + "/oauth/authorize"
+			doc.TokenEndpoint = base + "/oauth/token"
 		}
 
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")

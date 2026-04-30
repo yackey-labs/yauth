@@ -38,6 +38,14 @@ export interface AdminDeleteSessionsResponse {
   deleted: number;
 }
 
+export interface UserJSON {
+  display_name?: string;
+  email: string;
+  email_verified: boolean;
+  id: string;
+  role: string;
+}
+
 export interface AdminUserJSON {
   banned: boolean;
   banned_reason?: string;
@@ -52,6 +60,7 @@ export interface AdminUserJSON {
 }
 
 export interface AdminImpersonateResponse {
+  impersonator?: UserJSON;
   user: AdminUserJSON;
 }
 
@@ -60,7 +69,26 @@ export interface AdminListAuditResponse {
   entries: AdminAuditEntryJSON[] | null;
 }
 
+export interface AdminSessionJSON {
+  created_at: string;
+  expires_at: string;
+  id: string;
+  ip_address?: string;
+  user_agent?: string;
+  user_id: string;
+}
+
+export interface AdminListSessionsResponse {
+  page: number;
+  per_page: number;
+  /** @nullable */
+  sessions: AdminSessionJSON[] | null;
+  total: number;
+}
+
 export interface AdminListUsersResponse {
+  page: number;
+  per_page: number;
   total: number;
   /** @nullable */
   users: AdminUserJSON[] | null;
@@ -68,11 +96,12 @@ export interface AdminListUsersResponse {
 
 export interface AdminPatchUserRequest {
   display_name?: string;
+  email_verified?: boolean;
   role?: string;
 }
 
 export interface ApiKeyCreateRequest {
-  expires_at?: string;
+  expires_in_days?: number;
   name: string;
   /** @nullable */
   scopes?: string[] | null;
@@ -91,12 +120,15 @@ export interface ApiKeyJSON {
 
 export interface ApiKeyCreateResponse {
   api_key: ApiKeyJSON;
-  key: string;
+  secret: string;
 }
 
 export interface ApiKeyListResponse {
   /** @nullable */
-  keys: ApiKeyJSON[] | null;
+  items: ApiKeyJSON[] | null;
+  page: number;
+  per_page: number;
+  total: number;
 }
 
 export interface BearerRefreshRequest {
@@ -110,6 +142,7 @@ export interface BearerRevokeRequest {
 export interface BearerTokenRequest {
   email: string;
   password: string;
+  scope?: string;
 }
 
 export interface BearerTokenResponse {
@@ -119,9 +152,26 @@ export interface BearerTokenResponse {
   token_type: string;
 }
 
+export interface ConfigResponse {
+  allow_signups: boolean;
+  require_email_verification: boolean;
+}
+
+export interface EmailForgotPasswordRequest {
+  email: string;
+}
+
+export interface EmailForgotPasswordResponse {
+  message: string;
+}
+
 export interface EmailPasswordChangePasswordRequest {
+  current_password: string;
   new_password: string;
-  old_password: string;
+}
+
+export interface EmailPasswordChangePasswordResponse {
+  message: string;
 }
 
 export interface EmailPasswordLoginMfaResponse {
@@ -132,32 +182,72 @@ export interface EmailPasswordLoginMfaResponse {
 export interface EmailPasswordLoginRequest {
   email: string;
   password: string;
-}
-
-export interface UserJSON {
-  display_name?: string;
-  email: string;
-  email_verified: boolean;
-  id: string;
-  role: string;
+  remember_me?: boolean;
 }
 
 export interface EmailPasswordLoginResponse {
   user: UserJSON;
 }
 
+export interface EmailPasswordPatchMeRequest {
+  display_name?: string;
+}
+
+export interface SessionUserJSON {
+  auth_method: string;
+  banned: boolean;
+  display_name?: string;
+  email: string;
+  email_verified: boolean;
+  id: string;
+  role: string;
+  /** @nullable */
+  scopes: string[] | null;
+}
+
+export interface EmailPasswordPatchMeResponse {
+  user: SessionUserJSON;
+}
+
 export interface EmailPasswordRegisterRequest {
+  display_name?: string;
   email: string;
   password: string;
 }
 
 export interface EmailPasswordRegisterResponse {
-  user: UserJSON;
+  message?: string;
+  user?: UserJSON;
 }
 
 export interface EmailPasswordSessionResponse {
-  expires_at: string;
-  user: UserJSON;
+  expires_at?: string;
+  user: SessionUserJSON;
+}
+
+export interface EmailResendVerificationRequest {
+  email: string;
+}
+
+export interface EmailResendVerificationResponse {
+  message: string;
+}
+
+export interface EmailResetPasswordRequest {
+  password: string;
+  token: string;
+}
+
+export interface EmailResetPasswordResponse {
+  message: string;
+}
+
+export interface EmailVerifyRequest {
+  token: string;
+}
+
+export interface EmailVerifyResponse {
+  message: string;
 }
 
 export interface ErrorPayload {
@@ -205,7 +295,7 @@ export interface LockoutUnlockReqRequest {
 }
 
 export interface LockoutUnlockReqResponse {
-  sent: boolean;
+  message: string;
 }
 
 export interface LockoutUnlockRequest {
@@ -213,16 +303,15 @@ export interface LockoutUnlockRequest {
 }
 
 export interface LockoutUnlockResponse {
-  unlocked: boolean;
+  message: string;
 }
 
 export interface MagicLinkSendRequest {
   email: string;
-  redirect_url?: string;
 }
 
 export interface MagicLinkSendResponse {
-  sent: boolean;
+  message: string;
 }
 
 export interface MagicLinkVerifyRequest {
@@ -234,11 +323,15 @@ export interface MagicLinkVerifyResponse {
 }
 
 export interface MfaBackupCodesCountResponse {
-  unused: number;
+  remaining: number;
 }
 
 export interface MfaConfirmRequest {
   code: string;
+}
+
+export interface MfaMessageResponse {
+  message: string;
 }
 
 export interface MfaRegenerateResponse {
@@ -260,7 +353,7 @@ export interface MfaVerifyRequest {
 }
 
 export interface MfaVerifyResponse {
-  user_id: string;
+  user: UserJSON;
 }
 
 export interface Oauth2AuthorizeRedirect {
@@ -362,6 +455,37 @@ export interface Oauth2PatchClientRequest {
   public_key_pem?: string;
 }
 
+export interface Oauth2RegisterRequest {
+  client_name?: string;
+  /** @nullable */
+  grant_types?: string[] | null;
+  jwks_uri?: string;
+  /** @nullable */
+  redirect_uris: string[] | null;
+  /** @nullable */
+  response_types?: string[] | null;
+  scope?: string;
+  token_endpoint_auth_method?: string;
+}
+
+export interface Oauth2RegisterResponse {
+  client_id: string;
+  client_id_issued_at: number;
+  client_name?: string;
+  client_secret?: string;
+  client_secret_expires_at: number;
+  /** @nullable */
+  grant_types: string[] | null;
+  /** @nullable */
+  redirect_uris: string[] | null;
+  registration_access_token?: string;
+  registration_client_uri?: string;
+  /** @nullable */
+  response_types: string[] | null;
+  scope?: string;
+  token_endpoint_auth_method: string;
+}
+
 export interface Oauth2TokenResponse {
   access_token: string;
   expires_in: number;
@@ -378,23 +502,25 @@ export interface OauthAccountJSON {
   provider_user_id: string;
 }
 
-export interface OauthCallbackResponseUserStruct {
-  email: string;
-  id: string;
+export interface OauthCallbackBody {
+  code: string;
+  state: string;
 }
 
 export interface OauthCallbackResponse {
-  provider: string;
-  user: OauthCallbackResponseUserStruct;
+  user: UserJSON;
 }
 
 export interface OauthLinkResponse {
-  authorize_url: string;
+  auth_url: string;
 }
 
 export interface OauthListAccountsResponse {
   /** @nullable */
-  accounts: OauthAccountJSON[] | null;
+  items: OauthAccountJSON[] | null;
+  page: number;
+  per_page: number;
+  total: number;
 }
 
 export interface OidcDiscoveryDoc {
@@ -434,7 +560,10 @@ export interface PasskeyJSON {
 
 export interface PasskeyListResponse {
   /** @nullable */
-  passkeys: PasskeyJSON[] | null;
+  items: PasskeyJSON[] | null;
+  page: number;
+  per_page: number;
+  total: number;
 }
 
 export interface PasskeyLoginBeginRequest {
@@ -444,15 +573,15 @@ export interface PasskeyLoginBeginRequest {
 export type PasskeyLoginBeginResponseOptions = {[key: string]: unknown};
 
 export interface PasskeyLoginBeginResponse {
+  challenge_id: string;
   options: PasskeyLoginBeginResponseOptions;
-  request_id: string;
 }
 
-export type PasskeyLoginFinishRequestResponse = {[key: string]: unknown};
+export type PasskeyLoginFinishRequestCredential = {[key: string]: unknown};
 
 export interface PasskeyLoginFinishRequest {
-  request_id: string;
-  response: PasskeyLoginFinishRequestResponse;
+  challenge_id: string;
+  credential: PasskeyLoginFinishRequestCredential;
 }
 
 export interface PasskeyLoginFinishResponse {
@@ -462,17 +591,15 @@ export interface PasskeyLoginFinishResponse {
 export type PasskeyRegisterBeginResponseOptions = {[key: string]: unknown};
 
 export interface PasskeyRegisterBeginResponse {
+  challenge_id: string;
   options: PasskeyRegisterBeginResponseOptions;
-  request_id: string;
 }
 
-export type PasskeyRegisterFinishRequestResponse = {[key: string]: unknown};
+export type PasskeyRegisterFinishRequestCredential = {[key: string]: unknown};
 
 export interface PasskeyRegisterFinishRequest {
-  device_name?: string;
+  credential: PasskeyRegisterFinishRequestCredential;
   name?: string;
-  request_id: string;
-  response: PasskeyRegisterFinishRequestResponse;
 }
 
 export interface PasskeyRegisterFinishResponse {
@@ -488,9 +615,9 @@ export interface StatusResponse {
 }
 
 export interface WebhookCreateRequest {
-  active?: boolean;
   /** @nullable */
   events: string[] | null;
+  secret?: string;
   url: string;
 }
 
@@ -511,30 +638,38 @@ export interface WebhookJSON {
   /** @nullable */
   events: string[] | null;
   id: string;
-  secret?: string;
   updated_at: string;
   url: string;
 }
 
 export interface WebhookListDeliveriesResponse {
   /** @nullable */
-  deliveries: WebhookDeliveryJSON[] | null;
+  items: WebhookDeliveryJSON[] | null;
+  page: number;
+  per_page: number;
+  total: number;
 }
 
 export interface WebhookListResponse {
   /** @nullable */
-  webhooks: WebhookJSON[] | null;
+  items: WebhookJSON[] | null;
+  page: number;
+  per_page: number;
+  total: number;
+}
+
+export interface WebhookShowResponse {
+  webhook: WebhookJSON;
 }
 
 export interface WebhookTestResponse {
-  delivery_queued: boolean;
-  event_type: string;
+  delivery_queued: string;
 }
 
 export interface WebhookUpdateRequest {
   active?: boolean;
   events?: string[];
-  rotate_secret?: boolean;
+  secret?: string;
   url?: string;
 }
 
@@ -557,6 +692,21 @@ user_id?: string;
 type?: string;
 };
 
+export type AdminListSessionsParams = {
+/**
+ * Filter to a single user.
+ */
+user_id?: string;
+/**
+ * Page size.
+ */
+limit?: number;
+/**
+ * Pagination offset.
+ */
+offset?: number;
+};
+
 export type AdminListUsersParams = {
 /**
  * Page size (default 50, capped at 100).
@@ -567,34 +717,39 @@ limit?: number;
  */
 offset?: number;
 /**
+ * Page number (alternate to limit/offset; 1-based).
+ */
+page?: number;
+/**
+ * Page size (alternate to limit).
+ */
+per_page?: number;
+/**
  * Substring match on email or display_name.
  */
 search?: string;
 };
 
-export type OauthAuthorizeParams = {
+export type ApiKeyListParams = {
 /**
- * Optional URL to navigate to after callback.
+ * Page number (1-based).
  */
-redirect_url?: string;
+page?: number;
+/**
+ * Page size (default 50, max 200).
+ */
+per_page?: number;
 };
 
-export type OauthCallbackParams = {
+export type OauthListAccountsParams = {
 /**
- * Authorization code.
+ * Page number (1-based).
  */
-code?: string;
+page?: number;
 /**
- * State stored at /authorize.
+ * Page size (default 50, max 200).
  */
-state?: string;
-};
-
-export type OauthLinkParams = {
-/**
- * Optional URL to navigate to after callback.
- */
-redirect_url?: string;
+per_page?: number;
 };
 
 export type Oauth2AuthorizeParams = {
@@ -632,6 +787,14 @@ nonce?: string;
 scope?: string;
 };
 
+export type Oauth2AuthorizePostBodyOne = { [key: string]: unknown };
+
+export type Oauth2AuthorizePostBodyTwo = { [key: string]: unknown };
+
+export type Oauth2DeviceVerifyBodyOne = { [key: string]: unknown };
+
+export type Oauth2DeviceVerifyBodyTwo = { [key: string]: unknown };
+
 export type Oauth2DeviceAuthorizationBody = { [key: string]: unknown };
 
 export type Oauth2IntrospectBody = { [key: string]: unknown };
@@ -642,11 +805,62 @@ export type Oauth2TokenBodyOne = { [key: string]: unknown };
 
 export type Oauth2TokenBodyTwo = { [key: string]: unknown };
 
+export type OauthAuthorizeParams = {
+/**
+ * Optional URL to navigate to after callback.
+ */
+redirect_url?: string;
+};
+
+export type OauthCallbackParams = {
+/**
+ * Authorization code.
+ */
+code?: string;
+/**
+ * State stored at /authorize.
+ */
+state?: string;
+};
+
+export type OauthLinkParams = {
+/**
+ * Optional URL to navigate to after callback.
+ */
+redirect_url?: string;
+};
+
+export type PasskeyListParams = {
+/**
+ * Page number (1-based).
+ */
+page?: number;
+/**
+ * Page size (default 50, max 200).
+ */
+per_page?: number;
+};
+
+export type WebhookListParams = {
+/**
+ * Page number (1-based).
+ */
+page?: number;
+/**
+ * Page size (default 50, max 200).
+ */
+per_page?: number;
+};
+
 export type WebhookListDeliveriesParams = {
 /**
- * Max rows (default 100, capped at 1000).
+ * Page number (1-based).
  */
-limit?: number;
+page?: number;
+/**
+ * Page size (default 50, max 200).
+ */
+per_page?: number;
 };
 
 /**
@@ -661,9 +875,33 @@ export const getAsymJWKSUrl = () => {
   return `/.well-known/jwks.json`
 }
 
-export const asymJWKS = async ( options?: RequestInit): Promise<JwksDocument> => {
+export const asymJWKS = async ( options?: RequestInit): Promise<void> => {
 
-  return customFetch<JwksDocument>(getAsymJWKSUrl(),
+  return customFetch<void>(getAsymJWKSUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+/**
+ * @summary RFC 8414 authorization server metadata
+ */
+export const getOauth2AuthServerMetadataUrl = () => {
+
+
+
+
+  return `/.well-known/oauth-authorization-server`
+}
+
+export const oauth2AuthServerMetadata = async ( options?: RequestInit): Promise<void> => {
+
+  return customFetch<void>(getOauth2AuthServerMetadataUrl(),
   {
     ...options,
     method: 'GET'
@@ -685,14 +923,65 @@ export const getOidcDiscoveryUrl = () => {
   return `/.well-known/openid-configuration`
 }
 
-export const oidcDiscovery = async ( options?: RequestInit): Promise<OidcDiscoveryDoc> => {
+export const oidcDiscovery = async ( options?: RequestInit): Promise<void> => {
 
-  return customFetch<OidcDiscoveryDoc>(getOidcDiscoveryUrl(),
+  return customFetch<void>(getOidcDiscoveryUrl(),
   {
     ...options,
     method: 'GET'
 
 
+  }
+);}
+
+
+
+/**
+ * Always responds 200 to prevent user enumeration.
+ * @summary Email a single-use unlock token
+ */
+export const getLockoutUnlockRequestUrl = () => {
+
+
+
+
+  return `/account/request-unlock`
+}
+
+export const lockoutUnlockRequest = async (lockoutUnlockReqRequest: LockoutUnlockReqRequest, options?: RequestInit): Promise<LockoutUnlockReqResponse> => {
+
+  return customFetch<LockoutUnlockReqResponse>(getLockoutUnlockRequestUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      lockoutUnlockReqRequest,)
+  }
+);}
+
+
+
+/**
+ * @summary Consume an unlock token to clear an account lock
+ */
+export const getLockoutUnlockUrl = () => {
+
+
+
+
+  return `/account/unlock`
+}
+
+export const lockoutUnlock = async (lockoutUnlockRequest: LockoutUnlockRequest, options?: RequestInit): Promise<LockoutUnlockResponse> => {
+
+  return customFetch<LockoutUnlockResponse>(getLockoutUnlockUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      lockoutUnlockRequest,)
   }
 );}
 
@@ -730,6 +1019,61 @@ export const adminListAudit = async (params?: AdminListAuditParams, options?: Re
 
 
 /**
+ * @summary List sessions, optionally filtered by user_id
+ */
+export const getAdminListSessionsUrl = (params?: AdminListSessionsParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString())
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/admin/sessions?${stringifiedParams}` : `/admin/sessions`
+}
+
+export const adminListSessions = async (params?: AdminListSessionsParams, options?: RequestInit): Promise<AdminListSessionsResponse> => {
+
+  return customFetch<AdminListSessionsResponse>(getAdminListSessionsUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+/**
+ * @summary Terminate a single session by id
+ */
+export const getAdminDeleteSessionUrl = (id: string,) => {
+
+
+
+
+  return `/admin/sessions/${id}`
+}
+
+export const adminDeleteSession = async (id: string, options?: RequestInit): Promise<void> => {
+
+  return customFetch<void>(getAdminDeleteSessionUrl(id),
+  {
+    ...options,
+    method: 'DELETE'
+
+
+  }
+);}
+
+
+
+/**
  * @summary List users with optional search/pagination
  */
 export const getAdminListUsersUrl = (params?: AdminListUsersParams,) => {
@@ -753,6 +1097,30 @@ export const adminListUsers = async (params?: AdminListUsersParams, options?: Re
   {
     ...options,
     method: 'GET'
+
+
+  }
+);}
+
+
+
+/**
+ * @summary Hard-delete a user (refuses self-delete)
+ */
+export const getAdminDeleteUserUrl = (id: string,) => {
+
+
+
+
+  return `/admin/users/${id}`
+}
+
+export const adminDeleteUser = async (id: string, options?: RequestInit): Promise<void> => {
+
+  return customFetch<void>(getAdminDeleteUserUrl(id),
+  {
+    ...options,
+    method: 'DELETE'
 
 
   }
@@ -811,6 +1179,32 @@ export const adminPatchUser = async (id: string,
 
 
 /**
+ * @summary Alias for PATCH /admin/users/{id} (Rust parity)
+ */
+export const getAdminPutUserUrl = (id: string,) => {
+
+
+
+
+  return `/admin/users/${id}`
+}
+
+export const adminPutUser = async (id: string,
+    adminPatchUserRequest: AdminPatchUserRequest, options?: RequestInit): Promise<AdminUserJSON> => {
+
+  return customFetch<AdminUserJSON>(getAdminPutUserUrl(id),
+  {
+    ...options,
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      adminPatchUserRequest,)
+  }
+);}
+
+
+
+/**
  * @summary Ban a user; revokes their sessions
  */
 export const getAdminBanUserUrl = (id: string,) => {
@@ -847,9 +1241,9 @@ export const getAdminImpersonateUrl = (id: string,) => {
   return `/admin/users/${id}/impersonate`
 }
 
-export const adminImpersonate = async (id: string, options?: RequestInit): Promise<AdminImpersonateResponse> => {
+export const adminImpersonate = async (id: string, options?: RequestInit): Promise<void> => {
 
-  return customFetch<AdminImpersonateResponse>(getAdminImpersonateUrl(id),
+  return customFetch<void>(getAdminImpersonateUrl(id),
   {
     ...options,
     method: 'POST'
@@ -909,19 +1303,50 @@ export const adminUnbanUser = async (id: string, options?: RequestInit): Promise
 
 
 /**
- * @summary List the caller's API keys (no secrets)
+ * @summary Force-unlock a user (admin)
  */
-export const getApiKeyListUrl = () => {
+export const getLockoutAdminUnlockUrl = (id: string,) => {
 
 
 
 
-  return `/api-keys`
+  return `/admin/users/${id}/unlock`
 }
 
-export const apiKeyList = async ( options?: RequestInit): Promise<ApiKeyListResponse> => {
+export const lockoutAdminUnlock = async (id: string, options?: RequestInit): Promise<LockoutUnlockResponse> => {
 
-  return customFetch<ApiKeyListResponse>(getApiKeyListUrl(),
+  return customFetch<LockoutUnlockResponse>(getLockoutAdminUnlockUrl(id),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+/**
+ * @summary List the caller's API keys (no secrets)
+ */
+export const getApiKeyListUrl = (params?: ApiKeyListParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString())
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api-keys?${stringifiedParams}` : `/api-keys`
+}
+
+export const apiKeyList = async (params?: ApiKeyListParams, options?: RequestInit): Promise<ApiKeyListResponse> => {
+
+  return customFetch<ApiKeyListResponse>(getApiKeyListUrl(params),
   {
     ...options,
     method: 'GET'
@@ -933,7 +1358,7 @@ export const apiKeyList = async ( options?: RequestInit): Promise<ApiKeyListResp
 
 
 /**
- * @summary Create a new API key (plaintext returned once)
+ * @summary Create a new API key (plaintext secret returned once)
  */
 export const getApiKeyCreateUrl = () => {
 
@@ -982,19 +1407,45 @@ export const apiKeyDelete = async (id: string, options?: RequestInit): Promise<v
 
 
 /**
- * @summary Return the count of unused backup codes
+ * Verifies the current password, stores the new hash, revokes other sessions, re-issues a fresh cookie for the caller.
+ * @summary Rotate the caller's password
  */
-export const getMfaBackupCodesCountUrl = () => {
+export const getEmailPasswordChangePasswordUrl = () => {
 
 
 
 
-  return `/backup-codes`
+  return `/change-password`
 }
 
-export const mfaBackupCodesCount = async ( options?: RequestInit): Promise<MfaBackupCodesCountResponse> => {
+export const emailPasswordChangePassword = async (emailPasswordChangePasswordRequest: EmailPasswordChangePasswordRequest, options?: RequestInit): Promise<EmailPasswordChangePasswordResponse> => {
 
-  return customFetch<MfaBackupCodesCountResponse>(getMfaBackupCodesCountUrl(),
+  return customFetch<EmailPasswordChangePasswordResponse>(getEmailPasswordChangePasswordUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      emailPasswordChangePasswordRequest,)
+  }
+);}
+
+
+
+/**
+ * @summary Return the host configuration subset exposed for clients
+ */
+export const getConfigUrl = () => {
+
+
+
+
+  return `/config`
+}
+
+export const config = async ( options?: RequestInit): Promise<ConfigResponse> => {
+
+  return customFetch<ConfigResponse>(getConfigUrl(),
   {
     ...options,
     method: 'GET'
@@ -1006,50 +1457,26 @@ export const mfaBackupCodesCount = async ( options?: RequestInit): Promise<MfaBa
 
 
 /**
- * @summary Replace the user's backup codes; returns the new set once
+ * Always responds 200 to prevent user enumeration.
+ * @summary Email a single-use password-reset token
  */
-export const getMfaRegenerateBackupCodesUrl = () => {
+export const getEmailPasswordForgotPasswordUrl = () => {
 
 
 
 
-  return `/backup-codes/regenerate`
+  return `/forgot-password`
 }
 
-export const mfaRegenerateBackupCodes = async ( options?: RequestInit): Promise<MfaRegenerateResponse> => {
+export const emailPasswordForgotPassword = async (emailForgotPasswordRequest: EmailForgotPasswordRequest, options?: RequestInit): Promise<EmailForgotPasswordResponse> => {
 
-  return customFetch<MfaRegenerateResponse>(getMfaRegenerateBackupCodesUrl(),
-  {
-    ...options,
-    method: 'POST'
-
-
-  }
-);}
-
-
-
-/**
- * Verifies the old password, stores the new hash, revokes other sessions, re-issues a fresh cookie for the caller.
- * @summary Rotate the caller's password
- */
-export const getEmailPasswordChangePasswordUrl = () => {
-
-
-
-
-  return `/change-password`
-}
-
-export const emailPasswordChangePassword = async (emailPasswordChangePasswordRequest: EmailPasswordChangePasswordRequest, options?: RequestInit): Promise<void> => {
-
-  return customFetch<void>(getEmailPasswordChangePasswordUrl(),
+  return customFetch<EmailForgotPasswordResponse>(getEmailPasswordForgotPasswordUrl(),
   {
     ...options,
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...options?.headers },
     body: JSON.stringify(
-      emailPasswordChangePasswordRequest,)
+      emailForgotPasswordRequest,)
   }
 );}
 
@@ -1166,9 +1593,9 @@ export const getMagicLinkVerifyUrl = () => {
   return `/magic-link/verify`
 }
 
-export const magicLinkVerify = async (magicLinkVerifyRequest: MagicLinkVerifyRequest, options?: RequestInit): Promise<MagicLinkVerifyResponse> => {
+export const magicLinkVerify = async (magicLinkVerifyRequest: MagicLinkVerifyRequest, options?: RequestInit): Promise<void> => {
 
-  return customFetch<MagicLinkVerifyResponse>(getMagicLinkVerifyUrl(),
+  return customFetch<void>(getMagicLinkVerifyUrl(),
   {
     ...options,
     method: 'POST',
@@ -1181,24 +1608,443 @@ export const magicLinkVerify = async (magicLinkVerifyRequest: MagicLinkVerifyReq
 
 
 /**
- * @summary List the caller's linked OAuth accounts
+ * Currently only display_name is mutable.
+ * @summary Update the caller's profile
  */
-export const getOauthListAccountsUrl = () => {
+export const getEmailPasswordPatchMeUrl = () => {
 
 
 
 
-  return `/oauth/accounts`
+  return `/me`
 }
 
-export const oauthListAccounts = async ( options?: RequestInit): Promise<OauthListAccountsResponse> => {
+export const emailPasswordPatchMe = async (emailPasswordPatchMeRequest: EmailPasswordPatchMeRequest, options?: RequestInit): Promise<EmailPasswordPatchMeResponse> => {
 
-  return customFetch<OauthListAccountsResponse>(getOauthListAccountsUrl(),
+  return customFetch<EmailPasswordPatchMeResponse>(getEmailPasswordPatchMeUrl(),
+  {
+    ...options,
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      emailPasswordPatchMeRequest,)
+  }
+);}
+
+
+
+/**
+ * @summary Return the count of unused backup codes
+ */
+export const getMfaBackupCodesCountUrl = () => {
+
+
+
+
+  return `/mfa/backup-codes`
+}
+
+export const mfaBackupCodesCount = async ( options?: RequestInit): Promise<MfaBackupCodesCountResponse> => {
+
+  return customFetch<MfaBackupCodesCountResponse>(getMfaBackupCodesCountUrl(),
   {
     ...options,
     method: 'GET'
 
 
+  }
+);}
+
+
+
+/**
+ * @summary Replace the user's backup codes; returns the new set once
+ */
+export const getMfaRegenerateBackupCodesUrl = () => {
+
+
+
+
+  return `/mfa/backup-codes/regenerate`
+}
+
+export const mfaRegenerateBackupCodes = async ( options?: RequestInit): Promise<MfaRegenerateResponse> => {
+
+  return customFetch<MfaRegenerateResponse>(getMfaRegenerateBackupCodesUrl(),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+/**
+ * @summary Remove the user's TOTP secret + backup codes
+ */
+export const getMfaTOTPDeleteUrl = () => {
+
+
+
+
+  return `/mfa/totp`
+}
+
+export const mfaTOTPDelete = async ( options?: RequestInit): Promise<MfaMessageResponse> => {
+
+  return customFetch<MfaMessageResponse>(getMfaTOTPDeleteUrl(),
+  {
+    ...options,
+    method: 'DELETE'
+
+
+  }
+);}
+
+
+
+/**
+ * @summary Verify the freshly-provisioned TOTP and activate it
+ */
+export const getMfaTOTPConfirmUrl = () => {
+
+
+
+
+  return `/mfa/totp/confirm`
+}
+
+export const mfaTOTPConfirm = async (mfaConfirmRequest: MfaConfirmRequest, options?: RequestInit): Promise<MfaMessageResponse> => {
+
+  return customFetch<MfaMessageResponse>(getMfaTOTPConfirmUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      mfaConfirmRequest,)
+  }
+);}
+
+
+
+/**
+ * Wipes any prior secret/backup codes for this user, then issues a fresh QR + backup-code set.
+ * @summary Provision a new TOTP secret + backup codes (unverified)
+ */
+export const getMfaTOTPSetupUrl = () => {
+
+
+
+
+  return `/mfa/totp/setup`
+}
+
+export const mfaTOTPSetup = async ( options?: RequestInit): Promise<MfaSetupResponse> => {
+
+  return customFetch<MfaSetupResponse>(getMfaTOTPSetupUrl(),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+/**
+ * @summary Consume a pending session (TOTP or backup code)
+ */
+export const getMfaVerifyUrl = () => {
+
+
+
+
+  return `/mfa/verify`
+}
+
+export const mfaVerify = async (mfaVerifyRequest: MfaVerifyRequest, options?: RequestInit): Promise<MfaVerifyResponse> => {
+
+  return customFetch<MfaVerifyResponse>(getMfaVerifyUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      mfaVerifyRequest,)
+  }
+);}
+
+
+
+/**
+ * @summary List the caller's linked OAuth accounts
+ */
+export const getOauthListAccountsUrl = (params?: OauthListAccountsParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString())
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/oauth/accounts?${stringifiedParams}` : `/oauth/accounts`
+}
+
+export const oauthListAccounts = async (params?: OauthListAccountsParams, options?: RequestInit): Promise<OauthListAccountsResponse> => {
+
+  return customFetch<OauthListAccountsResponse>(getOauthListAccountsUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+/**
+ * @summary Authorization endpoint — returns either a redirect URL or a consent payload
+ */
+export const getOauth2AuthorizeUrl = (params?: Oauth2AuthorizeParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString())
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/oauth/authorize?${stringifiedParams}` : `/oauth/authorize`
+}
+
+export const oauth2Authorize = async (params?: Oauth2AuthorizeParams, options?: RequestInit): Promise<Oauth2AuthorizeRedirect | Oauth2ConsentPayload> => {
+
+  return customFetch<Oauth2AuthorizeRedirect | Oauth2ConsentPayload>(getOauth2AuthorizeUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+/**
+ * Identical semantics to the GET form; some clients prefer to submit the request as application/x-www-form-urlencoded.
+ * @summary POST variant of /oauth/authorize (Rust parity)
+ */
+export const getOauth2AuthorizePostUrl = () => {
+
+
+
+
+  return `/oauth/authorize`
+}
+
+export const oauth2AuthorizePost = async (oauth2AuthorizePostBody: Oauth2AuthorizePostBodyOne | Oauth2AuthorizePostBodyTwo, options?: RequestInit): Promise<void> => {
+
+  return customFetch<void>(getOauth2AuthorizePostUrl(),
+  {
+    ...options,
+    method: 'POST'
+    ,
+    body: JSON.stringify(
+      oauth2AuthorizePostBody,)
+  }
+);}
+
+
+
+/**
+ * Renders or proxies the user-facing prompt where the user enters the user_code printed on the device. Body shape is implementation-defined.
+ * @summary Browser landing for the device flow user-code prompt (Rust parity)
+ */
+export const getOauth2DeviceVerifyGetUrl = () => {
+
+
+
+
+  return `/oauth/device`
+}
+
+export const oauth2DeviceVerifyGet = async ( options?: RequestInit): Promise<void> => {
+
+  return customFetch<void>(getOauth2DeviceVerifyGetUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+/**
+ * @summary User-facing endpoint to enter a user_code (RFC 8628)
+ */
+export const getOauth2DeviceVerifyUrl = () => {
+
+
+
+
+  return `/oauth/device`
+}
+
+export const oauth2DeviceVerify = async (oauth2DeviceVerifyBody: Oauth2DeviceVerifyBodyOne | Oauth2DeviceVerifyBodyTwo, options?: RequestInit): Promise<void> => {
+
+  return customFetch<void>(getOauth2DeviceVerifyUrl(),
+  {
+    ...options,
+    method: 'POST'
+    ,
+    body: JSON.stringify(
+      oauth2DeviceVerifyBody,)
+  }
+);}
+
+
+
+/**
+ * @summary RFC 8628 device-authorization endpoint
+ */
+export const getOauth2DeviceAuthorizationUrl = () => {
+
+
+
+
+  return `/oauth/device/code`
+}
+
+export const oauth2DeviceAuthorization = async (oauth2DeviceAuthorizationBody: Oauth2DeviceAuthorizationBody, options?: RequestInit): Promise<void> => {
+    const formUrlEncoded = new URLSearchParams();
+
+  return customFetch<void>(getOauth2DeviceAuthorizationUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...options?.headers },
+    body:
+      formUrlEncoded,
+  }
+);}
+
+
+
+/**
+ * Caller authenticates as a confidential client.
+ * @summary RFC 7662 token introspection
+ */
+export const getOauth2IntrospectUrl = () => {
+
+
+
+
+  return `/oauth/introspect`
+}
+
+export const oauth2Introspect = async (oauth2IntrospectBody: Oauth2IntrospectBody, options?: RequestInit): Promise<void> => {
+    const formUrlEncoded = new URLSearchParams();
+
+  return customFetch<void>(getOauth2IntrospectUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...options?.headers },
+    body:
+      formUrlEncoded,
+  }
+);}
+
+
+
+/**
+ * Public dynamic client registration endpoint. Disabled by default; opt in via plugin Config.DCREnabled. When DCRRequireInitialAccessToken is true (default), the request must carry an admin-issued Bearer token in the Authorization header.
+ * @summary Register an OAuth2 client (RFC 7591)
+ */
+export const getOauth2DynamicClientRegisterUrl = () => {
+
+
+
+
+  return `/oauth/register`
+}
+
+export const oauth2DynamicClientRegister = async (oauth2RegisterRequest: Oauth2RegisterRequest, options?: RequestInit): Promise<Oauth2RegisterResponse> => {
+
+  return customFetch<Oauth2RegisterResponse>(getOauth2DynamicClientRegisterUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      oauth2RegisterRequest,)
+  }
+);}
+
+
+
+/**
+ * Idempotent: unknown / already-revoked / malformed tokens still return 200.
+ * @summary RFC 7009 revocation
+ */
+export const getOauth2RevokeUrl = () => {
+
+
+
+
+  return `/oauth/revoke`
+}
+
+export const oauth2Revoke = async (oauth2RevokeBody: Oauth2RevokeBody, options?: RequestInit): Promise<void> => {
+    const formUrlEncoded = new URLSearchParams();
+
+  return customFetch<void>(getOauth2RevokeUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...options?.headers },
+    body:
+      formUrlEncoded,
+  }
+);}
+
+
+
+/**
+ * Accepts authorization_code, refresh_token, client_credentials, and urn:ietf:params:oauth:grant-type:device_code grants. Body is application/x-www-form-urlencoded or application/json.
+ * @summary Token endpoint (RFC 6749 §3.2)
+ */
+export const getOauth2TokenUrl = () => {
+
+
+
+
+  return `/oauth/token`
+}
+
+export const oauth2Token = async (oauth2TokenBody: Oauth2TokenBodyOne | Oauth2TokenBodyTwo, options?: RequestInit): Promise<void> => {
+
+  return customFetch<void>(getOauth2TokenUrl(),
+  {
+    ...options,
+    method: 'POST'
+    ,
+    body: JSON.stringify(
+      oauth2TokenBody,)
   }
 );}
 
@@ -1296,6 +2142,33 @@ export const oauthCallback = async (provider: string,
 
 
 /**
+ * Used by SPAs that prefer to POST the {code, state} pair from a hash fragment rather than appearing in the URL. Body is application/json or application/x-www-form-urlencoded.
+ * @summary JSON-body variant of GET /oauth/{provider}/callback (Rust parity)
+ */
+export const getOauthCallbackPostUrl = (provider: string,) => {
+
+
+
+
+  return `/oauth/${provider}/callback`
+}
+
+export const oauthCallbackPost = async (provider: string,
+    oauthCallbackBody: OauthCallbackBody, options?: RequestInit): Promise<OauthCallbackResponse> => {
+
+  return customFetch<OauthCallbackResponse>(getOauthCallbackPostUrl(provider),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      oauthCallbackBody,)
+  }
+);}
+
+
+
+/**
  * @summary Start a link flow for an already-authenticated user
  */
 export const getOauthLinkUrl = (provider: string,
@@ -1321,37 +2194,6 @@ export const oauthLink = async (provider: string,
   {
     ...options,
     method: 'POST'
-
-
-  }
-);}
-
-
-
-/**
- * @summary Authorization endpoint — returns either a redirect URL or a consent payload
- */
-export const getOauth2AuthorizeUrl = (params?: Oauth2AuthorizeParams,) => {
-  const normalizedParams = new URLSearchParams();
-
-  Object.entries(params || {}).forEach(([key, value]) => {
-
-    if (value !== undefined) {
-      normalizedParams.append(key, value === null ? 'null' : value.toString())
-    }
-  });
-
-  const stringifiedParams = normalizedParams.toString();
-
-  return stringifiedParams.length > 0 ? `/oauth2/authorize?${stringifiedParams}` : `/oauth2/authorize`
-}
-
-export const oauth2Authorize = async (params?: Oauth2AuthorizeParams, options?: RequestInit): Promise<Oauth2AuthorizeRedirect | Oauth2ConsentPayload> => {
-
-  return customFetch<Oauth2AuthorizeRedirect | Oauth2ConsentPayload>(getOauth2AuthorizeUrl(params),
-  {
-    ...options,
-    method: 'GET'
 
 
   }
@@ -1511,137 +2353,6 @@ export const oauth2Consent = async (oauth2ConsentRequest: Oauth2ConsentRequest, 
 
 
 /**
- * @summary User-facing endpoint to enter a user_code (RFC 8628)
- */
-export const getOauth2DeviceVerifyUrl = () => {
-
-
-
-
-  return `/oauth2/device`
-}
-
-export const oauth2DeviceVerify = async (oauth2DeviceVerifyRequest: Oauth2DeviceVerifyRequest, options?: RequestInit): Promise<Oauth2DeviceVerifyResponse> => {
-
-  return customFetch<Oauth2DeviceVerifyResponse>(getOauth2DeviceVerifyUrl(),
-  {
-    ...options,
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...options?.headers },
-    body: JSON.stringify(
-      oauth2DeviceVerifyRequest,)
-  }
-);}
-
-
-
-/**
- * @summary RFC 8628 device-authorization endpoint
- */
-export const getOauth2DeviceAuthorizationUrl = () => {
-
-
-
-
-  return `/oauth2/device_authorization`
-}
-
-export const oauth2DeviceAuthorization = async (oauth2DeviceAuthorizationBody: Oauth2DeviceAuthorizationBody, options?: RequestInit): Promise<Oauth2DeviceAuthResponse> => {
-    const formUrlEncoded = new URLSearchParams();
-
-  return customFetch<Oauth2DeviceAuthResponse>(getOauth2DeviceAuthorizationUrl(),
-  {
-    ...options,
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...options?.headers },
-    body:
-      formUrlEncoded,
-  }
-);}
-
-
-
-/**
- * Caller authenticates as a confidential client.
- * @summary RFC 7662 token introspection
- */
-export const getOauth2IntrospectUrl = () => {
-
-
-
-
-  return `/oauth2/introspect`
-}
-
-export const oauth2Introspect = async (oauth2IntrospectBody: Oauth2IntrospectBody, options?: RequestInit): Promise<Oauth2IntrospectResponse> => {
-    const formUrlEncoded = new URLSearchParams();
-
-  return customFetch<Oauth2IntrospectResponse>(getOauth2IntrospectUrl(),
-  {
-    ...options,
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...options?.headers },
-    body:
-      formUrlEncoded,
-  }
-);}
-
-
-
-/**
- * Idempotent: unknown / already-revoked / malformed tokens still return 200.
- * @summary RFC 7009 revocation
- */
-export const getOauth2RevokeUrl = () => {
-
-
-
-
-  return `/oauth2/revoke`
-}
-
-export const oauth2Revoke = async (oauth2RevokeBody: Oauth2RevokeBody, options?: RequestInit): Promise<void> => {
-    const formUrlEncoded = new URLSearchParams();
-
-  return customFetch<void>(getOauth2RevokeUrl(),
-  {
-    ...options,
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...options?.headers },
-    body:
-      formUrlEncoded,
-  }
-);}
-
-
-
-/**
- * Accepts authorization_code, refresh_token, client_credentials, and urn:ietf:params:oauth:grant-type:device_code grants. Body is application/x-www-form-urlencoded or application/json.
- * @summary Token endpoint (RFC 6749 §3.2)
- */
-export const getOauth2TokenUrl = () => {
-
-
-
-
-  return `/oauth2/token`
-}
-
-export const oauth2Token = async (oauth2TokenBody: Oauth2TokenBodyOne | Oauth2TokenBodyTwo, options?: RequestInit): Promise<Oauth2TokenResponse> => {
-
-  return customFetch<Oauth2TokenResponse>(getOauth2TokenUrl(),
-  {
-    ...options,
-    method: 'POST'
-    ,
-    body: JSON.stringify(
-      oauth2TokenBody,)
-  }
-);}
-
-
-
-/**
  * @summary Start a passkey assertion; supports discoverable flow
  */
 export const getPasskeyLoginBeginUrl = () => {
@@ -1652,9 +2363,9 @@ export const getPasskeyLoginBeginUrl = () => {
   return `/passkey/login/begin`
 }
 
-export const passkeyLoginBegin = async (passkeyLoginBeginRequest: PasskeyLoginBeginRequest, options?: RequestInit): Promise<PasskeyLoginBeginResponse> => {
+export const passkeyLoginBegin = async (passkeyLoginBeginRequest: PasskeyLoginBeginRequest, options?: RequestInit): Promise<void> => {
 
-  return customFetch<PasskeyLoginBeginResponse>(getPasskeyLoginBeginUrl(),
+  return customFetch<void>(getPasskeyLoginBeginUrl(),
   {
     ...options,
     method: 'POST',
@@ -1677,9 +2388,9 @@ export const getPasskeyLoginFinishUrl = () => {
   return `/passkey/login/finish`
 }
 
-export const passkeyLoginFinish = async (passkeyLoginFinishRequest: PasskeyLoginFinishRequest, options?: RequestInit): Promise<PasskeyLoginFinishResponse> => {
+export const passkeyLoginFinish = async (passkeyLoginFinishRequest: PasskeyLoginFinishRequest, options?: RequestInit): Promise<void> => {
 
-  return customFetch<PasskeyLoginFinishResponse>(getPasskeyLoginFinishUrl(),
+  return customFetch<void>(getPasskeyLoginFinishUrl(),
   {
     ...options,
     method: 'POST',
@@ -1694,17 +2405,24 @@ export const passkeyLoginFinish = async (passkeyLoginFinishRequest: PasskeyLogin
 /**
  * @summary List the caller's stored passkeys
  */
-export const getPasskeyListUrl = () => {
+export const getPasskeyListUrl = (params?: PasskeyListParams,) => {
+  const normalizedParams = new URLSearchParams();
 
+  Object.entries(params || {}).forEach(([key, value]) => {
 
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString())
+    }
+  });
 
+  const stringifiedParams = normalizedParams.toString();
 
-  return `/passkeys`
+  return stringifiedParams.length > 0 ? `/passkeys?${stringifiedParams}` : `/passkeys`
 }
 
-export const passkeyList = async ( options?: RequestInit): Promise<PasskeyListResponse> => {
+export const passkeyList = async (params?: PasskeyListParams, options?: RequestInit): Promise<PasskeyListResponse> => {
 
-  return customFetch<PasskeyListResponse>(getPasskeyListUrl(),
+  return customFetch<PasskeyListResponse>(getPasskeyListUrl(params),
   {
     ...options,
     method: 'GET'
@@ -1726,9 +2444,9 @@ export const getPasskeyRegisterBeginUrl = () => {
   return `/passkeys/register/begin`
 }
 
-export const passkeyRegisterBegin = async ( options?: RequestInit): Promise<PasskeyRegisterBeginResponse> => {
+export const passkeyRegisterBegin = async ( options?: RequestInit): Promise<void> => {
 
-  return customFetch<PasskeyRegisterBeginResponse>(getPasskeyRegisterBeginUrl(),
+  return customFetch<void>(getPasskeyRegisterBeginUrl(),
   {
     ...options,
     method: 'POST'
@@ -1750,9 +2468,9 @@ export const getPasskeyRegisterFinishUrl = () => {
   return `/passkeys/register/finish`
 }
 
-export const passkeyRegisterFinish = async (passkeyRegisterFinishRequest: PasskeyRegisterFinishRequest, options?: RequestInit): Promise<PasskeyRegisterFinishResponse> => {
+export const passkeyRegisterFinish = async (passkeyRegisterFinishRequest: PasskeyRegisterFinishRequest, options?: RequestInit): Promise<void> => {
 
-  return customFetch<PasskeyRegisterFinishResponse>(getPasskeyRegisterFinishUrl(),
+  return customFetch<void>(getPasskeyRegisterFinishUrl(),
   {
     ...options,
     method: 'POST',
@@ -1809,6 +2527,57 @@ export const emailPasswordRegister = async (emailPasswordRegisterRequest: EmailP
     headers: { 'Content-Type': 'application/json', ...options?.headers },
     body: JSON.stringify(
       emailPasswordRegisterRequest,)
+  }
+);}
+
+
+
+/**
+ * Always responds 200 to prevent user enumeration.
+ * @summary Email a fresh verification link
+ */
+export const getEmailPasswordResendVerificationUrl = () => {
+
+
+
+
+  return `/resend-verification`
+}
+
+export const emailPasswordResendVerification = async (emailResendVerificationRequest: EmailResendVerificationRequest, options?: RequestInit): Promise<EmailResendVerificationResponse> => {
+
+  return customFetch<EmailResendVerificationResponse>(getEmailPasswordResendVerificationUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      emailResendVerificationRequest,)
+  }
+);}
+
+
+
+/**
+ * @summary Consume a password-reset token and set a new password
+ */
+export const getEmailPasswordResetPasswordUrl = () => {
+
+
+
+
+  return `/reset-password`
+}
+
+export const emailPasswordResetPassword = async (emailResetPasswordRequest: EmailResetPasswordRequest, options?: RequestInit): Promise<EmailResetPasswordResponse> => {
+
+  return customFetch<EmailResetPasswordResponse>(getEmailPasswordResetPasswordUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      emailResetPasswordRequest,)
   }
 );}
 
@@ -1939,131 +2708,6 @@ export const bearerRevoke = async (bearerRevokeRequest: BearerRevokeRequest, opt
 
 
 /**
- * @summary Remove the user's TOTP secret + backup codes
- */
-export const getMfaTOTPDeleteUrl = () => {
-
-
-
-
-  return `/totp`
-}
-
-export const mfaTOTPDelete = async ( options?: RequestInit): Promise<void> => {
-
-  return customFetch<void>(getMfaTOTPDeleteUrl(),
-  {
-    ...options,
-    method: 'DELETE'
-
-
-  }
-);}
-
-
-
-/**
- * @summary Verify the freshly-provisioned TOTP and activate it
- */
-export const getMfaTOTPConfirmUrl = () => {
-
-
-
-
-  return `/totp/confirm`
-}
-
-export const mfaTOTPConfirm = async (mfaConfirmRequest: MfaConfirmRequest, options?: RequestInit): Promise<void> => {
-
-  return customFetch<void>(getMfaTOTPConfirmUrl(),
-  {
-    ...options,
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...options?.headers },
-    body: JSON.stringify(
-      mfaConfirmRequest,)
-  }
-);}
-
-
-
-/**
- * Wipes any prior secret/backup codes for this user, then issues a fresh QR + backup-code set.
- * @summary Provision a new TOTP secret + backup codes (unverified)
- */
-export const getMfaTOTPSetupUrl = () => {
-
-
-
-
-  return `/totp/setup`
-}
-
-export const mfaTOTPSetup = async ( options?: RequestInit): Promise<MfaSetupResponse> => {
-
-  return customFetch<MfaSetupResponse>(getMfaTOTPSetupUrl(),
-  {
-    ...options,
-    method: 'POST'
-
-
-  }
-);}
-
-
-
-/**
- * @summary Consume an unlock token to clear an account lock
- */
-export const getLockoutUnlockUrl = () => {
-
-
-
-
-  return `/unlock`
-}
-
-export const lockoutUnlock = async (lockoutUnlockRequest: LockoutUnlockRequest, options?: RequestInit): Promise<LockoutUnlockResponse> => {
-
-  return customFetch<LockoutUnlockResponse>(getLockoutUnlockUrl(),
-  {
-    ...options,
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...options?.headers },
-    body: JSON.stringify(
-      lockoutUnlockRequest,)
-  }
-);}
-
-
-
-/**
- * Always responds 200 to prevent user enumeration.
- * @summary Email a single-use unlock token
- */
-export const getLockoutUnlockRequestUrl = () => {
-
-
-
-
-  return `/unlock/request`
-}
-
-export const lockoutUnlockRequest = async (lockoutUnlockReqRequest: LockoutUnlockReqRequest, options?: RequestInit): Promise<LockoutUnlockReqResponse> => {
-
-  return customFetch<LockoutUnlockReqResponse>(getLockoutUnlockRequestUrl(),
-  {
-    ...options,
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...options?.headers },
-    body: JSON.stringify(
-      lockoutUnlockReqRequest,)
-  }
-);}
-
-
-
-/**
  * @summary Standard OIDC UserInfo for the authenticated caller
  */
 export const getOidcUserInfoUrl = () => {
@@ -2074,9 +2718,9 @@ export const getOidcUserInfoUrl = () => {
   return `/userinfo`
 }
 
-export const oidcUserInfo = async ( options?: RequestInit): Promise<OidcUserInfoResponse> => {
+export const oidcUserInfo = async ( options?: RequestInit): Promise<void> => {
 
-  return customFetch<OidcUserInfoResponse>(getOidcUserInfoUrl(),
+  return customFetch<void>(getOidcUserInfoUrl(),
   {
     ...options,
     method: 'GET'
@@ -2088,25 +2732,25 @@ export const oidcUserInfo = async ( options?: RequestInit): Promise<OidcUserInfo
 
 
 /**
- * @summary Consume a pending session (TOTP or backup code)
+ * @summary Consume a verification token issued by /resend-verification
  */
-export const getMfaVerifyUrl = () => {
+export const getEmailPasswordVerifyEmailUrl = () => {
 
 
 
 
-  return `/verify`
+  return `/verify-email`
 }
 
-export const mfaVerify = async (mfaVerifyRequest: MfaVerifyRequest, options?: RequestInit): Promise<MfaVerifyResponse> => {
+export const emailPasswordVerifyEmail = async (emailVerifyRequest: EmailVerifyRequest, options?: RequestInit): Promise<EmailVerifyResponse> => {
 
-  return customFetch<MfaVerifyResponse>(getMfaVerifyUrl(),
+  return customFetch<EmailVerifyResponse>(getEmailPasswordVerifyEmailUrl(),
   {
     ...options,
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...options?.headers },
     body: JSON.stringify(
-      mfaVerifyRequest,)
+      emailVerifyRequest,)
   }
 );}
 
@@ -2115,17 +2759,24 @@ export const mfaVerify = async (mfaVerifyRequest: MfaVerifyRequest, options?: Re
 /**
  * @summary List webhooks (admin)
  */
-export const getWebhookListUrl = () => {
+export const getWebhookListUrl = (params?: WebhookListParams,) => {
+  const normalizedParams = new URLSearchParams();
 
+  Object.entries(params || {}).forEach(([key, value]) => {
 
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString())
+    }
+  });
 
+  const stringifiedParams = normalizedParams.toString();
 
-  return `/webhooks`
+  return stringifiedParams.length > 0 ? `/webhooks?${stringifiedParams}` : `/webhooks`
 }
 
-export const webhookList = async ( options?: RequestInit): Promise<WebhookListResponse> => {
+export const webhookList = async (params?: WebhookListParams, options?: RequestInit): Promise<WebhookListResponse> => {
 
-  return customFetch<WebhookListResponse>(getWebhookListUrl(),
+  return customFetch<WebhookListResponse>(getWebhookListUrl(params),
   {
     ...options,
     method: 'GET'
@@ -2186,6 +2837,7 @@ export const webhookDelete = async (id: string, options?: RequestInit): Promise<
 
 
 /**
+ * For delivery history, use GET /webhooks/{id}/deliveries.
  * @summary Fetch a single webhook (no secret)
  */
 export const getWebhookGetUrl = (id: string,) => {
@@ -2196,9 +2848,9 @@ export const getWebhookGetUrl = (id: string,) => {
   return `/webhooks/${id}`
 }
 
-export const webhookGet = async (id: string, options?: RequestInit): Promise<WebhookJSON> => {
+export const webhookGet = async (id: string, options?: RequestInit): Promise<WebhookShowResponse> => {
 
-  return customFetch<WebhookJSON>(getWebhookGetUrl(id),
+  return customFetch<WebhookShowResponse>(getWebhookGetUrl(id),
   {
     ...options,
     method: 'GET'
@@ -2227,6 +2879,32 @@ export const webhookUpdate = async (id: string,
   {
     ...options,
     method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      webhookUpdateRequest,)
+  }
+);}
+
+
+
+/**
+ * @summary Alias for PATCH /webhooks/{id} (Rust parity)
+ */
+export const getWebhookPutUrl = (id: string,) => {
+
+
+
+
+  return `/webhooks/${id}`
+}
+
+export const webhookPut = async (id: string,
+    webhookUpdateRequest: WebhookUpdateRequest, options?: RequestInit): Promise<WebhookJSON> => {
+
+  return customFetch<WebhookJSON>(getWebhookPutUrl(id),
+  {
+    ...options,
+    method: 'PUT',
     headers: { 'Content-Type': 'application/json', ...options?.headers },
     body: JSON.stringify(
       webhookUpdateRequest,)
@@ -2291,35 +2969,41 @@ export const webhookTest = async (id: string, options?: RequestInit): Promise<We
 );}
 
 
-export const getAsymJWKSResponseMock = (overrideResponse: Partial<Extract<JwksDocument, object>> = {}): JwksDocument => ({keys: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({alg: faker.string.alpha({length: {min: 10, max: 20}}), crv: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), e: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), kid: faker.string.alpha({length: {min: 10, max: 20}}), kty: faker.string.alpha({length: {min: 10, max: 20}}), n: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), use: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), x: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), y: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined])})), null]), ...overrideResponse})
+export const getLockoutUnlockRequestResponseMock = (overrideResponse: Partial<Extract<LockoutUnlockReqResponse, object>> = {}): LockoutUnlockReqResponse => ({message: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
-export const getOidcDiscoveryResponseMock = (overrideResponse: Partial<Extract<OidcDiscoveryDoc, object>> = {}): OidcDiscoveryDoc => ({authorization_endpoint: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), grant_types_supported: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), null]), id_token_signing_alg_values_supported: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), null]), issuer: faker.string.alpha({length: {min: 10, max: 20}}), jwks_uri: faker.string.alpha({length: {min: 10, max: 20}}), response_types_supported: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), null]), scopes_supported: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), undefined]), subject_types_supported: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), null]), token_endpoint: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), userinfo_endpoint: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
+export const getLockoutUnlockResponseMock = (overrideResponse: Partial<Extract<LockoutUnlockResponse, object>> = {}): LockoutUnlockResponse => ({message: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
 export const getAdminListAuditResponseMock = (overrideResponse: Partial<Extract<AdminListAuditResponse, object>> = {}): AdminListAuditResponse => ({entries: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', event_type: faker.string.alpha({length: {min: 10, max: 20}}), id: faker.string.alpha({length: {min: 10, max: 20}}), ip_address: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), metadata: faker.helpers.arrayElement([{
         [faker.string.alphanumeric(5)]: {}
       }, undefined]), user_id: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined])})), null]), ...overrideResponse})
 
-export const getAdminListUsersResponseMock = (overrideResponse: Partial<Extract<AdminListUsersResponse, object>> = {}): AdminListUsersResponse => ({total: faker.number.int(), users: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({banned: faker.datatype.boolean(), banned_reason: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), banned_until: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', display_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), email: faker.string.alpha({length: {min: 10, max: 20}}), email_verified: faker.datatype.boolean(), id: faker.string.alpha({length: {min: 10, max: 20}}), role: faker.string.alpha({length: {min: 10, max: 20}}), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z'})), null]), ...overrideResponse})
+export const getAdminListSessionsResponseMock = (overrideResponse: Partial<Extract<AdminListSessionsResponse, object>> = {}): AdminListSessionsResponse => ({page: faker.number.int(), per_page: faker.number.int(), sessions: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', expires_at: faker.date.past().toISOString().slice(0, 19) + 'Z', id: faker.string.alpha({length: {min: 10, max: 20}}), ip_address: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), user_agent: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), user_id: faker.string.alpha({length: {min: 10, max: 20}})})), null]), total: faker.number.int(), ...overrideResponse})
+
+export const getAdminListUsersResponseMock = (overrideResponse: Partial<Extract<AdminListUsersResponse, object>> = {}): AdminListUsersResponse => ({page: faker.number.int(), per_page: faker.number.int(), total: faker.number.int(), users: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({banned: faker.datatype.boolean(), banned_reason: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), banned_until: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', display_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), email: faker.string.alpha({length: {min: 10, max: 20}}), email_verified: faker.datatype.boolean(), id: faker.string.alpha({length: {min: 10, max: 20}}), role: faker.string.alpha({length: {min: 10, max: 20}}), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z'})), null]), ...overrideResponse})
 
 export const getAdminGetUserResponseMock = (overrideResponse: Partial<Extract<AdminUserJSON, object>> = {}): AdminUserJSON => ({banned: faker.datatype.boolean(), banned_reason: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), banned_until: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', display_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), email: faker.string.alpha({length: {min: 10, max: 20}}), email_verified: faker.datatype.boolean(), id: faker.string.alpha({length: {min: 10, max: 20}}), role: faker.string.alpha({length: {min: 10, max: 20}}), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', ...overrideResponse})
 
 export const getAdminPatchUserResponseMock = (overrideResponse: Partial<Extract<AdminUserJSON, object>> = {}): AdminUserJSON => ({banned: faker.datatype.boolean(), banned_reason: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), banned_until: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', display_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), email: faker.string.alpha({length: {min: 10, max: 20}}), email_verified: faker.datatype.boolean(), id: faker.string.alpha({length: {min: 10, max: 20}}), role: faker.string.alpha({length: {min: 10, max: 20}}), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', ...overrideResponse})
 
-export const getAdminBanUserResponseMock = (overrideResponse: Partial<Extract<AdminUserJSON, object>> = {}): AdminUserJSON => ({banned: faker.datatype.boolean(), banned_reason: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), banned_until: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', display_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), email: faker.string.alpha({length: {min: 10, max: 20}}), email_verified: faker.datatype.boolean(), id: faker.string.alpha({length: {min: 10, max: 20}}), role: faker.string.alpha({length: {min: 10, max: 20}}), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', ...overrideResponse})
+export const getAdminPutUserResponseMock = (overrideResponse: Partial<Extract<AdminUserJSON, object>> = {}): AdminUserJSON => ({banned: faker.datatype.boolean(), banned_reason: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), banned_until: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', display_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), email: faker.string.alpha({length: {min: 10, max: 20}}), email_verified: faker.datatype.boolean(), id: faker.string.alpha({length: {min: 10, max: 20}}), role: faker.string.alpha({length: {min: 10, max: 20}}), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', ...overrideResponse})
 
-export const getAdminImpersonateResponseMock = (overrideResponse: Partial<Extract<AdminImpersonateResponse, object>> = {}): AdminImpersonateResponse => ({user: {banned: faker.datatype.boolean(), banned_reason: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), banned_until: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', display_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), email: faker.string.alpha({length: {min: 10, max: 20}}), email_verified: faker.datatype.boolean(), id: faker.string.alpha({length: {min: 10, max: 20}}), role: faker.string.alpha({length: {min: 10, max: 20}}), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z'}, ...overrideResponse})
+export const getAdminBanUserResponseMock = (overrideResponse: Partial<Extract<AdminUserJSON, object>> = {}): AdminUserJSON => ({banned: faker.datatype.boolean(), banned_reason: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), banned_until: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', display_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), email: faker.string.alpha({length: {min: 10, max: 20}}), email_verified: faker.datatype.boolean(), id: faker.string.alpha({length: {min: 10, max: 20}}), role: faker.string.alpha({length: {min: 10, max: 20}}), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', ...overrideResponse})
 
 export const getAdminDeleteUserSessionsResponseMock = (overrideResponse: Partial<Extract<AdminDeleteSessionsResponse, object>> = {}): AdminDeleteSessionsResponse => ({deleted: faker.number.int(), ...overrideResponse})
 
 export const getAdminUnbanUserResponseMock = (overrideResponse: Partial<Extract<AdminUserJSON, object>> = {}): AdminUserJSON => ({banned: faker.datatype.boolean(), banned_reason: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), banned_until: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', display_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), email: faker.string.alpha({length: {min: 10, max: 20}}), email_verified: faker.datatype.boolean(), id: faker.string.alpha({length: {min: 10, max: 20}}), role: faker.string.alpha({length: {min: 10, max: 20}}), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', ...overrideResponse})
 
-export const getApiKeyListResponseMock = (overrideResponse: Partial<Extract<ApiKeyListResponse, object>> = {}): ApiKeyListResponse => ({keys: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', expires_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), id: faker.string.alpha({length: {min: 10, max: 20}}), last_used_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), name: faker.string.alpha({length: {min: 10, max: 20}}), prefix: faker.string.alpha({length: {min: 10, max: 20}}), scopes: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), null])})), null]), ...overrideResponse})
+export const getLockoutAdminUnlockResponseMock = (overrideResponse: Partial<Extract<LockoutUnlockResponse, object>> = {}): LockoutUnlockResponse => ({message: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
-export const getApiKeyCreateResponseMock = (overrideResponse: Partial<Extract<ApiKeyCreateResponse, object>> = {}): ApiKeyCreateResponse => ({api_key: {created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', expires_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), id: faker.string.alpha({length: {min: 10, max: 20}}), last_used_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), name: faker.string.alpha({length: {min: 10, max: 20}}), prefix: faker.string.alpha({length: {min: 10, max: 20}}), scopes: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), null])}, key: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
+export const getApiKeyListResponseMock = (overrideResponse: Partial<Extract<ApiKeyListResponse, object>> = {}): ApiKeyListResponse => ({items: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', expires_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), id: faker.string.alpha({length: {min: 10, max: 20}}), last_used_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), name: faker.string.alpha({length: {min: 10, max: 20}}), prefix: faker.string.alpha({length: {min: 10, max: 20}}), scopes: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), null])})), null]), page: faker.number.int(), per_page: faker.number.int(), total: faker.number.int(), ...overrideResponse})
 
-export const getMfaBackupCodesCountResponseMock = (overrideResponse: Partial<Extract<MfaBackupCodesCountResponse, object>> = {}): MfaBackupCodesCountResponse => ({unused: faker.number.int(), ...overrideResponse})
+export const getApiKeyCreateResponseMock = (overrideResponse: Partial<Extract<ApiKeyCreateResponse, object>> = {}): ApiKeyCreateResponse => ({api_key: {created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', expires_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), id: faker.string.alpha({length: {min: 10, max: 20}}), last_used_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), name: faker.string.alpha({length: {min: 10, max: 20}}), prefix: faker.string.alpha({length: {min: 10, max: 20}}), scopes: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), null])}, secret: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
-export const getMfaRegenerateBackupCodesResponseMock = (overrideResponse: Partial<Extract<MfaRegenerateResponse, object>> = {}): MfaRegenerateResponse => ({backup_codes: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), null]), ...overrideResponse})
+export const getEmailPasswordChangePasswordResponseMock = (overrideResponse: Partial<Extract<EmailPasswordChangePasswordResponse, object>> = {}): EmailPasswordChangePasswordResponse => ({message: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
+
+export const getConfigResponseMock = (overrideResponse: Partial<Extract<ConfigResponse, object>> = {}): ConfigResponse => ({allow_signups: faker.datatype.boolean(), require_email_verification: faker.datatype.boolean(), ...overrideResponse})
+
+export const getEmailPasswordForgotPasswordResponseMock = (overrideResponse: Partial<Extract<EmailForgotPasswordResponse, object>> = {}): EmailForgotPasswordResponse => ({message: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
 export const getLockoutStateResponseMock = (overrideResponse: Partial<Extract<LockoutStateResponse, object>> = {}): LockoutStateResponse => ({locked: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({email: faker.string.alpha({length: {min: 10, max: 20}}), failed_count: faker.number.int(), lock_count: faker.number.int(), locked_reason: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), locked_until: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), user_id: faker.string.alpha({length: {min: 10, max: 20}})})), null]), ...overrideResponse})
 
@@ -2329,21 +3013,37 @@ export const getEmailPasswordLoginResponseEmailPasswordLoginMfaResponseMock = (o
 
 export const getEmailPasswordLoginResponseMock = (): EmailPasswordLoginResponse | EmailPasswordLoginMfaResponse => (faker.helpers.arrayElement([{...getEmailPasswordLoginResponseEmailPasswordLoginResponseMock()},{...getEmailPasswordLoginResponseEmailPasswordLoginMfaResponseMock()},]))
 
-export const getMagicLinkSendResponseMock = (overrideResponse: Partial<Extract<MagicLinkSendResponse, object>> = {}): MagicLinkSendResponse => ({sent: faker.datatype.boolean(), ...overrideResponse})
+export const getMagicLinkSendResponseMock = (overrideResponse: Partial<Extract<MagicLinkSendResponse, object>> = {}): MagicLinkSendResponse => ({message: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
-export const getMagicLinkVerifyResponseMock = (overrideResponse: Partial<Extract<MagicLinkVerifyResponse, object>> = {}): MagicLinkVerifyResponse => ({user: {display_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), email: faker.string.alpha({length: {min: 10, max: 20}}), email_verified: faker.datatype.boolean(), id: faker.string.alpha({length: {min: 10, max: 20}}), role: faker.string.alpha({length: {min: 10, max: 20}})}, ...overrideResponse})
+export const getEmailPasswordPatchMeResponseMock = (overrideResponse: Partial<Extract<EmailPasswordPatchMeResponse, object>> = {}): EmailPasswordPatchMeResponse => ({user: {auth_method: faker.string.alpha({length: {min: 10, max: 20}}), banned: faker.datatype.boolean(), display_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), email: faker.string.alpha({length: {min: 10, max: 20}}), email_verified: faker.datatype.boolean(), id: faker.string.alpha({length: {min: 10, max: 20}}), role: faker.string.alpha({length: {min: 10, max: 20}}), scopes: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), null])}, ...overrideResponse})
 
-export const getOauthListAccountsResponseMock = (overrideResponse: Partial<Extract<OauthListAccountsResponse, object>> = {}): OauthListAccountsResponse => ({accounts: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', expires_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), provider: faker.string.alpha({length: {min: 10, max: 20}}), provider_user_id: faker.string.alpha({length: {min: 10, max: 20}})})), null]), ...overrideResponse})
+export const getMfaBackupCodesCountResponseMock = (overrideResponse: Partial<Extract<MfaBackupCodesCountResponse, object>> = {}): MfaBackupCodesCountResponse => ({remaining: faker.number.int(), ...overrideResponse})
 
-export const getOauthCallbackResponseMock = (overrideResponse: Partial<Extract<OauthCallbackResponse, object>> = {}): OauthCallbackResponse => ({provider: faker.string.alpha({length: {min: 10, max: 20}}), user: {email: faker.string.alpha({length: {min: 10, max: 20}}), id: faker.string.alpha({length: {min: 10, max: 20}})}, ...overrideResponse})
+export const getMfaRegenerateBackupCodesResponseMock = (overrideResponse: Partial<Extract<MfaRegenerateResponse, object>> = {}): MfaRegenerateResponse => ({backup_codes: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), null]), ...overrideResponse})
 
-export const getOauthLinkResponseMock = (overrideResponse: Partial<Extract<OauthLinkResponse, object>> = {}): OauthLinkResponse => ({authorize_url: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
+export const getMfaTOTPDeleteResponseMock = (overrideResponse: Partial<Extract<MfaMessageResponse, object>> = {}): MfaMessageResponse => ({message: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
+
+export const getMfaTOTPConfirmResponseMock = (overrideResponse: Partial<Extract<MfaMessageResponse, object>> = {}): MfaMessageResponse => ({message: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
+
+export const getMfaTOTPSetupResponseMock = (overrideResponse: Partial<Extract<MfaSetupResponse, object>> = {}): MfaSetupResponse => ({backup_codes: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), null]), otpauth_url: faker.string.alpha({length: {min: 10, max: 20}}), qr_code: faker.string.alpha({length: {min: 10, max: 20}}), secret: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
+
+export const getMfaVerifyResponseMock = (overrideResponse: Partial<Extract<MfaVerifyResponse, object>> = {}): MfaVerifyResponse => ({user: {display_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), email: faker.string.alpha({length: {min: 10, max: 20}}), email_verified: faker.datatype.boolean(), id: faker.string.alpha({length: {min: 10, max: 20}}), role: faker.string.alpha({length: {min: 10, max: 20}})}, ...overrideResponse})
+
+export const getOauthListAccountsResponseMock = (overrideResponse: Partial<Extract<OauthListAccountsResponse, object>> = {}): OauthListAccountsResponse => ({items: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', expires_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), provider: faker.string.alpha({length: {min: 10, max: 20}}), provider_user_id: faker.string.alpha({length: {min: 10, max: 20}})})), null]), page: faker.number.int(), per_page: faker.number.int(), total: faker.number.int(), ...overrideResponse})
 
 export const getOauth2AuthorizeResponseOauth2AuthorizeRedirectMock = (overrideResponse: Partial<Oauth2AuthorizeRedirect> = {}): Oauth2AuthorizeRedirect => ({...{redirect_url: faker.string.alpha({length: {min: 10, max: 20}})}, ...overrideResponse});
 
 export const getOauth2AuthorizeResponseOauth2ConsentPayloadMock = (overrideResponse: Partial<Oauth2ConsentPayload> = {}): Oauth2ConsentPayload => ({...{client: {id: faker.string.alpha({length: {min: 10, max: 20}}), name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined])}, csrf_token: faker.string.alpha({length: {min: 10, max: 20}}), request_id: faker.string.alpha({length: {min: 10, max: 20}}), scopes: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), null])}, ...overrideResponse});
 
 export const getOauth2AuthorizeResponseMock = (): Oauth2AuthorizeRedirect | Oauth2ConsentPayload => (faker.helpers.arrayElement([{...getOauth2AuthorizeResponseOauth2AuthorizeRedirectMock()},{...getOauth2AuthorizeResponseOauth2ConsentPayloadMock()},]))
+
+export const getOauth2DynamicClientRegisterResponseMock = (overrideResponse: Partial<Extract<Oauth2RegisterResponse, object>> = {}): Oauth2RegisterResponse => ({client_id: faker.string.alpha({length: {min: 10, max: 20}}), client_id_issued_at: faker.number.int(), client_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), client_secret: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), client_secret_expires_at: faker.number.int(), grant_types: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), null]), redirect_uris: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), null]), registration_access_token: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), registration_client_uri: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), response_types: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), null]), scope: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), token_endpoint_auth_method: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
+
+export const getOauthCallbackResponseMock = (overrideResponse: Partial<Extract<OauthCallbackResponse, object>> = {}): OauthCallbackResponse => ({user: {display_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), email: faker.string.alpha({length: {min: 10, max: 20}}), email_verified: faker.datatype.boolean(), id: faker.string.alpha({length: {min: 10, max: 20}}), role: faker.string.alpha({length: {min: 10, max: 20}})}, ...overrideResponse})
+
+export const getOauthCallbackPostResponseMock = (overrideResponse: Partial<Extract<OauthCallbackResponse, object>> = {}): OauthCallbackResponse => ({user: {display_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), email: faker.string.alpha({length: {min: 10, max: 20}}), email_verified: faker.datatype.boolean(), id: faker.string.alpha({length: {min: 10, max: 20}}), role: faker.string.alpha({length: {min: 10, max: 20}})}, ...overrideResponse})
+
+export const getOauthLinkResponseMock = (overrideResponse: Partial<Extract<OauthLinkResponse, object>> = {}): OauthLinkResponse => ({auth_url: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
 export const getOauth2ListBannedClientsResponseMock = (overrideResponse: Partial<Extract<Oauth2BannedClientsResponse, object>> = {}): Oauth2BannedClientsResponse => ({banned: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({banned: faker.datatype.boolean(), banned_reason: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), client_id: faker.string.alpha({length: {min: 10, max: 20}}), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', grant_types: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), null]), has_public_key: faker.datatype.boolean(), id: faker.string.alpha({length: {min: 10, max: 20}}), is_public: faker.datatype.boolean(), jwks_uri: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), redirect_uris: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), null]), scopes: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), null]), token_endpoint_auth_method: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined])})), null]), ...overrideResponse})
 
@@ -2355,31 +3055,15 @@ export const getOauth2PatchClientResponseMock = (overrideResponse: Partial<Extra
 
 export const getOauth2ConsentResponseMock = (overrideResponse: Partial<Extract<Oauth2AuthorizeRedirect, object>> = {}): Oauth2AuthorizeRedirect => ({redirect_url: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
-export const getOauth2DeviceVerifyResponseMock = (overrideResponse: Partial<Extract<Oauth2DeviceVerifyResponse, object>> = {}): Oauth2DeviceVerifyResponse => ({status: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
+export const getPasskeyListResponseMock = (overrideResponse: Partial<Extract<PasskeyListResponse, object>> = {}): PasskeyListResponse => ({items: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({aaguid: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', device_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), id: faker.string.alpha({length: {min: 10, max: 20}}), last_used_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), name: faker.string.alpha({length: {min: 10, max: 20}})})), null]), page: faker.number.int(), per_page: faker.number.int(), total: faker.number.int(), ...overrideResponse})
 
-export const getOauth2DeviceAuthorizationResponseMock = (overrideResponse: Partial<Extract<Oauth2DeviceAuthResponse, object>> = {}): Oauth2DeviceAuthResponse => ({device_code: faker.string.alpha({length: {min: 10, max: 20}}), expires_in: faker.number.int(), interval: faker.number.int(), user_code: faker.string.alpha({length: {min: 10, max: 20}}), verification_uri: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
+export const getEmailPasswordRegisterResponseMock = (overrideResponse: Partial<Extract<EmailPasswordRegisterResponse, object>> = {}): EmailPasswordRegisterResponse => ({message: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), user: faker.helpers.arrayElement([{display_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), email: faker.string.alpha({length: {min: 10, max: 20}}), email_verified: faker.datatype.boolean(), id: faker.string.alpha({length: {min: 10, max: 20}}), role: faker.string.alpha({length: {min: 10, max: 20}})}, undefined]), ...overrideResponse})
 
-export const getOauth2IntrospectResponseMock = (overrideResponse: Partial<Extract<Oauth2IntrospectResponse, object>> = {}): Oauth2IntrospectResponse => ({active: faker.datatype.boolean(), client_id: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), exp: faker.helpers.arrayElement([faker.number.int(), undefined]), iat: faker.helpers.arrayElement([faker.number.int(), undefined]), iss: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), scope: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), sub: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), token_type: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), ...overrideResponse})
+export const getEmailPasswordResendVerificationResponseMock = (overrideResponse: Partial<Extract<EmailResendVerificationResponse, object>> = {}): EmailResendVerificationResponse => ({message: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
-export const getOauth2TokenResponseMock = (overrideResponse: Partial<Extract<Oauth2TokenResponse, object>> = {}): Oauth2TokenResponse => ({access_token: faker.string.alpha({length: {min: 10, max: 20}}), expires_in: faker.number.int(), id_token: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), refresh_token: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), scope: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), token_type: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
+export const getEmailPasswordResetPasswordResponseMock = (overrideResponse: Partial<Extract<EmailResetPasswordResponse, object>> = {}): EmailResetPasswordResponse => ({message: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
-export const getPasskeyLoginBeginResponseMock = (overrideResponse: Partial<Extract<PasskeyLoginBeginResponse, object>> = {}): PasskeyLoginBeginResponse => ({options: {
-        [faker.string.alphanumeric(5)]: {}
-      }, request_id: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
-
-export const getPasskeyLoginFinishResponseMock = (overrideResponse: Partial<Extract<PasskeyLoginFinishResponse, object>> = {}): PasskeyLoginFinishResponse => ({user: {display_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), email: faker.string.alpha({length: {min: 10, max: 20}}), email_verified: faker.datatype.boolean(), id: faker.string.alpha({length: {min: 10, max: 20}}), role: faker.string.alpha({length: {min: 10, max: 20}})}, ...overrideResponse})
-
-export const getPasskeyListResponseMock = (overrideResponse: Partial<Extract<PasskeyListResponse, object>> = {}): PasskeyListResponse => ({passkeys: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({aaguid: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', device_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), id: faker.string.alpha({length: {min: 10, max: 20}}), last_used_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), name: faker.string.alpha({length: {min: 10, max: 20}})})), null]), ...overrideResponse})
-
-export const getPasskeyRegisterBeginResponseMock = (overrideResponse: Partial<Extract<PasskeyRegisterBeginResponse, object>> = {}): PasskeyRegisterBeginResponse => ({options: {
-        [faker.string.alphanumeric(5)]: {}
-      }, request_id: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
-
-export const getPasskeyRegisterFinishResponseMock = (overrideResponse: Partial<Extract<PasskeyRegisterFinishResponse, object>> = {}): PasskeyRegisterFinishResponse => ({created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', id: faker.string.alpha({length: {min: 10, max: 20}}), name: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
-
-export const getEmailPasswordRegisterResponseMock = (overrideResponse: Partial<Extract<EmailPasswordRegisterResponse, object>> = {}): EmailPasswordRegisterResponse => ({user: {display_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), email: faker.string.alpha({length: {min: 10, max: 20}}), email_verified: faker.datatype.boolean(), id: faker.string.alpha({length: {min: 10, max: 20}}), role: faker.string.alpha({length: {min: 10, max: 20}})}, ...overrideResponse})
-
-export const getEmailPasswordSessionResponseMock = (overrideResponse: Partial<Extract<EmailPasswordSessionResponse, object>> = {}): EmailPasswordSessionResponse => ({expires_at: faker.date.past().toISOString().slice(0, 19) + 'Z', user: {display_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), email: faker.string.alpha({length: {min: 10, max: 20}}), email_verified: faker.datatype.boolean(), id: faker.string.alpha({length: {min: 10, max: 20}}), role: faker.string.alpha({length: {min: 10, max: 20}})}, ...overrideResponse})
+export const getEmailPasswordSessionResponseMock = (overrideResponse: Partial<Extract<EmailPasswordSessionResponse, object>> = {}): EmailPasswordSessionResponse => ({expires_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), user: {auth_method: faker.string.alpha({length: {min: 10, max: 20}}), banned: faker.datatype.boolean(), display_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), email: faker.string.alpha({length: {min: 10, max: 20}}), email_verified: faker.datatype.boolean(), id: faker.string.alpha({length: {min: 10, max: 20}}), role: faker.string.alpha({length: {min: 10, max: 20}}), scopes: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), null])}, ...overrideResponse})
 
 export const getStatusResponseMock = (overrideResponse: Partial<Extract<StatusResponse, object>> = {}): StatusResponse => ({plugins: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), null]), version: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
@@ -2387,48 +3071,72 @@ export const getBearerIssueTokenResponseMock = (overrideResponse: Partial<Extrac
 
 export const getBearerRefreshResponseMock = (overrideResponse: Partial<Extract<BearerTokenResponse, object>> = {}): BearerTokenResponse => ({access_token: faker.string.alpha({length: {min: 10, max: 20}}), expires_in: faker.number.int(), refresh_token: faker.string.alpha({length: {min: 10, max: 20}}), token_type: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
-export const getMfaTOTPSetupResponseMock = (overrideResponse: Partial<Extract<MfaSetupResponse, object>> = {}): MfaSetupResponse => ({backup_codes: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), null]), otpauth_url: faker.string.alpha({length: {min: 10, max: 20}}), qr_code: faker.string.alpha({length: {min: 10, max: 20}}), secret: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
+export const getEmailPasswordVerifyEmailResponseMock = (overrideResponse: Partial<Extract<EmailVerifyResponse, object>> = {}): EmailVerifyResponse => ({message: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
-export const getLockoutUnlockResponseMock = (overrideResponse: Partial<Extract<LockoutUnlockResponse, object>> = {}): LockoutUnlockResponse => ({unlocked: faker.datatype.boolean(), ...overrideResponse})
+export const getWebhookListResponseMock = (overrideResponse: Partial<Extract<WebhookListResponse, object>> = {}): WebhookListResponse => ({items: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({active: faker.datatype.boolean(), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', events: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), null]), id: faker.string.alpha({length: {min: 10, max: 20}}), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', url: faker.string.alpha({length: {min: 10, max: 20}})})), null]), page: faker.number.int(), per_page: faker.number.int(), total: faker.number.int(), ...overrideResponse})
 
-export const getLockoutUnlockRequestResponseMock = (overrideResponse: Partial<Extract<LockoutUnlockReqResponse, object>> = {}): LockoutUnlockReqResponse => ({sent: faker.datatype.boolean(), ...overrideResponse})
+export const getWebhookCreateResponseMock = (overrideResponse: Partial<Extract<WebhookJSON, object>> = {}): WebhookJSON => ({active: faker.datatype.boolean(), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', events: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), null]), id: faker.string.alpha({length: {min: 10, max: 20}}), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', url: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
-export const getOidcUserInfoResponseMock = (overrideResponse: Partial<Extract<OidcUserInfoResponse, object>> = {}): OidcUserInfoResponse => ({email: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), email_verified: faker.datatype.boolean(), name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), picture: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), sub: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
+export const getWebhookGetResponseMock = (overrideResponse: Partial<Extract<WebhookShowResponse, object>> = {}): WebhookShowResponse => ({webhook: {active: faker.datatype.boolean(), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', events: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), null]), id: faker.string.alpha({length: {min: 10, max: 20}}), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', url: faker.string.alpha({length: {min: 10, max: 20}})}, ...overrideResponse})
 
-export const getMfaVerifyResponseMock = (overrideResponse: Partial<Extract<MfaVerifyResponse, object>> = {}): MfaVerifyResponse => ({user_id: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
+export const getWebhookUpdateResponseMock = (overrideResponse: Partial<Extract<WebhookJSON, object>> = {}): WebhookJSON => ({active: faker.datatype.boolean(), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', events: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), null]), id: faker.string.alpha({length: {min: 10, max: 20}}), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', url: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
-export const getWebhookListResponseMock = (overrideResponse: Partial<Extract<WebhookListResponse, object>> = {}): WebhookListResponse => ({webhooks: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({active: faker.datatype.boolean(), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', events: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), null]), id: faker.string.alpha({length: {min: 10, max: 20}}), secret: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', url: faker.string.alpha({length: {min: 10, max: 20}})})), null]), ...overrideResponse})
+export const getWebhookPutResponseMock = (overrideResponse: Partial<Extract<WebhookJSON, object>> = {}): WebhookJSON => ({active: faker.datatype.boolean(), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', events: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), null]), id: faker.string.alpha({length: {min: 10, max: 20}}), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', url: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
-export const getWebhookCreateResponseMock = (overrideResponse: Partial<Extract<WebhookJSON, object>> = {}): WebhookJSON => ({active: faker.datatype.boolean(), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', events: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), null]), id: faker.string.alpha({length: {min: 10, max: 20}}), secret: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', url: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
+export const getWebhookListDeliveriesResponseMock = (overrideResponse: Partial<Extract<WebhookListDeliveriesResponse, object>> = {}): WebhookListDeliveriesResponse => ({items: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({attempt: faker.number.int(), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', event_type: faker.string.alpha({length: {min: 10, max: 20}}), id: faker.string.alpha({length: {min: 10, max: 20}}), response_body: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), status_code: faker.helpers.arrayElement([faker.number.int(), undefined]), success: faker.datatype.boolean(), webhook_id: faker.string.alpha({length: {min: 10, max: 20}})})), null]), page: faker.number.int(), per_page: faker.number.int(), total: faker.number.int(), ...overrideResponse})
 
-export const getWebhookGetResponseMock = (overrideResponse: Partial<Extract<WebhookJSON, object>> = {}): WebhookJSON => ({active: faker.datatype.boolean(), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', events: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), null]), id: faker.string.alpha({length: {min: 10, max: 20}}), secret: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', url: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
-
-export const getWebhookUpdateResponseMock = (overrideResponse: Partial<Extract<WebhookJSON, object>> = {}): WebhookJSON => ({active: faker.datatype.boolean(), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', events: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), null]), id: faker.string.alpha({length: {min: 10, max: 20}}), secret: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', url: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
-
-export const getWebhookListDeliveriesResponseMock = (overrideResponse: Partial<Extract<WebhookListDeliveriesResponse, object>> = {}): WebhookListDeliveriesResponse => ({deliveries: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({attempt: faker.number.int(), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', event_type: faker.string.alpha({length: {min: 10, max: 20}}), id: faker.string.alpha({length: {min: 10, max: 20}}), response_body: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), status_code: faker.helpers.arrayElement([faker.number.int(), undefined]), success: faker.datatype.boolean(), webhook_id: faker.string.alpha({length: {min: 10, max: 20}})})), null]), ...overrideResponse})
-
-export const getWebhookTestResponseMock = (overrideResponse: Partial<Extract<WebhookTestResponse, object>> = {}): WebhookTestResponse => ({delivery_queued: faker.datatype.boolean(), event_type: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
+export const getWebhookTestResponseMock = (overrideResponse: Partial<Extract<WebhookTestResponse, object>> = {}): WebhookTestResponse => ({delivery_queued: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
 
-export const getAsymJWKSMockHandler = (overrideResponse?: JwksDocument | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<JwksDocument> | JwksDocument), options?: RequestHandlerOptions) => {
+export const getAsymJWKSMockHandler = (overrideResponse?: void | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<void> | void), options?: RequestHandlerOptions) => {
   return http.get('*/.well-known/jwks.json', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+  if (typeof overrideResponse === 'function') {await overrideResponse(info); }
 
-
-    return HttpResponse.json(overrideResponse !== undefined
-    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
-    : getAsymJWKSResponseMock(),
+    return new HttpResponse(null,
       { status: 200
       })
   }, options)
 }
 
-export const getOidcDiscoveryMockHandler = (overrideResponse?: OidcDiscoveryDoc | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<OidcDiscoveryDoc> | OidcDiscoveryDoc), options?: RequestHandlerOptions) => {
+export const getOauth2AuthServerMetadataMockHandler = (overrideResponse?: void | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<void> | void), options?: RequestHandlerOptions) => {
+  return http.get('*/.well-known/oauth-authorization-server', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+  if (typeof overrideResponse === 'function') {await overrideResponse(info); }
+
+    return new HttpResponse(null,
+      { status: 200
+      })
+  }, options)
+}
+
+export const getOidcDiscoveryMockHandler = (overrideResponse?: void | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<void> | void), options?: RequestHandlerOptions) => {
   return http.get('*/.well-known/openid-configuration', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+  if (typeof overrideResponse === 'function') {await overrideResponse(info); }
+
+    return new HttpResponse(null,
+      { status: 200
+      })
+  }, options)
+}
+
+export const getLockoutUnlockRequestMockHandler = (overrideResponse?: LockoutUnlockReqResponse | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<LockoutUnlockReqResponse> | LockoutUnlockReqResponse), options?: RequestHandlerOptions) => {
+  return http.post('*/account/request-unlock', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
 
 
     return HttpResponse.json(overrideResponse !== undefined
     ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
-    : getOidcDiscoveryResponseMock(),
+    : getLockoutUnlockRequestResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
+export const getLockoutUnlockMockHandler = (overrideResponse?: LockoutUnlockResponse | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<LockoutUnlockResponse> | LockoutUnlockResponse), options?: RequestHandlerOptions) => {
+  return http.post('*/account/unlock', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getLockoutUnlockResponseMock(),
       { status: 200
       })
   }, options)
@@ -2446,6 +3154,28 @@ export const getAdminListAuditMockHandler = (overrideResponse?: AdminListAuditRe
   }, options)
 }
 
+export const getAdminListSessionsMockHandler = (overrideResponse?: AdminListSessionsResponse | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<AdminListSessionsResponse> | AdminListSessionsResponse), options?: RequestHandlerOptions) => {
+  return http.get('*/admin/sessions', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getAdminListSessionsResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
+export const getAdminDeleteSessionMockHandler = (overrideResponse?: void | ((info: Parameters<Parameters<typeof http.delete>[1]>[0]) => Promise<void> | void), options?: RequestHandlerOptions) => {
+  return http.delete('*/admin/sessions/:id', async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+  if (typeof overrideResponse === 'function') {await overrideResponse(info); }
+
+    return new HttpResponse(null,
+      { status: 204
+      })
+  }, options)
+}
+
 export const getAdminListUsersMockHandler = (overrideResponse?: AdminListUsersResponse | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<AdminListUsersResponse> | AdminListUsersResponse), options?: RequestHandlerOptions) => {
   return http.get('*/admin/users', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
 
@@ -2454,6 +3184,16 @@ export const getAdminListUsersMockHandler = (overrideResponse?: AdminListUsersRe
     ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
     : getAdminListUsersResponseMock(),
       { status: 200
+      })
+  }, options)
+}
+
+export const getAdminDeleteUserMockHandler = (overrideResponse?: void | ((info: Parameters<Parameters<typeof http.delete>[1]>[0]) => Promise<void> | void), options?: RequestHandlerOptions) => {
+  return http.delete('*/admin/users/:id', async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+  if (typeof overrideResponse === 'function') {await overrideResponse(info); }
+
+    return new HttpResponse(null,
+      { status: 204
       })
   }, options)
 }
@@ -2482,6 +3222,18 @@ export const getAdminPatchUserMockHandler = (overrideResponse?: AdminUserJSON | 
   }, options)
 }
 
+export const getAdminPutUserMockHandler = (overrideResponse?: AdminUserJSON | ((info: Parameters<Parameters<typeof http.put>[1]>[0]) => Promise<AdminUserJSON> | AdminUserJSON), options?: RequestHandlerOptions) => {
+  return http.put('*/admin/users/:id', async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getAdminPutUserResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
 export const getAdminBanUserMockHandler = (overrideResponse?: AdminUserJSON | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<AdminUserJSON> | AdminUserJSON), options?: RequestHandlerOptions) => {
   return http.post('*/admin/users/:id/ban', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
 
@@ -2494,13 +3246,11 @@ export const getAdminBanUserMockHandler = (overrideResponse?: AdminUserJSON | ((
   }, options)
 }
 
-export const getAdminImpersonateMockHandler = (overrideResponse?: AdminImpersonateResponse | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<AdminImpersonateResponse> | AdminImpersonateResponse), options?: RequestHandlerOptions) => {
+export const getAdminImpersonateMockHandler = (overrideResponse?: void | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<void> | void), options?: RequestHandlerOptions) => {
   return http.post('*/admin/users/:id/impersonate', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+  if (typeof overrideResponse === 'function') {await overrideResponse(info); }
 
-
-    return HttpResponse.json(overrideResponse !== undefined
-    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
-    : getAdminImpersonateResponseMock(),
+    return new HttpResponse(null,
       { status: 200
       })
   }, options)
@@ -2525,6 +3275,18 @@ export const getAdminUnbanUserMockHandler = (overrideResponse?: AdminUserJSON | 
     return HttpResponse.json(overrideResponse !== undefined
     ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
     : getAdminUnbanUserResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
+export const getLockoutAdminUnlockMockHandler = (overrideResponse?: LockoutUnlockResponse | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<LockoutUnlockResponse> | LockoutUnlockResponse), options?: RequestHandlerOptions) => {
+  return http.post('*/admin/users/:id/unlock', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getLockoutAdminUnlockResponseMock(),
       { status: 200
       })
   }, options)
@@ -2564,36 +3326,38 @@ export const getApiKeyDeleteMockHandler = (overrideResponse?: void | ((info: Par
   }, options)
 }
 
-export const getMfaBackupCodesCountMockHandler = (overrideResponse?: MfaBackupCodesCountResponse | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<MfaBackupCodesCountResponse> | MfaBackupCodesCountResponse), options?: RequestHandlerOptions) => {
-  return http.get('*/backup-codes', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
-
-
-    return HttpResponse.json(overrideResponse !== undefined
-    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
-    : getMfaBackupCodesCountResponseMock(),
-      { status: 200
-      })
-  }, options)
-}
-
-export const getMfaRegenerateBackupCodesMockHandler = (overrideResponse?: MfaRegenerateResponse | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<MfaRegenerateResponse> | MfaRegenerateResponse), options?: RequestHandlerOptions) => {
-  return http.post('*/backup-codes/regenerate', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
-
-
-    return HttpResponse.json(overrideResponse !== undefined
-    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
-    : getMfaRegenerateBackupCodesResponseMock(),
-      { status: 200
-      })
-  }, options)
-}
-
-export const getEmailPasswordChangePasswordMockHandler = (overrideResponse?: void | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<void> | void), options?: RequestHandlerOptions) => {
+export const getEmailPasswordChangePasswordMockHandler = (overrideResponse?: EmailPasswordChangePasswordResponse | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<EmailPasswordChangePasswordResponse> | EmailPasswordChangePasswordResponse), options?: RequestHandlerOptions) => {
   return http.post('*/change-password', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
-  if (typeof overrideResponse === 'function') {await overrideResponse(info); }
 
-    return new HttpResponse(null,
-      { status: 204
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getEmailPasswordChangePasswordResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
+export const getConfigMockHandler = (overrideResponse?: ConfigResponse | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<ConfigResponse> | ConfigResponse), options?: RequestHandlerOptions) => {
+  return http.get('*/config', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getConfigResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
+export const getEmailPasswordForgotPasswordMockHandler = (overrideResponse?: EmailForgotPasswordResponse | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<EmailForgotPasswordResponse> | EmailForgotPasswordResponse), options?: RequestHandlerOptions) => {
+  return http.post('*/forgot-password', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getEmailPasswordForgotPasswordResponseMock(),
+      { status: 200
       })
   }, options)
 }
@@ -2644,13 +3408,95 @@ export const getMagicLinkSendMockHandler = (overrideResponse?: MagicLinkSendResp
   }, options)
 }
 
-export const getMagicLinkVerifyMockHandler = (overrideResponse?: MagicLinkVerifyResponse | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<MagicLinkVerifyResponse> | MagicLinkVerifyResponse), options?: RequestHandlerOptions) => {
+export const getMagicLinkVerifyMockHandler = (overrideResponse?: void | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<void> | void), options?: RequestHandlerOptions) => {
   return http.post('*/magic-link/verify', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+  if (typeof overrideResponse === 'function') {await overrideResponse(info); }
+
+    return new HttpResponse(null,
+      { status: 200
+      })
+  }, options)
+}
+
+export const getEmailPasswordPatchMeMockHandler = (overrideResponse?: EmailPasswordPatchMeResponse | ((info: Parameters<Parameters<typeof http.patch>[1]>[0]) => Promise<EmailPasswordPatchMeResponse> | EmailPasswordPatchMeResponse), options?: RequestHandlerOptions) => {
+  return http.patch('*/me', async (info: Parameters<Parameters<typeof http.patch>[1]>[0]) => {
 
 
     return HttpResponse.json(overrideResponse !== undefined
     ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
-    : getMagicLinkVerifyResponseMock(),
+    : getEmailPasswordPatchMeResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
+export const getMfaBackupCodesCountMockHandler = (overrideResponse?: MfaBackupCodesCountResponse | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<MfaBackupCodesCountResponse> | MfaBackupCodesCountResponse), options?: RequestHandlerOptions) => {
+  return http.get('*/mfa/backup-codes', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getMfaBackupCodesCountResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
+export const getMfaRegenerateBackupCodesMockHandler = (overrideResponse?: MfaRegenerateResponse | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<MfaRegenerateResponse> | MfaRegenerateResponse), options?: RequestHandlerOptions) => {
+  return http.post('*/mfa/backup-codes/regenerate', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getMfaRegenerateBackupCodesResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
+export const getMfaTOTPDeleteMockHandler = (overrideResponse?: MfaMessageResponse | ((info: Parameters<Parameters<typeof http.delete>[1]>[0]) => Promise<MfaMessageResponse> | MfaMessageResponse), options?: RequestHandlerOptions) => {
+  return http.delete('*/mfa/totp', async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getMfaTOTPDeleteResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
+export const getMfaTOTPConfirmMockHandler = (overrideResponse?: MfaMessageResponse | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<MfaMessageResponse> | MfaMessageResponse), options?: RequestHandlerOptions) => {
+  return http.post('*/mfa/totp/confirm', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getMfaTOTPConfirmResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
+export const getMfaTOTPSetupMockHandler = (overrideResponse?: MfaSetupResponse | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<MfaSetupResponse> | MfaSetupResponse), options?: RequestHandlerOptions) => {
+  return http.post('*/mfa/totp/setup', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getMfaTOTPSetupResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
+export const getMfaVerifyMockHandler = (overrideResponse?: MfaVerifyResponse | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<MfaVerifyResponse> | MfaVerifyResponse), options?: RequestHandlerOptions) => {
+  return http.post('*/mfa/verify', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getMfaVerifyResponseMock(),
       { status: 200
       })
   }, options)
@@ -2663,6 +3509,100 @@ export const getOauthListAccountsMockHandler = (overrideResponse?: OauthListAcco
     return HttpResponse.json(overrideResponse !== undefined
     ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
     : getOauthListAccountsResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
+export const getOauth2AuthorizeMockHandler = (overrideResponse?: Oauth2AuthorizeRedirect | Oauth2ConsentPayload | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<Oauth2AuthorizeRedirect | Oauth2ConsentPayload> | Oauth2AuthorizeRedirect | Oauth2ConsentPayload), options?: RequestHandlerOptions) => {
+  return http.get('*/oauth/authorize', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getOauth2AuthorizeResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
+export const getOauth2AuthorizePostMockHandler = (overrideResponse?: void | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<void> | void), options?: RequestHandlerOptions) => {
+  return http.post('*/oauth/authorize', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+  if (typeof overrideResponse === 'function') {await overrideResponse(info); }
+
+    return new HttpResponse(null,
+      { status: 200
+      })
+  }, options)
+}
+
+export const getOauth2DeviceVerifyGetMockHandler = (overrideResponse?: void | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<void> | void), options?: RequestHandlerOptions) => {
+  return http.get('*/oauth/device', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+  if (typeof overrideResponse === 'function') {await overrideResponse(info); }
+
+    return new HttpResponse(null,
+      { status: 200
+      })
+  }, options)
+}
+
+export const getOauth2DeviceVerifyMockHandler = (overrideResponse?: void | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<void> | void), options?: RequestHandlerOptions) => {
+  return http.post('*/oauth/device', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+  if (typeof overrideResponse === 'function') {await overrideResponse(info); }
+
+    return new HttpResponse(null,
+      { status: 200
+      })
+  }, options)
+}
+
+export const getOauth2DeviceAuthorizationMockHandler = (overrideResponse?: void | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<void> | void), options?: RequestHandlerOptions) => {
+  return http.post('*/oauth/device/code', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+  if (typeof overrideResponse === 'function') {await overrideResponse(info); }
+
+    return new HttpResponse(null,
+      { status: 200
+      })
+  }, options)
+}
+
+export const getOauth2IntrospectMockHandler = (overrideResponse?: void | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<void> | void), options?: RequestHandlerOptions) => {
+  return http.post('*/oauth/introspect', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+  if (typeof overrideResponse === 'function') {await overrideResponse(info); }
+
+    return new HttpResponse(null,
+      { status: 200
+      })
+  }, options)
+}
+
+export const getOauth2DynamicClientRegisterMockHandler = (overrideResponse?: Oauth2RegisterResponse | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<Oauth2RegisterResponse> | Oauth2RegisterResponse), options?: RequestHandlerOptions) => {
+  return http.post('*/oauth/register', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getOauth2DynamicClientRegisterResponseMock(),
+      { status: 201
+      })
+  }, options)
+}
+
+export const getOauth2RevokeMockHandler = (overrideResponse?: void | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<void> | void), options?: RequestHandlerOptions) => {
+  return http.post('*/oauth/revoke', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+  if (typeof overrideResponse === 'function') {await overrideResponse(info); }
+
+    return new HttpResponse(null,
+      { status: 200
+      })
+  }, options)
+}
+
+export const getOauth2TokenMockHandler = (overrideResponse?: void | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<void> | void), options?: RequestHandlerOptions) => {
+  return http.post('*/oauth/token', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+  if (typeof overrideResponse === 'function') {await overrideResponse(info); }
+
+    return new HttpResponse(null,
       { status: 200
       })
   }, options)
@@ -2700,6 +3640,18 @@ export const getOauthCallbackMockHandler = (overrideResponse?: OauthCallbackResp
   }, options)
 }
 
+export const getOauthCallbackPostMockHandler = (overrideResponse?: OauthCallbackResponse | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<OauthCallbackResponse> | OauthCallbackResponse), options?: RequestHandlerOptions) => {
+  return http.post('*/oauth/:provider/callback', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getOauthCallbackPostResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
 export const getOauthLinkMockHandler = (overrideResponse?: OauthLinkResponse | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<OauthLinkResponse> | OauthLinkResponse), options?: RequestHandlerOptions) => {
   return http.post('*/oauth/:provider/link', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
 
@@ -2707,18 +3659,6 @@ export const getOauthLinkMockHandler = (overrideResponse?: OauthLinkResponse | (
     return HttpResponse.json(overrideResponse !== undefined
     ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
     : getOauthLinkResponseMock(),
-      { status: 200
-      })
-  }, options)
-}
-
-export const getOauth2AuthorizeMockHandler = (overrideResponse?: Oauth2AuthorizeRedirect | Oauth2ConsentPayload | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<Oauth2AuthorizeRedirect | Oauth2ConsentPayload> | Oauth2AuthorizeRedirect | Oauth2ConsentPayload), options?: RequestHandlerOptions) => {
-  return http.get('*/oauth2/authorize', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
-
-
-    return HttpResponse.json(overrideResponse !== undefined
-    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
-    : getOauth2AuthorizeResponseMock(),
       { status: 200
       })
   }, options)
@@ -2794,44 +3734,8 @@ export const getOauth2ConsentMockHandler = (overrideResponse?: Oauth2AuthorizeRe
   }, options)
 }
 
-export const getOauth2DeviceVerifyMockHandler = (overrideResponse?: Oauth2DeviceVerifyResponse | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<Oauth2DeviceVerifyResponse> | Oauth2DeviceVerifyResponse), options?: RequestHandlerOptions) => {
-  return http.post('*/oauth2/device', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
-
-
-    return HttpResponse.json(overrideResponse !== undefined
-    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
-    : getOauth2DeviceVerifyResponseMock(),
-      { status: 200
-      })
-  }, options)
-}
-
-export const getOauth2DeviceAuthorizationMockHandler = (overrideResponse?: Oauth2DeviceAuthResponse | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<Oauth2DeviceAuthResponse> | Oauth2DeviceAuthResponse), options?: RequestHandlerOptions) => {
-  return http.post('*/oauth2/device_authorization', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
-
-
-    return HttpResponse.json(overrideResponse !== undefined
-    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
-    : getOauth2DeviceAuthorizationResponseMock(),
-      { status: 200
-      })
-  }, options)
-}
-
-export const getOauth2IntrospectMockHandler = (overrideResponse?: Oauth2IntrospectResponse | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<Oauth2IntrospectResponse> | Oauth2IntrospectResponse), options?: RequestHandlerOptions) => {
-  return http.post('*/oauth2/introspect', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
-
-
-    return HttpResponse.json(overrideResponse !== undefined
-    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
-    : getOauth2IntrospectResponseMock(),
-      { status: 200
-      })
-  }, options)
-}
-
-export const getOauth2RevokeMockHandler = (overrideResponse?: void | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<void> | void), options?: RequestHandlerOptions) => {
-  return http.post('*/oauth2/revoke', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+export const getPasskeyLoginBeginMockHandler = (overrideResponse?: void | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<void> | void), options?: RequestHandlerOptions) => {
+  return http.post('*/passkey/login/begin', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
   if (typeof overrideResponse === 'function') {await overrideResponse(info); }
 
     return new HttpResponse(null,
@@ -2840,37 +3744,11 @@ export const getOauth2RevokeMockHandler = (overrideResponse?: void | ((info: Par
   }, options)
 }
 
-export const getOauth2TokenMockHandler = (overrideResponse?: Oauth2TokenResponse | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<Oauth2TokenResponse> | Oauth2TokenResponse), options?: RequestHandlerOptions) => {
-  return http.post('*/oauth2/token', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
-
-
-    return HttpResponse.json(overrideResponse !== undefined
-    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
-    : getOauth2TokenResponseMock(),
-      { status: 200
-      })
-  }, options)
-}
-
-export const getPasskeyLoginBeginMockHandler = (overrideResponse?: PasskeyLoginBeginResponse | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<PasskeyLoginBeginResponse> | PasskeyLoginBeginResponse), options?: RequestHandlerOptions) => {
-  return http.post('*/passkey/login/begin', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
-
-
-    return HttpResponse.json(overrideResponse !== undefined
-    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
-    : getPasskeyLoginBeginResponseMock(),
-      { status: 200
-      })
-  }, options)
-}
-
-export const getPasskeyLoginFinishMockHandler = (overrideResponse?: PasskeyLoginFinishResponse | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<PasskeyLoginFinishResponse> | PasskeyLoginFinishResponse), options?: RequestHandlerOptions) => {
+export const getPasskeyLoginFinishMockHandler = (overrideResponse?: void | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<void> | void), options?: RequestHandlerOptions) => {
   return http.post('*/passkey/login/finish', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+  if (typeof overrideResponse === 'function') {await overrideResponse(info); }
 
-
-    return HttpResponse.json(overrideResponse !== undefined
-    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
-    : getPasskeyLoginFinishResponseMock(),
+    return new HttpResponse(null,
       { status: 200
       })
   }, options)
@@ -2888,25 +3766,21 @@ export const getPasskeyListMockHandler = (overrideResponse?: PasskeyListResponse
   }, options)
 }
 
-export const getPasskeyRegisterBeginMockHandler = (overrideResponse?: PasskeyRegisterBeginResponse | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<PasskeyRegisterBeginResponse> | PasskeyRegisterBeginResponse), options?: RequestHandlerOptions) => {
+export const getPasskeyRegisterBeginMockHandler = (overrideResponse?: void | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<void> | void), options?: RequestHandlerOptions) => {
   return http.post('*/passkeys/register/begin', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+  if (typeof overrideResponse === 'function') {await overrideResponse(info); }
 
-
-    return HttpResponse.json(overrideResponse !== undefined
-    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
-    : getPasskeyRegisterBeginResponseMock(),
+    return new HttpResponse(null,
       { status: 200
       })
   }, options)
 }
 
-export const getPasskeyRegisterFinishMockHandler = (overrideResponse?: PasskeyRegisterFinishResponse | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<PasskeyRegisterFinishResponse> | PasskeyRegisterFinishResponse), options?: RequestHandlerOptions) => {
+export const getPasskeyRegisterFinishMockHandler = (overrideResponse?: void | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<void> | void), options?: RequestHandlerOptions) => {
   return http.post('*/passkeys/register/finish', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+  if (typeof overrideResponse === 'function') {await overrideResponse(info); }
 
-
-    return HttpResponse.json(overrideResponse !== undefined
-    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
-    : getPasskeyRegisterFinishResponseMock(),
+    return new HttpResponse(null,
       { status: 201
       })
   }, options)
@@ -2930,6 +3804,30 @@ export const getEmailPasswordRegisterMockHandler = (overrideResponse?: EmailPass
     ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
     : getEmailPasswordRegisterResponseMock(),
       { status: 201
+      })
+  }, options)
+}
+
+export const getEmailPasswordResendVerificationMockHandler = (overrideResponse?: EmailResendVerificationResponse | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<EmailResendVerificationResponse> | EmailResendVerificationResponse), options?: RequestHandlerOptions) => {
+  return http.post('*/resend-verification', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getEmailPasswordResendVerificationResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
+export const getEmailPasswordResetPasswordMockHandler = (overrideResponse?: EmailResetPasswordResponse | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<EmailResetPasswordResponse> | EmailResetPasswordResponse), options?: RequestHandlerOptions) => {
+  return http.post('*/reset-password', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getEmailPasswordResetPasswordResponseMock(),
+      { status: 200
       })
   }, options)
 }
@@ -2992,81 +3890,23 @@ export const getBearerRevokeMockHandler = (overrideResponse?: void | ((info: Par
   }, options)
 }
 
-export const getMfaTOTPDeleteMockHandler = (overrideResponse?: void | ((info: Parameters<Parameters<typeof http.delete>[1]>[0]) => Promise<void> | void), options?: RequestHandlerOptions) => {
-  return http.delete('*/totp', async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
-  if (typeof overrideResponse === 'function') {await overrideResponse(info); }
-
-    return new HttpResponse(null,
-      { status: 204
-      })
-  }, options)
-}
-
-export const getMfaTOTPConfirmMockHandler = (overrideResponse?: void | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<void> | void), options?: RequestHandlerOptions) => {
-  return http.post('*/totp/confirm', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
-  if (typeof overrideResponse === 'function') {await overrideResponse(info); }
-
-    return new HttpResponse(null,
-      { status: 204
-      })
-  }, options)
-}
-
-export const getMfaTOTPSetupMockHandler = (overrideResponse?: MfaSetupResponse | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<MfaSetupResponse> | MfaSetupResponse), options?: RequestHandlerOptions) => {
-  return http.post('*/totp/setup', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
-
-
-    return HttpResponse.json(overrideResponse !== undefined
-    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
-    : getMfaTOTPSetupResponseMock(),
-      { status: 200
-      })
-  }, options)
-}
-
-export const getLockoutUnlockMockHandler = (overrideResponse?: LockoutUnlockResponse | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<LockoutUnlockResponse> | LockoutUnlockResponse), options?: RequestHandlerOptions) => {
-  return http.post('*/unlock', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
-
-
-    return HttpResponse.json(overrideResponse !== undefined
-    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
-    : getLockoutUnlockResponseMock(),
-      { status: 200
-      })
-  }, options)
-}
-
-export const getLockoutUnlockRequestMockHandler = (overrideResponse?: LockoutUnlockReqResponse | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<LockoutUnlockReqResponse> | LockoutUnlockReqResponse), options?: RequestHandlerOptions) => {
-  return http.post('*/unlock/request', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
-
-
-    return HttpResponse.json(overrideResponse !== undefined
-    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
-    : getLockoutUnlockRequestResponseMock(),
-      { status: 200
-      })
-  }, options)
-}
-
-export const getOidcUserInfoMockHandler = (overrideResponse?: OidcUserInfoResponse | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<OidcUserInfoResponse> | OidcUserInfoResponse), options?: RequestHandlerOptions) => {
+export const getOidcUserInfoMockHandler = (overrideResponse?: void | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<void> | void), options?: RequestHandlerOptions) => {
   return http.get('*/userinfo', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+  if (typeof overrideResponse === 'function') {await overrideResponse(info); }
 
-
-    return HttpResponse.json(overrideResponse !== undefined
-    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
-    : getOidcUserInfoResponseMock(),
+    return new HttpResponse(null,
       { status: 200
       })
   }, options)
 }
 
-export const getMfaVerifyMockHandler = (overrideResponse?: MfaVerifyResponse | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<MfaVerifyResponse> | MfaVerifyResponse), options?: RequestHandlerOptions) => {
-  return http.post('*/verify', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+export const getEmailPasswordVerifyEmailMockHandler = (overrideResponse?: EmailVerifyResponse | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<EmailVerifyResponse> | EmailVerifyResponse), options?: RequestHandlerOptions) => {
+  return http.post('*/verify-email', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
 
 
     return HttpResponse.json(overrideResponse !== undefined
     ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
-    : getMfaVerifyResponseMock(),
+    : getEmailPasswordVerifyEmailResponseMock(),
       { status: 200
       })
   }, options)
@@ -3106,7 +3946,7 @@ export const getWebhookDeleteMockHandler = (overrideResponse?: void | ((info: Pa
   }, options)
 }
 
-export const getWebhookGetMockHandler = (overrideResponse?: WebhookJSON | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<WebhookJSON> | WebhookJSON), options?: RequestHandlerOptions) => {
+export const getWebhookGetMockHandler = (overrideResponse?: WebhookShowResponse | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<WebhookShowResponse> | WebhookShowResponse), options?: RequestHandlerOptions) => {
   return http.get('*/webhooks/:id', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
 
 
@@ -3125,6 +3965,18 @@ export const getWebhookUpdateMockHandler = (overrideResponse?: WebhookJSON | ((i
     return HttpResponse.json(overrideResponse !== undefined
     ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
     : getWebhookUpdateResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
+export const getWebhookPutMockHandler = (overrideResponse?: WebhookJSON | ((info: Parameters<Parameters<typeof http.put>[1]>[0]) => Promise<WebhookJSON> | WebhookJSON), options?: RequestHandlerOptions) => {
+  return http.put('*/webhooks/:id', async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getWebhookPutResponseMock(),
       { status: 200
       })
   }, options)
@@ -3149,49 +4001,68 @@ export const getWebhookTestMockHandler = (overrideResponse?: WebhookTestResponse
     return HttpResponse.json(overrideResponse !== undefined
     ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
     : getWebhookTestResponseMock(),
-      { status: 202
+      { status: 200
       })
   }, options)
 }
 export const getYauthGoMock = () => [
   getAsymJWKSMockHandler(),
+  getOauth2AuthServerMetadataMockHandler(),
   getOidcDiscoveryMockHandler(),
+  getLockoutUnlockRequestMockHandler(),
+  getLockoutUnlockMockHandler(),
   getAdminListAuditMockHandler(),
+  getAdminListSessionsMockHandler(),
+  getAdminDeleteSessionMockHandler(),
   getAdminListUsersMockHandler(),
+  getAdminDeleteUserMockHandler(),
   getAdminGetUserMockHandler(),
   getAdminPatchUserMockHandler(),
+  getAdminPutUserMockHandler(),
   getAdminBanUserMockHandler(),
   getAdminImpersonateMockHandler(),
   getAdminDeleteUserSessionsMockHandler(),
   getAdminUnbanUserMockHandler(),
+  getLockoutAdminUnlockMockHandler(),
   getApiKeyListMockHandler(),
   getApiKeyCreateMockHandler(),
   getApiKeyDeleteMockHandler(),
-  getMfaBackupCodesCountMockHandler(),
-  getMfaRegenerateBackupCodesMockHandler(),
   getEmailPasswordChangePasswordMockHandler(),
+  getConfigMockHandler(),
+  getEmailPasswordForgotPasswordMockHandler(),
   getLockoutStateMockHandler(),
   getEmailPasswordLoginMockHandler(),
   getEmailPasswordLogoutMockHandler(),
   getMagicLinkSendMockHandler(),
   getMagicLinkVerifyMockHandler(),
+  getEmailPasswordPatchMeMockHandler(),
+  getMfaBackupCodesCountMockHandler(),
+  getMfaRegenerateBackupCodesMockHandler(),
+  getMfaTOTPDeleteMockHandler(),
+  getMfaTOTPConfirmMockHandler(),
+  getMfaTOTPSetupMockHandler(),
+  getMfaVerifyMockHandler(),
   getOauthListAccountsMockHandler(),
+  getOauth2AuthorizeMockHandler(),
+  getOauth2AuthorizePostMockHandler(),
+  getOauth2DeviceVerifyGetMockHandler(),
+  getOauth2DeviceVerifyMockHandler(),
+  getOauth2DeviceAuthorizationMockHandler(),
+  getOauth2IntrospectMockHandler(),
+  getOauth2DynamicClientRegisterMockHandler(),
+  getOauth2RevokeMockHandler(),
+  getOauth2TokenMockHandler(),
   getOauthUnlinkMockHandler(),
   getOauthAuthorizeMockHandler(),
   getOauthCallbackMockHandler(),
+  getOauthCallbackPostMockHandler(),
   getOauthLinkMockHandler(),
-  getOauth2AuthorizeMockHandler(),
   getOauth2ListBannedClientsMockHandler(),
   getOauth2CreateClientMockHandler(),
   getOauth2DeleteClientMockHandler(),
   getOauth2GetClientMockHandler(),
   getOauth2PatchClientMockHandler(),
   getOauth2ConsentMockHandler(),
-  getOauth2DeviceVerifyMockHandler(),
-  getOauth2DeviceAuthorizationMockHandler(),
-  getOauth2IntrospectMockHandler(),
-  getOauth2RevokeMockHandler(),
-  getOauth2TokenMockHandler(),
   getPasskeyLoginBeginMockHandler(),
   getPasskeyLoginFinishMockHandler(),
   getPasskeyListMockHandler(),
@@ -3199,23 +4070,21 @@ export const getYauthGoMock = () => [
   getPasskeyRegisterFinishMockHandler(),
   getPasskeyDeleteMockHandler(),
   getEmailPasswordRegisterMockHandler(),
+  getEmailPasswordResendVerificationMockHandler(),
+  getEmailPasswordResetPasswordMockHandler(),
   getEmailPasswordSessionMockHandler(),
   getStatusMockHandler(),
   getBearerIssueTokenMockHandler(),
   getBearerRefreshMockHandler(),
   getBearerRevokeMockHandler(),
-  getMfaTOTPDeleteMockHandler(),
-  getMfaTOTPConfirmMockHandler(),
-  getMfaTOTPSetupMockHandler(),
-  getLockoutUnlockMockHandler(),
-  getLockoutUnlockRequestMockHandler(),
   getOidcUserInfoMockHandler(),
-  getMfaVerifyMockHandler(),
+  getEmailPasswordVerifyEmailMockHandler(),
   getWebhookListMockHandler(),
   getWebhookCreateMockHandler(),
   getWebhookDeleteMockHandler(),
   getWebhookGetMockHandler(),
   getWebhookUpdateMockHandler(),
+  getWebhookPutMockHandler(),
   getWebhookListDeliveriesMockHandler(),
   getWebhookTestMockHandler()
 ]

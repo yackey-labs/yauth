@@ -10,6 +10,7 @@
 //	POST   {prefix}/webhooks                — create webhook (one-time secret in response)
 //	GET    {prefix}/webhooks/{id}           — fetch one webhook
 //	PATCH  {prefix}/webhooks/{id}           — update url/events/active, optionally rotate secret
+//	PUT    {prefix}/webhooks/{id}           — alias for PATCH (Rust parity)
 //	DELETE {prefix}/webhooks/{id}           — delete webhook
 //	GET    {prefix}/webhooks/{id}/deliveries — recent delivery attempts
 //	POST   {prefix}/webhooks/{id}/test      — fire a synthetic webhook.test event
@@ -159,6 +160,7 @@ func (p *webhooksPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux, pref
 	mux.Handle("POST "+prefix+"/webhooks", mw.RequireAdmin(http.HandlerFunc(p.handleCreate(host))))
 	mux.Handle("GET "+prefix+"/webhooks/{id}", mw.RequireAdmin(http.HandlerFunc(p.handleGet(host))))
 	mux.Handle("PATCH "+prefix+"/webhooks/{id}", mw.RequireAdmin(http.HandlerFunc(p.handleUpdate(host))))
+	mux.Handle("PUT "+prefix+"/webhooks/{id}", mw.RequireAdmin(http.HandlerFunc(p.handleUpdate(host))))
 	mux.Handle("DELETE "+prefix+"/webhooks/{id}", mw.RequireAdmin(http.HandlerFunc(p.handleDelete(host))))
 	mux.Handle("GET "+prefix+"/webhooks/{id}/deliveries", mw.RequireAdmin(http.HandlerFunc(p.handleDeliveries(host))))
 	mux.Handle("POST "+prefix+"/webhooks/{id}/test", mw.RequireAdmin(http.HandlerFunc(p.handleTest(host))))

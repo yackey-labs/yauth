@@ -204,7 +204,7 @@ func TestUnlock_TokenClearsLock(t *testing.T) {
 	res.Body.Close()
 
 	// Request an unlock token.
-	res = postJSON(t, c, srv.URL+"/api/auth/unlock/request", map[string]string{
+	res = postJSON(t, c, srv.URL+"/api/auth/account/request-unlock", map[string]string{
 		"email": email,
 	})
 	if res.StatusCode != http.StatusOK {
@@ -216,7 +216,7 @@ func TestUnlock_TokenClearsLock(t *testing.T) {
 		t.Fatalf("no token in unlock email")
 	}
 
-	res = postJSON(t, c, srv.URL+"/api/auth/unlock", map[string]string{
+	res = postJSON(t, c, srv.URL+"/api/auth/account/unlock", map[string]string{
 		"token": tok,
 	})
 	if res.StatusCode != http.StatusOK {
@@ -241,7 +241,7 @@ func TestUnlockRequest_UnknownEmail_200_NoSend(t *testing.T) {
 	srv, mailer, stop := newServer(t, lockout.Config{})
 	defer stop()
 	c := &http.Client{}
-	res := postJSON(t, c, srv.URL+"/api/auth/unlock/request", map[string]string{
+	res := postJSON(t, c, srv.URL+"/api/auth/account/request-unlock", map[string]string{
 		"email": "ghost@example.com",
 	})
 	if res.StatusCode != http.StatusOK {
@@ -332,13 +332,13 @@ func TestLockout_AutoUnlockFalseRequiresExplicitUnlock(t *testing.T) {
 	res.Body.Close()
 
 	// Explicit /unlock token clears the lock.
-	res = postJSON(t, c, srv.URL+"/api/auth/unlock/request", map[string]string{"email": email})
+	res = postJSON(t, c, srv.URL+"/api/auth/account/request-unlock", map[string]string{"email": email})
 	res.Body.Close()
 	tok := tokenFromLink(mailer.lastLink())
 	if tok == "" {
 		t.Fatalf("no unlock token issued")
 	}
-	res = postJSON(t, c, srv.URL+"/api/auth/unlock", map[string]string{"token": tok})
+	res = postJSON(t, c, srv.URL+"/api/auth/account/unlock", map[string]string{"token": tok})
 	res.Body.Close()
 
 	res = postJSON(t, c, srv.URL+"/api/auth/login", map[string]string{

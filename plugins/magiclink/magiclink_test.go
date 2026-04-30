@@ -178,7 +178,9 @@ func TestVerify_SignupEnabled_CreatesUserAndIssuesSession(t *testing.T) {
 		t.Fatalf("verify: expected 200, got %d (%s)", res.StatusCode, drain(res))
 	}
 	var body struct {
-		User struct{ Email string } `json:"user"`
+		User struct {
+			Email string `json:"email"`
+		} `json:"user"`
 	}
 	_ = json.NewDecoder(res.Body).Decode(&body)
 	res.Body.Close()

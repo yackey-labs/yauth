@@ -7,17 +7,21 @@ the Rust (yauth) spec against the Go (yauth-go) spec.
 Findings are categorised:
 
 - BREAKING: a path exists in Rust but not in Go (Go is missing a route the
-  Rust crate publishes — a real divergence).
+  Rust crate publishes — a real divergence in feature coverage).
 - MISSING : a path+method (operation) exists in Rust but not in Go.
 - SHAPE   : top-level request or response schema fields differ between the
-  two specs for the same operation.
+  two specs for the same operation. Informational only — yauth-go intentionally
+  diverges on shape decisions (e.g. wrapped pagination metadata over bare
+  arrays, {user: {...}} envelopes for forward compatibility). Feature parity
+  is required; shape parity is not.
 - DOC     : description/summary-only differences (informational).
 
 Anything in Go that is not in Rust is *not* a breaking finding — yauth-go is
 intentionally a "Go superset" and may add routes the Rust crate has not
 shipped yet. Those show up as INFO entries so reviewers can see the delta.
 
-Exit code is non-zero iff any BREAKING or MISSING gap is found.
+Exit code is non-zero iff any BREAKING or MISSING gap is found. SHAPE
+divergences are reported but do not fail the check.
 
 Usage:
     python3 scripts/openapi-diff.py <rust-openapi.json> <go-openapi.json>
@@ -149,8 +153,13 @@ def diff_specs(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Return (must_findings, info_findings).
 
-    must_findings  -> drive non-zero exit (BREAKING, MISSING, SHAPE).
-    info_findings  -> reported but not failing (DOC, Go-extra).
+    must_findings  -> drive non-zero exit (BREAKING, MISSING).
+    info_findings  -> reported but not failing (SHAPE, DOC, Go-extra).
+
+    SHAPE divergences are reported as informational because yauth-go
+    intentionally diverges on shape decisions (wrapped pagination over
+    bare arrays, {user: {...}} envelopes, etc.) for forward
+    compatibility. Feature parity is required; shape parity is not.
     """
     must: list[dict[str, Any]] = []
     info: list[dict[str, Any]] = []
@@ -216,7 +225,7 @@ def diff_specs(
             only_rust = rust_req - go_req
             only_go = go_req - rust_req
             if only_rust or only_go:
-                must.append(
+                info.append(
                     {
                         "category": "SHAPE",
                         "path": path,
@@ -233,7 +242,7 @@ def diff_specs(
             only_rust = rust_resp - go_resp
             only_go = go_resp - rust_resp
             if only_rust or only_go:
-                must.append(
+                info.append(
                     {
                         "category": "SHAPE",
                         "path": path,
@@ -289,7 +298,7 @@ def render_report(
 
     breaking = [f for f in must if f["category"] == "BREAKING"]
     missing = [f for f in must if f["category"] == "MISSING"]
-    shape = [f for f in must if f["category"] == "SHAPE"]
+    shape = [f for f in info if f["category"] == "SHAPE"]
     go_extra = [f for f in info if f["category"] == "GO-EXTRA"]
     doc = [f for f in info if f["category"] == "DOC"]
 
@@ -297,7 +306,7 @@ def render_report(
     lines.append("")
     lines.append(f"- BREAKING (path missing in Go): **{len(breaking)}**")
     lines.append(f"- MISSING (operation missing in Go): **{len(missing)}**")
-    lines.append(f"- SHAPE (request/response field divergence): **{len(shape)}**")
+    lines.append(f"- SHAPE (request/response field divergence, informational): **{len(shape)}**")
     lines.append(f"- DOC (description-only diffs): **{len(doc)}**")
     lines.append(f"- GO-EXTRA (Go-only routes/operations, informational): **{len(go_extra)}**")
     lines.append("")

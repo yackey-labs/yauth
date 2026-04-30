@@ -7,9 +7,10 @@
 //
 // Routes registered by Plugin.Routes (relative to the prefix passed in):
 //
-//	POST {prefix}/unlock          — exchange a single-use unlock token
-//	POST {prefix}/unlock/request  — email a fresh unlock token
-//	GET  {prefix}/lockout/state   — admin: list currently locked accounts
+//	POST {prefix}/account/unlock                — exchange a single-use unlock token
+//	POST {prefix}/account/request-unlock        — email a fresh unlock token
+//	POST {prefix}/admin/users/{id}/unlock       — admin: force-unlock a user
+//	GET  {prefix}/lockout/state                 — admin: list currently locked accounts
 package lockout
 
 import (
@@ -131,7 +132,8 @@ func (p *lockoutPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux, prefi
 	host.RegisterEventHandler(&loginEventHandler{cfg: p.cfg, host: host})
 
 	mw := host.Middleware()
-	mux.Handle("POST "+prefix+"/unlock", http.HandlerFunc(p.handleUnlock(host)))
-	mux.Handle("POST "+prefix+"/unlock/request", http.HandlerFunc(p.handleUnlockRequest(host)))
+	mux.Handle("POST "+prefix+"/account/unlock", http.HandlerFunc(p.handleUnlock(host)))
+	mux.Handle("POST "+prefix+"/account/request-unlock", http.HandlerFunc(p.handleUnlockRequest(host)))
+	mux.Handle("POST "+prefix+"/admin/users/{id}/unlock", mw.RequireAdmin(http.HandlerFunc(p.handleAdminUnlock(host))))
 	mux.Handle("GET "+prefix+"/lockout/state", mw.RequireAdmin(http.HandlerFunc(p.handleLockoutState(host))))
 }

@@ -282,14 +282,14 @@ func TestOAuthEndToEnd_NewUser(t *testing.T) {
 		t.Fatalf("accounts: %d (%s)", res3.StatusCode, drainBody(res3))
 	}
 	var ar struct {
-		Accounts []struct {
+		Items []struct {
 			Provider       string `json:"provider"`
 			ProviderUserID string `json:"provider_user_id"`
-		} `json:"accounts"`
+		} `json:"items"`
 	}
 	_ = json.NewDecoder(res3.Body).Decode(&ar)
 	res3.Body.Close()
-	if len(ar.Accounts) != 1 || ar.Accounts[0].Provider != "fake" || ar.Accounts[0].ProviderUserID != "remote-1" {
+	if len(ar.Items) != 1 || ar.Items[0].Provider != "fake" || ar.Items[0].ProviderUserID != "remote-1" {
 		t.Fatalf("accounts: %+v", ar)
 	}
 

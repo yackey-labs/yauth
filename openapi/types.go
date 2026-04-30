@@ -52,16 +52,36 @@ type adminUserJSON struct {
 
 // --- email-password ---------------------------------------------------
 
-type emailPasswordRegisterRequest struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
+// sessionUserJSON is the flat user shape returned by /session, /me and
+// the various login endpoints. Mirrors the Rust spec.
+type sessionUserJSON struct {
+	ID            string   `json:"id"`
+	Email         string   `json:"email"`
+	DisplayName   *string  `json:"display_name,omitempty"`
+	EmailVerified bool     `json:"email_verified"`
+	Role          string   `json:"role"`
+	Banned        bool     `json:"banned"`
+	AuthMethod    string   `json:"auth_method"`
+	Scopes        []string `json:"scopes"`
 }
+
+type emailPasswordRegisterRequest struct {
+	Email       string  `json:"email"`
+	Password    string  `json:"password"`
+	DisplayName *string `json:"display_name,omitempty"`
+}
+// emailPasswordRegisterResponse returns either the user (when no email
+// verification is required) or a {message} prompt directing the caller
+// to check their inbox. The User pointer is omitted when only the
+// message applies.
 type emailPasswordRegisterResponse struct {
-	User userJSON `json:"user"`
+	User    *userJSON `json:"user,omitempty"`
+	Message string    `json:"message,omitempty"`
 }
 type emailPasswordLoginRequest struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
+	Email      string `json:"email"`
+	Password   string `json:"password"`
+	RememberMe bool   `json:"remember_me,omitempty"`
 }
 type emailPasswordLoginResponse struct {
 	User userJSON `json:"user"`
@@ -70,23 +90,61 @@ type emailPasswordLoginMfaResponse struct {
 	RequireMfa       bool   `json:"require_mfa"`
 	PendingSessionID string `json:"pending_session_id"`
 }
+
+// emailPasswordSessionResponse wraps the session user under `user` so
+// session metadata (expires_at, last_seen_at) can be added later
+// without breaking clients.
 type emailPasswordSessionResponse struct {
-	User      userJSON  `json:"user"`
-	ExpiresAt time.Time `json:"expires_at"`
+	User      sessionUserJSON `json:"user"`
+	ExpiresAt *time.Time      `json:"expires_at,omitempty"`
 }
 type emailPasswordChangePasswordRequest struct {
-	OldPassword string `json:"old_password"`
-	NewPassword string `json:"new_password"`
+	CurrentPassword string `json:"current_password"`
+	NewPassword     string `json:"new_password"`
+}
+type emailPasswordChangePasswordResponse struct {
+	Message string `json:"message"`
 }
 
 type emailPasswordPatchMeRequest struct {
 	DisplayName *string `json:"display_name,omitempty"`
 }
 
+// emailPasswordPatchMeResponse returns the updated user wrapped under
+// `user` so additional metadata fields can be added non-breakingly.
 type emailPasswordPatchMeResponse struct {
-	User userJSON `json:"user"`
+	User sessionUserJSON `json:"user"`
 }
 
+// --- email verification + password reset extras ---
+
+type emailVerifyRequest struct {
+	Token string `json:"token"`
+}
+type emailVerifyResponse struct {
+	Message string `json:"message"`
+}
+type emailResendVerificationRequest struct {
+	Email string `json:"email"`
+}
+type emailResendVerificationResponse struct {
+	Message string `json:"message"`
+}
+type emailForgotPasswordRequest struct {
+	Email string `json:"email"`
+}
+type emailForgotPasswordResponse struct {
+	Message string `json:"message"`
+}
+type emailResetPasswordRequest struct {
+	Token    string `json:"token"`
+	Password string `json:"password"`
+}
+type emailResetPasswordResponse struct {
+	Message string `json:"message"`
+}
+
+// oauth2RegisterRequest mirrors RFC 7591 §2 dynamic client registration.
 type oauth2RegisterRequest struct {
 	RedirectURIs            []string `json:"redirect_uris"`
 	ClientName              string   `json:"client_name,omitempty"`
@@ -97,6 +155,9 @@ type oauth2RegisterRequest struct {
 	JWKSURI                 string   `json:"jwks_uri,omitempty"`
 }
 
+// oauth2RegisterResponse mirrors RFC 7591 §3 dynamic client registration
+// response, including the one-time client_secret (omitted for public
+// clients) and registration access token.
 type oauth2RegisterResponse struct {
 	ClientID                string   `json:"client_id"`
 	ClientSecret            string   `json:"client_secret,omitempty"`
@@ -117,6 +178,7 @@ type oauth2RegisterResponse struct {
 type bearerTokenRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
+	Scope    string `json:"scope,omitempty"`
 }
 type bearerTokenResponse struct {
 	AccessToken  string `json:"access_token"`
@@ -142,31 +204,44 @@ type apiKeyJSON struct {
 	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
 	CreatedAt  time.Time  `json:"created_at"`
 }
+// apiKeyListResponse wraps the GET /api-keys list with pagination
+// metadata. Wrapping (instead of a bare array) preserves forward
+// compatibility for adding fields later without breaking clients.
 type apiKeyListResponse struct {
-	Keys []apiKeyJSON `json:"keys"`
+	Items   []apiKeyJSON `json:"items"`
+	Total   int64        `json:"total"`
+	Page    int          `json:"page"`
+	PerPage int          `json:"per_page"`
 }
+
 type apiKeyCreateRequest struct {
-	Name      string     `json:"name"`
-	Scopes    []string   `json:"scopes,omitempty"`
-	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+	Name          string   `json:"name"`
+	Scopes        []string `json:"scopes,omitempty"`
+	ExpiresInDays *int     `json:"expires_in_days,omitempty"`
 }
+
+// apiKeyCreateResponse splits the persisted-key metadata from the
+// one-time plaintext secret so client code can't accidentally log the
+// whole envelope. The plaintext is shown ONCE (in `secret`) and is
+// unrecoverable thereafter.
 type apiKeyCreateResponse struct {
 	APIKey apiKeyJSON `json:"api_key"`
-	Key    string     `json:"key"`
+	Secret string     `json:"secret"`
 }
 
 // --- magic-link -------------------------------------------------------
 
 type magicLinkSendRequest struct {
-	Email       string `json:"email"`
-	RedirectURL string `json:"redirect_url,omitempty"`
+	Email string `json:"email"`
 }
 type magicLinkSendResponse struct {
-	Sent bool `json:"sent"`
+	Message string `json:"message"`
 }
 type magicLinkVerifyRequest struct {
 	Token string `json:"token"`
 }
+// magicLinkVerifyResponse wraps the verified user under `user`. The
+// inner shape mirrors the other auth endpoints' user representation.
 type magicLinkVerifyResponse struct {
 	User userJSON `json:"user"`
 }
@@ -177,13 +252,13 @@ type lockoutUnlockRequest struct {
 	Token string `json:"token"`
 }
 type lockoutUnlockResponse struct {
-	Unlocked bool `json:"unlocked"`
+	Message string `json:"message"`
 }
 type lockoutUnlockReqRequest struct {
 	Email string `json:"email"`
 }
 type lockoutUnlockReqResponse struct {
-	Sent bool `json:"sent"`
+	Message string `json:"message"`
 }
 type lockoutLockedAccountJSON struct {
 	UserID       string  `json:"user_id"`
@@ -204,22 +279,36 @@ type statusResponse struct {
 	Version string   `json:"version"`
 }
 
+// configResponse mirrors the Rust shape returned by GET /config: only
+// the operator-toggled flags clients need.
+type configResponse struct {
+	AllowSignups             bool `json:"allow_signups"`
+	RequireEmailVerification bool `json:"require_email_verification"`
+}
+
 // --- admin ------------------------------------------------------------
 
 type adminListUsersResponse struct {
-	Users []adminUserJSON `json:"users"`
-	Total int64           `json:"total"`
+	Users   []adminUserJSON `json:"users"`
+	Total   int64           `json:"total"`
+	Page    int             `json:"page"`
+	PerPage int             `json:"per_page"`
 }
 type adminPatchUserRequest struct {
-	DisplayName *string `json:"display_name,omitempty"`
-	Role        *string `json:"role,omitempty"`
+	DisplayName   *string `json:"display_name,omitempty"`
+	Role          *string `json:"role,omitempty"`
+	EmailVerified *bool   `json:"email_verified,omitempty"`
 }
 type adminBanRequest struct {
 	Reason string     `json:"reason"`
 	Until  *time.Time `json:"until,omitempty"`
 }
+// adminImpersonateResponse wraps the impersonated user under `user`
+// alongside the impersonator's own identity, so audit-aware clients can
+// surface "you are X impersonating Y" UI without a separate fetch.
 type adminImpersonateResponse struct {
-	User adminUserJSON `json:"user"`
+	User         adminUserJSON `json:"user"`
+	Impersonator *userJSON     `json:"impersonator,omitempty"`
 }
 type adminDeleteSessionsResponse struct {
 	Deleted int64 `json:"deleted"`
@@ -238,8 +327,28 @@ type adminListAuditResponse struct {
 	Entries []adminAuditEntryJSON `json:"entries"`
 }
 
+type adminSessionJSON struct {
+	ID        string    `json:"id"`
+	UserID    string    `json:"user_id"`
+	IPAddress *string   `json:"ip_address,omitempty"`
+	UserAgent *string   `json:"user_agent,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+type adminListSessionsResponse struct {
+	Sessions []adminSessionJSON `json:"sessions"`
+	Total    int64              `json:"total"`
+	Page     int                `json:"page"`
+	PerPage  int                `json:"per_page"`
+}
+
 // --- mfa --------------------------------------------------------------
 
+// mfaSetupResponse includes a pre-rendered qr_code (data URL) alongside
+// the otpauth_url. Many clients (especially CLI / mobile) prefer the
+// pre-rendered QR over importing a render library; the otpauth_url is
+// kept for clients that want to render their own.
 type mfaSetupResponse struct {
 	Secret      string   `json:"secret"`
 	OTPAuthURL  string   `json:"otpauth_url"`
@@ -249,8 +358,11 @@ type mfaSetupResponse struct {
 type mfaConfirmRequest struct {
 	Code string `json:"code"`
 }
+type mfaMessageResponse struct {
+	Message string `json:"message"`
+}
 type mfaBackupCodesCountResponse struct {
-	Unused int `json:"unused"`
+	Remaining int `json:"remaining"`
 }
 type mfaRegenerateResponse struct {
 	BackupCodes []string `json:"backup_codes"`
@@ -259,8 +371,10 @@ type mfaVerifyRequest struct {
 	PendingSessionID string `json:"pending_session_id"`
 	Code             string `json:"code"`
 }
+// mfaVerifyResponse wraps the verified user under `user` for forward
+// compatibility (future MFA metadata can be added at the top level).
 type mfaVerifyResponse struct {
-	UserID string `json:"user_id"`
+	User userJSON `json:"user"`
 }
 
 // --- passkey ----------------------------------------------------------
@@ -274,14 +388,12 @@ type mfaVerifyResponse struct {
 type passkeyOptions = map[string]any
 
 type passkeyRegisterBeginResponse struct {
-	RequestID string         `json:"request_id"`
-	Options   passkeyOptions `json:"options"`
+	ChallengeID string         `json:"challenge_id"`
+	Options     passkeyOptions `json:"options"`
 }
 type passkeyRegisterFinishRequest struct {
-	RequestID  string         `json:"request_id"`
 	Name       string         `json:"name,omitempty"`
-	Response   map[string]any `json:"response"`
-	DeviceName *string        `json:"device_name,omitempty"`
+	Credential map[string]any `json:"credential"`
 }
 type passkeyRegisterFinishResponse struct {
 	ID        string    `json:"id"`
@@ -292,13 +404,14 @@ type passkeyLoginBeginRequest struct {
 	Email string `json:"email,omitempty"`
 }
 type passkeyLoginBeginResponse struct {
-	RequestID string         `json:"request_id"`
-	Options   passkeyOptions `json:"options"`
+	ChallengeID string         `json:"challenge_id"`
+	Options     passkeyOptions `json:"options"`
 }
 type passkeyLoginFinishRequest struct {
-	RequestID string         `json:"request_id"`
-	Response  map[string]any `json:"response"`
+	ChallengeID string         `json:"challenge_id"`
+	Credential  map[string]any `json:"credential"`
 }
+// passkeyLoginFinishResponse wraps the authenticated user under `user`.
 type passkeyLoginFinishResponse struct {
 	User userJSON `json:"user"`
 }
@@ -310,18 +423,20 @@ type passkeyJSON struct {
 	CreatedAt  time.Time  `json:"created_at"`
 	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
 }
+
+// passkeyListResponse wraps GET /passkeys with pagination metadata.
 type passkeyListResponse struct {
-	Passkeys []passkeyJSON `json:"passkeys"`
+	Items   []passkeyJSON `json:"items"`
+	Total   int64         `json:"total"`
+	Page    int           `json:"page"`
+	PerPage int           `json:"per_page"`
 }
 
 // --- oauth ------------------------------------------------------------
 
+// oauthCallbackResponse wraps the authenticated user under `user`.
 type oauthCallbackResponse struct {
-	User struct {
-		ID    string `json:"id"`
-		Email string `json:"email"`
-	} `json:"user"`
-	Provider string `json:"provider"`
+	User userJSON `json:"user"`
 }
 type oauthAccountJSON struct {
 	Provider       string     `json:"provider"`
@@ -329,11 +444,24 @@ type oauthAccountJSON struct {
 	CreatedAt      time.Time  `json:"created_at"`
 	ExpiresAt      *time.Time `json:"expires_at,omitempty"`
 }
-type oauthListAccountsResponse struct {
-	Accounts []oauthAccountJSON `json:"accounts"`
+// oauthCallbackBody is the JSON body for POST /oauth/{provider}/callback
+// (Rust parity).
+type oauthCallbackBody struct {
+	Code  string `json:"code"`
+	State string `json:"state"`
 }
+
+// oauthListAccountsResponse wraps GET /oauth/accounts with pagination
+// metadata.
+type oauthListAccountsResponse struct {
+	Items   []oauthAccountJSON `json:"items"`
+	Total   int64              `json:"total"`
+	Page    int                `json:"page"`
+	PerPage int                `json:"per_page"`
+}
+
 type oauthLinkResponse struct {
-	AuthorizeURL string `json:"authorize_url"`
+	AuthURL string `json:"auth_url"`
 }
 
 // --- webhooks ---------------------------------------------------------
@@ -345,21 +473,26 @@ type webhookJSON struct {
 	Active    bool      `json:"active"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
-	Secret    string    `json:"secret,omitempty"`
 }
+
+// webhookListResponse wraps GET /webhooks with pagination metadata.
 type webhookListResponse struct {
-	Webhooks []webhookJSON `json:"webhooks"`
+	Items   []webhookJSON `json:"items"`
+	Total   int64         `json:"total"`
+	Page    int           `json:"page"`
+	PerPage int           `json:"per_page"`
 }
+
 type webhookCreateRequest struct {
 	URL    string   `json:"url"`
 	Events []string `json:"events"`
-	Active *bool    `json:"active,omitempty"`
+	Secret string   `json:"secret,omitempty"`
 }
 type webhookUpdateRequest struct {
-	URL          *string   `json:"url,omitempty"`
-	Events       *[]string `json:"events,omitempty"`
-	Active       *bool     `json:"active,omitempty"`
-	RotateSecret bool      `json:"rotate_secret,omitempty"`
+	URL    *string   `json:"url,omitempty"`
+	Events *[]string `json:"events,omitempty"`
+	Active *bool     `json:"active,omitempty"`
+	Secret *string   `json:"secret,omitempty"`
 }
 type webhookDeliveryJSON struct {
 	ID           string    `json:"id"`
@@ -371,12 +504,27 @@ type webhookDeliveryJSON struct {
 	Attempt      int       `json:"attempt"`
 	CreatedAt    time.Time `json:"created_at"`
 }
+
+// webhookListDeliveriesResponse wraps GET /webhooks/{id}/deliveries
+// with pagination metadata.
 type webhookListDeliveriesResponse struct {
-	Deliveries []webhookDeliveryJSON `json:"deliveries"`
+	Items   []webhookDeliveryJSON `json:"items"`
+	Total   int64                 `json:"total"`
+	Page    int                   `json:"page"`
+	PerPage int                   `json:"per_page"`
 }
+
+// webhookShowResponse used to embed recent_deliveries inline; we now
+// expose only the webhook itself and direct clients to the dedicated
+// /webhooks/{id}/deliveries endpoint for delivery history.
+type webhookShowResponse struct {
+	Webhook webhookJSON `json:"webhook"`
+}
+
+// webhookTestResponse acknowledges a queued test delivery and returns
+// the delivery ID so callers can poll /deliveries.
 type webhookTestResponse struct {
-	DeliveryQueued bool   `json:"delivery_queued"`
-	EventType      string `json:"event_type"`
+	DeliveryQueued string `json:"delivery_queued"`
 }
 
 // --- asymjwt: jwks ----------------------------------------------------

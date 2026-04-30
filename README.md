@@ -76,6 +76,33 @@ open http://localhost:3000/docs
 
 A runnable copy lives at [`examples/sqlite/main.go`](examples/sqlite/main.go).
 
+### Try it for real (Vue + Go end-to-end)
+
+`examples/vue` is a full SPA + Go backend wired together. It boots the
+in-memory SQLite repo, the email-password / status / admin plugins, and
+a Vue 3 frontend that uses `@yackey-labs/yauth-go-ui-vue` for the
+login/register/dashboard flow. See
+[`examples/vue/README.md`](examples/vue/README.md) for the walkthrough;
+the short version:
+
+```bash
+# build the workspace TS packages once
+bun install
+(cd packages/client && bun run build)
+(cd packages/shared && bun run build)
+(cd packages/ui-vue && bun run build)
+
+# terminal 1 — backend on :3000
+go run ./examples/vue/server
+
+# terminal 2 — frontend on :5173 (proxies /api → :3000)
+cd examples/vue && bun dev
+```
+
+Open <http://localhost:5173>, log in with the seeded admin
+(`admin@example.com` / `correct horse battery staple`), and watch
+`useSession()` populate the dashboard from `GET /api/auth/session`.
+
 ## How It Works
 
 **Plugins** implement `plugin.Plugin` — `Name()` and

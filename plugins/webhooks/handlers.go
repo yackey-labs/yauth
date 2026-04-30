@@ -106,8 +106,12 @@ func decodeEventsList(raw json.RawMessage) []string {
 
 // --- GET /webhooks ------------------------------------------------------
 
-type listWebhooksResponse struct {
-	Webhooks []webhookJSON `json:"webhooks"`
+// listResponse wraps GET /webhooks with pagination metadata.
+type listResponse struct {
+	Items   []webhookJSON `json:"items"`
+	Total   int64         `json:"total"`
+	Page    int           `json:"page"`
+	PerPage int           `json:"per_page"`
 }
 
 func (p *webhooksPlugin) handleList(host plugin.PluginHost) http.HandlerFunc {
@@ -117,12 +121,47 @@ func (p *webhooksPlugin) handleList(host plugin.PluginHost) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to list webhooks")
 			return
 		}
-		out := make([]webhookJSON, 0, len(hooks))
-		for _, h := range hooks {
+		page, perPage := paginationFromQuery(r)
+		total := int64(len(hooks))
+		start := (page - 1) * perPage
+		end := start + perPage
+		if start > len(hooks) {
+			start = len(hooks)
+		}
+		if end > len(hooks) {
+			end = len(hooks)
+		}
+		page1 := hooks[start:end]
+		out := make([]webhookJSON, 0, len(page1))
+		for _, h := range page1 {
 			out = append(out, toWebhookJSON(*h, false))
 		}
-		writeJSON(w, http.StatusOK, listWebhooksResponse{Webhooks: out})
+		writeJSON(w, http.StatusOK, listResponse{
+			Items:   out,
+			Total:   total,
+			Page:    page,
+			PerPage: perPage,
+		})
 	}
+}
+
+func paginationFromQuery(r *http.Request) (page, perPage int) {
+	page = 1
+	perPage = 50
+	if v := r.URL.Query().Get("page"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			page = n
+		}
+	}
+	if v := r.URL.Query().Get("per_page"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			if n > 200 {
+				n = 200
+			}
+			perPage = n
+		}
+	}
+	return page, perPage
 }
 
 // --- POST /webhooks -----------------------------------------------------
@@ -130,7 +169,10 @@ func (p *webhooksPlugin) handleList(host plugin.PluginHost) http.HandlerFunc {
 type createWebhookRequest struct {
 	URL    string   `json:"url"`
 	Events []string `json:"events"`
-	Active *bool    `json:"active"`
+	// Secret is the HMAC signing secret. When omitted a fresh random
+	// secret is generated; the operator must capture the response in
+	// either case because it is not retrievable later.
+	Secret string `json:"secret,omitempty"`
 }
 
 func (p *webhooksPlugin) handleCreate(host plugin.PluginHost) http.HandlerFunc {
@@ -155,24 +197,23 @@ func (p *webhooksPlugin) handleCreate(host plugin.PluginHost) http.HandlerFunc {
 			return
 		}
 
-		secret, err := generateSecret()
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to generate secret")
-			return
+		secret := req.Secret
+		if secret == "" {
+			s, err := generateSecret()
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to generate secret")
+				return
+			}
+			secret = s
 		}
 
 		now := time.Now().UTC()
-		active := true
-		if req.Active != nil {
-			active = *req.Active
-		}
-
 		input := domain.NewWebhook{
 			ID:        uuid.NewString(),
 			URL:       req.URL,
 			Secret:    secret,
 			Events:    eventsRaw,
-			Active:    active,
+			Active:    true,
 			CreatedAt: now,
 			UpdatedAt: now,
 		}
@@ -193,11 +234,19 @@ func (p *webhooksPlugin) handleCreate(host plugin.PluginHost) http.HandlerFunc {
 			CreatedAt: input.CreatedAt,
 			UpdatedAt: input.UpdatedAt,
 		}
-		writeJSON(w, http.StatusCreated, toWebhookJSON(created, true))
+		writeJSON(w, http.StatusCreated, toWebhookJSON(created, false))
 	}
 }
 
 // --- GET /webhooks/{id} -------------------------------------------------
+
+// webhookShowResponse returns the webhook on its own. For delivery
+// history, callers use GET /webhooks/{id}/deliveries — keeping the two
+// endpoints separate keeps response sizes predictable and lets clients
+// page deliveries independently.
+type webhookShowResponse struct {
+	Webhook webhookJSON `json:"webhook"`
+}
 
 func (p *webhooksPlugin) handleGet(host plugin.PluginHost) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -211,17 +260,22 @@ func (p *webhooksPlugin) handleGet(host plugin.PluginHost) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to load webhook")
 			return
 		}
-		writeJSON(w, http.StatusOK, toWebhookJSON(*hook, false))
+		writeJSON(w, http.StatusOK, webhookShowResponse{
+			Webhook: toWebhookJSON(*hook, false),
+		})
 	}
 }
 
 // --- PATCH /webhooks/{id} -----------------------------------------------
 
 type updateWebhookRequest struct {
-	URL          *string   `json:"url"`
-	Events       *[]string `json:"events"`
-	Active       *bool     `json:"active"`
-	RotateSecret bool      `json:"rotate_secret"`
+	URL    *string   `json:"url"`
+	Events *[]string `json:"events"`
+	Active *bool     `json:"active"`
+	// Secret, when non-empty, replaces the webhook's HMAC secret. Send
+	// an empty string to keep the existing secret. (The legacy
+	// `rotate_secret: true` boolean is no longer accepted.)
+	Secret *string `json:"secret"`
 }
 
 func (p *webhooksPlugin) handleUpdate(host plugin.PluginHost) http.HandlerFunc {
@@ -250,15 +304,9 @@ func (p *webhooksPlugin) handleUpdate(host plugin.PluginHost) http.HandlerFunc {
 		if req.Active != nil {
 			changes.Active = req.Active
 		}
-		var newSecret string
-		if req.RotateSecret {
-			s, err := generateSecret()
-			if err != nil {
-				writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to generate secret")
-				return
-			}
-			newSecret = s
-			changes.Secret = &newSecret
+		if req.Secret != nil && *req.Secret != "" {
+			s := *req.Secret
+			changes.Secret = &s
 		}
 
 		updated, err := host.Repo().UpdateWebhook(r.Context(), id, changes)
@@ -270,7 +318,7 @@ func (p *webhooksPlugin) handleUpdate(host plugin.PluginHost) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to update webhook")
 			return
 		}
-		writeJSON(w, http.StatusOK, toWebhookJSON(updated, req.RotateSecret))
+		writeJSON(w, http.StatusOK, toWebhookJSON(updated, false))
 	}
 }
 
@@ -304,8 +352,13 @@ type deliveryJSON struct {
 	CreatedAt    time.Time `json:"created_at"`
 }
 
+// listDeliveriesResponse wraps the delivery list with pagination
+// metadata.
 type listDeliveriesResponse struct {
-	Deliveries []deliveryJSON `json:"deliveries"`
+	Items   []deliveryJSON `json:"items"`
+	Total   int64          `json:"total"`
+	Page    int            `json:"page"`
+	PerPage int            `json:"per_page"`
 }
 
 func (p *webhooksPlugin) handleDeliveries(host plugin.PluginHost) http.HandlerFunc {
@@ -322,20 +375,28 @@ func (p *webhooksPlugin) handleDeliveries(host plugin.PluginHost) http.HandlerFu
 			return
 		}
 
-		limit := recentDeliveryLimit
-		if v := r.URL.Query().Get("limit"); v != "" {
-			if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 1000 {
-				limit = n
-			}
-		}
-
-		rows, err := host.Repo().ListWebhookDeliveriesByWebhookID(r.Context(), id, limit)
+		page, perPage := paginationFromQuery(r)
+		// Fetch a generous window then paginate in-memory. The repo
+		// query uses a hard limit; for v0.1.0 we cap at 1000 rows of
+		// underlying data and slice the requested page out.
+		const fetchCap = 1000
+		rows, err := host.Repo().ListWebhookDeliveriesByWebhookID(r.Context(), id, fetchCap)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to list deliveries")
 			return
 		}
-		out := make([]deliveryJSON, 0, len(rows))
-		for _, d := range rows {
+		total := int64(len(rows))
+		start := (page - 1) * perPage
+		end := start + perPage
+		if start > len(rows) {
+			start = len(rows)
+		}
+		if end > len(rows) {
+			end = len(rows)
+		}
+		page1 := rows[start:end]
+		out := make([]deliveryJSON, 0, len(page1))
+		for _, d := range page1 {
 			out = append(out, deliveryJSON{
 				ID:           d.ID,
 				WebhookID:    d.WebhookID,
@@ -347,21 +408,30 @@ func (p *webhooksPlugin) handleDeliveries(host plugin.PluginHost) http.HandlerFu
 				CreatedAt:    d.CreatedAt,
 			})
 		}
-		writeJSON(w, http.StatusOK, listDeliveriesResponse{Deliveries: out})
+		writeJSON(w, http.StatusOK, listDeliveriesResponse{
+			Items:   out,
+			Total:   total,
+			Page:    page,
+			PerPage: perPage,
+		})
 	}
 }
 
 // --- POST /webhooks/{id}/test -------------------------------------------
 
-type testWebhookResponse struct {
-	DeliveryQueued bool   `json:"delivery_queued"`
-	EventType      string `json:"event_type"`
+// testResponse acknowledges a queued test delivery; clients can poll
+// /webhooks/{id}/deliveries to see the eventual result.
+type testResponse struct {
+	DeliveryQueued string `json:"delivery_queued"`
 }
 
 // handleTest enqueues a synthetic webhook.test event so operators can
 // verify their endpoint receives traffic and the signature validates.
 // The synthetic payload bypasses the active/events filter — even an
 // inactive or unsubscribed webhook will receive a /test fire.
+//
+// Returns 200 with the queued delivery id so callers can correlate
+// asynchronously without subscribing to webhooks.
 func (p *webhooksPlugin) handleTest(host plugin.PluginHost) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
@@ -394,9 +464,6 @@ func (p *webhooksPlugin) handleTest(host plugin.PluginHost) http.HandlerFunc {
 			writeError(w, http.StatusServiceUnavailable, "DISPATCHER_DOWN", "webhook dispatcher is shutting down")
 			return
 		}
-		writeJSON(w, http.StatusAccepted, testWebhookResponse{
-			DeliveryQueued: true,
-			EventType:      eventType,
-		})
+		writeJSON(w, http.StatusOK, testResponse{DeliveryQueued: testDeliveryID})
 	}
 }

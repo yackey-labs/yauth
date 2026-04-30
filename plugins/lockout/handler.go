@@ -69,8 +69,13 @@ func (h *loginEventHandler) onAttempt(ctx context.Context, e events.AuthEvent) (
 		return events.Block(http.StatusTooManyRequests, "Account locked"), nil
 	}
 	// If the lock window has elapsed, clear it lazily and reset counter
-	// so this login can proceed clean.
+	// so this login can proceed clean — but only when AutoUnlock is on.
+	// AutoUnlock=false means an admin must POST /unlock; the cooldown
+	// timer alone is not enough to clear the lock.
 	if lock.LockedUntil != nil {
+		if !h.cfg.autoUnlock() {
+			return events.Block(http.StatusTooManyRequests, "Account locked"), nil
+		}
 		now := time.Now().UTC()
 		_ = h.host.Repo().AutoUnlockAccount(ctx, lock.ID, now)
 		_ = h.host.Repo().ResetAccountLockFailedCount(ctx, lock.ID, now)
@@ -142,7 +147,9 @@ func (h *loginEventHandler) onSucceeded(ctx context.Context, e events.AuthEvent)
 
 // applyLock writes the locked_until / lock_count update for the supplied
 // lock row, given the previous lock_count. The new lock_count is
-// previous+1 (capped by len(LockoutDurations)).
+// previous+1 (capped by len(LockoutDurations)). The chosen step is
+// truncated by Config.MaxLockoutDuration so a misconfigured ladder
+// cannot lock an account beyond the policy ceiling.
 func (h *loginEventHandler) applyLock(ctx context.Context, lockID string, prevLockCount int, now time.Time) error {
 	idx := prevLockCount
 	if idx >= len(h.cfg.LockoutDurations) {
@@ -151,7 +158,11 @@ func (h *loginEventHandler) applyLock(ctx context.Context, lockID string, prevLo
 	if idx < 0 {
 		idx = 0
 	}
-	until := now.Add(h.cfg.LockoutDurations[idx])
+	step := h.cfg.LockoutDurations[idx]
+	if h.cfg.MaxLockoutDuration > 0 && step > h.cfg.MaxLockoutDuration {
+		step = h.cfg.MaxLockoutDuration
+	}
+	until := now.Add(step)
 	reason := "too many failed login attempts"
 	state := domain.LockState{
 		LockedUntil:  &until,

@@ -253,7 +253,8 @@ func (r *Repo) ConsumeEmailVerification(ctx context.Context, tokenHash string) (
 	err := r.ctx(ctx).Transaction(func(tx *gorm.DB) error {
 		var m EmailVerification
 		q := tx.Where("token_hash = ?", tokenHash)
-		if tx.Dialector.Name() == "postgres" {
+		switch tx.Dialector.Name() {
+		case "postgres", "mysql":
 			q = q.Clauses(clause.Locking{Strength: "UPDATE"})
 		}
 		if err := q.First(&m).Error; err != nil {
@@ -296,7 +297,8 @@ func (r *Repo) ConsumePasswordReset(ctx context.Context, tokenHash string) (*dom
 	err := r.ctx(ctx).Transaction(func(tx *gorm.DB) error {
 		var m PasswordReset
 		q := tx.Where("token_hash = ?", tokenHash)
-		if tx.Dialector.Name() == "postgres" {
+		switch tx.Dialector.Name() {
+		case "postgres", "mysql":
 			q = q.Clauses(clause.Locking{Strength: "UPDATE"})
 		}
 		if err := q.First(&m).Error; err != nil {

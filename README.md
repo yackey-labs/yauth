@@ -365,6 +365,39 @@ runs `go generate ./openapi/` and fails if the working tree is dirty.
 Always commit a regenerated `openapi.json` alongside any handler
 shape change.
 
+### Cross-language conformance
+
+The `openapi-conformance` CI job diffs the Rust crate's `openapi.json`
+against this repo's `openapi.json` and uploads a markdown report as a
+build artifact. It runs `scripts/openapi-diff.py`, which fetches the
+Rust spec from `yackey-labs/yauth@main` and falls back to the snapshot
+at `scripts/yauth-rust-openapi.json` when the network fetch fails.
+
+Findings are categorised:
+
+- `BREAKING` — path published by Rust but absent in Go.
+- `MISSING`  — path+method present in Rust but absent in Go.
+- `SHAPE`    — request/response top-level fields diverge for the same
+  operation. (Deliberately shallow; nested-object changes are not
+  flagged unless cheap to detect.)
+- `DOC`      — description/summary-only differences.
+- `GO-EXTRA` — routes Go ships that Rust does not. yauth-go is
+  intentionally a "Go superset", so these are informational only and do
+  not fail the check.
+
+The job runs as `continue-on-error: true` during initial roll-out so the
+report surfaces in the artifact tab without blocking merges. After one
+round of triage, flip the flag so divergence becomes a hard gate. Run
+the diff locally with:
+
+```bash
+python3 scripts/openapi-diff.py \
+  ../yauth/openapi.json openapi.json
+```
+
+The script exits non-zero if any `BREAKING`, `MISSING`, or `SHAPE`
+finding is reported.
+
 ## License
 
 MIT

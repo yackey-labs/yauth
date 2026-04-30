@@ -54,7 +54,7 @@ func (b *bearerResolver) Resolve(r *http.Request) (*domain.AuthUser, bool, error
 	if user.Banned {
 		return nil, true, yautherr.ErrUserBanned
 	}
-	return &domain.AuthUser{User: *user}, true, nil
+	return &domain.AuthUser{User: *user, Method: domain.AuthMethodBearer}, true, nil
 }
 
 // extractBearer pulls the JWT out of an "Authorization: Bearer <jwt>"

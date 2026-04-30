@@ -44,6 +44,13 @@ type Config struct {
 	IPMismatchAction string
 	// UAMismatchAction is "warn" or "invalidate". Empty defaults to "warn".
 	UAMismatchAction string
+
+	// AllowAdminMachineCallers controls whether bearer-JWT or X-Api-Key
+	// callers can pass RequireAdmin. The strict default (false) requires
+	// a cookie-resolved session for admin access even when the underlying
+	// user has role=admin. Set true to allow admin automation via
+	// machine credentials.
+	AllowAdminMachineCallers bool
 }
 
 // Mismatch action constants. Empty string is treated as MismatchActionWarn.
@@ -212,7 +219,7 @@ func (m *Middleware) resolveCookie(r *http.Request) (*domain.AuthUser, error) {
 		return nil, yautherr.ErrUserBanned
 	}
 
-	return &domain.AuthUser{User: *user, Session: *sess}, nil
+	return &domain.AuthUser{User: *user, Session: *sess, Method: domain.AuthMethodCookie}, nil
 }
 
 // enforceBinding applies the configured session-binding policy. On a
@@ -346,6 +353,12 @@ func (m *Middleware) OptionalAuth(next http.Handler) http.Handler {
 // RequireAdmin wraps next so requests must carry a valid identity AND
 // the resolved User.Role must equal "admin". 401 on no-auth, 403 on
 // non-admin.
+//
+// When Config.AllowAdminMachineCallers is false (the default), bearer
+// JWT or X-Api-Key callers are rejected with 403 even if the underlying
+// user is an admin: only cookie sessions count. AuthUser.Method is the
+// signal — empty Method is treated as cookie for backwards compat with
+// hand-built principals.
 func (m *Middleware) RequireAdmin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		au, err := m.ResolveAuth(r)
@@ -357,6 +370,21 @@ func (m *Middleware) RequireAdmin(next http.Handler) http.Handler {
 			http.Error(w, "Forbidden", http.StatusForbidden)
 			return
 		}
+		if !m.cfg.AllowAdminMachineCallers && isMachineMethod(au.Method) {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
 		next.ServeHTTP(w, r.WithContext(withAuthUser(r.Context(), au)))
 	})
+}
+
+// isMachineMethod reports whether m identifies a machine-credential auth
+// path (bearer JWT or X-Api-Key). Empty/cookie methods are treated as
+// human callers.
+func isMachineMethod(m string) bool {
+	switch m {
+	case domain.AuthMethodBearer, domain.AuthMethodAPIKey:
+		return true
+	}
+	return false
 }

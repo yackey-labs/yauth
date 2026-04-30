@@ -133,7 +133,7 @@ func TestValidate(t *testing.T) {
 		},
 		{
 			name:    "bad driver",
-			mutate:  func(c *Config) { c.Database.Driver = "mysql" },
+			mutate:  func(c *Config) { c.Database.Driver = "oracle" },
 			wantErr: true,
 		},
 		{

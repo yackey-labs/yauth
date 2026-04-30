@@ -80,7 +80,7 @@ func validEmail(s string) bool {
 	return at > 0 && at < len(s)-1
 }
 
-func cookieOptionsFromHost(host plugin.PluginHost, maxAge int) auth.CookieOptions {
+func cookieOptionsFromHost(host plugin.PluginHost, r *http.Request, maxAge int) auth.CookieOptions {
 	sameSite := "Lax"
 	switch host.CookieSameSite() {
 	case http.SameSiteStrictMode:
@@ -91,7 +91,7 @@ func cookieOptionsFromHost(host plugin.PluginHost, maxAge int) auth.CookieOption
 	return auth.CookieOptions{
 		Name:     host.CookieName(),
 		Path:     host.CookiePath(),
-		Domain:   host.CookieDomain(),
+		Domain:   auth.ResolveCookieDomain(host.CookieDomain(), r),
 		Secure:   host.CookieSecure(),
 		SameSite: sameSite,
 		MaxAge:   maxAge,
@@ -317,7 +317,7 @@ func (p *magicLinkPlugin) handleVerify(host plugin.PluginHost) http.HandlerFunc 
 		})
 
 		http.SetCookie(w, auth.SessionCookie(
-			cookieOptionsFromHost(host, int(host.SessionTTL().Seconds())),
+			cookieOptionsFromHost(host, r, int(host.SessionTTL().Seconds())),
 			raw2,
 		))
 		writeJSON(w, http.StatusOK, verifyResponse{User: toUserJSON(*user)})

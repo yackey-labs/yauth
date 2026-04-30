@@ -8,10 +8,14 @@ import (
 	"os"
 	"strings"
 
+	"github.com/redis/go-redis/v9"
+
 	"github.com/yackey-labs/yauth-go/auth/passwordpolicy"
 	"github.com/yackey-labs/yauth-go/plugins/emailpassword"
 	smtpmailer "github.com/yackey-labs/yauth-go/plugins/mailer/smtp"
+	yauthrepo "github.com/yackey-labs/yauth-go/repo"
 	"github.com/yackey-labs/yauth-go/repo/gormrepo"
+	"github.com/yackey-labs/yauth-go/repo/redisrepo"
 	"github.com/yackey-labs/yauth-go/telemetry"
 	"github.com/yackey-labs/yauth-go/yauthcfg"
 	"gorm.io/gorm"
@@ -52,7 +56,14 @@ func NewFromConfig(ctx context.Context, cfg *yauthcfg.Config) (*YAuth, error) {
 		}
 	}
 
-	repo := gormrepo.New(db)
+	var repo yauthrepo.Repository = gormrepo.New(db)
+	if cfg.Cache.Enabled {
+		decorated, err := buildCacheDecorator(repo, cfg.Cache)
+		if err != nil {
+			return nil, err
+		}
+		repo = decorated
+	}
 	builder := New(repo, configToYAuthConfig(cfg))
 
 	// Build the host's mailer once and share it across plugins. Each
@@ -158,7 +169,7 @@ func SchemaCheck(ctx context.Context, cfg *yauthcfg.Config) error {
 		return fmt.Errorf("yauth: database unreachable: %w", err)
 	}
 
-	have, err := listTables(ctx, db)
+	have, err := listTables(ctx, db, cfg.Database.Schema)
 	if err != nil {
 		return fmt.Errorf("yauth: list tables: %w", err)
 	}
@@ -184,7 +195,9 @@ func openDB(d yauthcfg.DatabaseConfig) (*gorm.DB, error) {
 	case "sqlite":
 		return gormrepo.OpenSQLite(d.DSN)
 	case "postgres":
-		return gormrepo.OpenPostgres(d.DSN)
+		return gormrepo.OpenPostgresSchema(d.DSN, d.Schema)
+	case "mysql":
+		return gormrepo.OpenMySQL(d.DSN)
 	default:
 		return nil, fmt.Errorf("yauth: unsupported database driver %q", d.Driver)
 	}
@@ -198,7 +211,7 @@ func pingDB(ctx context.Context, db *gorm.DB) error {
 	return sqlDB.PingContext(ctx)
 }
 
-func listTables(ctx context.Context, db *gorm.DB) ([]string, error) {
+func listTables(ctx context.Context, db *gorm.DB, schema string) ([]string, error) {
 	sqlDB, err := db.DB()
 	if err != nil {
 		return nil, err
@@ -209,7 +222,13 @@ func listTables(ctx context.Context, db *gorm.DB) ([]string, error) {
 	case "sqlite":
 		rows, err = sqlDB.QueryContext(ctx, "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'yauth_%'")
 	case "postgres":
-		rows, err = sqlDB.QueryContext(ctx, "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename LIKE 'yauth_%'")
+		pgSchema := schema
+		if pgSchema == "" {
+			pgSchema = "public"
+		}
+		rows, err = sqlDB.QueryContext(ctx, "SELECT tablename FROM pg_tables WHERE schemaname=$1 AND tablename LIKE 'yauth_%'", pgSchema)
+	case "mysql":
+		rows, err = sqlDB.QueryContext(ctx, "SELECT TABLE_NAME FROM information_schema.tables WHERE table_schema = DATABASE() AND TABLE_NAME LIKE 'yauth_%'")
 	default:
 		return nil, fmt.Errorf("listTables: unsupported dialect %q", dialect)
 	}
@@ -262,6 +281,7 @@ func configToYAuthConfig(c *yauthcfg.Config) YAuthConfig {
 		IPMismatchAction: c.Session.IPMismatchAction,
 		UAMismatchAction: c.Session.UAMismatchAction,
 	}
+	out.AllowAdminMachineCallers = c.Plugins.Admin.AllowMachineCallers
 	overrideRule(&out.RateLimit.Login, c.RateLimit.Login)
 	overrideRule(&out.RateLimit.Register, c.RateLimit.Register)
 	overrideRule(&out.RateLimit.ForgotPassword, c.RateLimit.ForgotPassword)
@@ -313,5 +333,32 @@ func overrideRule(dst *RateLimitRule, src yauthcfg.RateLimitRule) {
 	}
 	if src.Window > 0 {
 		dst.Window = src.Window
+	}
+}
+
+// buildCacheDecorator wraps inner with the read-cache decorator selected
+// by cfg. Today only cfg.Provider="redis" is supported. The Redis client
+// is constructed but not pinged here; the decorator degrades to inner-only
+// reads when Redis is unreachable, so a cold Redis at startup does not
+// take the whole server down.
+func buildCacheDecorator(inner yauthrepo.Repository, cfg yauthcfg.CacheConfig) (yauthrepo.Repository, error) {
+	switch cfg.Provider {
+	case "redis":
+		password := ""
+		if cfg.RedisPasswordEnv != "" {
+			password = os.Getenv(cfg.RedisPasswordEnv)
+		}
+		client := redis.NewClient(&redis.Options{
+			Addr:     cfg.RedisAddr,
+			Password: password,
+			DB:       cfg.RedisDB,
+		})
+		opts := redisrepo.Options{
+			KeyPrefix:            cfg.KeyPrefix,
+			DisableNegativeCache: cfg.DisableNegativeCache,
+		}
+		return redisrepo.New(inner, client, opts), nil
+	default:
+		return nil, fmt.Errorf("yauth: unsupported cache.provider %q", cfg.Provider)
 	}
 }

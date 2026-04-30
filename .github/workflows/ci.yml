@@ -94,6 +94,37 @@ jobs:
       - name: Run gormrepo tests with PG
         run: go test ./repo/gormrepo/... ./...
 
+  test-mysql:
+    name: Test (mysql)
+    runs-on: ubuntu-latest
+    # Marked continue-on-error to keep this job advisory while the
+    # MySQL backend stabilises in CI. Promote to required once it has
+    # ridden green for a release cycle.
+    continue-on-error: true
+    services:
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: yauth
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h localhost -uroot -proot"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL_MYSQL: root:root@tcp(127.0.0.1:3306)/yauth?parseTime=true&charset=utf8mb4&collation=utf8mb4_unicode_ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+      - name: Run gormrepo + conformance tests with MySQL
+        run: go test ./repo/gormrepo/... ./repo/conformance/...
+
   build-cli:
     name: Build CLI (bin/yauth)
     runs-on: ubuntu-latest
@@ -211,6 +242,61 @@ jobs:
         run: go generate ./openapi/
       - name: Verify openapi.json is up to date
         run: git diff --exit-code openapi.json
+
+  openapi-conformance:
+    name: OpenAPI conformance (Rust ↔ Go)
+    runs-on: ubuntu-latest
+    # Soft-fail during initial roll-out so reviewers see the report without
+    # blocking merges. Flip this to false (or remove) after one round of
+    # triage so divergence becomes a hard gate.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Regenerate Go openapi.json
+        run: go generate ./openapi/
+      - name: Fetch Rust openapi.json from yauth main
+        id: fetch-rust
+        run: |
+          set -e
+          mkdir -p tmp
+          # Try the upstream Rust repo first; fall back to the committed
+          # snapshot under scripts/ if the network fetch fails or the file
+          # has not been published yet on main.
+          if curl -fsSL -o tmp/rust-openapi.json \
+              https://raw.githubusercontent.com/yackey-labs/yauth/main/openapi.json; then
+            echo "source=upstream" >> "$GITHUB_OUTPUT"
+          else
+            echo "Falling back to scripts/yauth-rust-openapi.json snapshot"
+            cp scripts/yauth-rust-openapi.json tmp/rust-openapi.json
+            echo "source=snapshot" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Diff Rust ↔ Go openapi.json
+        id: diff
+        run: |
+          set +e
+          python3 scripts/openapi-diff.py tmp/rust-openapi.json openapi.json \
+            | tee tmp/openapi-conformance.md
+          echo "exit=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+      - name: Upload conformance report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: openapi-conformance-report
+          path: tmp/openapi-conformance.md
+          if-no-files-found: error
+      - name: Fail on MUST gaps
+        run: |
+          if [ "${{ steps.diff.outputs.exit }}" != "0" ]; then
+            echo "openapi-diff reported MUST-level gaps (see report artifact)."
+            exit 1
+          fi
 
   bench:
     name: Build benchmark (artifact)

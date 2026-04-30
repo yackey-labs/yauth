@@ -6,11 +6,11 @@ import "fmt"
 // A non-nil result means the config is unsuitable for NewFromConfig.
 func (c *Config) Validate() error {
 	switch c.Database.Driver {
-	case "sqlite", "postgres":
+	case "sqlite", "postgres", "mysql":
 	case "":
-		return fmt.Errorf("database.driver is required (sqlite | postgres)")
+		return fmt.Errorf("database.driver is required (sqlite | postgres | mysql)")
 	default:
-		return fmt.Errorf("database.driver %q is not supported (sqlite | postgres)", c.Database.Driver)
+		return fmt.Errorf("database.driver %q is not supported (sqlite | postgres | mysql)", c.Database.Driver)
 	}
 	if c.Database.DSN == "" {
 		return fmt.Errorf("database.dsn is required")
@@ -48,12 +48,38 @@ func (c *Config) Validate() error {
 		default:
 			return fmt.Errorf("plugins.asym_jwt.key_type %q invalid (rs256 | es256)", p.AsymJWT.KeyType)
 		}
-		if p.AsymJWT.PrivateKeyPath == "" || p.AsymJWT.PublicKeyPath == "" {
-			return fmt.Errorf("plugins.asym_jwt requires both private_key_path and public_key_path")
+		havePrivPath := p.AsymJWT.PrivateKeyPath != ""
+		havePrivEnv := p.AsymJWT.PrivateKeyPEMEnv != ""
+		havePubPath := p.AsymJWT.PublicKeyPath != ""
+		havePubEnv := p.AsymJWT.PublicKeyPEMEnv != ""
+		if havePrivPath && havePrivEnv {
+			return fmt.Errorf("plugins.asym_jwt private_key_path and private_key_pem_env are mutually exclusive")
+		}
+		if havePubPath && havePubEnv {
+			return fmt.Errorf("plugins.asym_jwt public_key_path and public_key_pem_env are mutually exclusive")
+		}
+		if !havePrivPath && !havePrivEnv {
+			return fmt.Errorf("plugins.asym_jwt requires private_key_path or private_key_pem_env")
+		}
+		if !havePubPath && !havePubEnv {
+			return fmt.Errorf("plugins.asym_jwt requires public_key_path or public_key_pem_env")
 		}
 	}
 	if p.Passkey.Enabled && (p.Passkey.RPID == "" || p.Passkey.RPOrigin == "") {
 		return fmt.Errorf("plugins.passkey requires rp_id and rp_origin")
+	}
+
+	if c.Cache.Enabled {
+		switch c.Cache.Provider {
+		case "redis":
+			if c.Cache.RedisAddr == "" {
+				return fmt.Errorf("cache.redis_addr is required when cache.provider=redis")
+			}
+		case "":
+			return fmt.Errorf("cache.provider is required when cache.enabled=true (redis)")
+		default:
+			return fmt.Errorf("cache.provider %q is not supported (redis)", c.Cache.Provider)
+		}
 	}
 
 	return nil

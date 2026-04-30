@@ -30,18 +30,31 @@ import (
 )
 
 // Config tunes the asymjwt plugin.
+//
+// Operators supply the keypair via filesystem paths (PrivateKeyPath /
+// PublicKeyPath) OR via inline PEM bytes (PrivateKeyPEM / PublicKeyPEM).
+// The two modes are mutually exclusive — passing both for the same key
+// is rejected at construction time. Inline bytes are typically fed in
+// from a secret manager (Vault, AWS Secrets Manager) that lands the
+// value in the process environment rather than on disk.
 type Config struct {
 	// KeyType selects the algorithm: "RS256" (RSA-2048+) or "ES256"
 	// (ECDSA P-256). Required.
 	KeyType string
 	// PrivateKeyPath is a filesystem path to the PEM-encoded private
-	// key. Required.
+	// key. Mutually exclusive with PrivateKeyPEM.
 	PrivateKeyPath string
 	// PublicKeyPath is a filesystem path to the PEM-encoded public key.
-	// Required. Loaded separately so the deployment can ship a
-	// JWKS-only public-key bundle to verifiers without exposing the
-	// private key.
+	// Mutually exclusive with PublicKeyPEM. Loaded separately so the
+	// deployment can ship a JWKS-only public-key bundle to verifiers
+	// without exposing the private key.
 	PublicKeyPath string
+	// PrivateKeyPEM holds the raw PEM bytes of the private key.
+	// Mutually exclusive with PrivateKeyPath.
+	PrivateKeyPEM []byte
+	// PublicKeyPEM holds the raw PEM bytes of the public key.
+	// Mutually exclusive with PublicKeyPath.
+	PublicKeyPEM []byte
 	// KID is the JWS "kid" header value. It is also the kid attached
 	// to the JWKS entry. Required — chosen by the operator so verifying
 	// peers can pin a key id (e.g., "yauth-2026").
@@ -61,8 +74,17 @@ func New(cfg Config) (plugin.Plugin, error) {
 	if cfg.KeyType == "" {
 		return nil, fmt.Errorf("asymjwt: KeyType is required (\"RS256\" or \"ES256\")")
 	}
-	if cfg.PrivateKeyPath == "" || cfg.PublicKeyPath == "" {
-		return nil, fmt.Errorf("asymjwt: PrivateKeyPath and PublicKeyPath are required")
+	if cfg.PrivateKeyPath != "" && len(cfg.PrivateKeyPEM) > 0 {
+		return nil, fmt.Errorf("asymjwt: PrivateKeyPath and PrivateKeyPEM are mutually exclusive")
+	}
+	if cfg.PublicKeyPath != "" && len(cfg.PublicKeyPEM) > 0 {
+		return nil, fmt.Errorf("asymjwt: PublicKeyPath and PublicKeyPEM are mutually exclusive")
+	}
+	if cfg.PrivateKeyPath == "" && len(cfg.PrivateKeyPEM) == 0 {
+		return nil, fmt.Errorf("asymjwt: PrivateKeyPath or PrivateKeyPEM is required")
+	}
+	if cfg.PublicKeyPath == "" && len(cfg.PublicKeyPEM) == 0 {
+		return nil, fmt.Errorf("asymjwt: PublicKeyPath or PublicKeyPEM is required")
 	}
 	if cfg.KID == "" {
 		return nil, fmt.Errorf("asymjwt: KID is required")

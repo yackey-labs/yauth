@@ -240,3 +240,69 @@ func (h *captureHost) RateLimit(_ string, _ int, _ time.Duration) func(http.Hand
 }
 
 var _ plugin.PluginHost = (*captureHost)(nil)
+
+// Inline-PEM mode is the secret-manager-friendly path: operators feed
+// PEM bytes directly via Config.PrivateKeyPEM/PublicKeyPEM instead of a
+// filesystem path. Round-trip behaviour must be identical to the path
+// mode.
+func TestSigner_InlinePEM_RoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	privPath, pubPath := writeRSAKeys(t, dir)
+	privPEM, err := os.ReadFile(privPath)
+	if err != nil {
+		t.Fatalf("read priv: %v", err)
+	}
+	pubPEM, err := os.ReadFile(pubPath)
+	if err != nil {
+		t.Fatalf("read pub: %v", err)
+	}
+
+	signer, err := asymjwt.NewSigner(asymjwt.Config{
+		KeyType: "RS256", PrivateKeyPEM: privPEM, PublicKeyPEM: pubPEM, KID: "inline-rs",
+	})
+	if err != nil {
+		t.Fatalf("NewSigner: %v", err)
+	}
+	tok, err := signer.Sign(map[string]any{"sub": "inline-user"})
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	claims, err := signer.Verify(tok)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if claims["sub"] != "inline-user" {
+		t.Fatalf("claims roundtrip mismatch: %#v", claims)
+	}
+}
+
+// Path and inline modes are mutually exclusive — passing both for the
+// same key is a config error and must be rejected at New() time.
+func TestPlugin_New_RejectsPathAndPEM(t *testing.T) {
+	dir := t.TempDir()
+	privPath, pubPath := writeRSAKeys(t, dir)
+	privPEM, err := os.ReadFile(privPath)
+	if err != nil {
+		t.Fatalf("read priv: %v", err)
+	}
+
+	if _, err := asymjwt.New(asymjwt.Config{
+		KeyType:        "RS256",
+		PrivateKeyPath: privPath,
+		PrivateKeyPEM:  privPEM,
+		PublicKeyPath:  pubPath,
+		KID:            "k",
+	}); err == nil {
+		t.Fatalf("expected error when both PrivateKeyPath and PrivateKeyPEM set")
+	}
+}
+
+// Missing both forms of a key is an error.
+func TestPlugin_New_RejectsMissingKey(t *testing.T) {
+	if _, err := asymjwt.New(asymjwt.Config{
+		KeyType: "RS256",
+		KID:     "k",
+	}); err == nil {
+		t.Fatalf("expected error when no key configured")
+	}
+}

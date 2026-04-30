@@ -620,6 +620,77 @@ func TestRequireAdmin(t *testing.T) {
 	}
 }
 
+// RequireAdmin must reject machine credentials by default — even when
+// the underlying user has role=admin, a bearer or api-key principal is
+// 403 unless the host opts in via AllowAdminMachineCallers.
+func TestRequireAdmin_RejectsMachineByDefault(t *testing.T) {
+	r := newFakeRepo()
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	adminUser, err := r.CreateUser(ctx, domain.NewUser{
+		ID: uuid.NewString(), Email: "a@example.com", Role: "admin",
+		CreatedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+
+	bearerAU := &domain.AuthUser{User: adminUser, Method: domain.AuthMethodBearer}
+	apikeyAU := &domain.AuthUser{User: adminUser, Method: domain.AuthMethodAPIKey}
+
+	bearerHit := &fakeResolver{name: "bearer", recognized: true, user: bearerAU}
+	mw := New(r, Config{CookieName: "yauth_session"}, bearerHit)
+	handler := mw.RequireAdmin(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("bearer admin under default policy: expected 403, got %d", rec.Code)
+	}
+
+	apikeyHit := &fakeResolver{name: "api-key", recognized: true, user: apikeyAU}
+	mw2 := New(r, Config{CookieName: "yauth_session"}, apikeyHit)
+	handler2 := mw2.RequireAdmin(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	rec = httptest.NewRecorder()
+	handler2.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("api-key admin under default policy: expected 403, got %d", rec.Code)
+	}
+}
+
+// AllowAdminMachineCallers=true admits both bearer and api-key admins.
+func TestRequireAdmin_AllowMachineCallers(t *testing.T) {
+	r := newFakeRepo()
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	adminUser, err := r.CreateUser(ctx, domain.NewUser{
+		ID: uuid.NewString(), Email: "a@example.com", Role: "admin",
+		CreatedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+
+	hit := &fakeResolver{
+		name:       "bearer",
+		recognized: true,
+		user:       &domain.AuthUser{User: adminUser, Method: domain.AuthMethodBearer},
+	}
+	mw := New(r, Config{CookieName: "yauth_session", AllowAdminMachineCallers: true}, hit)
+	handler := mw.RequireAdmin(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("opt-in machine admin: expected 200, got %d", rec.Code)
+	}
+}
+
 // fakeResolver lets us drive the AuthResolver iteration in ResolveAuth.
 type fakeResolver struct {
 	name       string

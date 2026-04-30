@@ -70,7 +70,9 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 }
 
 // cookieOptionsFromHost mirrors host config onto auth.CookieOptions.
-func cookieOptionsFromHost(host plugin.PluginHost, maxAge int) auth.CookieOptions {
+// The request is forwarded so a CookieDomain of "auto" resolves to the
+// inbound Host header at issuance time.
+func cookieOptionsFromHost(host plugin.PluginHost, r *http.Request, maxAge int) auth.CookieOptions {
 	sameSite := "Lax"
 	switch host.CookieSameSite() {
 	case http.SameSiteStrictMode:
@@ -81,7 +83,7 @@ func cookieOptionsFromHost(host plugin.PluginHost, maxAge int) auth.CookieOption
 	return auth.CookieOptions{
 		Name:     host.CookieName(),
 		Path:     host.CookiePath(),
-		Domain:   host.CookieDomain(),
+		Domain:   auth.ResolveCookieDomain(host.CookieDomain(), r),
 		Secure:   host.CookieSecure(),
 		SameSite: sameSite,
 		MaxAge:   maxAge,
@@ -239,7 +241,7 @@ func (p *emailPasswordPlugin) handleRegister(host plugin.PluginHost) http.Handle
 		})
 
 		http.SetCookie(w, auth.SessionCookie(
-			cookieOptionsFromHost(host, int(host.SessionTTL().Seconds())),
+			cookieOptionsFromHost(host, r, int(host.SessionTTL().Seconds())),
 			raw,
 		))
 		writeJSON(w, http.StatusCreated, registerResponse{User: toUserJSON(user)})
@@ -389,7 +391,7 @@ func (p *emailPasswordPlugin) handleLogin(host plugin.PluginHost) http.HandlerFu
 		}
 
 		http.SetCookie(w, auth.SessionCookie(
-			cookieOptionsFromHost(host, int(ttl.Seconds())),
+			cookieOptionsFromHost(host, r, int(ttl.Seconds())),
 			raw,
 		))
 		writeJSON(w, http.StatusOK, loginResponse{User: toUserJSON(*user)})
@@ -457,7 +459,7 @@ func (p *emailPasswordPlugin) handleLogout(host plugin.PluginHost) http.HandlerF
 			IPAddress: requestIP(r),
 		})
 
-		http.SetCookie(w, auth.ClearSessionCookie(cookieOptionsFromHost(host, -1)))
+		http.SetCookie(w, auth.ClearSessionCookie(cookieOptionsFromHost(host, r, -1)))
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
@@ -570,7 +572,7 @@ func (p *emailPasswordPlugin) handleChangePassword(host plugin.PluginHost) http.
 			return
 		}
 		http.SetCookie(w, auth.SessionCookie(
-			cookieOptionsFromHost(host, int(host.SessionTTL().Seconds())),
+			cookieOptionsFromHost(host, r, int(host.SessionTTL().Seconds())),
 			raw,
 		))
 

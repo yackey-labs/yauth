@@ -19,6 +19,7 @@ package oidc
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/yackey-labs/yauth-go/plugin"
 )
@@ -34,6 +35,44 @@ type Config struct {
 	// building the absolute URLs returned in the discovery doc. Empty
 	// means the router is mounted at the root.
 	BasePath string
+
+	// IDTokenTTL is the lifetime stamped onto id_tokens minted in the
+	// authorization-code → id_token flow. Defaults to 1h when zero.
+	// The mint itself happens in oauth2-server today; this config is
+	// surfaced here so the discovery doc and a future revision of
+	// oauth2-server can both read it from one place.
+	IDTokenTTL time.Duration
+
+	// ClaimsSupported populates the discovery doc "claims_supported"
+	// array. Defaults to the OIDC core baseline (sub, email,
+	// email_verified, name, aud, exp, iat, iss).
+	ClaimsSupported []string
+}
+
+// defaultClaimsSupported is the baseline list advertised when
+// Config.ClaimsSupported is nil. It mirrors the OIDC Core 1.0 standard
+// claims yauth's UserInfo response actually populates.
+var defaultClaimsSupported = []string{
+	"sub", "email", "email_verified", "name", "aud", "exp", "iat", "iss",
+}
+
+// claimsSupported returns the configured claim list, falling back to
+// defaultClaimsSupported when nil.
+func (c *Config) claimsSupported() []string {
+	if len(c.ClaimsSupported) == 0 {
+		return defaultClaimsSupported
+	}
+	return c.ClaimsSupported
+}
+
+// EffectiveIDTokenTTL returns the configured id_token TTL, defaulting
+// to 1h when zero. Exported so a future oauth2-server revision can read
+// it without reimplementing the default rule.
+func (c *Config) EffectiveIDTokenTTL() time.Duration {
+	if c.IDTokenTTL <= 0 {
+		return time.Hour
+	}
+	return c.IDTokenTTL
 }
 
 // oidcPlugin is the unexported plugin.Plugin implementation.

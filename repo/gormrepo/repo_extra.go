@@ -12,13 +12,26 @@ import (
 )
 
 // withRowLock wraps q with a SELECT … FOR UPDATE locking clause when the
-// connection is Postgres. SQLite serializes writes via a global lock, so the
-// hint is a no-op there.
+// connection is Postgres or MySQL. SQLite serializes writes via a global lock,
+// so the hint is a no-op there.
 func withRowLock(q *gorm.DB) *gorm.DB {
-	if q.Dialector.Name() == "postgres" {
+	switch q.Dialector.Name() {
+	case "postgres", "mysql":
 		return q.Clauses(clause.Locking{Strength: "UPDATE"})
 	}
 	return q
+}
+
+// keyEq returns a Where-clause-friendly predicate for the column named
+// `key`. `key` is a reserved word in MySQL so the raw SQL needs the
+// dialect-appropriate identifier quote (backticks on MySQL, double
+// quotes on Postgres). Postgres accepts the unquoted form too, but
+// being explicit keeps the helper trivially correct on every dialect.
+func keyEq(db *gorm.DB) string {
+	if db.Dialector.Name() == "mysql" {
+		return "`key` = ?"
+	}
+	return `"key" = ?`
 }
 
 // --- User extras ---
@@ -200,15 +213,16 @@ func (r *Repo) SetChallenge(ctx context.Context, key, value string, ttl time.Dur
 }
 
 func (r *Repo) GetChallenge(ctx context.Context, key string) (*domain.Challenge, error) {
+	db := r.ctx(ctx)
 	var m Challenge
-	if err := r.ctx(ctx).Where("key = ?", key).First(&m).Error; err != nil {
+	if err := db.Where(keyEq(db), key).First(&m).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, yautherr.ErrNotFound
 		}
 		return nil, err
 	}
 	if !m.ExpiresAt.UTC().After(time.Now().UTC()) {
-		_ = r.ctx(ctx).Where("key = ?", key).Delete(&Challenge{}).Error
+		_ = db.Where(keyEq(db), key).Delete(&Challenge{}).Error
 		return nil, yautherr.ErrNotFound
 	}
 	d := m.toDomain()
@@ -219,13 +233,13 @@ func (r *Repo) ConsumeChallenge(ctx context.Context, key string) (*domain.Challe
 	var out *domain.Challenge
 	err := r.ctx(ctx).Transaction(func(tx *gorm.DB) error {
 		var m Challenge
-		if err := withRowLock(tx).Where("key = ?", key).First(&m).Error; err != nil {
+		if err := withRowLock(tx).Where(keyEq(tx), key).First(&m).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return yautherr.ErrNotFound
 			}
 			return err
 		}
-		if err := tx.Where("key = ?", key).Delete(&Challenge{}).Error; err != nil {
+		if err := tx.Where(keyEq(tx), key).Delete(&Challenge{}).Error; err != nil {
 			return err
 		}
 		if !m.ExpiresAt.UTC().After(time.Now().UTC()) {
@@ -245,7 +259,8 @@ func (r *Repo) ConsumeChallenge(ctx context.Context, key string) (*domain.Challe
 }
 
 func (r *Repo) DeleteChallenge(ctx context.Context, key string) error {
-	return r.ctx(ctx).Where("key = ?", key).Delete(&Challenge{}).Error
+	db := r.ctx(ctx)
+	return db.Where(keyEq(db), key).Delete(&Challenge{}).Error
 }
 
 // --- RateLimit ---
@@ -257,7 +272,7 @@ func (r *Repo) CheckRateLimit(ctx context.Context, key string, limit int, window
 
 	err := r.ctx(ctx).Transaction(func(tx *gorm.DB) error {
 		var m RateLimit
-		err := withRowLock(tx).Where("key = ?", key).First(&m).Error
+		err := withRowLock(tx).Where(keyEq(tx), key).First(&m).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			row := RateLimit{Key: key, Count: 1, WindowStart: now}
 			if err := tx.Create(&row).Error; err != nil {
@@ -274,7 +289,7 @@ func (r *Repo) CheckRateLimit(ctx context.Context, key string, limit int, window
 		}
 
 		if m.WindowStart.UTC().Before(windowStart) {
-			if err := tx.Model(&RateLimit{}).Where("key = ?", key).
+			if err := tx.Model(&RateLimit{}).Where(keyEq(tx), key).
 				Updates(map[string]any{"count": 1, "window_start": now}).Error; err != nil {
 				return err
 			}
@@ -299,7 +314,7 @@ func (r *Repo) CheckRateLimit(ctx context.Context, key string, limit int, window
 		}
 
 		newCount := m.Count + 1
-		if err := tx.Model(&RateLimit{}).Where("key = ?", key).
+		if err := tx.Model(&RateLimit{}).Where(keyEq(tx), key).
 			Update("count", newCount).Error; err != nil {
 			return err
 		}
@@ -328,8 +343,9 @@ func (r *Repo) RevokeToken(ctx context.Context, jti string, ttl time.Duration) e
 }
 
 func (r *Repo) IsTokenRevoked(ctx context.Context, jti string) (bool, error) {
+	db := r.ctx(ctx)
 	var m Revocation
-	err := r.ctx(ctx).Where("key = ?", jti).First(&m).Error
+	err := db.Where(keyEq(db), jti).First(&m).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return false, nil
 	}
@@ -337,7 +353,7 @@ func (r *Repo) IsTokenRevoked(ctx context.Context, jti string) (bool, error) {
 		return false, err
 	}
 	if !m.ExpiresAt.UTC().After(time.Now().UTC()) {
-		_ = r.ctx(ctx).Where("key = ?", jti).Delete(&Revocation{}).Error
+		_ = db.Where(keyEq(db), jti).Delete(&Revocation{}).Error
 		return false, nil
 	}
 	return true, nil
@@ -1349,8 +1365,8 @@ func (r *Repo) CreateScheduledRetry(ctx context.Context, input domain.NewSchedul
 // same transaction, and returns the deleted rows. The locking strategy
 // per dialect:
 //
-//   - Postgres: SELECT … FOR UPDATE SKIP LOCKED so two concurrent
-//     dispatchers never see the same row.
+//   - Postgres / MySQL 8+: SELECT … FOR UPDATE SKIP LOCKED so two
+//     concurrent dispatchers never see the same row.
 //   - SQLite: the surrounding Transaction() takes a RESERVED then EXCLUSIVE
 //     lock on commit, which is enough to serialise claimers on the
 //     single-writer engine.
@@ -1367,7 +1383,8 @@ func (r *Repo) ClaimDueRetries(ctx context.Context, now time.Time, limit int) ([
 		q := tx.Where("not_before <= ?", now.UTC()).
 			Order("not_before ASC, id ASC").
 			Limit(limit)
-		if tx.Dialector.Name() == "postgres" {
+		switch tx.Dialector.Name() {
+		case "postgres", "mysql":
 			q = q.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"})
 		}
 		var rows []WebhookRetry

@@ -140,14 +140,14 @@ type OAuth2Client struct {
 	ID                      string     `gorm:"column:id;primaryKey"`
 	ClientID                string     `gorm:"column:client_id;not null;uniqueIndex"`
 	ClientSecretHash        *string    `gorm:"column:client_secret_hash"`
-	RedirectURIs            string     `gorm:"column:redirect_uris;not null"`
+	RedirectURIs            string     `gorm:"column:redirect_uris;type:text;not null"`
 	ClientName              *string    `gorm:"column:client_name"`
-	GrantTypes              string     `gorm:"column:grant_types;not null"`
-	Scopes                  *string    `gorm:"column:scopes"`
+	GrantTypes              string     `gorm:"column:grant_types;type:text;not null"`
+	Scopes                  *string    `gorm:"column:scopes;type:text"`
 	IsPublic                bool       `gorm:"column:is_public;not null"`
 	CreatedAt               time.Time  `gorm:"column:created_at;not null"`
 	TokenEndpointAuthMethod *string    `gorm:"column:token_endpoint_auth_method"`
-	PublicKeyPEM            *string    `gorm:"column:public_key_pem"`
+	PublicKeyPEM            *string    `gorm:"column:public_key_pem;type:text"`
 	JWKSURI                 *string    `gorm:"column:jwks_uri"`
 	BannedAt                *time.Time `gorm:"column:banned_at"`
 	BannedReason            *string    `gorm:"column:banned_reason"`
@@ -198,7 +198,7 @@ type Webhook struct {
 	ID        string    `gorm:"column:id;primaryKey"`
 	URL       string    `gorm:"column:url;not null"`
 	Secret    string    `gorm:"column:secret;not null"`
-	Events    string    `gorm:"column:events;not null"`
+	Events    string    `gorm:"column:events;type:text;not null"`
 	Active    bool      `gorm:"column:active;not null"`
 	CreatedAt time.Time `gorm:"column:created_at;not null"`
 	UpdatedAt time.Time `gorm:"column:updated_at;not null"`
@@ -269,7 +269,7 @@ type WebauthnCredential struct {
 	Name       string     `gorm:"column:name;not null"`
 	AAGUID     *string    `gorm:"column:aaguid"`
 	DeviceName *string    `gorm:"column:device_name"`
-	Credential string     `gorm:"column:credential;not null"`
+	Credential string     `gorm:"column:credential;type:text;not null"`
 	CreatedAt  time.Time  `gorm:"column:created_at;not null"`
 	LastUsedAt *time.Time `gorm:"column:last_used_at"`
 }
@@ -375,8 +375,8 @@ type OAuthAccount struct {
 	UserID          string     `gorm:"column:user_id;index"`
 	Provider        string     `gorm:"column:provider;not null;index"`
 	ProviderUserID  string     `gorm:"column:provider_user_id;not null"`
-	AccessTokenEnc  *string    `gorm:"column:access_token_enc"`
-	RefreshTokenEnc *string    `gorm:"column:refresh_token_enc"`
+	AccessTokenEnc  *string    `gorm:"column:access_token_enc;type:text"`
+	RefreshTokenEnc *string    `gorm:"column:refresh_token_enc;type:text"`
 	CreatedAt       time.Time  `gorm:"column:created_at;not null"`
 	ExpiresAt       *time.Time `gorm:"column:expires_at"`
 	UpdatedAt       time.Time  `gorm:"column:updated_at;not null"`
@@ -460,7 +460,7 @@ type APIKey struct {
 	KeyPrefix  string     `gorm:"column:key_prefix;not null;uniqueIndex"`
 	KeyHash    string     `gorm:"column:key_hash;not null"`
 	Name       string     `gorm:"column:name;not null"`
-	Scopes     *string    `gorm:"column:scopes"`
+	Scopes     *string    `gorm:"column:scopes;type:text"`
 	LastUsedAt *time.Time `gorm:"column:last_used_at"`
 	ExpiresAt  *time.Time `gorm:"column:expires_at"`
 	CreatedAt  time.Time  `gorm:"column:created_at;not null"`
@@ -503,7 +503,7 @@ type AuthorizationCode struct {
 	CodeHash            string    `gorm:"column:code_hash;not null;uniqueIndex"`
 	ClientID            string    `gorm:"column:client_id;not null"`
 	UserID              string    `gorm:"column:user_id;index"`
-	Scopes              *string   `gorm:"column:scopes"`
+	Scopes              *string   `gorm:"column:scopes;type:text"`
 	RedirectURI         string    `gorm:"column:redirect_uri;not null"`
 	CodeChallenge       string    `gorm:"column:code_challenge;not null"`
 	CodeChallengeMethod string    `gorm:"column:code_challenge_method;not null"`
@@ -556,7 +556,7 @@ type Consent struct {
 	ID        string    `gorm:"column:id;primaryKey"`
 	UserID    string    `gorm:"column:user_id;index"`
 	ClientID  string    `gorm:"column:client_id;not null"`
-	Scopes    *string   `gorm:"column:scopes"`
+	Scopes    *string   `gorm:"column:scopes;type:text"`
 	CreatedAt time.Time `gorm:"column:created_at;not null"`
 }
 
@@ -590,7 +590,7 @@ type DeviceCode struct {
 	DeviceCodeHash string     `gorm:"column:device_code_hash;not null;uniqueIndex"`
 	UserCode       string     `gorm:"column:user_code;not null;uniqueIndex"`
 	ClientID       string     `gorm:"column:client_id;not null"`
-	Scopes         *string    `gorm:"column:scopes"`
+	Scopes         *string    `gorm:"column:scopes;type:text"`
 	UserID         *string    `gorm:"column:user_id"`
 	Status         string     `gorm:"column:status;not null;default:pending"`
 	Interval       int        `gorm:"column:interval;not null;default:5"`
@@ -714,9 +714,9 @@ type WebhookDelivery struct {
 	ID           string    `gorm:"column:id;primaryKey"`
 	WebhookID    string    `gorm:"column:webhook_id;index"`
 	EventType    string    `gorm:"column:event_type;not null"`
-	Payload      string    `gorm:"column:payload;not null"`
+	Payload      string    `gorm:"column:payload;type:text;not null"`
 	StatusCode   *int16    `gorm:"column:status_code"`
-	ResponseBody *string   `gorm:"column:response_body"`
+	ResponseBody *string   `gorm:"column:response_body;type:text"`
 	Success      bool      `gorm:"column:success;not null"`
 	Attempt      int       `gorm:"column:attempt;not null;default:1"`
 	CreatedAt    time.Time `gorm:"column:created_at;not null"`

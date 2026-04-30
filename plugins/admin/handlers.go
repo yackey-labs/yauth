@@ -122,7 +122,7 @@ func requestIP(r *http.Request) *string {
 // cookieOptionsFromHost mirrors host config onto auth.CookieOptions. It
 // duplicates the helper found in plugins/emailpassword to keep the admin
 // plugin free of cross-plugin imports.
-func cookieOptionsFromHost(host plugin.PluginHost, maxAge int) auth.CookieOptions {
+func cookieOptionsFromHost(host plugin.PluginHost, r *http.Request, maxAge int) auth.CookieOptions {
 	sameSite := "Lax"
 	switch host.CookieSameSite() {
 	case http.SameSiteStrictMode:
@@ -133,7 +133,7 @@ func cookieOptionsFromHost(host plugin.PluginHost, maxAge int) auth.CookieOption
 	return auth.CookieOptions{
 		Name:     host.CookieName(),
 		Path:     host.CookiePath(),
-		Domain:   host.CookieDomain(),
+		Domain:   auth.ResolveCookieDomain(host.CookieDomain(), r),
 		Secure:   host.CookieSecure(),
 		SameSite: sameSite,
 		MaxAge:   maxAge,
@@ -382,7 +382,7 @@ func (p *adminPlugin) handleImpersonate(host plugin.PluginHost) http.HandlerFunc
 		})
 
 		http.SetCookie(w, auth.SessionCookie(
-			cookieOptionsFromHost(host, int(host.SessionTTL().Seconds())),
+			cookieOptionsFromHost(host, r, int(host.SessionTTL().Seconds())),
 			raw,
 		))
 		writeJSON(w, http.StatusOK, impersonateResponse{User: toUserJSON(*target)})

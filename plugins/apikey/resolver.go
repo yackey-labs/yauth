@@ -103,7 +103,7 @@ func (r *apiKeyResolver) Resolve(req *http.Request) (*domain.AuthUser, bool, err
 
 	r.touchLastUsed(rec.ID)
 
-	return &domain.AuthUser{User: *user}, true, nil
+	return &domain.AuthUser{User: *user, Method: domain.AuthMethodAPIKey}, true, nil
 }
 
 // touchLastUsed fires UpdateAPIKeyLastUsed asynchronously. Errors are

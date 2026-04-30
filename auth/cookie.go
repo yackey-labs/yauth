@@ -1,9 +1,37 @@
 package auth
 
 import (
+	"net"
 	"net/http"
 	"strings"
 )
+
+// CookieDomainAuto is the sentinel value for CookieOptions.Domain that
+// means "reflect the request's Host header back as the cookie Domain at
+// issuance time". Useful for multi-tenant deployments where one binary
+// serves several hostnames and a single static value would not match
+// every host. Resolution is performed by ResolveCookieDomain.
+const CookieDomainAuto = "auto"
+
+// ResolveCookieDomain returns the literal cookie Domain to set on a
+// response, given a configured value (typically host.CookieDomain()) and
+// the inbound request. The configured value is returned unchanged unless
+// it equals CookieDomainAuto, in which case the request's Host header
+// (with any :port stripped) is returned. An empty Host short-circuits
+// to "" so the Set-Cookie header omits Domain entirely.
+func ResolveCookieDomain(configured string, r *http.Request) string {
+	if !strings.EqualFold(strings.TrimSpace(configured), CookieDomainAuto) {
+		return configured
+	}
+	if r == nil || r.Host == "" {
+		return ""
+	}
+	host := r.Host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	return host
+}
 
 // CookieOptions captures every field of an http.Cookie that yauth-go needs to
 // configure. It is intentionally a leaf type with no dependency on the root

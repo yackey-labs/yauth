@@ -22,6 +22,7 @@ type discoveryDoc struct {
 	SubjectTypesSupported            []string `json:"subject_types_supported"`
 	IDTokenSigningAlgValuesSupported []string `json:"id_token_signing_alg_values_supported"`
 	ScopesSupported                  []string `json:"scopes_supported,omitempty"`
+	ClaimsSupported                  []string `json:"claims_supported,omitempty"`
 }
 
 // handleDiscovery returns the OpenID Provider discovery document. The
@@ -41,6 +42,7 @@ func (p *oidcPlugin) handleDiscovery(host plugin.PluginHost) http.HandlerFunc {
 			GrantTypesSupported:    []string{"authorization_code", "refresh_token"},
 			SubjectTypesSupported:  []string{"public"},
 			ScopesSupported:        []string{"openid", "email", "profile"},
+			ClaimsSupported:        p.cfg.claimsSupported(),
 		}
 
 		if signer := host.JWTSigner(); signer != nil {

@@ -59,7 +59,7 @@ func decodeJSON(r *http.Request, v any) error {
 	return dec.Decode(v)
 }
 
-func cookieOptionsFromHost(host plugin.PluginHost, maxAge int) auth.CookieOptions {
+func cookieOptionsFromHost(host plugin.PluginHost, r *http.Request, maxAge int) auth.CookieOptions {
 	sameSite := "Lax"
 	switch host.CookieSameSite() {
 	case http.SameSiteStrictMode:
@@ -70,7 +70,7 @@ func cookieOptionsFromHost(host plugin.PluginHost, maxAge int) auth.CookieOption
 	return auth.CookieOptions{
 		Name:     host.CookieName(),
 		Path:     host.CookiePath(),
-		Domain:   host.CookieDomain(),
+		Domain:   auth.ResolveCookieDomain(host.CookieDomain(), r),
 		Secure:   host.CookieSecure(),
 		SameSite: sameSite,
 		MaxAge:   maxAge,
@@ -391,7 +391,7 @@ func (p *mfaPlugin) handleVerify(host plugin.PluginHost) http.HandlerFunc {
 			return
 		}
 		http.SetCookie(w, auth.SessionCookie(
-			cookieOptionsFromHost(host, int(host.SessionTTL().Seconds())),
+			cookieOptionsFromHost(host, r, int(host.SessionTTL().Seconds())),
 			raw,
 		))
 		writeJSON(w, http.StatusOK, verifyResponse{UserID: userID})

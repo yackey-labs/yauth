@@ -208,7 +208,7 @@ type AuditLog struct {
 	ID        string    `gorm:"column:id;primaryKey"`
 	UserID    *string   `gorm:"column:user_id;index"`
 	EventType string    `gorm:"column:event_type;not null"`
-	Metadata  *string   `gorm:"column:metadata"`
+	Metadata  *string   `gorm:"column:metadata;type:text"`
 	IPAddress *string   `gorm:"column:ip_address"`
 	CreatedAt time.Time `gorm:"column:created_at;not null"`
 }

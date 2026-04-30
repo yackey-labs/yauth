@@ -255,6 +255,138 @@ func TestUnlockRequest_UnknownEmail_200_NoSend(t *testing.T) {
 	}
 }
 
+// MaxLockoutDuration caps the per-step lockout window even when
+// LockoutDurations is configured larger.
+func TestLockout_MaxLockoutDurationCapsStep(t *testing.T) {
+	srv, _, stop := newIsolatedServer(t, lockout.Config{
+		MaxAttempts: 2,
+		// 1h step requested, but cap is 50ms — the cooldown should
+		// elapse fast enough that the next login wins.
+		LockoutDurations:   []time.Duration{1 * time.Hour},
+		MaxLockoutDuration: 50 * time.Millisecond,
+	})
+	defer stop()
+
+	jar, _ := cookiejar.New(nil)
+	c := &http.Client{Jar: jar}
+	const email = "cap@example.com"
+	const pw = "correct horse battery staple"
+	register(t, srv, c, email, pw)
+	res := postJSON(t, c, srv.URL+"/api/auth/logout", struct{}{})
+	res.Body.Close()
+
+	for i := 0; i < 2; i++ {
+		res := postJSON(t, c, srv.URL+"/api/auth/login", map[string]string{
+			"email": email, "password": "wrong",
+		})
+		res.Body.Close()
+	}
+
+	// Cap=50ms — wait it out and the correct login should succeed,
+	// proving the 1h step was truncated to the cap.
+	time.Sleep(120 * time.Millisecond)
+	res = postJSON(t, c, srv.URL+"/api/auth/login", map[string]string{
+		"email": email, "password": pw,
+	})
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("expected post-cap login 200, got %d (%s)", res.StatusCode, drain(res))
+	}
+	res.Body.Close()
+}
+
+// AutoUnlock=false suppresses the lazy timer-based clear; only an
+// explicit /unlock can free the account.
+func TestLockout_AutoUnlockFalseRequiresExplicitUnlock(t *testing.T) {
+	off := false
+	srv, mailer, stop := newIsolatedServer(t, lockout.Config{
+		MaxAttempts:      2,
+		LockoutDurations: []time.Duration{20 * time.Millisecond},
+		AutoUnlock:       &off,
+	})
+	defer stop()
+
+	jar, _ := cookiejar.New(nil)
+	c := &http.Client{Jar: jar}
+	const email = "noauto@example.com"
+	const pw = "correct horse battery staple"
+	register(t, srv, c, email, pw)
+	res := postJSON(t, c, srv.URL+"/api/auth/logout", struct{}{})
+	res.Body.Close()
+
+	for i := 0; i < 2; i++ {
+		res := postJSON(t, c, srv.URL+"/api/auth/login", map[string]string{
+			"email": email, "password": "wrong",
+		})
+		res.Body.Close()
+	}
+
+	// Wait long past the cooldown — with AutoUnlock=false this must NOT
+	// re-open the account; the lock stays armed.
+	time.Sleep(80 * time.Millisecond)
+	res = postJSON(t, c, srv.URL+"/api/auth/login", map[string]string{
+		"email": email, "password": pw,
+	})
+	if res.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("expected still-locked 429, got %d (%s)", res.StatusCode, drain(res))
+	}
+	res.Body.Close()
+
+	// Explicit /unlock token clears the lock.
+	res = postJSON(t, c, srv.URL+"/api/auth/unlock/request", map[string]string{"email": email})
+	res.Body.Close()
+	tok := tokenFromLink(mailer.lastLink())
+	if tok == "" {
+		t.Fatalf("no unlock token issued")
+	}
+	res = postJSON(t, c, srv.URL+"/api/auth/unlock", map[string]string{"token": tok})
+	res.Body.Close()
+
+	res = postJSON(t, c, srv.URL+"/api/auth/login", map[string]string{
+		"email": email, "password": pw,
+	})
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("expected post-unlock 200, got %d (%s)", res.StatusCode, drain(res))
+	}
+	res.Body.Close()
+}
+
+// newIsolatedServer is a sibling of newServer that uses a unique
+// in-memory SQLite instance per test, so the shared rate-limit table
+// from neighbouring tests cannot bleed in and exhaust login budgets.
+func newIsolatedServer(t *testing.T, cfg lockout.Config) (*httptest.Server, *captureMailer, func()) {
+	t.Helper()
+	dsn := "file:lockout_" + t.Name() + "?mode=memory&cache=shared&_pragma=foreign_keys(1)"
+	db, err := gormrepo.OpenSQLite(dsn)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	if err := gormrepo.Migrate(context.Background(), db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	r := gormrepo.New(db)
+
+	mailer := &captureMailer{}
+	cfg.Mailer = mailer
+	if cfg.LinkBaseURL == "" {
+		cfg.LinkBaseURL = "https://example.test/unlock"
+	}
+
+	ya, err := yauth.New(r, yauth.NewDefaultConfig()).
+		WithPlugin(emailpassword.New(emailpassword.Config{
+			HIBPCheck:    false,
+			HIBPCheckSet: true,
+		})).
+		WithPlugin(lockout.New(cfg)).
+		Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	mux := http.NewServeMux()
+	mux.Handle("/api/auth/", http.StripPrefix("/api/auth", ya.Router()))
+	srv := httptest.NewServer(mux)
+	return srv, mailer, func() { srv.Close() }
+}
+
 // /lockout/state requires admin.
 func TestLockoutState_RequiresAdmin(t *testing.T) {
 	srv, _, stop := newServer(t, lockout.Config{})

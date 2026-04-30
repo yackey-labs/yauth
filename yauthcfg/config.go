@@ -25,6 +25,34 @@ type Config struct {
 	Telemetry TelemetryConfig `yaml:"telemetry" toml:"telemetry"`
 	Mailer    MailerConfig    `yaml:"mailer" toml:"mailer"`
 	Plugins   PluginsConfig   `yaml:"plugins" toml:"plugins"`
+	Cache     CacheConfig     `yaml:"cache" toml:"cache"`
+}
+
+// CacheConfig configures the optional read-cache decorator that wraps the
+// primary repository. When Enabled is false the rest of the section is
+// ignored. Today only Provider="redis" is implemented; future providers
+// (memcached, in-process LRU) would slot in here.
+type CacheConfig struct {
+	Enabled  bool   `yaml:"enabled" toml:"enabled"`
+	Provider string `yaml:"provider" toml:"provider"`
+
+	// RedisAddr is the host:port the Redis decorator dials. Required
+	// when Provider="redis".
+	RedisAddr string `yaml:"redis_addr" toml:"redis_addr"`
+	// RedisPasswordEnv is the env var holding the Redis AUTH password.
+	// Empty string means no AUTH.
+	RedisPasswordEnv string `yaml:"redis_password_env" toml:"redis_password_env"`
+	// RedisDB is the numeric Redis logical database (0-15). Defaults to 0.
+	RedisDB int `yaml:"redis_db" toml:"redis_db"`
+
+	// KeyPrefix is prepended to every cache key. Defaults to "yauth:".
+	// Useful when multiple yauth tenants share a Redis instance.
+	KeyPrefix string `yaml:"key_prefix" toml:"key_prefix"`
+
+	// DisableNegativeCache turns off short-TTL negative caching. Negative
+	// caching mitigates enumeration thrash on hot read paths but masks
+	// fresh writes for up to 60s.
+	DisableNegativeCache bool `yaml:"disable_negative_cache" toml:"disable_negative_cache"`
 }
 
 // DatabaseConfig selects a driver and DSN. DSN may be a literal value
@@ -32,6 +60,12 @@ type Config struct {
 type DatabaseConfig struct {
 	Driver string `yaml:"driver" toml:"driver"`
 	DSN    string `yaml:"dsn" toml:"dsn"`
+
+	// Schema selects a Postgres schema for table isolation. Empty (the
+	// default) means "public". When set, the value is appended to the
+	// DSN as `search_path=<schema>,public` so every query falls back
+	// through the public schema. Ignored for non-Postgres drivers.
+	Schema string `yaml:"schema" toml:"schema"`
 
 	// AutoMigrate, when true, runs Migrate inside NewFromConfig.
 	// DEV/TEST ONLY — production must use `yauth migrate`. When set
@@ -242,6 +276,17 @@ type AccountLockPluginConfig struct {
 	Enabled         bool          `yaml:"enabled" toml:"enabled"`
 	MaxAttempts     int           `yaml:"max_attempts" toml:"max_attempts"`
 	LockoutDuration time.Duration `yaml:"lockout_duration" toml:"lockout_duration"`
+
+	// MaxLockoutDuration caps the per-step LockoutDurations[i] used by
+	// the escalation ladder. A zero value means "no cap" — the existing
+	// LockoutDurations entries apply unchanged. Default: 1h.
+	MaxLockoutDuration time.Duration `yaml:"max_lockout_duration" toml:"max_lockout_duration"`
+
+	// AutoUnlock controls whether expired locks are cleared lazily on
+	// the next login attempt. When false, an admin must POST /unlock to
+	// clear a lock — the cooldown timer is ignored. nil pointer = true
+	// (the safe default; no operator action required).
+	AutoUnlock *bool `yaml:"auto_unlock,omitempty" toml:"auto_unlock,omitempty"`
 }
 
 // StatusPluginConfig configures the status plugin.
@@ -252,6 +297,13 @@ type StatusPluginConfig struct {
 // AdminPluginConfig configures the admin plugin.
 type AdminPluginConfig struct {
 	Enabled bool `yaml:"enabled" toml:"enabled"`
+
+	// AllowMachineCallers controls whether bearer-JWT or X-Api-Key
+	// callers may pass the RequireAdmin gate. The default (false) is
+	// strict: only cookie-resolved sessions count, even if the bearer
+	// token or api-key belongs to an admin user. Set true to allow
+	// machine-to-machine admin automation. Tracked via AuthUser.Method.
+	AllowMachineCallers bool `yaml:"allow_machine_callers" toml:"allow_machine_callers"`
 }
 
 // MFAPluginConfig configures the MFA (TOTP + backup codes) plugin.
@@ -293,18 +345,45 @@ type WebhooksPluginConfig struct {
 }
 
 // AsymJWTPluginConfig configures asymmetric (RS256/ES256) JWT signing.
+//
+// Operators supply the key material via filesystem path
+// (PrivateKeyPath/PublicKeyPath) OR via an environment variable holding
+// the PEM bytes (PrivateKeyPEMEnv/PublicKeyPEMEnv). The two modes are
+// mutually exclusive — Validate rejects configs that mix them. The env
+// path suits secret managers (Vault, AWS Secrets Manager) that mount
+// values into the process environment rather than the filesystem.
 type AsymJWTPluginConfig struct {
 	Enabled        bool   `yaml:"enabled" toml:"enabled"`
 	KeyType        string `yaml:"key_type" toml:"key_type"` // "rs256" | "es256"
 	PrivateKeyPath string `yaml:"private_key_path" toml:"private_key_path"`
 	PublicKeyPath  string `yaml:"public_key_path" toml:"public_key_path"`
-	KeyID          string `yaml:"key_id" toml:"key_id"`
+
+	// PrivateKeyPEMEnv names the environment variable whose value is the
+	// PEM-encoded private key. Mutually exclusive with PrivateKeyPath.
+	PrivateKeyPEMEnv string `yaml:"private_key_pem_env" toml:"private_key_pem_env"`
+	// PublicKeyPEMEnv names the environment variable whose value is the
+	// PEM-encoded public key. Mutually exclusive with PublicKeyPath.
+	PublicKeyPEMEnv string `yaml:"public_key_pem_env" toml:"public_key_pem_env"`
+
+	KeyID string `yaml:"key_id" toml:"key_id"`
 }
 
 // OIDCPluginConfig configures the OIDC discovery + JWKS plugin.
 type OIDCPluginConfig struct {
 	Enabled bool   `yaml:"enabled" toml:"enabled"`
 	Issuer  string `yaml:"issuer" toml:"issuer"`
+
+	// IDTokenTTL is the lifetime stamped onto id_tokens minted by the
+	// oauth2-server when oidc is loaded. Defaults to 1h when zero. The
+	// oidc plugin itself does not mint tokens today; the value is wired
+	// through PluginHost so a future oauth2-server revision can pick it
+	// up without re-plumbing.
+	IDTokenTTL time.Duration `yaml:"id_token_ttl" toml:"id_token_ttl"`
+
+	// ClaimsSupported is advertised under "claims_supported" in the
+	// discovery document. Defaults to the OIDC core baseline
+	// (sub/email/email_verified/name/aud/exp/iat/iss) when nil.
+	ClaimsSupported []string `yaml:"claims_supported" toml:"claims_supported"`
 }
 
 // OAuth2ServerPluginConfig configures the embedded RFC 6749 server.

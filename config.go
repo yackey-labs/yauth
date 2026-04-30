@@ -32,6 +32,10 @@ type YAuthConfig struct {
 	// cookie-resolved sessions. Disabled by default.
 	SessionBinding SessionBindingConfig
 
+	// AllowAdminMachineCallers controls whether bearer or api-key
+	// callers can pass RequireAdmin. False (default) = cookie-only.
+	AllowAdminMachineCallers bool
+
 	// RateLimit holds per-operation rate-limit windows. Plugins read
 	// these via PluginHost.RateLimit when wrapping their handlers.
 	RateLimit RateLimitConfig

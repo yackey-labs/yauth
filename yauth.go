@@ -96,11 +96,12 @@ func (b *YAuthBuilder) WithJWTSecret(secret []byte) *YAuthBuilder {
 // ServeMux, and returns the assembled object.
 func (b *YAuthBuilder) Build() (*YAuth, error) {
 	mw := middleware.New(b.repo, middleware.Config{
-		CookieName:       b.cfg.CookieName,
-		BindIP:           b.cfg.SessionBinding.BindIP,
-		BindUA:           b.cfg.SessionBinding.BindUA,
-		IPMismatchAction: b.cfg.SessionBinding.IPMismatchAction,
-		UAMismatchAction: b.cfg.SessionBinding.UAMismatchAction,
+		CookieName:               b.cfg.CookieName,
+		BindIP:                   b.cfg.SessionBinding.BindIP,
+		BindUA:                   b.cfg.SessionBinding.BindUA,
+		IPMismatchAction:         b.cfg.SessionBinding.IPMismatchAction,
+		UAMismatchAction:         b.cfg.SessionBinding.UAMismatchAction,
+		AllowAdminMachineCallers: b.cfg.AllowAdminMachineCallers,
 	})
 	mux := http.NewServeMux()
 

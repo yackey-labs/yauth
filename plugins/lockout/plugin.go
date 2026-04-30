@@ -63,6 +63,21 @@ type Config struct {
 	// the unlock email. Example: "https://app.example.com/unlock". The
 	// plugin appends "?token=<raw>".
 	LinkBaseURL string
+
+	// MaxLockoutDuration caps the per-step value picked off
+	// LockoutDurations. A LockoutDurations entry larger than this is
+	// truncated to MaxLockoutDuration when applied. Zero means
+	// "no cap"; the default applied below is 1h, the same as the last
+	// rung of the default ladder, so the default cap is effectively
+	// no-op until an operator extends the ladder.
+	MaxLockoutDuration time.Duration
+
+	// AutoUnlock controls whether expired locks are cleared lazily by a
+	// subsequent login attempt. When false the cooldown timer is
+	// ignored and an admin must POST /unlock to clear the lock; this
+	// is the safer mode for high-value workflows where a noisy
+	// attacker should not be able to "wait out" a lock. nil = true.
+	AutoUnlock *bool
 }
 
 func (c *Config) applyDefaults() {
@@ -80,9 +95,21 @@ func (c *Config) applyDefaults() {
 	if c.UnlockTokenTTL <= 0 {
 		c.UnlockTokenTTL = 1 * time.Hour
 	}
+	if c.MaxLockoutDuration <= 0 {
+		c.MaxLockoutDuration = 1 * time.Hour
+	}
 	if c.Mailer == nil {
 		c.Mailer = LoggingMailer{}
 	}
+}
+
+// autoUnlock reports the effective AutoUnlock value, defaulting to true
+// when the caller left the pointer nil.
+func (c *Config) autoUnlock() bool {
+	if c.AutoUnlock == nil {
+		return true
+	}
+	return *c.AutoUnlock
 }
 
 type lockoutPlugin struct {

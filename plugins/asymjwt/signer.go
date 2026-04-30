@@ -25,15 +25,24 @@ type Signer struct {
 	jwksBytes  []byte
 }
 
-// NewSigner loads the private and public PEM files referenced by cfg
-// and produces a Signer that can sign+verify JWTs with the configured
-// algorithm. JWKS bytes are precomputed at construction time.
+// NewSigner loads the private and public PEM material referenced by
+// cfg (either filesystem paths or inline byte slices) and produces a
+// Signer that can sign+verify JWTs with the configured algorithm. JWKS
+// bytes are precomputed at construction time.
 func NewSigner(cfg Config) (*Signer, error) {
-	priv, err := loadPrivateKey(cfg.PrivateKeyPath, cfg.KeyType)
+	privPEM, err := readPEMOrInline(cfg.PrivateKeyPath, cfg.PrivateKeyPEM, "private")
 	if err != nil {
 		return nil, err
 	}
-	pub, err := loadPublicKey(cfg.PublicKeyPath, cfg.KeyType)
+	pubPEM, err := readPEMOrInline(cfg.PublicKeyPath, cfg.PublicKeyPEM, "public")
+	if err != nil {
+		return nil, err
+	}
+	priv, err := parsePrivateKeyPEM(privPEM, cfg.KeyType)
+	if err != nil {
+		return nil, err
+	}
+	pub, err := parsePublicKeyPEM(pubPEM, cfg.KeyType)
 	if err != nil {
 		return nil, err
 	}
@@ -108,16 +117,31 @@ func (s *Signer) PublicJWKS() ([]byte, error) {
 	return out, nil
 }
 
-// loadPrivateKey reads a PEM private key from path and returns it as
-// the concrete key type expected for keyType.
-func loadPrivateKey(path, keyType string) (any, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("asymjwt: read private key: %w", err)
+// readPEMOrInline returns the PEM bytes pointed at by path or, when
+// path is empty, the inline payload. Exactly one of path/inline is
+// expected; New() enforces the precondition. The kind label is woven
+// into error messages so operators can tell which key failed to load.
+func readPEMOrInline(path string, inline []byte, kind string) ([]byte, error) {
+	if path != "" {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("asymjwt: read %s key: %w", kind, err)
+		}
+		return raw, nil
 	}
+	if len(inline) == 0 {
+		return nil, fmt.Errorf("asymjwt: %s key not configured", kind)
+	}
+	return inline, nil
+}
+
+// parsePrivateKeyPEM decodes raw PEM private-key bytes into the
+// concrete key type expected for keyType. The supported encodings are
+// PKCS8, PKCS1 (RSA), and SEC1 (EC).
+func parsePrivateKeyPEM(raw []byte, keyType string) (any, error) {
 	block, _ := pem.Decode(raw)
 	if block == nil {
-		return nil, fmt.Errorf("asymjwt: private key %q is not PEM", path)
+		return nil, fmt.Errorf("asymjwt: private key is not PEM")
 	}
 
 	if k, err := x509.ParsePKCS8PrivateKey(block.Bytes); err == nil {
@@ -129,23 +153,19 @@ func loadPrivateKey(path, keyType string) (any, error) {
 	if k, err := x509.ParseECPrivateKey(block.Bytes); err == nil {
 		return validatePrivateKeyType(k, keyType)
 	}
-	return nil, fmt.Errorf("asymjwt: unrecognized private-key encoding in %q", path)
+	return nil, fmt.Errorf("asymjwt: unrecognized private-key encoding")
 }
 
-// loadPublicKey reads a PEM public key from path and returns it as the
-// concrete key type expected for keyType.
-func loadPublicKey(path, keyType string) (any, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("asymjwt: read public key: %w", err)
-	}
+// parsePublicKeyPEM decodes raw PEM public-key bytes into the concrete
+// key type expected for keyType. PKIX is the primary path; PKCS1 RSA
+// public keys are accepted as a fallback.
+func parsePublicKeyPEM(raw []byte, keyType string) (any, error) {
 	block, _ := pem.Decode(raw)
 	if block == nil {
-		return nil, fmt.Errorf("asymjwt: public key %q is not PEM", path)
+		return nil, fmt.Errorf("asymjwt: public key is not PEM")
 	}
 	k, err := x509.ParsePKIXPublicKey(block.Bytes)
 	if err != nil {
-		// Fall back to PKCS1 RSA public-key encoding.
 		if k2, err2 := x509.ParsePKCS1PublicKey(block.Bytes); err2 == nil {
 			k = k2
 		} else {

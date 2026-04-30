@@ -138,16 +138,14 @@ func TestEmailPasswordEndToEnd(t *testing.T) {
 		t.Fatalf("session after register: expected 200, got %d (%s)", res.StatusCode, drain(res))
 	}
 	var sessBody struct {
-		User struct {
-			Email string `json:"email"`
-		} `json:"user"`
+		Email string `json:"email"`
 	}
 	if err := json.NewDecoder(res.Body).Decode(&sessBody); err != nil {
 		t.Fatalf("decode session: %v", err)
 	}
 	res.Body.Close()
-	if sessBody.User.Email != email {
-		t.Fatalf("session: expected %q, got %q", email, sessBody.User.Email)
+	if sessBody.Email != email {
+		t.Fatalf("session: expected %q, got %q", email, sessBody.Email)
 	}
 
 	// 3. logout
@@ -176,11 +174,11 @@ func TestEmailPasswordEndToEnd(t *testing.T) {
 
 	// 6. change password
 	res = cl.post(t, srv.URL+"/api/auth/change-password", map[string]string{
-		"old_password": oldPW,
-		"new_password": newPW,
+		"current_password": oldPW,
+		"new_password":     newPW,
 	})
-	if res.StatusCode != http.StatusNoContent {
-		t.Fatalf("change-password: expected 204, got %d (%s)", res.StatusCode, drain(res))
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("change-password: expected 200, got %d (%s)", res.StatusCode, drain(res))
 	}
 	res.Body.Close()
 
@@ -393,8 +391,8 @@ func TestForgotPassword_ResetPassword_RoundTrip(t *testing.T) {
 	token := extractToken(t, mail.link)
 
 	res = cl.post(t, srv.URL+"/api/auth/reset-password", map[string]string{
-		"token":        token,
-		"new_password": newPW,
+		"token":    token,
+		"password": newPW,
 	})
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("reset-password: %d (%s)", res.StatusCode, drain(res))
@@ -423,8 +421,8 @@ func TestForgotPassword_ResetPassword_RoundTrip(t *testing.T) {
 
 	// Replay reset must fail.
 	res = cl2.post(t, srv.URL+"/api/auth/reset-password", map[string]string{
-		"token":        token,
-		"new_password": newPW,
+		"token":    token,
+		"password": newPW,
 	})
 	if res.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("reset-password replay: want 401, got %d", res.StatusCode)
@@ -615,16 +613,14 @@ func TestPatchMe_UpdatesDisplayName(t *testing.T) {
 		t.Fatalf("PATCH /me: want 200, got %d (%s)", res.StatusCode, drain(res))
 	}
 	var body struct {
-		User struct {
-			DisplayName *string `json:"display_name"`
-		} `json:"user"`
+		DisplayName *string `json:"display_name"`
 	}
 	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	res.Body.Close()
-	if body.User.DisplayName == nil || *body.User.DisplayName != "Patch User" {
-		t.Fatalf("display_name not updated: %+v", body.User.DisplayName)
+	if body.DisplayName == nil || *body.DisplayName != "Patch User" {
+		t.Fatalf("display_name not updated: %+v", body.DisplayName)
 	}
 }
 
@@ -682,17 +678,20 @@ func TestRegister_AutoAdminFirstUser(t *testing.T) {
 	if res.StatusCode != http.StatusCreated {
 		t.Fatalf("register first: %d (%s)", res.StatusCode, drain(res))
 	}
+	res.Body.Close()
+	res = cl1.get(t, srv.URL+"/api/auth/session")
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("session first: %d", res.StatusCode)
+	}
 	var firstBody struct {
-		User struct {
-			Role string `json:"role"`
-		} `json:"user"`
+		Role string `json:"role"`
 	}
 	if err := json.NewDecoder(res.Body).Decode(&firstBody); err != nil {
 		t.Fatalf("decode first: %v", err)
 	}
 	res.Body.Close()
-	if firstBody.User.Role != "admin" {
-		t.Fatalf("first user role: want admin, got %q", firstBody.User.Role)
+	if firstBody.Role != "admin" {
+		t.Fatalf("first user role: want admin, got %q", firstBody.Role)
 	}
 
 	cl2 := newJSONClient(t)
@@ -703,16 +702,19 @@ func TestRegister_AutoAdminFirstUser(t *testing.T) {
 	if res.StatusCode != http.StatusCreated {
 		t.Fatalf("register second: %d", res.StatusCode)
 	}
+	res.Body.Close()
+	res = cl2.get(t, srv.URL+"/api/auth/session")
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("session second: %d", res.StatusCode)
+	}
 	var secondBody struct {
-		User struct {
-			Role string `json:"role"`
-		} `json:"user"`
+		Role string `json:"role"`
 	}
 	if err := json.NewDecoder(res.Body).Decode(&secondBody); err != nil {
 		t.Fatalf("decode second: %v", err)
 	}
 	res.Body.Close()
-	if secondBody.User.Role != "user" {
-		t.Fatalf("second user role: want user, got %q", secondBody.User.Role)
+	if secondBody.Role != "user" {
+		t.Fatalf("second user role: want user, got %q", secondBody.Role)
 	}
 }

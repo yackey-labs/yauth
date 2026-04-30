@@ -87,6 +87,7 @@ func declareSchemas(r huma.Registry) {
 		reflect.TypeOf(userJSON{}),
 		reflect.TypeOf(adminUserJSON{}),
 
+		reflect.TypeOf(sessionUserJSON{}),
 		reflect.TypeOf(emailPasswordRegisterRequest{}),
 		reflect.TypeOf(emailPasswordRegisterResponse{}),
 		reflect.TypeOf(emailPasswordLoginRequest{}),
@@ -94,6 +95,17 @@ func declareSchemas(r huma.Registry) {
 		reflect.TypeOf(emailPasswordLoginMfaResponse{}),
 		reflect.TypeOf(emailPasswordSessionResponse{}),
 		reflect.TypeOf(emailPasswordChangePasswordRequest{}),
+		reflect.TypeOf(emailPasswordChangePasswordResponse{}),
+		reflect.TypeOf(emailPasswordPatchMeRequest{}),
+		reflect.TypeOf(emailPasswordPatchMeResponse{}),
+		reflect.TypeOf(emailVerifyRequest{}),
+		reflect.TypeOf(emailVerifyResponse{}),
+		reflect.TypeOf(emailResendVerificationRequest{}),
+		reflect.TypeOf(emailResendVerificationResponse{}),
+		reflect.TypeOf(emailForgotPasswordRequest{}),
+		reflect.TypeOf(emailForgotPasswordResponse{}),
+		reflect.TypeOf(emailResetPasswordRequest{}),
+		reflect.TypeOf(emailResetPasswordResponse{}),
 
 		reflect.TypeOf(bearerTokenRequest{}),
 		reflect.TypeOf(bearerTokenResponse{}),
@@ -101,7 +113,6 @@ func declareSchemas(r huma.Registry) {
 		reflect.TypeOf(bearerRevokeRequest{}),
 
 		reflect.TypeOf(apiKeyJSON{}),
-		reflect.TypeOf(apiKeyListResponse{}),
 		reflect.TypeOf(apiKeyCreateRequest{}),
 		reflect.TypeOf(apiKeyCreateResponse{}),
 
@@ -118,6 +129,7 @@ func declareSchemas(r huma.Registry) {
 		reflect.TypeOf(lockoutStateResponse{}),
 
 		reflect.TypeOf(statusResponse{}),
+		reflect.TypeOf(configResponse{}),
 
 		reflect.TypeOf(adminListUsersResponse{}),
 		reflect.TypeOf(adminPatchUserRequest{}),
@@ -126,9 +138,12 @@ func declareSchemas(r huma.Registry) {
 		reflect.TypeOf(adminDeleteSessionsResponse{}),
 		reflect.TypeOf(adminAuditEntryJSON{}),
 		reflect.TypeOf(adminListAuditResponse{}),
+		reflect.TypeOf(adminSessionJSON{}),
+		reflect.TypeOf(adminListSessionsResponse{}),
 
 		reflect.TypeOf(mfaSetupResponse{}),
 		reflect.TypeOf(mfaConfirmRequest{}),
+		reflect.TypeOf(mfaMessageResponse{}),
 		reflect.TypeOf(mfaBackupCodesCountResponse{}),
 		reflect.TypeOf(mfaRegenerateResponse{}),
 		reflect.TypeOf(mfaVerifyRequest{}),
@@ -142,20 +157,17 @@ func declareSchemas(r huma.Registry) {
 		reflect.TypeOf(passkeyLoginFinishRequest{}),
 		reflect.TypeOf(passkeyLoginFinishResponse{}),
 		reflect.TypeOf(passkeyJSON{}),
-		reflect.TypeOf(passkeyListResponse{}),
 
 		reflect.TypeOf(oauthCallbackResponse{}),
+		reflect.TypeOf(oauthCallbackBody{}),
 		reflect.TypeOf(oauthAccountJSON{}),
-		reflect.TypeOf(oauthListAccountsResponse{}),
 		reflect.TypeOf(oauthLinkResponse{}),
 
 		reflect.TypeOf(webhookJSON{}),
-		reflect.TypeOf(webhookListResponse{}),
 		reflect.TypeOf(webhookCreateRequest{}),
 		reflect.TypeOf(webhookUpdateRequest{}),
 		reflect.TypeOf(webhookDeliveryJSON{}),
-		reflect.TypeOf(webhookListDeliveriesResponse{}),
-		reflect.TypeOf(webhookTestResponse{}),
+		reflect.TypeOf(webhookShowResponse{}),
 
 		reflect.TypeOf(jwksKey{}),
 		reflect.TypeOf(jwksDocument{}),

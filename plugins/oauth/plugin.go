@@ -9,6 +9,7 @@
 //	                                          state cookie, redirect
 //	GET  {prefix}/oauth/{provider}/callback   exchange code, link/create
 //	                                          user, issue session
+//	POST {prefix}/oauth/{provider}/callback   form-post variant of GET callback
 //	GET  {prefix}/oauth/accounts              list current user's links
 //	                                          (RequireAuth)
 //	DELETE {prefix}/oauth/{provider}          unlink (RequireAuth);
@@ -119,6 +120,7 @@ func (p *oauthPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux, prefix 
 
 	mux.Handle("GET "+prefix+"/oauth/{provider}/authorize", http.HandlerFunc(p.handleAuthorize(host)))
 	mux.Handle("GET "+prefix+"/oauth/{provider}/callback", http.HandlerFunc(p.handleCallback(host)))
+	mux.Handle("POST "+prefix+"/oauth/{provider}/callback", http.HandlerFunc(p.handleCallback(host)))
 	mux.Handle("GET "+prefix+"/oauth/accounts", mw.RequireAuth(http.HandlerFunc(p.handleListAccounts(host))))
 	mux.Handle("DELETE "+prefix+"/oauth/{provider}", mw.RequireAuth(http.HandlerFunc(p.handleUnlink(host))))
 	mux.Handle("POST "+prefix+"/oauth/{provider}/link", mw.RequireAuth(http.HandlerFunc(p.handleLink(host))))

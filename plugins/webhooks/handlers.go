@@ -106,10 +106,6 @@ func decodeEventsList(raw json.RawMessage) []string {
 
 // --- GET /webhooks ------------------------------------------------------
 
-type listWebhooksResponse struct {
-	Webhooks []webhookJSON `json:"webhooks"`
-}
-
 func (p *webhooksPlugin) handleList(host plugin.PluginHost) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		hooks, err := host.Repo().ListWebhooks(r.Context())
@@ -121,7 +117,7 @@ func (p *webhooksPlugin) handleList(host plugin.PluginHost) http.HandlerFunc {
 		for _, h := range hooks {
 			out = append(out, toWebhookJSON(*h, false))
 		}
-		writeJSON(w, http.StatusOK, listWebhooksResponse{Webhooks: out})
+		writeJSON(w, http.StatusOK, out)
 	}
 }
 
@@ -130,7 +126,10 @@ func (p *webhooksPlugin) handleList(host plugin.PluginHost) http.HandlerFunc {
 type createWebhookRequest struct {
 	URL    string   `json:"url"`
 	Events []string `json:"events"`
-	Active *bool    `json:"active"`
+	// Secret is the HMAC signing secret. When omitted a fresh random
+	// secret is generated; the operator must capture the response in
+	// either case because it is not retrievable later.
+	Secret string `json:"secret,omitempty"`
 }
 
 func (p *webhooksPlugin) handleCreate(host plugin.PluginHost) http.HandlerFunc {
@@ -155,24 +154,23 @@ func (p *webhooksPlugin) handleCreate(host plugin.PluginHost) http.HandlerFunc {
 			return
 		}
 
-		secret, err := generateSecret()
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to generate secret")
-			return
+		secret := req.Secret
+		if secret == "" {
+			s, err := generateSecret()
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to generate secret")
+				return
+			}
+			secret = s
 		}
 
 		now := time.Now().UTC()
-		active := true
-		if req.Active != nil {
-			active = *req.Active
-		}
-
 		input := domain.NewWebhook{
 			ID:        uuid.NewString(),
 			URL:       req.URL,
 			Secret:    secret,
 			Events:    eventsRaw,
-			Active:    active,
+			Active:    true,
 			CreatedAt: now,
 			UpdatedAt: now,
 		}
@@ -193,11 +191,21 @@ func (p *webhooksPlugin) handleCreate(host plugin.PluginHost) http.HandlerFunc {
 			CreatedAt: input.CreatedAt,
 			UpdatedAt: input.UpdatedAt,
 		}
-		writeJSON(w, http.StatusCreated, toWebhookJSON(created, true))
+		writeJSON(w, http.StatusCreated, toWebhookJSON(created, false))
 	}
 }
 
 // --- GET /webhooks/{id} -------------------------------------------------
+
+// recentDeliveryShowLimit caps the inline recent_deliveries list returned
+// by GET /webhooks/{id}. Larger histories are still available via
+// GET /webhooks/{id}/deliveries?limit=N.
+const recentDeliveryShowLimit = 10
+
+type webhookShowResponse struct {
+	Webhook          webhookJSON    `json:"webhook"`
+	RecentDeliveries []deliveryJSON `json:"recent_deliveries"`
+}
 
 func (p *webhooksPlugin) handleGet(host plugin.PluginHost) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -211,17 +219,39 @@ func (p *webhooksPlugin) handleGet(host plugin.PluginHost) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to load webhook")
 			return
 		}
-		writeJSON(w, http.StatusOK, toWebhookJSON(*hook, false))
+
+		recent := make([]deliveryJSON, 0)
+		if rows, err := host.Repo().ListWebhookDeliveriesByWebhookID(r.Context(), id, recentDeliveryShowLimit); err == nil {
+			for _, d := range rows {
+				recent = append(recent, deliveryJSON{
+					ID:           d.ID,
+					WebhookID:    d.WebhookID,
+					EventType:    d.EventType,
+					StatusCode:   d.StatusCode,
+					ResponseBody: d.ResponseBody,
+					Success:      d.Success,
+					Attempt:      d.Attempt,
+					CreatedAt:    d.CreatedAt,
+				})
+			}
+		}
+		writeJSON(w, http.StatusOK, webhookShowResponse{
+			Webhook:          toWebhookJSON(*hook, false),
+			RecentDeliveries: recent,
+		})
 	}
 }
 
 // --- PATCH /webhooks/{id} -----------------------------------------------
 
 type updateWebhookRequest struct {
-	URL          *string   `json:"url"`
-	Events       *[]string `json:"events"`
-	Active       *bool     `json:"active"`
-	RotateSecret bool      `json:"rotate_secret"`
+	URL    *string   `json:"url"`
+	Events *[]string `json:"events"`
+	Active *bool     `json:"active"`
+	// Secret, when non-empty, replaces the webhook's HMAC secret. Send
+	// an empty string to keep the existing secret. (The legacy
+	// `rotate_secret: true` boolean is no longer accepted.)
+	Secret *string `json:"secret"`
 }
 
 func (p *webhooksPlugin) handleUpdate(host plugin.PluginHost) http.HandlerFunc {
@@ -250,15 +280,9 @@ func (p *webhooksPlugin) handleUpdate(host plugin.PluginHost) http.HandlerFunc {
 		if req.Active != nil {
 			changes.Active = req.Active
 		}
-		var newSecret string
-		if req.RotateSecret {
-			s, err := generateSecret()
-			if err != nil {
-				writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to generate secret")
-				return
-			}
-			newSecret = s
-			changes.Secret = &newSecret
+		if req.Secret != nil && *req.Secret != "" {
+			s := *req.Secret
+			changes.Secret = &s
 		}
 
 		updated, err := host.Repo().UpdateWebhook(r.Context(), id, changes)
@@ -270,7 +294,7 @@ func (p *webhooksPlugin) handleUpdate(host plugin.PluginHost) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to update webhook")
 			return
 		}
-		writeJSON(w, http.StatusOK, toWebhookJSON(updated, req.RotateSecret))
+		writeJSON(w, http.StatusOK, toWebhookJSON(updated, false))
 	}
 }
 
@@ -302,10 +326,6 @@ type deliveryJSON struct {
 	Success      bool      `json:"success"`
 	Attempt      int       `json:"attempt"`
 	CreatedAt    time.Time `json:"created_at"`
-}
-
-type listDeliveriesResponse struct {
-	Deliveries []deliveryJSON `json:"deliveries"`
 }
 
 func (p *webhooksPlugin) handleDeliveries(host plugin.PluginHost) http.HandlerFunc {
@@ -347,21 +367,18 @@ func (p *webhooksPlugin) handleDeliveries(host plugin.PluginHost) http.HandlerFu
 				CreatedAt:    d.CreatedAt,
 			})
 		}
-		writeJSON(w, http.StatusOK, listDeliveriesResponse{Deliveries: out})
+		writeJSON(w, http.StatusOK, out)
 	}
 }
 
 // --- POST /webhooks/{id}/test -------------------------------------------
 
-type testWebhookResponse struct {
-	DeliveryQueued bool   `json:"delivery_queued"`
-	EventType      string `json:"event_type"`
-}
-
 // handleTest enqueues a synthetic webhook.test event so operators can
 // verify their endpoint receives traffic and the signature validates.
 // The synthetic payload bypasses the active/events filter — even an
 // inactive or unsubscribed webhook will receive a /test fire.
+//
+// Mirrors the Rust shape: 202 with no body once the delivery is queued.
 func (p *webhooksPlugin) handleTest(host plugin.PluginHost) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
@@ -394,9 +411,6 @@ func (p *webhooksPlugin) handleTest(host plugin.PluginHost) http.HandlerFunc {
 			writeError(w, http.StatusServiceUnavailable, "DISPATCHER_DOWN", "webhook dispatcher is shutting down")
 			return
 		}
-		writeJSON(w, http.StatusAccepted, testWebhookResponse{
-			DeliveryQueued: true,
-			EventType:      eventType,
-		})
+		w.WriteHeader(http.StatusAccepted)
 	}
 }

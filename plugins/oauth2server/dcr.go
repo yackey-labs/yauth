@@ -247,5 +247,5 @@ func signRegistrationAccessToken(host plugin.PluginHost, issuer, clientID string
 // future round.
 func buildRegistrationClientURI(cfg Config, prefix, clientID string) string {
 	base := strings.TrimRight(cfg.Issuer, "/") + strings.TrimRight(prefix, "/")
-	return base + "/oauth2/register/" + clientID
+	return base + "/oauth/register/" + clientID
 }

@@ -121,7 +121,7 @@ func (h *dcrHarness) signInitialAccessToken(t *testing.T) string {
 // credential to send (empty → omit the header).
 func (h *dcrHarness) register(t *testing.T, body string, bearer string) (int, map[string]any) {
 	t.Helper()
-	req, _ := http.NewRequest(http.MethodPost, h.srv.URL+"/api/auth/oauth2/register", strings.NewReader(body))
+	req, _ := http.NewRequest(http.MethodPost, h.srv.URL+"/api/auth/oauth/register", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	if bearer != "" {
 		req.Header.Set("Authorization", "Bearer "+bearer)
@@ -149,7 +149,7 @@ func (h *dcrHarness) authzAndConsent(t *testing.T, cookie, clientID, redirectURI
 	q.Set("code_challenge", challenge)
 	q.Set("code_challenge_method", "S256")
 
-	req, _ := http.NewRequest(http.MethodGet, h.srv.URL+"/api/auth/oauth2/authorize?"+q.Encode(), nil)
+	req, _ := http.NewRequest(http.MethodGet, h.srv.URL+"/api/auth/oauth/authorize?"+q.Encode(), nil)
 	req.AddCookie(&http.Cookie{Name: "yauth_session", Value: cookie})
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -268,7 +268,7 @@ func TestDCR_RegisterPublicClient_Then_AuthCodePKCE_EndToEnd(t *testing.T) {
 	if rat, _ := b["registration_access_token"].(string); rat == "" {
 		t.Fatalf("missing registration_access_token: %v", b)
 	}
-	if uri, _ := b["registration_client_uri"].(string); uri == "" || !strings.HasSuffix(uri, "/oauth2/register/"+clientID) {
+	if uri, _ := b["registration_client_uri"].(string); uri == "" || !strings.HasSuffix(uri, "/oauth/register/"+clientID) {
 		t.Fatalf("unexpected registration_client_uri: %v", b["registration_client_uri"])
 	}
 	if got, _ := b["token_endpoint_auth_method"].(string); got != "none" {
@@ -286,7 +286,7 @@ func TestDCR_RegisterPublicClient_Then_AuthCodePKCE_EndToEnd(t *testing.T) {
 	form.Set("redirect_uri", "https://app.example/cb")
 	form.Set("client_id", clientID)
 	form.Set("code_verifier", verifier)
-	st, tb := h.postForm(t, "/api/auth/oauth2/token", form, "", "")
+	st, tb := h.postForm(t, "/api/auth/oauth/token", form, "", "")
 	if st != http.StatusOK {
 		t.Fatalf("token: %d %v", st, tb)
 	}
@@ -326,7 +326,7 @@ func TestDCR_RegisterConfidentialClient_BasicAuth_TokenEndpoint(t *testing.T) {
 	form := url.Values{}
 	form.Set("grant_type", "client_credentials")
 	form.Set("scope", "read")
-	st, tb := h.postForm(t, "/api/auth/oauth2/token", form, clientID, clientSecret)
+	st, tb := h.postForm(t, "/api/auth/oauth/token", form, clientID, clientSecret)
 	if st != http.StatusOK {
 		t.Fatalf("client_credentials: %d %v", st, tb)
 	}

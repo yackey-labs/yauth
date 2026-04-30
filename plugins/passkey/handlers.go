@@ -100,9 +100,12 @@ func loadCredentialsForUser(ctx context.Context, r repo.Repository, userID strin
 
 // --- /passkeys/register/begin -------------------------------------------
 
+// registerBeginResponse mirrors the Rust spec: returns the WebAuthn
+// CredentialCreation options at the top level, with a challenge_id used
+// to correlate with the matching /finish call.
 type registerBeginResponse struct {
-	RequestID string                       `json:"request_id"`
-	Options   *protocol.CredentialCreation `json:"options"`
+	ChallengeID string                       `json:"challenge_id"`
+	Options     *protocol.CredentialCreation `json:"options"`
 }
 
 func (p *passkeyPlugin) handleRegisterBegin(host plugin.PluginHost) http.HandlerFunc {
@@ -139,17 +142,16 @@ func (p *passkeyPlugin) handleRegisterBegin(host plugin.PluginHost) http.Handler
 			return
 		}
 
-		writeJSON(w, http.StatusOK, registerBeginResponse{RequestID: reqID, Options: options})
+		writeJSON(w, http.StatusOK, registerBeginResponse{ChallengeID: reqID, Options: options})
 	}
 }
 
 // --- /passkeys/register/finish ------------------------------------------
 
 type registerFinishRequest struct {
-	RequestID  string          `json:"request_id"`
-	Name       string          `json:"name,omitempty"`
-	Response   json.RawMessage `json:"response"`
-	DeviceName *string         `json:"device_name,omitempty"`
+	ChallengeID string          `json:"challenge_id"`
+	Name        string          `json:"name,omitempty"`
+	Credential  json.RawMessage `json:"credential"`
 }
 
 type registerFinishResponse struct {
@@ -170,15 +172,15 @@ func (p *passkeyPlugin) handleRegisterFinish(host plugin.PluginHost) http.Handle
 			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 			return
 		}
-		if req.RequestID == "" || len(req.Response) == 0 {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "request_id and response are required")
+		if req.ChallengeID == "" || len(req.Credential) == 0 {
+			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "challenge_id and credential are required")
 			return
 		}
 
 		ctx := r.Context()
 		repoRef := host.Repo()
 
-		ch, err := repoRef.ConsumeChallenge(ctx, regChallengePrefix+req.RequestID)
+		ch, err := repoRef.ConsumeChallenge(ctx, regChallengePrefix+req.ChallengeID)
 		if err != nil || ch == nil {
 			writeError(w, http.StatusBadRequest, "INVALID_CHALLENGE", "registration challenge not found or expired")
 			return
@@ -196,7 +198,7 @@ func (p *passkeyPlugin) handleRegisterFinish(host plugin.PluginHost) http.Handle
 		}
 		pu := newPasskeyUser(&au.User, creds)
 
-		parsed, err := protocol.ParseCredentialCreationResponseBody(bytes.NewReader(req.Response))
+		parsed, err := protocol.ParseCredentialCreationResponseBody(bytes.NewReader(req.Credential))
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "INVALID_RESPONSE", "invalid attestation response: "+err.Error())
 			return
@@ -230,7 +232,7 @@ func (p *passkeyPlugin) handleRegisterFinish(host plugin.PluginHost) http.Handle
 			UserID:     au.User.ID,
 			Name:       name,
 			AAGUID:     aaguid,
-			DeviceName: req.DeviceName,
+			DeviceName: nil,
 			Credential: credJSON,
 			CreatedAt:  now,
 		}); err != nil {
@@ -253,8 +255,8 @@ type loginBeginRequest struct {
 }
 
 type loginBeginResponse struct {
-	RequestID string                        `json:"request_id"`
-	Options   *protocol.CredentialAssertion `json:"options"`
+	ChallengeID string                        `json:"challenge_id"`
+	Options     *protocol.CredentialAssertion `json:"options"`
 }
 
 func (p *passkeyPlugin) handleLoginBegin(host plugin.PluginHost) http.HandlerFunc {
@@ -314,22 +316,20 @@ func (p *passkeyPlugin) handleLoginBegin(host plugin.PluginHost) http.HandlerFun
 			return
 		}
 
-		writeJSON(w, http.StatusOK, loginBeginResponse{RequestID: reqID, Options: options})
+		writeJSON(w, http.StatusOK, loginBeginResponse{ChallengeID: reqID, Options: options})
 	}
 }
 
 // --- /passkey/login/finish ----------------------------------------------
 
 type loginFinishRequest struct {
-	RequestID string          `json:"request_id"`
-	Response  json.RawMessage `json:"response"`
+	ChallengeID string          `json:"challenge_id"`
+	Credential  json.RawMessage `json:"credential"`
 }
 
+// loginFinishResponse mirrors the Rust shape: flat user fields with no
+// envelope. The session cookie is set in the response headers.
 type loginFinishResponse struct {
-	User userJSON `json:"user"`
-}
-
-type userJSON struct {
 	ID            string  `json:"id"`
 	Email         string  `json:"email"`
 	DisplayName   *string `json:"display_name,omitempty"`
@@ -337,8 +337,8 @@ type userJSON struct {
 	Role          string  `json:"role"`
 }
 
-func toUserJSON(u domain.User) userJSON {
-	return userJSON{
+func toLoginFinishResponse(u domain.User) loginFinishResponse {
+	return loginFinishResponse{
 		ID:            u.ID,
 		Email:         u.Email,
 		DisplayName:   u.DisplayName,
@@ -347,6 +347,7 @@ func toUserJSON(u domain.User) userJSON {
 	}
 }
 
+
 func (p *passkeyPlugin) handleLoginFinish(host plugin.PluginHost) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req loginFinishRequest
@@ -354,15 +355,15 @@ func (p *passkeyPlugin) handleLoginFinish(host plugin.PluginHost) http.HandlerFu
 			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 			return
 		}
-		if req.RequestID == "" || len(req.Response) == 0 {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "request_id and response are required")
+		if req.ChallengeID == "" || len(req.Credential) == 0 {
+			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "challenge_id and credential are required")
 			return
 		}
 
 		ctx := r.Context()
 		repoRef := host.Repo()
 
-		ch, err := repoRef.ConsumeChallenge(ctx, loginChallengePrefix+req.RequestID)
+		ch, err := repoRef.ConsumeChallenge(ctx, loginChallengePrefix+req.ChallengeID)
 		if err != nil || ch == nil {
 			writeError(w, http.StatusBadRequest, "INVALID_CHALLENGE", "login challenge not found or expired")
 			return
@@ -373,7 +374,7 @@ func (p *passkeyPlugin) handleLoginFinish(host plugin.PluginHost) http.HandlerFu
 			return
 		}
 
-		parsed, err := protocol.ParseCredentialRequestResponseBody(bytes.NewReader(req.Response))
+		parsed, err := protocol.ParseCredentialRequestResponseBody(bytes.NewReader(req.Credential))
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "INVALID_RESPONSE", "invalid assertion response: "+err.Error())
 			return
@@ -453,7 +454,7 @@ func (p *passkeyPlugin) handleLoginFinish(host plugin.PluginHost) http.HandlerFu
 			cookieOptionsFromHost(host, r, int(host.SessionTTL().Seconds())),
 			raw,
 		))
-		writeJSON(w, http.StatusOK, loginFinishResponse{User: toUserJSON(*matchedUser)})
+		writeJSON(w, http.StatusOK, toLoginFinishResponse(*matchedUser))
 	}
 }
 
@@ -497,10 +498,6 @@ type passkeyJSON struct {
 	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
 }
 
-type listResponse struct {
-	Passkeys []passkeyJSON `json:"passkeys"`
-}
-
 func (p *passkeyPlugin) handleList(host plugin.PluginHost) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		au, ok := middleware.AuthUserFromContext(r.Context())
@@ -524,7 +521,7 @@ func (p *passkeyPlugin) handleList(host plugin.PluginHost) http.HandlerFunc {
 				LastUsedAt: row.LastUsedAt,
 			}
 		}
-		writeJSON(w, http.StatusOK, listResponse{Passkeys: out})
+		writeJSON(w, http.StatusOK, out)
 	}
 }
 

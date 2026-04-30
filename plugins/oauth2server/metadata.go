@@ -36,11 +36,11 @@ func (p *oauth2Plugin) handleAuthServerMetadata(host plugin.PluginHost) http.Han
 
 		doc := authServerMetadata{
 			Issuer:                      p.cfg.Issuer,
-			AuthorizationEndpoint:       base + "/oauth2/authorize",
-			TokenEndpoint:               base + "/oauth2/token",
-			RevocationEndpoint:          base + "/oauth2/revoke",
-			IntrospectionEndpoint:       base + "/oauth2/introspect",
-			DeviceAuthorizationEndpoint: base + "/oauth2/device_authorization",
+			AuthorizationEndpoint:       base + "/oauth/authorize",
+			TokenEndpoint:               base + "/oauth/token",
+			RevocationEndpoint:          base + "/oauth/revoke",
+			IntrospectionEndpoint:       base + "/oauth/introspect",
+			DeviceAuthorizationEndpoint: base + "/oauth/device/code",
 			ResponseTypesSupported:      []string{"code"},
 			GrantTypesSupported: []string{
 				"authorization_code",

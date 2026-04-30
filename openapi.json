@@ -64,12 +64,48 @@
       "AdminImpersonateResponse": {
         "additionalProperties": false,
         "properties": {
-          "user": {
-            "$ref": "#/components/schemas/AdminUserJSON"
+          "banned": {
+            "type": "boolean"
+          },
+          "banned_reason": {
+            "type": "string"
+          },
+          "banned_until": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "email_verified": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string"
           }
         },
         "required": [
-          "user"
+          "id",
+          "email",
+          "email_verified",
+          "role",
+          "banned",
+          "created_at",
+          "updated_at"
         ],
         "type": "object"
       },
@@ -91,9 +127,50 @@
         ],
         "type": "object"
       },
+      "AdminListSessionsResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "page": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "per_page": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "sessions": {
+            "items": {
+              "$ref": "#/components/schemas/AdminSessionJSON"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "total": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sessions",
+          "total",
+          "page",
+          "per_page"
+        ],
+        "type": "object"
+      },
       "AdminListUsersResponse": {
         "additionalProperties": false,
         "properties": {
+          "page": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "per_page": {
+            "format": "int64",
+            "type": "integer"
+          },
           "total": {
             "format": "int64",
             "type": "integer"
@@ -110,7 +187,9 @@
         },
         "required": [
           "users",
-          "total"
+          "total",
+          "page",
+          "per_page"
         ],
         "type": "object"
       },
@@ -120,10 +199,45 @@
           "display_name": {
             "type": "string"
           },
+          "email_verified": {
+            "type": "boolean"
+          },
           "role": {
             "type": "string"
           }
         },
+        "type": "object"
+      },
+      "AdminSessionJSON": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "ip_address": {
+            "type": "string"
+          },
+          "user_agent": {
+            "type": "string"
+          },
+          "user_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "user_id",
+          "created_at",
+          "expires_at"
+        ],
         "type": "object"
       },
       "AdminUserJSON": {
@@ -177,9 +291,9 @@
       "ApiKeyCreateRequest": {
         "additionalProperties": false,
         "properties": {
-          "expires_at": {
-            "format": "date-time",
-            "type": "string"
+          "expires_in_days": {
+            "format": "int64",
+            "type": "integer"
           },
           "name": {
             "type": "string"
@@ -202,15 +316,42 @@
       "ApiKeyCreateResponse": {
         "additionalProperties": false,
         "properties": {
-          "api_key": {
-            "$ref": "#/components/schemas/ApiKeyJSON"
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
           },
           "key": {
             "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           }
         },
         "required": [
-          "api_key",
+          "id",
+          "name",
+          "prefix",
+          "scopes",
+          "created_at",
           "key"
         ],
         "type": "object"
@@ -258,24 +399,6 @@
         ],
         "type": "object"
       },
-      "ApiKeyListResponse": {
-        "additionalProperties": false,
-        "properties": {
-          "keys": {
-            "items": {
-              "$ref": "#/components/schemas/ApiKeyJSON"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "keys"
-        ],
-        "type": "object"
-      },
       "BearerRefreshRequest": {
         "additionalProperties": false,
         "properties": {
@@ -307,6 +430,9 @@
             "type": "string"
           },
           "password": {
+            "type": "string"
+          },
+          "scope": {
             "type": "string"
           }
         },
@@ -341,19 +467,71 @@
         ],
         "type": "object"
       },
-      "EmailPasswordChangePasswordRequest": {
+      "ConfigResponse": {
         "additionalProperties": false,
         "properties": {
-          "new_password": {
-            "type": "string"
+          "allow_signups": {
+            "type": "boolean"
           },
-          "old_password": {
+          "require_email_verification": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "allow_signups",
+          "require_email_verification"
+        ],
+        "type": "object"
+      },
+      "EmailForgotPasswordRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "email": {
             "type": "string"
           }
         },
         "required": [
-          "old_password",
+          "email"
+        ],
+        "type": "object"
+      },
+      "EmailForgotPasswordResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "type": "object"
+      },
+      "EmailPasswordChangePasswordRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "current_password": {
+            "type": "string"
+          },
+          "new_password": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "current_password",
           "new_password"
+        ],
+        "type": "object"
+      },
+      "EmailPasswordChangePasswordResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
         ],
         "type": "object"
       },
@@ -381,6 +559,9 @@
           },
           "password": {
             "type": "string"
+          },
+          "remember_me": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -401,9 +582,66 @@
         ],
         "type": "object"
       },
+      "EmailPasswordPatchMeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "display_name": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "EmailPasswordPatchMeResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "auth_method": {
+            "type": "string"
+          },
+          "banned": {
+            "type": "boolean"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "email_verified": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "email_verified",
+          "role",
+          "banned",
+          "auth_method",
+          "scopes"
+        ],
+        "type": "object"
+      },
       "EmailPasswordRegisterRequest": {
         "additionalProperties": false,
         "properties": {
+          "display_name": {
+            "type": "string"
+          },
           "email": {
             "type": "string"
           },
@@ -420,29 +658,133 @@
       "EmailPasswordRegisterResponse": {
         "additionalProperties": false,
         "properties": {
-          "user": {
-            "$ref": "#/components/schemas/UserJSON"
+          "message": {
+            "type": "string"
           }
         },
         "required": [
-          "user"
+          "message"
         ],
         "type": "object"
       },
       "EmailPasswordSessionResponse": {
         "additionalProperties": false,
         "properties": {
-          "expires_at": {
-            "format": "date-time",
+          "auth_method": {
             "type": "string"
           },
-          "user": {
-            "$ref": "#/components/schemas/UserJSON"
+          "banned": {
+            "type": "boolean"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "email_verified": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           }
         },
         "required": [
-          "user",
-          "expires_at"
+          "id",
+          "email",
+          "email_verified",
+          "role",
+          "banned",
+          "auth_method",
+          "scopes"
+        ],
+        "type": "object"
+      },
+      "EmailResendVerificationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "email": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "email"
+        ],
+        "type": "object"
+      },
+      "EmailResendVerificationResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "type": "object"
+      },
+      "EmailResetPasswordRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "password": {
+            "type": "string"
+          },
+          "token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "token",
+          "password"
+        ],
+        "type": "object"
+      },
+      "EmailResetPasswordResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "type": "object"
+      },
+      "EmailVerifyRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "token"
+        ],
+        "type": "object"
+      },
+      "EmailVerifyResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
         ],
         "type": "object"
       },
@@ -595,12 +937,12 @@
       "LockoutUnlockReqResponse": {
         "additionalProperties": false,
         "properties": {
-          "sent": {
-            "type": "boolean"
+          "message": {
+            "type": "string"
           }
         },
         "required": [
-          "sent"
+          "message"
         ],
         "type": "object"
       },
@@ -619,12 +961,12 @@
       "LockoutUnlockResponse": {
         "additionalProperties": false,
         "properties": {
-          "unlocked": {
-            "type": "boolean"
+          "message": {
+            "type": "string"
           }
         },
         "required": [
-          "unlocked"
+          "message"
         ],
         "type": "object"
       },
@@ -632,9 +974,6 @@
         "additionalProperties": false,
         "properties": {
           "email": {
-            "type": "string"
-          },
-          "redirect_url": {
             "type": "string"
           }
         },
@@ -646,12 +985,12 @@
       "MagicLinkSendResponse": {
         "additionalProperties": false,
         "properties": {
-          "sent": {
-            "type": "boolean"
+          "message": {
+            "type": "string"
           }
         },
         "required": [
-          "sent"
+          "message"
         ],
         "type": "object"
       },
@@ -670,25 +1009,36 @@
       "MagicLinkVerifyResponse": {
         "additionalProperties": false,
         "properties": {
-          "user": {
-            "$ref": "#/components/schemas/UserJSON"
+          "display_name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "email_verified": {
+            "type": "boolean"
+          },
+          "user_id": {
+            "type": "string"
           }
         },
         "required": [
-          "user"
+          "user_id",
+          "email",
+          "email_verified"
         ],
         "type": "object"
       },
       "MfaBackupCodesCountResponse": {
         "additionalProperties": false,
         "properties": {
-          "unused": {
+          "remaining": {
             "format": "int64",
             "type": "integer"
           }
         },
         "required": [
-          "unused"
+          "remaining"
         ],
         "type": "object"
       },
@@ -701,6 +1051,18 @@
         },
         "required": [
           "code"
+        ],
+        "type": "object"
+      },
+      "MfaMessageResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
         ],
         "type": "object"
       },
@@ -737,9 +1099,6 @@
           "otpauth_url": {
             "type": "string"
           },
-          "qr_code": {
-            "type": "string"
-          },
           "secret": {
             "type": "string"
           }
@@ -747,7 +1106,6 @@
         "required": [
           "secret",
           "otpauth_url",
-          "qr_code",
           "backup_codes"
         ],
         "type": "object"
@@ -771,12 +1129,23 @@
       "MfaVerifyResponse": {
         "additionalProperties": false,
         "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "email_verified": {
+            "type": "boolean"
+          },
           "user_id": {
             "type": "string"
           }
         },
         "required": [
-          "user_id"
+          "user_id",
+          "email",
+          "email_verified"
         ],
         "type": "object"
       },
@@ -1178,65 +1547,54 @@
         ],
         "type": "object"
       },
-      "OauthCallbackResponse": {
+      "OauthCallbackBody": {
         "additionalProperties": false,
         "properties": {
-          "provider": {
+          "code": {
             "type": "string"
           },
-          "user": {
-            "$ref": "#/components/schemas/OauthCallbackResponseUserStruct"
+          "state": {
+            "type": "string"
           }
         },
         "required": [
-          "user",
-          "provider"
+          "code",
+          "state"
         ],
         "type": "object"
       },
-      "OauthCallbackResponseUserStruct": {
+      "OauthCallbackResponse": {
         "additionalProperties": false,
         "properties": {
+          "display_name": {
+            "type": "string"
+          },
           "email": {
             "type": "string"
           },
-          "id": {
+          "email_verified": {
+            "type": "boolean"
+          },
+          "user_id": {
             "type": "string"
           }
         },
         "required": [
-          "id",
-          "email"
+          "user_id",
+          "email",
+          "email_verified"
         ],
         "type": "object"
       },
       "OauthLinkResponse": {
         "additionalProperties": false,
         "properties": {
-          "authorize_url": {
+          "auth_url": {
             "type": "string"
           }
         },
         "required": [
-          "authorize_url"
-        ],
-        "type": "object"
-      },
-      "OauthListAccountsResponse": {
-        "additionalProperties": false,
-        "properties": {
-          "accounts": {
-            "items": {
-              "$ref": "#/components/schemas/OauthAccountJSON"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "accounts"
+          "auth_url"
         ],
         "type": "object"
       },
@@ -1371,24 +1729,6 @@
         ],
         "type": "object"
       },
-      "PasskeyListResponse": {
-        "additionalProperties": false,
-        "properties": {
-          "passkeys": {
-            "items": {
-              "$ref": "#/components/schemas/PasskeyJSON"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "passkeys"
-        ],
-        "type": "object"
-      },
       "PasskeyLoginBeginRequest": {
         "additionalProperties": false,
         "properties": {
@@ -1401,16 +1741,16 @@
       "PasskeyLoginBeginResponse": {
         "additionalProperties": false,
         "properties": {
+          "challenge_id": {
+            "type": "string"
+          },
           "options": {
             "additionalProperties": {},
             "type": "object"
-          },
-          "request_id": {
-            "type": "string"
           }
         },
         "required": [
-          "request_id",
+          "challenge_id",
           "options"
         ],
         "type": "object"
@@ -1418,45 +1758,60 @@
       "PasskeyLoginFinishRequest": {
         "additionalProperties": false,
         "properties": {
-          "request_id": {
+          "challenge_id": {
             "type": "string"
           },
-          "response": {
+          "credential": {
             "additionalProperties": {},
             "type": "object"
           }
         },
         "required": [
-          "request_id",
-          "response"
+          "challenge_id",
+          "credential"
         ],
         "type": "object"
       },
       "PasskeyLoginFinishResponse": {
         "additionalProperties": false,
         "properties": {
-          "user": {
-            "$ref": "#/components/schemas/UserJSON"
+          "display_name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "email_verified": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
           }
         },
         "required": [
-          "user"
+          "id",
+          "email",
+          "email_verified",
+          "role"
         ],
         "type": "object"
       },
       "PasskeyRegisterBeginResponse": {
         "additionalProperties": false,
         "properties": {
+          "challenge_id": {
+            "type": "string"
+          },
           "options": {
             "additionalProperties": {},
             "type": "object"
-          },
-          "request_id": {
-            "type": "string"
           }
         },
         "required": [
-          "request_id",
+          "challenge_id",
           "options"
         ],
         "type": "object"
@@ -1464,23 +1819,16 @@
       "PasskeyRegisterFinishRequest": {
         "additionalProperties": false,
         "properties": {
-          "device_name": {
-            "type": "string"
+          "credential": {
+            "additionalProperties": {},
+            "type": "object"
           },
           "name": {
             "type": "string"
-          },
-          "request_id": {
-            "type": "string"
-          },
-          "response": {
-            "additionalProperties": {},
-            "type": "object"
           }
         },
         "required": [
-          "request_id",
-          "response"
+          "credential"
         ],
         "type": "object"
       },
@@ -1502,6 +1850,51 @@
           "id",
           "name",
           "created_at"
+        ],
+        "type": "object"
+      },
+      "SessionUserJSON": {
+        "additionalProperties": false,
+        "properties": {
+          "auth_method": {
+            "type": "string"
+          },
+          "banned": {
+            "type": "boolean"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "email_verified": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "email_verified",
+          "role",
+          "banned",
+          "auth_method",
+          "scopes"
         ],
         "type": "object"
       },
@@ -1557,9 +1950,6 @@
       "WebhookCreateRequest": {
         "additionalProperties": false,
         "properties": {
-          "active": {
-            "type": "boolean"
-          },
           "events": {
             "items": {
               "type": "string"
@@ -1568,6 +1958,9 @@
               "array",
               "null"
             ]
+          },
+          "secret": {
+            "type": "string"
           },
           "url": {
             "type": "string"
@@ -1642,9 +2035,6 @@
           "id": {
             "type": "string"
           },
-          "secret": {
-            "type": "string"
-          },
           "updated_at": {
             "format": "date-time",
             "type": "string"
@@ -1663,10 +2053,10 @@
         ],
         "type": "object"
       },
-      "WebhookListDeliveriesResponse": {
+      "WebhookShowResponse": {
         "additionalProperties": false,
         "properties": {
-          "deliveries": {
+          "recent_deliveries": {
             "items": {
               "$ref": "#/components/schemas/WebhookDeliveryJSON"
             },
@@ -1674,44 +2064,14 @@
               "array",
               "null"
             ]
-          }
-        },
-        "required": [
-          "deliveries"
-        ],
-        "type": "object"
-      },
-      "WebhookListResponse": {
-        "additionalProperties": false,
-        "properties": {
-          "webhooks": {
-            "items": {
-              "$ref": "#/components/schemas/WebhookJSON"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "webhooks"
-        ],
-        "type": "object"
-      },
-      "WebhookTestResponse": {
-        "additionalProperties": false,
-        "properties": {
-          "delivery_queued": {
-            "type": "boolean"
           },
-          "event_type": {
-            "type": "string"
+          "webhook": {
+            "$ref": "#/components/schemas/WebhookJSON"
           }
         },
         "required": [
-          "delivery_queued",
-          "event_type"
+          "webhook",
+          "recent_deliveries"
         ],
         "type": "object"
       },
@@ -1727,8 +2087,8 @@
             },
             "type": "array"
           },
-          "rotate_secret": {
-            "type": "boolean"
+          "secret": {
+            "type": "string"
           },
           "url": {
             "type": "string"
@@ -1771,13 +2131,6 @@
         "operationId": "asymJWKS",
         "responses": {
           "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JwksDocument"
-                }
-              }
-            },
             "description": "JWKS."
           },
           "500": {
@@ -1798,18 +2151,26 @@
         ]
       }
     },
+    "/.well-known/oauth-authorization-server": {
+      "get": {
+        "operationId": "oauth2AuthServerMetadata",
+        "responses": {
+          "200": {
+            "description": "Metadata document."
+          }
+        },
+        "security": [],
+        "summary": "RFC 8414 authorization server metadata",
+        "tags": [
+          "oauth2-server"
+        ]
+      }
+    },
     "/.well-known/openid-configuration": {
       "get": {
         "operationId": "oidcDiscovery",
         "responses": {
           "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OidcDiscoveryDoc"
-                }
-              }
-            },
             "description": "Discovery."
           }
         },
@@ -1817,6 +2178,93 @@
         "summary": "OpenID Provider discovery document",
         "tags": [
           "oidc"
+        ]
+      }
+    },
+    "/account/request-unlock": {
+      "post": {
+        "description": "Always responds 200 to prevent user enumeration.",
+        "operationId": "lockoutUnlockRequest",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LockoutUnlockReqRequest"
+              }
+            }
+          },
+          "description": "Email address",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LockoutUnlockReqResponse"
+                }
+              }
+            },
+            "description": "Acknowledged."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Invalid email."
+          }
+        },
+        "security": [],
+        "summary": "Email a single-use unlock token",
+        "tags": [
+          "lockout"
+        ]
+      }
+    },
+    "/account/unlock": {
+      "post": {
+        "operationId": "lockoutUnlock",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LockoutUnlockRequest"
+              }
+            }
+          },
+          "description": "Unlock token",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LockoutUnlockResponse"
+                }
+              }
+            },
+            "description": "Account unlocked."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Invalid token."
+          }
+        },
+        "security": [],
+        "summary": "Consume an unlock token to clear an account lock",
+        "tags": [
+          "lockout"
         ]
       }
     },
@@ -1890,6 +2338,118 @@
         ]
       }
     },
+    "/admin/sessions": {
+      "get": {
+        "operationId": "adminListSessions",
+        "parameters": [
+          {
+            "description": "Filter to a single user.",
+            "in": "query",
+            "name": "user_id",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page size.",
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Pagination offset.",
+            "in": "query",
+            "name": "offset",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminListSessionsResponse"
+                }
+              }
+            },
+            "description": "Sessions."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Caller is not admin."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "List sessions, optionally filtered by user_id",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/sessions/{id}": {
+      "delete": {
+        "operationId": "adminDeleteSession",
+        "parameters": [
+          {
+            "description": "Session id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Session deleted."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Caller is not admin."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Session not found."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Terminate a single session by id",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/admin/users": {
       "get": {
         "operationId": "adminListUsers",
@@ -1906,6 +2466,22 @@
             "description": "Pagination offset.",
             "in": "query",
             "name": "offset",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Page number (alternate to limit/offset; 1-based).",
+            "in": "query",
+            "name": "page",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Page size (alternate to limit).",
+            "in": "query",
+            "name": "per_page",
             "schema": {
               "type": "integer"
             }
@@ -1953,6 +2529,64 @@
       }
     },
     "/admin/users/{id}": {
+      "delete": {
+        "operationId": "adminDeleteUser",
+        "parameters": [
+          {
+            "description": "User id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "User deleted."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Invalid id or self-delete."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Caller is not admin."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "User not found."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Hard-delete a user (refuses self-delete)",
+        "tags": [
+          "admin"
+        ]
+      },
       "get": {
         "operationId": "adminGetUser",
         "parameters": [
@@ -2073,6 +2707,72 @@
         "tags": [
           "admin"
         ]
+      },
+      "put": {
+        "operationId": "adminPutUser",
+        "parameters": [
+          {
+            "description": "User id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminPatchUserRequest"
+              }
+            }
+          },
+          "description": "Fields to update",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUserJSON"
+                }
+              }
+            },
+            "description": "Updated user."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Caller is not admin."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "User not found."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Alias for PATCH /admin/users/{id} (Rust parity)",
+        "tags": [
+          "admin"
+        ]
       }
     },
     "/admin/users/{id}/ban": {
@@ -2169,13 +2869,6 @@
         ],
         "responses": {
           "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AdminImpersonateResponse"
-                }
-              }
-            },
             "description": "Session issued for the target user."
           },
           "403": {
@@ -2314,6 +3007,53 @@
         ]
       }
     },
+    "/admin/users/{id}/unlock": {
+      "post": {
+        "operationId": "lockoutAdminUnlock",
+        "parameters": [
+          {
+            "description": "User id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LockoutUnlockResponse"
+                }
+              }
+            },
+            "description": "Account unlocked."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Caller is not admin."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Force-unlock a user (admin)",
+        "tags": [
+          "lockout"
+        ]
+      }
+    },
     "/api-keys": {
       "get": {
         "operationId": "apiKeyList",
@@ -2322,7 +3062,10 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiKeyListResponse"
+                  "items": {
+                    "$ref": "#/components/schemas/ApiKeyJSON"
+                  },
+                  "type": "array"
                 }
               }
             },
@@ -2365,7 +3108,7 @@
               }
             }
           },
-          "description": "Name, optional scopes, optional expiry",
+          "description": "Name, optional scopes, optional expires_in_days",
           "required": true
         },
         "responses": {
@@ -2377,7 +3120,7 @@
                 }
               }
             },
-            "description": "Key created. The `key` field is the plaintext, shown once."
+            "description": "Key created. The `secret` field is the plaintext, shown once."
           },
           "400": {
             "content": {
@@ -2421,7 +3164,7 @@
             "apiKey": []
           }
         ],
-        "summary": "Create a new API key (plaintext returned once)",
+        "summary": "Create a new API key (plaintext secret returned once)",
         "tags": [
           "api-key"
         ]
@@ -2483,81 +3226,9 @@
         ]
       }
     },
-    "/backup-codes": {
-      "get": {
-        "operationId": "mfaBackupCodesCount",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MfaBackupCodesCountResponse"
-                }
-              }
-            },
-            "description": "Unused backup-code count."
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            },
-            "description": "Not authenticated."
-          }
-        },
-        "security": [
-          {
-            "sessionCookie": []
-          }
-        ],
-        "summary": "Return the count of unused backup codes",
-        "tags": [
-          "mfa"
-        ]
-      }
-    },
-    "/backup-codes/regenerate": {
-      "post": {
-        "operationId": "mfaRegenerateBackupCodes",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MfaRegenerateResponse"
-                }
-              }
-            },
-            "description": "Fresh backup codes (shown once)."
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            },
-            "description": "Not authenticated."
-          }
-        },
-        "security": [
-          {
-            "sessionCookie": []
-          }
-        ],
-        "summary": "Replace the user's backup codes; returns the new set once",
-        "tags": [
-          "mfa"
-        ]
-      }
-    },
     "/change-password": {
       "post": {
-        "description": "Verifies the old password, stores the new hash, revokes other sessions, re-issues a fresh cookie for the caller.",
+        "description": "Verifies the current password, stores the new hash, revokes other sessions, re-issues a fresh cookie for the caller.",
         "operationId": "emailPasswordChangePassword",
         "requestBody": {
           "content": {
@@ -2567,11 +3238,18 @@
               }
             }
           },
-          "description": "Old + new password",
+          "description": "Current + new password",
           "required": true
         },
         "responses": {
-          "204": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailPasswordChangePasswordResponse"
+                }
+              }
+            },
             "description": "Password changed."
           },
           "400": {
@@ -2592,7 +3270,7 @@
                 }
               }
             },
-            "description": "Old password incorrect."
+            "description": "Current password incorrect."
           }
         },
         "security": [
@@ -2601,6 +3279,96 @@
           }
         ],
         "summary": "Rotate the caller's password",
+        "tags": [
+          "email-password"
+        ]
+      }
+    },
+    "/config": {
+      "get": {
+        "operationId": "config",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigResponse"
+                }
+              }
+            },
+            "description": "Config subset."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Caller is not admin."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Return the host configuration subset exposed for clients",
+        "tags": [
+          "status"
+        ]
+      }
+    },
+    "/forgot-password": {
+      "post": {
+        "description": "Always responds 200 to prevent user enumeration.",
+        "operationId": "emailPasswordForgotPassword",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailForgotPasswordRequest"
+              }
+            }
+          },
+          "description": "Email",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailForgotPasswordResponse"
+                }
+              }
+            },
+            "description": "Acknowledged."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Invalid email."
+          }
+        },
+        "security": [],
+        "summary": "Email a single-use password-reset token",
         "tags": [
           "email-password"
         ]
@@ -2812,13 +3580,6 @@
         },
         "responses": {
           "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MagicLinkVerifyResponse"
-                }
-              }
-            },
             "description": "Session issued; cookie set."
           },
           "401": {
@@ -2897,6 +3658,251 @@
         ]
       }
     },
+    "/mfa/backup-codes": {
+      "get": {
+        "operationId": "mfaBackupCodesCount",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MfaBackupCodesCountResponse"
+                }
+              }
+            },
+            "description": "Unused backup-code count."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Return the count of unused backup codes",
+        "tags": [
+          "mfa"
+        ]
+      }
+    },
+    "/mfa/backup-codes/regenerate": {
+      "post": {
+        "operationId": "mfaRegenerateBackupCodes",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MfaRegenerateResponse"
+                }
+              }
+            },
+            "description": "Fresh backup codes (shown once)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Replace the user's backup codes; returns the new set once",
+        "tags": [
+          "mfa"
+        ]
+      }
+    },
+    "/mfa/totp": {
+      "delete": {
+        "operationId": "mfaTOTPDelete",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MfaMessageResponse"
+                }
+              }
+            },
+            "description": "Removed."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Remove the user's TOTP secret + backup codes",
+        "tags": [
+          "mfa"
+        ]
+      }
+    },
+    "/mfa/totp/confirm": {
+      "post": {
+        "operationId": "mfaTOTPConfirm",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MfaConfirmRequest"
+              }
+            }
+          },
+          "description": "Six-digit TOTP code",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MfaMessageResponse"
+                }
+              }
+            },
+            "description": "TOTP activated."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No pending setup."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Invalid code."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Verify the freshly-provisioned TOTP and activate it",
+        "tags": [
+          "mfa"
+        ]
+      }
+    },
+    "/mfa/totp/setup": {
+      "post": {
+        "description": "Wipes any prior secret/backup codes for this user, then issues a fresh QR + backup-code set.",
+        "operationId": "mfaTOTPSetup",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MfaSetupResponse"
+                }
+              }
+            },
+            "description": "TOTP material; verify with /totp/confirm."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Provision a new TOTP secret + backup codes (unverified)",
+        "tags": [
+          "mfa"
+        ]
+      }
+    },
+    "/mfa/verify": {
+      "post": {
+        "operationId": "mfaVerify",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MfaVerifyRequest"
+              }
+            }
+          },
+          "description": "pending_session_id + code",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MfaVerifyResponse"
+                }
+              }
+            },
+            "description": "MFA verified; session cookie set."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Invalid code or pending session."
+          }
+        },
+        "security": [],
+        "summary": "Consume a pending session (TOTP or backup code)",
+        "tags": [
+          "mfa"
+        ]
+      }
+    },
     "/oauth/accounts": {
       "get": {
         "operationId": "oauthListAccounts",
@@ -2905,7 +3911,10 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/OauthListAccountsResponse"
+                  "items": {
+                    "$ref": "#/components/schemas/OauthAccountJSON"
+                  },
+                  "type": "array"
                 }
               }
             },
@@ -2930,6 +3939,473 @@
         "summary": "List the caller's linked OAuth accounts",
         "tags": [
           "oauth"
+        ]
+      }
+    },
+    "/oauth/authorize": {
+      "get": {
+        "operationId": "oauth2Authorize",
+        "parameters": [
+          {
+            "description": "Must be \"code\".",
+            "in": "query",
+            "name": "response_type",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Registered client_id.",
+            "in": "query",
+            "name": "client_id",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "One of the client's registered redirect URIs.",
+            "in": "query",
+            "name": "redirect_uri",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "PKCE challenge.",
+            "in": "query",
+            "name": "code_challenge",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "PKCE method (S256 only).",
+            "in": "query",
+            "name": "code_challenge_method",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Caller-supplied state echoed in the redirect.",
+            "in": "query",
+            "name": "state",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "OIDC nonce; included in id_token.",
+            "in": "query",
+            "name": "nonce",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Space-separated requested scopes.",
+            "in": "query",
+            "name": "scope",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/Oauth2AuthorizeRedirect"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Oauth2ConsentPayload"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Either {redirect_url} (consent already granted) or a consent payload that the UI must POST back via POST /oauth2/consent (Go-specific consent split)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Authorization endpoint — returns either a redirect URL or a consent payload",
+        "tags": [
+          "oauth2-server"
+        ]
+      },
+      "post": {
+        "description": "Identical semantics to the GET form; some clients prefer to submit the request as application/x-www-form-urlencoded.",
+        "operationId": "oauth2AuthorizePost",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            },
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Either {redirect_url} or a consent payload."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "POST variant of /oauth/authorize (Rust parity)",
+        "tags": [
+          "oauth2-server"
+        ]
+      }
+    },
+    "/oauth/device": {
+      "get": {
+        "description": "Renders or proxies the user-facing prompt where the user enters the user_code printed on the device. Body shape is implementation-defined.",
+        "operationId": "oauth2DeviceVerifyGet",
+        "responses": {
+          "200": {
+            "description": "Prompt rendered."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Browser landing for the device flow user-code prompt (Rust parity)",
+        "tags": [
+          "oauth2-server"
+        ]
+      },
+      "post": {
+        "operationId": "oauth2DeviceVerify",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            },
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Approved."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "invalid_request."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "User-facing endpoint to enter a user_code (RFC 8628)",
+        "tags": [
+          "oauth2-server"
+        ]
+      }
+    },
+    "/oauth/device/code": {
+      "post": {
+        "operationId": "oauth2DeviceAuthorization",
+        "requestBody": {
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "device_code + user_code pair."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "invalid_request."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "invalid_client."
+          }
+        },
+        "security": [],
+        "summary": "RFC 8628 device-authorization endpoint",
+        "tags": [
+          "oauth2-server"
+        ]
+      }
+    },
+    "/oauth/introspect": {
+      "post": {
+        "description": "Caller authenticates as a confidential client.",
+        "operationId": "oauth2Introspect",
+        "requestBody": {
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Introspection result."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "invalid_client."
+          }
+        },
+        "security": [],
+        "summary": "RFC 7662 token introspection",
+        "tags": [
+          "oauth2-server"
+        ]
+      }
+    },
+    "/oauth/register": {
+      "post": {
+        "description": "Public dynamic client registration endpoint. Disabled by default; opt in via plugin Config.DCREnabled. When DCRRequireInitialAccessToken is true (default), the request must carry an admin-issued Bearer token in the Authorization header.",
+        "operationId": "oauth2DynamicClientRegister",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Oauth2RegisterRequest"
+              }
+            }
+          },
+          "description": "Client metadata per RFC 7591 §2",
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Oauth2RegisterResponse"
+                }
+              }
+            },
+            "description": "Registered client + one-time client_secret (omitted for public clients) + registration_access_token."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Invalid client metadata."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Missing or invalid initial access token."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "DCR is disabled by configuration."
+          }
+        },
+        "security": [],
+        "summary": "Register an OAuth2 client (RFC 7591)",
+        "tags": [
+          "oauth2-server"
+        ]
+      }
+    },
+    "/oauth/revoke": {
+      "post": {
+        "description": "Idempotent: unknown / already-revoked / malformed tokens still return 200.",
+        "operationId": "oauth2Revoke",
+        "requestBody": {
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Always — RFC 7009 idempotency."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "invalid_client."
+          }
+        },
+        "security": [],
+        "summary": "RFC 7009 revocation",
+        "tags": [
+          "oauth2-server"
+        ]
+      }
+    },
+    "/oauth/token": {
+      "post": {
+        "description": "Accepts authorization_code, refresh_token, client_credentials, and urn:ietf:params:oauth:grant-type:device_code grants. Body is application/x-www-form-urlencoded or application/json.",
+        "operationId": "oauth2Token",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            },
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "description": "Form or JSON body with grant_type and grant-specific fields.",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Token bundle."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "invalid_request / unsupported_grant_type / etc."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "invalid_client."
+          }
+        },
+        "security": [],
+        "summary": "Token endpoint (RFC 6749 §3.2)",
+        "tags": [
+          "oauth2-server"
         ]
       }
     },
@@ -3118,6 +4594,82 @@
         "tags": [
           "oauth"
         ]
+      },
+      "post": {
+        "description": "Used by SPAs that prefer to POST the {code, state} pair from a hash fragment rather than appearing in the URL. Body is application/json or application/x-www-form-urlencoded.",
+        "operationId": "oauthCallbackPost",
+        "parameters": [
+          {
+            "description": "Registered provider name (e.g. google, github).",
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OauthCallbackBody"
+              }
+            }
+          },
+          "description": "code + state",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OauthCallbackResponse"
+                }
+              }
+            },
+            "description": "Linked or new user; session cookie set."
+          },
+          "302": {
+            "description": "Redirect (when redirect_url was supplied at /authorize)."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Invalid request, state, or provider error."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "User banned or user mismatch on link flow."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Provider exchange or userinfo failed."
+          }
+        },
+        "security": [],
+        "summary": "JSON-body variant of GET /oauth/{provider}/callback (Rust parity)",
+        "tags": [
+          "oauth"
+        ]
       }
     },
     "/oauth/{provider}/link": {
@@ -3192,115 +4744,6 @@
         "summary": "Start a link flow for an already-authenticated user",
         "tags": [
           "oauth"
-        ]
-      }
-    },
-    "/oauth2/authorize": {
-      "get": {
-        "operationId": "oauth2Authorize",
-        "parameters": [
-          {
-            "description": "Must be \"code\".",
-            "in": "query",
-            "name": "response_type",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Registered client_id.",
-            "in": "query",
-            "name": "client_id",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "One of the client's registered redirect URIs.",
-            "in": "query",
-            "name": "redirect_uri",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "PKCE challenge.",
-            "in": "query",
-            "name": "code_challenge",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "PKCE method (S256 only).",
-            "in": "query",
-            "name": "code_challenge_method",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Caller-supplied state echoed in the redirect.",
-            "in": "query",
-            "name": "state",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "OIDC nonce; included in id_token.",
-            "in": "query",
-            "name": "nonce",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Space-separated requested scopes.",
-            "in": "query",
-            "name": "scope",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "oneOf": [
-                    {
-                      "$ref": "#/components/schemas/Oauth2AuthorizeRedirect"
-                    },
-                    {
-                      "$ref": "#/components/schemas/Oauth2ConsentPayload"
-                    }
-                  ]
-                }
-              }
-            },
-            "description": "Either {redirect_url} (consent already granted) or a consent payload that the UI must POST back via /oauth2/consent."
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            },
-            "description": "Not authenticated."
-          }
-        },
-        "security": [
-          {
-            "sessionCookie": []
-          }
-        ],
-        "summary": "Authorization endpoint — returns either a redirect URL or a consent payload",
-        "tags": [
-          "oauth2-server"
         ]
       }
     },
@@ -3606,317 +5049,6 @@
         ]
       }
     },
-    "/oauth2/device": {
-      "post": {
-        "operationId": "oauth2DeviceVerify",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/Oauth2DeviceVerifyRequest"
-              }
-            }
-          },
-          "description": "user_code",
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Oauth2DeviceVerifyResponse"
-                }
-              }
-            },
-            "description": "Approved."
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            },
-            "description": "invalid_request."
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            },
-            "description": "Not authenticated."
-          }
-        },
-        "security": [
-          {
-            "sessionCookie": []
-          }
-        ],
-        "summary": "User-facing endpoint to enter a user_code (RFC 8628)",
-        "tags": [
-          "oauth2-server"
-        ]
-      }
-    },
-    "/oauth2/device_authorization": {
-      "post": {
-        "operationId": "oauth2DeviceAuthorization",
-        "requestBody": {
-          "content": {
-            "application/x-www-form-urlencoded": {
-              "schema": {
-                "type": "object"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Oauth2DeviceAuthResponse"
-                }
-              }
-            },
-            "description": "device_code + user_code pair."
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            },
-            "description": "invalid_request."
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            },
-            "description": "invalid_client."
-          }
-        },
-        "security": [],
-        "summary": "RFC 8628 device-authorization endpoint",
-        "tags": [
-          "oauth2-server"
-        ]
-      }
-    },
-    "/oauth2/introspect": {
-      "post": {
-        "description": "Caller authenticates as a confidential client.",
-        "operationId": "oauth2Introspect",
-        "requestBody": {
-          "content": {
-            "application/x-www-form-urlencoded": {
-              "schema": {
-                "type": "object"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Oauth2IntrospectResponse"
-                }
-              }
-            },
-            "description": "Introspection result."
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            },
-            "description": "invalid_client."
-          }
-        },
-        "security": [],
-        "summary": "RFC 7662 token introspection",
-        "tags": [
-          "oauth2-server"
-        ]
-      }
-    },
-    "/oauth2/register": {
-      "post": {
-        "description": "Public dynamic client registration endpoint. Disabled by default; opt in via plugin Config.DCREnabled. When DCRRequireInitialAccessToken is true (default), the request must carry an admin-issued Bearer token in the Authorization header.",
-        "operationId": "oauth2DynamicClientRegister",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/Oauth2RegisterRequest"
-              }
-            }
-          },
-          "description": "Client metadata per RFC 7591 §2",
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Oauth2RegisterResponse"
-                }
-              }
-            },
-            "description": "Registered client + one-time client_secret (omitted for public clients) + registration_access_token."
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            },
-            "description": "Invalid client metadata."
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            },
-            "description": "Missing or invalid initial access token."
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            },
-            "description": "DCR is disabled by configuration."
-          }
-        },
-        "security": [],
-        "summary": "Register an OAuth2 client (RFC 7591)",
-        "tags": [
-          "oauth2-server"
-        ]
-      }
-    },
-    "/oauth2/revoke": {
-      "post": {
-        "description": "Idempotent: unknown / already-revoked / malformed tokens still return 200.",
-        "operationId": "oauth2Revoke",
-        "requestBody": {
-          "content": {
-            "application/x-www-form-urlencoded": {
-              "schema": {
-                "type": "object"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Always — RFC 7009 idempotency."
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            },
-            "description": "invalid_client."
-          }
-        },
-        "security": [],
-        "summary": "RFC 7009 revocation",
-        "tags": [
-          "oauth2-server"
-        ]
-      }
-    },
-    "/oauth2/token": {
-      "post": {
-        "description": "Accepts authorization_code, refresh_token, client_credentials, and urn:ietf:params:oauth:grant-type:device_code grants. Body is application/x-www-form-urlencoded or application/json.",
-        "operationId": "oauth2Token",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object"
-              }
-            },
-            "application/x-www-form-urlencoded": {
-              "schema": {
-                "type": "object"
-              }
-            }
-          },
-          "description": "Form or JSON body with grant_type and grant-specific fields.",
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Oauth2TokenResponse"
-                }
-              }
-            },
-            "description": "Token bundle."
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            },
-            "description": "invalid_request / unsupported_grant_type / etc."
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            },
-            "description": "invalid_client."
-          }
-        },
-        "security": [],
-        "summary": "Token endpoint (RFC 6749 §3.2)",
-        "tags": [
-          "oauth2-server"
-        ]
-      }
-    },
     "/passkey/login/begin": {
       "post": {
         "operationId": "passkeyLoginBegin",
@@ -3933,13 +5065,6 @@
         },
         "responses": {
           "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PasskeyLoginBeginResponse"
-                }
-              }
-            },
             "description": "Options."
           }
         },
@@ -3961,18 +5086,11 @@
               }
             }
           },
-          "description": "Authenticator response",
+          "description": "Authenticator credential + challenge_id",
           "required": true
         },
         "responses": {
           "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PasskeyLoginFinishResponse"
-                }
-              }
-            },
             "description": "Session issued."
           },
           "400": {
@@ -4021,7 +5139,10 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PasskeyListResponse"
+                  "items": {
+                    "$ref": "#/components/schemas/PasskeyJSON"
+                  },
+                  "type": "array"
                 }
               }
             },
@@ -4054,13 +5175,6 @@
         "operationId": "passkeyRegisterBegin",
         "responses": {
           "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PasskeyRegisterBeginResponse"
-                }
-              }
-            },
             "description": "Options."
           },
           "401": {
@@ -4096,18 +5210,11 @@
               }
             }
           },
-          "description": "Authenticator response",
+          "description": "Authenticator credential + name",
           "required": true
         },
         "responses": {
           "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PasskeyRegisterFinishResponse"
-                }
-              }
-            },
             "description": "Stored credential."
           },
           "400": {
@@ -4241,6 +5348,103 @@
         },
         "security": [],
         "summary": "Register a new user",
+        "tags": [
+          "email-password"
+        ]
+      }
+    },
+    "/resend-verification": {
+      "post": {
+        "description": "Always responds 200 to prevent user enumeration.",
+        "operationId": "emailPasswordResendVerification",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailResendVerificationRequest"
+              }
+            }
+          },
+          "description": "Email",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailResendVerificationResponse"
+                }
+              }
+            },
+            "description": "Acknowledged."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Invalid email."
+          }
+        },
+        "security": [],
+        "summary": "Email a fresh verification link",
+        "tags": [
+          "email-password"
+        ]
+      }
+    },
+    "/reset-password": {
+      "post": {
+        "operationId": "emailPasswordResetPassword",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailResetPasswordRequest"
+              }
+            }
+          },
+          "description": "Token + new password",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailResetPasswordResponse"
+                }
+              }
+            },
+            "description": "Password reset."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Password too weak."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Token invalid or expired."
+          }
+        },
+        "security": [],
+        "summary": "Consume a password-reset token and set a new password",
         "tags": [
           "email-password"
         ]
@@ -4481,221 +5685,11 @@
         ]
       }
     },
-    "/totp": {
-      "delete": {
-        "operationId": "mfaTOTPDelete",
-        "responses": {
-          "204": {
-            "description": "Removed."
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            },
-            "description": "Not authenticated."
-          }
-        },
-        "security": [
-          {
-            "sessionCookie": []
-          }
-        ],
-        "summary": "Remove the user's TOTP secret + backup codes",
-        "tags": [
-          "mfa"
-        ]
-      }
-    },
-    "/totp/confirm": {
-      "post": {
-        "operationId": "mfaTOTPConfirm",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/MfaConfirmRequest"
-              }
-            }
-          },
-          "description": "Six-digit TOTP code",
-          "required": true
-        },
-        "responses": {
-          "204": {
-            "description": "TOTP activated."
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            },
-            "description": "No pending setup."
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            },
-            "description": "Invalid code."
-          }
-        },
-        "security": [
-          {
-            "sessionCookie": []
-          }
-        ],
-        "summary": "Verify the freshly-provisioned TOTP and activate it",
-        "tags": [
-          "mfa"
-        ]
-      }
-    },
-    "/totp/setup": {
-      "post": {
-        "description": "Wipes any prior secret/backup codes for this user, then issues a fresh QR + backup-code set.",
-        "operationId": "mfaTOTPSetup",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MfaSetupResponse"
-                }
-              }
-            },
-            "description": "TOTP material; verify with /totp/confirm."
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            },
-            "description": "Not authenticated."
-          }
-        },
-        "security": [
-          {
-            "sessionCookie": []
-          }
-        ],
-        "summary": "Provision a new TOTP secret + backup codes (unverified)",
-        "tags": [
-          "mfa"
-        ]
-      }
-    },
-    "/unlock": {
-      "post": {
-        "operationId": "lockoutUnlock",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/LockoutUnlockRequest"
-              }
-            }
-          },
-          "description": "Unlock token",
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/LockoutUnlockResponse"
-                }
-              }
-            },
-            "description": "Account unlocked."
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            },
-            "description": "Invalid token."
-          }
-        },
-        "security": [],
-        "summary": "Consume an unlock token to clear an account lock",
-        "tags": [
-          "lockout"
-        ]
-      }
-    },
-    "/unlock/request": {
-      "post": {
-        "description": "Always responds 200 to prevent user enumeration.",
-        "operationId": "lockoutUnlockRequest",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/LockoutUnlockReqRequest"
-              }
-            }
-          },
-          "description": "Email address",
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/LockoutUnlockReqResponse"
-                }
-              }
-            },
-            "description": "Acknowledged."
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            },
-            "description": "Invalid email."
-          }
-        },
-        "security": [],
-        "summary": "Email a single-use unlock token",
-        "tags": [
-          "lockout"
-        ]
-      }
-    },
     "/userinfo": {
       "get": {
         "operationId": "oidcUserInfo",
         "responses": {
           "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OidcUserInfoResponse"
-                }
-              }
-            },
             "description": "UserInfo."
           },
           "401": {
@@ -4726,18 +5720,18 @@
         ]
       }
     },
-    "/verify": {
+    "/verify-email": {
       "post": {
-        "operationId": "mfaVerify",
+        "operationId": "emailPasswordVerifyEmail",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/MfaVerifyRequest"
+                "$ref": "#/components/schemas/EmailVerifyRequest"
               }
             }
           },
-          "description": "pending_session_id + code",
+          "description": "Token",
           "required": true
         },
         "responses": {
@@ -4745,11 +5739,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MfaVerifyResponse"
+                  "$ref": "#/components/schemas/EmailVerifyResponse"
                 }
               }
             },
-            "description": "MFA verified; session cookie set."
+            "description": "Email verified."
           },
           "401": {
             "content": {
@@ -4759,13 +5753,13 @@
                 }
               }
             },
-            "description": "Invalid code or pending session."
+            "description": "Token invalid or expired."
           }
         },
         "security": [],
-        "summary": "Consume a pending session (TOTP or backup code)",
+        "summary": "Consume a verification token issued by /resend-verification",
         "tags": [
-          "mfa"
+          "email-password"
         ]
       }
     },
@@ -4777,7 +5771,10 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/WebhookListResponse"
+                  "items": {
+                    "$ref": "#/components/schemas/WebhookJSON"
+                  },
+                  "type": "array"
                 }
               }
             },
@@ -4927,11 +5924,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/WebhookJSON"
+                  "$ref": "#/components/schemas/WebhookShowResponse"
                 }
               }
             },
-            "description": "Webhook."
+            "description": "Webhook + recent_deliveries."
           },
           "403": {
             "content": {
@@ -4959,7 +5956,7 @@
             "sessionCookie": []
           }
         ],
-        "summary": "Fetch a single webhook (no secret)",
+        "summary": "Fetch a single webhook with its recent_deliveries (no secret)",
         "tags": [
           "webhooks"
         ]
@@ -5029,6 +6026,72 @@
         "tags": [
           "webhooks"
         ]
+      },
+      "put": {
+        "operationId": "webhookPut",
+        "parameters": [
+          {
+            "description": "Webhook id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookUpdateRequest"
+              }
+            }
+          },
+          "description": "Partial update",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookJSON"
+                }
+              }
+            },
+            "description": "Updated webhook."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Caller is not admin."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not found."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Alias for PATCH /webhooks/{id} (Rust parity)",
+        "tags": [
+          "webhooks"
+        ]
       }
     },
     "/webhooks/{id}/deliveries": {
@@ -5058,7 +6121,10 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/WebhookListDeliveriesResponse"
+                  "items": {
+                    "$ref": "#/components/schemas/WebhookDeliveryJSON"
+                  },
+                  "type": "array"
                 }
               }
             },
@@ -5112,13 +6178,6 @@
         ],
         "responses": {
           "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WebhookTestResponse"
-                }
-              }
-            },
             "description": "Delivery queued."
           },
           "403": {

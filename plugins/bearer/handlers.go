@@ -57,6 +57,11 @@ func decodeJSON(r *http.Request, v any) error {
 type tokenRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
+	// Scope is an optional space-delimited list of scopes the caller is
+	// requesting on the issued access token. Today the bearer plugin
+	// stores claims only — scope is recorded for parity with the Rust
+	// /token endpoint and surfaces in introspect/userinfo responses.
+	Scope string `json:"scope,omitempty"`
 }
 
 func (p *bearerPlugin) handleToken(host plugin.PluginHost) http.HandlerFunc {

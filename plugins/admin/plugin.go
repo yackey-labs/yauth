@@ -7,6 +7,7 @@
 //	GET    {prefix}/admin/users                  — list/search users
 //	GET    {prefix}/admin/users/{id}             — fetch a single user
 //	PATCH  {prefix}/admin/users/{id}             — partial update (display_name?, role?)
+//	PUT    {prefix}/admin/users/{id}             — alias for PATCH (Rust parity)
 //	DELETE {prefix}/admin/users/{id}             — hard-delete a user (refuses self-delete)
 //	POST   {prefix}/admin/users/{id}/ban         — ban a user
 //	POST   {prefix}/admin/users/{id}/unban       — clear a ban
@@ -44,6 +45,7 @@ func (p *adminPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux, prefix 
 	mux.Handle("GET "+prefix+"/admin/users", mw.RequireAdmin(http.HandlerFunc(p.handleListUsers(host))))
 	mux.Handle("GET "+prefix+"/admin/users/{id}", mw.RequireAdmin(http.HandlerFunc(p.handleGetUser(host))))
 	mux.Handle("PATCH "+prefix+"/admin/users/{id}", mw.RequireAdmin(http.HandlerFunc(p.handlePatchUser(host))))
+	mux.Handle("PUT "+prefix+"/admin/users/{id}", mw.RequireAdmin(http.HandlerFunc(p.handlePatchUser(host))))
 	mux.Handle("DELETE "+prefix+"/admin/users/{id}", mw.RequireAdmin(http.HandlerFunc(p.handleDeleteUser(host))))
 	mux.Handle("POST "+prefix+"/admin/users/{id}/ban", mw.RequireAdmin(http.HandlerFunc(p.handleBanUser(host))))
 	mux.Handle("POST "+prefix+"/admin/users/{id}/unban", mw.RequireAdmin(http.HandlerFunc(p.handleUnbanUser(host))))

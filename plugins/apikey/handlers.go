@@ -87,10 +87,6 @@ func decodeJSON(r *http.Request, v any) error {
 
 // --- GET /api-keys ------------------------------------------------------
 
-type listResponse struct {
-	Keys []apiKeyJSON `json:"keys"`
-}
-
 func (p *apiKeyPlugin) handleList(host plugin.PluginHost) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		au, ok := middleware.AuthUserFromContext(r.Context())
@@ -111,24 +107,30 @@ func (p *apiKeyPlugin) handleList(host plugin.PluginHost) http.HandlerFunc {
 			}
 			out = append(out, toAPIKeyJSON(*k))
 		}
-		writeJSON(w, http.StatusOK, listResponse{Keys: out})
+		writeJSON(w, http.StatusOK, out)
 	}
 }
 
 // --- POST /api-keys -----------------------------------------------------
 
 type createRequest struct {
-	Name      string     `json:"name"`
-	Scopes    []string   `json:"scopes,omitempty"`
-	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+	Name          string   `json:"name"`
+	Scopes        []string `json:"scopes,omitempty"`
+	ExpiresInDays *int     `json:"expires_in_days,omitempty"`
 }
 
-// createResponse returns the persisted key metadata plus the one-time
-// plaintext value. The plaintext is shown ONCE and is unrecoverable
+// createResponse returns the persisted key metadata flat plus the
+// one-time plaintext key. Mirrors the Rust shape (`key` field carries
+// the plaintext). The plaintext is shown ONCE and is unrecoverable
 // thereafter — callers must capture it from this response.
 type createResponse struct {
-	APIKey apiKeyJSON `json:"api_key"`
-	Key    string     `json:"key"`
+	ID        string     `json:"id"`
+	Name      string     `json:"name"`
+	Prefix    string     `json:"prefix"`
+	Scopes    []string   `json:"scopes"`
+	CreatedAt time.Time  `json:"created_at"`
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+	Key       string     `json:"key"`
 }
 
 func (p *apiKeyPlugin) handleCreate(host plugin.PluginHost) http.HandlerFunc {
@@ -149,9 +151,14 @@ func (p *apiKeyPlugin) handleCreate(host plugin.PluginHost) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "INVALID_NAME", "name is required")
 			return
 		}
-		if req.ExpiresAt != nil && !req.ExpiresAt.UTC().After(time.Now().UTC()) {
-			writeError(w, http.StatusBadRequest, "INVALID_EXPIRY", "expires_at must be in the future")
-			return
+		var expiresAt *time.Time
+		if req.ExpiresInDays != nil {
+			if *req.ExpiresInDays <= 0 {
+				writeError(w, http.StatusBadRequest, "INVALID_EXPIRY", "expires_in_days must be positive")
+				return
+			}
+			t := time.Now().UTC().Add(time.Duration(*req.ExpiresInDays) * 24 * time.Hour)
+			expiresAt = &t
 		}
 
 		repo := host.Repo()
@@ -181,7 +188,7 @@ func (p *apiKeyPlugin) handleCreate(host plugin.PluginHost) http.HandlerFunc {
 			KeyHash:   gen.Hash,
 			Name:      req.Name,
 			Scopes:    scopesJSON,
-			ExpiresAt: req.ExpiresAt,
+			ExpiresAt: expiresAt,
 			CreatedAt: now,
 		}
 		if err := repo.CreateAPIKey(r.Context(), input); err != nil {
@@ -190,16 +197,13 @@ func (p *apiKeyPlugin) handleCreate(host plugin.PluginHost) http.HandlerFunc {
 		}
 
 		writeJSON(w, http.StatusCreated, createResponse{
-			APIKey: apiKeyJSON{
-				ID:         input.ID,
-				Name:       input.Name,
-				Prefix:     input.KeyPrefix,
-				Scopes:     normalizeScopes(req.Scopes),
-				LastUsedAt: nil,
-				ExpiresAt:  input.ExpiresAt,
-				CreatedAt:  input.CreatedAt,
-			},
-			Key: gen.Plaintext,
+			ID:        input.ID,
+			Name:      input.Name,
+			Prefix:    input.KeyPrefix,
+			Scopes:    normalizeScopes(req.Scopes),
+			CreatedAt: input.CreatedAt,
+			ExpiresAt: input.ExpiresAt,
+			Key:       gen.Plaintext,
 		})
 	}
 }

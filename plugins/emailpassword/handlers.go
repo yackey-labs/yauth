@@ -106,12 +106,15 @@ func validEmail(s string) bool {
 // --- /register ----------------------------------------------------------
 
 type registerRequest struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
+	Email       string  `json:"email"`
+	Password    string  `json:"password"`
+	DisplayName *string `json:"display_name,omitempty"`
 }
 
+// registerResponse mirrors the Rust shape: a generic message. The
+// session cookie carries the actual auth state.
 type registerResponse struct {
-	User userJSON `json:"user"`
+	Message string `json:"message"`
 }
 
 func (p *emailPasswordPlugin) handleRegister(host plugin.PluginHost) http.HandlerFunc {
@@ -175,12 +178,20 @@ func (p *emailPasswordPlugin) handleRegister(host plugin.PluginHost) http.Handle
 		}
 
 		now := time.Now().UTC()
+		var displayName *string
+		if req.DisplayName != nil {
+			trimmed := strings.TrimSpace(*req.DisplayName)
+			if trimmed != "" {
+				displayName = &trimmed
+			}
+		}
 		user, err := repo.CreateUser(ctx, domain.NewUser{
-			ID:        uuid.NewString(),
-			Email:     req.Email,
-			Role:      role,
-			CreatedAt: now,
-			UpdatedAt: now,
+			ID:          uuid.NewString(),
+			Email:       req.Email,
+			Role:        role,
+			DisplayName: displayName,
+			CreatedAt:   now,
+			UpdatedAt:   now,
 		})
 		if err != nil {
 			if errors.Is(err, yautherr.ErrUserExists) {
@@ -244,7 +255,7 @@ func (p *emailPasswordPlugin) handleRegister(host plugin.PluginHost) http.Handle
 			cookieOptionsFromHost(host, r, int(host.SessionTTL().Seconds())),
 			raw,
 		))
-		writeJSON(w, http.StatusCreated, registerResponse{User: toUserJSON(user)})
+		writeJSON(w, http.StatusCreated, registerResponse{Message: "Account created."})
 	}
 }
 
@@ -466,9 +477,35 @@ func (p *emailPasswordPlugin) handleLogout(host plugin.PluginHost) http.HandlerF
 
 // --- /session -----------------------------------------------------------
 
+// sessionResponse mirrors the Rust shape: flat user fields, including
+// authentication-method metadata. It is also used by PATCH /me so the
+// two endpoints return identical structures.
 type sessionResponse struct {
-	User      userJSON  `json:"user"`
-	ExpiresAt time.Time `json:"expires_at"`
+	ID            string   `json:"id"`
+	Email         string   `json:"email"`
+	DisplayName   *string  `json:"display_name,omitempty"`
+	EmailVerified bool     `json:"email_verified"`
+	Role          string   `json:"role"`
+	Banned        bool     `json:"banned"`
+	AuthMethod    string   `json:"auth_method"`
+	Scopes        []string `json:"scopes"`
+}
+
+func toSessionResponse(au *domain.AuthUser) sessionResponse {
+	method := au.Method
+	if method == "" {
+		method = domain.AuthMethodCookie
+	}
+	return sessionResponse{
+		ID:            au.User.ID,
+		Email:         au.User.Email,
+		DisplayName:   au.User.DisplayName,
+		EmailVerified: au.User.EmailVerified,
+		Role:          au.User.Role,
+		Banned:        au.User.Banned,
+		AuthMethod:    method,
+		Scopes:        []string{},
+	}
 }
 
 func (p *emailPasswordPlugin) handleSession(host plugin.PluginHost) http.HandlerFunc {
@@ -478,18 +515,19 @@ func (p *emailPasswordPlugin) handleSession(host plugin.PluginHost) http.Handler
 			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "not authenticated")
 			return
 		}
-		writeJSON(w, http.StatusOK, sessionResponse{
-			User:      toUserJSON(au.User),
-			ExpiresAt: au.Session.ExpiresAt,
-		})
+		writeJSON(w, http.StatusOK, toSessionResponse(au))
 	}
 }
 
 // --- /change-password ---------------------------------------------------
 
 type changePasswordRequest struct {
-	OldPassword string `json:"old_password"`
-	NewPassword string `json:"new_password"`
+	CurrentPassword string `json:"current_password"`
+	NewPassword     string `json:"new_password"`
+}
+
+type changePasswordResponse struct {
+	Message string `json:"message"`
 }
 
 func (p *emailPasswordPlugin) handleChangePassword(host plugin.PluginHost) http.HandlerFunc {
@@ -518,9 +556,9 @@ func (p *emailPasswordPlugin) handleChangePassword(host plugin.PluginHost) http.
 			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to load current password")
 			return
 		}
-		ok2, err := auth.VerifyPassword(req.OldPassword, pw.PasswordHash)
+		ok2, err := auth.VerifyPassword(req.CurrentPassword, pw.PasswordHash)
 		if err != nil || !ok2 {
-			writeError(w, http.StatusUnauthorized, "INVALID_CREDENTIALS", "old password is incorrect")
+			writeError(w, http.StatusUnauthorized, "INVALID_CREDENTIALS", "current password is incorrect")
 			return
 		}
 
@@ -585,7 +623,7 @@ func (p *emailPasswordPlugin) handleChangePassword(host plugin.PluginHost) http.
 			IPAddress: requestIP(r),
 		})
 
-		w.WriteHeader(http.StatusNoContent)
+		writeJSON(w, http.StatusOK, changePasswordResponse{Message: "Password changed."})
 	}
 }
 
@@ -593,10 +631,6 @@ func (p *emailPasswordPlugin) handleChangePassword(host plugin.PluginHost) http.
 
 type patchMeRequest struct {
 	DisplayName *string `json:"display_name,omitempty"`
-}
-
-type patchMeResponse struct {
-	User userJSON `json:"user"`
 }
 
 func (p *emailPasswordPlugin) handlePatchMe(host plugin.PluginHost) http.HandlerFunc {
@@ -630,7 +664,9 @@ func (p *emailPasswordPlugin) handlePatchMe(host plugin.PluginHost) http.Handler
 			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to update user")
 			return
 		}
-		writeJSON(w, http.StatusOK, patchMeResponse{User: toUserJSON(updated)})
+		newAu := *au
+		newAu.User = updated
+		writeJSON(w, http.StatusOK, toSessionResponse(&newAu))
 	}
 }
 
@@ -688,7 +724,7 @@ type verifyEmailRequest struct {
 }
 
 type verifyEmailResponse struct {
-	Verified bool `json:"verified"`
+	Message string `json:"message"`
 }
 
 func (p *emailPasswordPlugin) handleVerifyEmail(host plugin.PluginHost) http.HandlerFunc {
@@ -731,7 +767,7 @@ func (p *emailPasswordPlugin) handleVerifyEmail(host plugin.PluginHost) http.Han
 			IPAddress: requestIP(r),
 		})
 
-		writeJSON(w, http.StatusOK, verifyEmailResponse{Verified: true})
+		writeJSON(w, http.StatusOK, verifyEmailResponse{Message: "Email verified."})
 	}
 }
 
@@ -742,8 +778,10 @@ type resendVerificationRequest struct {
 }
 
 type resendVerificationResponse struct {
-	Sent bool `json:"sent"`
+	Message string `json:"message"`
 }
+
+const resendVerificationMessage = "If the email exists, a verification link has been sent."
 
 func (p *emailPasswordPlugin) handleResendVerification(host plugin.PluginHost) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -765,17 +803,17 @@ func (p *emailPasswordPlugin) handleResendVerification(host plugin.PluginHost) h
 		// account is missing or already verified.
 		user, err := repoRef.GetUserByEmail(ctx, req.Email)
 		if err != nil || user == nil {
-			writeJSON(w, http.StatusOK, resendVerificationResponse{Sent: true})
+			writeJSON(w, http.StatusOK, resendVerificationResponse{Message: resendVerificationMessage})
 			return
 		}
 		if user.EmailVerified {
-			writeJSON(w, http.StatusOK, resendVerificationResponse{Sent: true})
+			writeJSON(w, http.StatusOK, resendVerificationResponse{Message: resendVerificationMessage})
 			return
 		}
 		if err := p.issueVerificationEmail(ctx, repoRef, user.ID, user.Email); err != nil {
 			log.Printf("yauth: issue verification email for %s: %v", user.Email, err)
 		}
-		writeJSON(w, http.StatusOK, resendVerificationResponse{Sent: true})
+		writeJSON(w, http.StatusOK, resendVerificationResponse{Message: resendVerificationMessage})
 	}
 }
 
@@ -786,8 +824,10 @@ type forgotPasswordRequest struct {
 }
 
 type forgotPasswordResponse struct {
-	Sent bool `json:"sent"`
+	Message string `json:"message"`
 }
+
+const forgotPasswordMessage = "If the email exists, a password-reset link has been sent."
 
 func (p *emailPasswordPlugin) handleForgotPassword(host plugin.PluginHost) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -807,13 +847,13 @@ func (p *emailPasswordPlugin) handleForgotPassword(host plugin.PluginHost) http.
 
 		user, err := repoRef.GetUserByEmail(ctx, req.Email)
 		if err != nil || user == nil {
-			writeJSON(w, http.StatusOK, forgotPasswordResponse{Sent: true})
+			writeJSON(w, http.StatusOK, forgotPasswordResponse{Message: forgotPasswordMessage})
 			return
 		}
 
 		raw, hash, err := generateRawToken()
 		if err != nil {
-			writeJSON(w, http.StatusOK, forgotPasswordResponse{Sent: true})
+			writeJSON(w, http.StatusOK, forgotPasswordResponse{Message: forgotPasswordMessage})
 			return
 		}
 		now := time.Now().UTC()
@@ -824,26 +864,26 @@ func (p *emailPasswordPlugin) handleForgotPassword(host plugin.PluginHost) http.
 			ExpiresAt: now.Add(p.cfg.PasswordResetTokenTTL),
 			CreatedAt: now,
 		}); err != nil {
-			writeJSON(w, http.StatusOK, forgotPasswordResponse{Sent: true})
+			writeJSON(w, http.StatusOK, forgotPasswordResponse{Message: forgotPasswordMessage})
 			return
 		}
 		link := buildLink(p.cfg.PasswordResetLinkBaseURL, raw)
 		if err := p.cfg.Mailer.SendPasswordReset(ctx, user.Email, link); err != nil {
 			log.Printf("yauth: SendPasswordReset for %s: %v", user.Email, err)
 		}
-		writeJSON(w, http.StatusOK, forgotPasswordResponse{Sent: true})
+		writeJSON(w, http.StatusOK, forgotPasswordResponse{Message: forgotPasswordMessage})
 	}
 }
 
 // --- /reset-password ----------------------------------------------------
 
 type resetPasswordRequest struct {
-	Token       string `json:"token"`
-	NewPassword string `json:"new_password"`
+	Token    string `json:"token"`
+	Password string `json:"password"`
 }
 
 type resetPasswordResponse struct {
-	Reset bool `json:"reset"`
+	Message string `json:"message"`
 }
 
 func (p *emailPasswordPlugin) handleResetPassword(host plugin.PluginHost) http.HandlerFunc {
@@ -858,7 +898,7 @@ func (p *emailPasswordPlugin) handleResetPassword(host plugin.PluginHost) http.H
 			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "token is required")
 			return
 		}
-		if err := p.validatePasswordComplexity(req.NewPassword); err != nil {
+		if err := p.validatePasswordComplexity(req.Password); err != nil {
 			writeError(w, http.StatusBadRequest, "WEAK_PASSWORD", err.Error())
 			return
 		}
@@ -881,22 +921,22 @@ func (p *emailPasswordPlugin) handleResetPassword(host plugin.PluginHost) http.H
 			currentHash = cur.PasswordHash
 		}
 		if currentHash != "" {
-			if same, _ := auth.VerifyPassword(req.NewPassword, currentHash); same {
+			if same, _ := auth.VerifyPassword(req.Password, currentHash); same {
 				writeError(w, http.StatusBadRequest, "PASSWORD_REUSED",
 					"new password must differ from current password")
 				return
 			}
 		}
-		if err := p.checkHistory(ctx, repoRef, pr.UserID, req.NewPassword); err != nil {
+		if err := p.checkHistory(ctx, repoRef, pr.UserID, req.Password); err != nil {
 			writeError(w, http.StatusBadRequest, "PASSWORD_REUSED", err.Error())
 			return
 		}
-		if pwned, msg := p.checkHIBP(ctx, req.NewPassword); pwned {
+		if pwned, msg := p.checkHIBP(ctx, req.Password); pwned {
 			writeError(w, http.StatusUnprocessableEntity, "PASSWORD_BREACHED", msg)
 			return
 		}
 
-		newHash, err := auth.HashPassword(req.NewPassword)
+		newHash, err := auth.HashPassword(req.Password)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to hash password")
 			return
@@ -925,7 +965,7 @@ func (p *emailPasswordPlugin) handleResetPassword(host plugin.PluginHost) http.H
 			IPAddress: requestIP(r),
 		})
 
-		writeJSON(w, http.StatusOK, resetPasswordResponse{Reset: true})
+		writeJSON(w, http.StatusOK, resetPasswordResponse{Message: "Password reset."})
 	}
 }
 

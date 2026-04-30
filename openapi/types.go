@@ -52,16 +52,31 @@ type adminUserJSON struct {
 
 // --- email-password ---------------------------------------------------
 
+// sessionUserJSON is the flat user shape returned by /session, /me and
+// the various login endpoints. Mirrors the Rust spec.
+type sessionUserJSON struct {
+	ID            string   `json:"id"`
+	Email         string   `json:"email"`
+	DisplayName   *string  `json:"display_name,omitempty"`
+	EmailVerified bool     `json:"email_verified"`
+	Role          string   `json:"role"`
+	Banned        bool     `json:"banned"`
+	AuthMethod    string   `json:"auth_method"`
+	Scopes        []string `json:"scopes"`
+}
+
 type emailPasswordRegisterRequest struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
+	Email       string  `json:"email"`
+	Password    string  `json:"password"`
+	DisplayName *string `json:"display_name,omitempty"`
 }
 type emailPasswordRegisterResponse struct {
-	User userJSON `json:"user"`
+	Message string `json:"message"`
 }
 type emailPasswordLoginRequest struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
+	Email      string `json:"email"`
+	Password   string `json:"password"`
+	RememberMe bool   `json:"remember_me,omitempty"`
 }
 type emailPasswordLoginResponse struct {
 	User userJSON `json:"user"`
@@ -70,21 +85,47 @@ type emailPasswordLoginMfaResponse struct {
 	RequireMfa       bool   `json:"require_mfa"`
 	PendingSessionID string `json:"pending_session_id"`
 }
-type emailPasswordSessionResponse struct {
-	User      userJSON  `json:"user"`
-	ExpiresAt time.Time `json:"expires_at"`
-}
+type emailPasswordSessionResponse sessionUserJSON
 type emailPasswordChangePasswordRequest struct {
-	OldPassword string `json:"old_password"`
-	NewPassword string `json:"new_password"`
+	CurrentPassword string `json:"current_password"`
+	NewPassword     string `json:"new_password"`
+}
+type emailPasswordChangePasswordResponse struct {
+	Message string `json:"message"`
 }
 
 type emailPasswordPatchMeRequest struct {
 	DisplayName *string `json:"display_name,omitempty"`
 }
 
-type emailPasswordPatchMeResponse struct {
-	User userJSON `json:"user"`
+type emailPasswordPatchMeResponse sessionUserJSON
+
+// --- email verification + password reset extras ---
+
+type emailVerifyRequest struct {
+	Token string `json:"token"`
+}
+type emailVerifyResponse struct {
+	Message string `json:"message"`
+}
+type emailResendVerificationRequest struct {
+	Email string `json:"email"`
+}
+type emailResendVerificationResponse struct {
+	Message string `json:"message"`
+}
+type emailForgotPasswordRequest struct {
+	Email string `json:"email"`
+}
+type emailForgotPasswordResponse struct {
+	Message string `json:"message"`
+}
+type emailResetPasswordRequest struct {
+	Token    string `json:"token"`
+	Password string `json:"password"`
+}
+type emailResetPasswordResponse struct {
+	Message string `json:"message"`
 }
 
 type oauth2RegisterRequest struct {
@@ -117,6 +158,7 @@ type oauth2RegisterResponse struct {
 type bearerTokenRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
+	Scope    string `json:"scope,omitempty"`
 }
 type bearerTokenResponse struct {
 	AccessToken  string `json:"access_token"`
@@ -142,33 +184,40 @@ type apiKeyJSON struct {
 	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
 	CreatedAt  time.Time  `json:"created_at"`
 }
-type apiKeyListResponse struct {
-	Keys []apiKeyJSON `json:"keys"`
-}
+// apiKeyListResponse: GET /api-keys returns a bare array of apiKeyJSON.
+// Documented inline via huma.Schema{Type:"array", Items:...}.
+
 type apiKeyCreateRequest struct {
-	Name      string     `json:"name"`
-	Scopes    []string   `json:"scopes,omitempty"`
-	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+	Name          string   `json:"name"`
+	Scopes        []string `json:"scopes,omitempty"`
+	ExpiresInDays *int     `json:"expires_in_days,omitempty"`
 }
 type apiKeyCreateResponse struct {
-	APIKey apiKeyJSON `json:"api_key"`
-	Key    string     `json:"key"`
+	ID        string     `json:"id"`
+	Name      string     `json:"name"`
+	Prefix    string     `json:"prefix"`
+	Scopes    []string   `json:"scopes"`
+	CreatedAt time.Time  `json:"created_at"`
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+	Key       string     `json:"key"`
 }
 
 // --- magic-link -------------------------------------------------------
 
 type magicLinkSendRequest struct {
-	Email       string `json:"email"`
-	RedirectURL string `json:"redirect_url,omitempty"`
+	Email string `json:"email"`
 }
 type magicLinkSendResponse struct {
-	Sent bool `json:"sent"`
+	Message string `json:"message"`
 }
 type magicLinkVerifyRequest struct {
 	Token string `json:"token"`
 }
 type magicLinkVerifyResponse struct {
-	User userJSON `json:"user"`
+	UserID        string  `json:"user_id"`
+	Email         string  `json:"email"`
+	DisplayName   *string `json:"display_name,omitempty"`
+	EmailVerified bool    `json:"email_verified"`
 }
 
 // --- lockout ----------------------------------------------------------
@@ -177,13 +226,13 @@ type lockoutUnlockRequest struct {
 	Token string `json:"token"`
 }
 type lockoutUnlockResponse struct {
-	Unlocked bool `json:"unlocked"`
+	Message string `json:"message"`
 }
 type lockoutUnlockReqRequest struct {
 	Email string `json:"email"`
 }
 type lockoutUnlockReqResponse struct {
-	Sent bool `json:"sent"`
+	Message string `json:"message"`
 }
 type lockoutLockedAccountJSON struct {
 	UserID       string  `json:"user_id"`
@@ -204,23 +253,31 @@ type statusResponse struct {
 	Version string   `json:"version"`
 }
 
+// configResponse mirrors the Rust shape returned by GET /config: only
+// the operator-toggled flags clients need.
+type configResponse struct {
+	AllowSignups             bool `json:"allow_signups"`
+	RequireEmailVerification bool `json:"require_email_verification"`
+}
+
 // --- admin ------------------------------------------------------------
 
 type adminListUsersResponse struct {
-	Users []adminUserJSON `json:"users"`
-	Total int64           `json:"total"`
+	Users   []adminUserJSON `json:"users"`
+	Total   int64           `json:"total"`
+	Page    int             `json:"page"`
+	PerPage int             `json:"per_page"`
 }
 type adminPatchUserRequest struct {
-	DisplayName *string `json:"display_name,omitempty"`
-	Role        *string `json:"role,omitempty"`
+	DisplayName   *string `json:"display_name,omitempty"`
+	Role          *string `json:"role,omitempty"`
+	EmailVerified *bool   `json:"email_verified,omitempty"`
 }
 type adminBanRequest struct {
 	Reason string     `json:"reason"`
 	Until  *time.Time `json:"until,omitempty"`
 }
-type adminImpersonateResponse struct {
-	User adminUserJSON `json:"user"`
-}
+type adminImpersonateResponse adminUserJSON
 type adminDeleteSessionsResponse struct {
 	Deleted int64 `json:"deleted"`
 }
@@ -238,19 +295,37 @@ type adminListAuditResponse struct {
 	Entries []adminAuditEntryJSON `json:"entries"`
 }
 
+type adminSessionJSON struct {
+	ID        string    `json:"id"`
+	UserID    string    `json:"user_id"`
+	IPAddress *string   `json:"ip_address,omitempty"`
+	UserAgent *string   `json:"user_agent,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+type adminListSessionsResponse struct {
+	Sessions []adminSessionJSON `json:"sessions"`
+	Total    int64              `json:"total"`
+	Page     int                `json:"page"`
+	PerPage  int                `json:"per_page"`
+}
+
 // --- mfa --------------------------------------------------------------
 
 type mfaSetupResponse struct {
 	Secret      string   `json:"secret"`
 	OTPAuthURL  string   `json:"otpauth_url"`
-	QRCode      string   `json:"qr_code"`
 	BackupCodes []string `json:"backup_codes"`
 }
 type mfaConfirmRequest struct {
 	Code string `json:"code"`
 }
+type mfaMessageResponse struct {
+	Message string `json:"message"`
+}
 type mfaBackupCodesCountResponse struct {
-	Unused int `json:"unused"`
+	Remaining int `json:"remaining"`
 }
 type mfaRegenerateResponse struct {
 	BackupCodes []string `json:"backup_codes"`
@@ -260,7 +335,10 @@ type mfaVerifyRequest struct {
 	Code             string `json:"code"`
 }
 type mfaVerifyResponse struct {
-	UserID string `json:"user_id"`
+	UserID        string  `json:"user_id"`
+	Email         string  `json:"email"`
+	DisplayName   *string `json:"display_name,omitempty"`
+	EmailVerified bool    `json:"email_verified"`
 }
 
 // --- passkey ----------------------------------------------------------
@@ -274,14 +352,12 @@ type mfaVerifyResponse struct {
 type passkeyOptions = map[string]any
 
 type passkeyRegisterBeginResponse struct {
-	RequestID string         `json:"request_id"`
-	Options   passkeyOptions `json:"options"`
+	ChallengeID string         `json:"challenge_id"`
+	Options     passkeyOptions `json:"options"`
 }
 type passkeyRegisterFinishRequest struct {
-	RequestID  string         `json:"request_id"`
 	Name       string         `json:"name,omitempty"`
-	Response   map[string]any `json:"response"`
-	DeviceName *string        `json:"device_name,omitempty"`
+	Credential map[string]any `json:"credential"`
 }
 type passkeyRegisterFinishResponse struct {
 	ID        string    `json:"id"`
@@ -292,15 +368,19 @@ type passkeyLoginBeginRequest struct {
 	Email string `json:"email,omitempty"`
 }
 type passkeyLoginBeginResponse struct {
-	RequestID string         `json:"request_id"`
-	Options   passkeyOptions `json:"options"`
+	ChallengeID string         `json:"challenge_id"`
+	Options     passkeyOptions `json:"options"`
 }
 type passkeyLoginFinishRequest struct {
-	RequestID string         `json:"request_id"`
-	Response  map[string]any `json:"response"`
+	ChallengeID string         `json:"challenge_id"`
+	Credential  map[string]any `json:"credential"`
 }
 type passkeyLoginFinishResponse struct {
-	User userJSON `json:"user"`
+	ID            string  `json:"id"`
+	Email         string  `json:"email"`
+	DisplayName   *string `json:"display_name,omitempty"`
+	EmailVerified bool    `json:"email_verified"`
+	Role          string  `json:"role"`
 }
 type passkeyJSON struct {
 	ID         string     `json:"id"`
@@ -310,18 +390,16 @@ type passkeyJSON struct {
 	CreatedAt  time.Time  `json:"created_at"`
 	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
 }
-type passkeyListResponse struct {
-	Passkeys []passkeyJSON `json:"passkeys"`
-}
+
+// passkeyListResponse: GET /passkeys returns a bare array of passkeyJSON.
 
 // --- oauth ------------------------------------------------------------
 
 type oauthCallbackResponse struct {
-	User struct {
-		ID    string `json:"id"`
-		Email string `json:"email"`
-	} `json:"user"`
-	Provider string `json:"provider"`
+	UserID        string  `json:"user_id"`
+	Email         string  `json:"email"`
+	DisplayName   *string `json:"display_name,omitempty"`
+	EmailVerified bool    `json:"email_verified"`
 }
 type oauthAccountJSON struct {
 	Provider       string     `json:"provider"`
@@ -329,11 +407,18 @@ type oauthAccountJSON struct {
 	CreatedAt      time.Time  `json:"created_at"`
 	ExpiresAt      *time.Time `json:"expires_at,omitempty"`
 }
-type oauthListAccountsResponse struct {
-	Accounts []oauthAccountJSON `json:"accounts"`
+// oauthCallbackBody is the JSON body for POST /oauth/{provider}/callback
+// (Rust parity).
+type oauthCallbackBody struct {
+	Code  string `json:"code"`
+	State string `json:"state"`
 }
+
+// oauthListAccountsResponse: GET /oauth/accounts returns a bare array
+// of oauthAccountJSON.
+
 type oauthLinkResponse struct {
-	AuthorizeURL string `json:"authorize_url"`
+	AuthURL string `json:"auth_url"`
 }
 
 // --- webhooks ---------------------------------------------------------
@@ -345,21 +430,20 @@ type webhookJSON struct {
 	Active    bool      `json:"active"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
-	Secret    string    `json:"secret,omitempty"`
 }
-type webhookListResponse struct {
-	Webhooks []webhookJSON `json:"webhooks"`
-}
+
+// webhookListResponse: GET /webhooks returns a bare array of webhookJSON.
+
 type webhookCreateRequest struct {
 	URL    string   `json:"url"`
 	Events []string `json:"events"`
-	Active *bool    `json:"active,omitempty"`
+	Secret string   `json:"secret,omitempty"`
 }
 type webhookUpdateRequest struct {
-	URL          *string   `json:"url,omitempty"`
-	Events       *[]string `json:"events,omitempty"`
-	Active       *bool     `json:"active,omitempty"`
-	RotateSecret bool      `json:"rotate_secret,omitempty"`
+	URL    *string   `json:"url,omitempty"`
+	Events *[]string `json:"events,omitempty"`
+	Active *bool     `json:"active,omitempty"`
+	Secret *string   `json:"secret,omitempty"`
 }
 type webhookDeliveryJSON struct {
 	ID           string    `json:"id"`
@@ -371,12 +455,15 @@ type webhookDeliveryJSON struct {
 	Attempt      int       `json:"attempt"`
 	CreatedAt    time.Time `json:"created_at"`
 }
-type webhookListDeliveriesResponse struct {
-	Deliveries []webhookDeliveryJSON `json:"deliveries"`
-}
-type webhookTestResponse struct {
-	DeliveryQueued bool   `json:"delivery_queued"`
-	EventType      string `json:"event_type"`
+
+// webhookListDeliveriesResponse: GET /webhooks/{id}/deliveries returns
+// a bare array of webhookDeliveryJSON.
+
+// webhookShowResponse wraps a webhook with its recent deliveries; used
+// by GET /webhooks/{id} per Rust parity.
+type webhookShowResponse struct {
+	Webhook          webhookJSON           `json:"webhook"`
+	RecentDeliveries []webhookDeliveryJSON `json:"recent_deliveries"`
 }
 
 // --- asymjwt: jwks ----------------------------------------------------

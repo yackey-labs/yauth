@@ -246,10 +246,10 @@ jobs:
   openapi-conformance:
     name: OpenAPI conformance (Rust ↔ Go)
     runs-on: ubuntu-latest
-    # Soft-fail during initial roll-out so reviewers see the report without
-    # blocking merges. Flip this to false (or remove) after one round of
-    # triage so divergence becomes a hard gate.
-    continue-on-error: true
+    # Hard-gated: any BREAKING / MISSING / SHAPE divergence between the
+    # Rust spec and Go spec fails the build. Cosmetic parity was closed
+    # in Task #39; further drift is a real regression.
+    continue-on-error: false
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

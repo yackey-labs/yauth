@@ -120,7 +120,7 @@ func TestRegisterBegin_ReturnsChallengeAndOptions(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if resp.RequestID == "" {
+	if resp.ChallengeID == "" {
 		t.Fatalf("expected request_id to be set")
 	}
 	if resp.Options == nil {
@@ -136,7 +136,7 @@ func TestRegisterBegin_ReturnsChallengeAndOptions(t *testing.T) {
 	// bytes round-trip through SessionData.UserID instead.
 
 	// The session JSON must have been stored under the corresponding key.
-	stored, err := fr.GetChallenge(context.Background(), regChallengePrefix+resp.RequestID)
+	stored, err := fr.GetChallenge(context.Background(), regChallengePrefix+resp.ChallengeID)
 	if err != nil {
 		t.Fatalf("GetChallenge: %v", err)
 	}
@@ -169,7 +169,7 @@ func TestLoginBegin_DiscoverableFlowWithEmptyBody(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if resp.RequestID == "" || resp.Options == nil {
+	if resp.ChallengeID == "" || resp.Options == nil {
 		t.Fatalf("missing request_id/options: %+v", resp)
 	}
 	if string(resp.Options.Response.Challenge) == "" {
@@ -221,11 +221,11 @@ func TestListAndDelete_OwnershipEnforced(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("list: expected 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	var lr listResponse
+	var lr []passkeyJSON
 	if err := json.Unmarshal(rec.Body.Bytes(), &lr); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if len(lr.Passkeys) != 1 || lr.Passkeys[0].ID != credID {
+	if len(lr) != 1 || lr[0].ID != credID {
 		t.Fatalf("unexpected list: %+v", lr)
 	}
 

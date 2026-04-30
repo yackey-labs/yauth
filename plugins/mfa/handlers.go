@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -16,7 +15,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/pquerna/otp/totp"
-	qrcode "github.com/skip2/go-qrcode"
 
 	"github.com/yackey-labs/yauth-go/auth"
 	"github.com/yackey-labs/yauth-go/domain"
@@ -27,10 +25,8 @@ import (
 )
 
 const (
-	backupCodeCount     = 10
-	backupCodeBytes     = 8 // 16 hex chars
-	qrCodeRecoveryLevel = qrcode.Medium
-	qrCodePixelSize     = 256
+	backupCodeCount = 10
+	backupCodeBytes = 8 // 16 hex chars
 )
 
 type errorBody struct {
@@ -104,10 +100,11 @@ func hashBackupCode(code string) string {
 
 // --- POST /totp/setup ----------------------------------------------------
 
+// setupResponse mirrors the Rust shape: secret, otpauth_url, backup_codes.
+// QR code rendering is left to the client (the otpauth URL is sufficient).
 type setupResponse struct {
 	Secret      string   `json:"secret"`
 	OTPAuthURL  string   `json:"otpauth_url"`
-	QRCodeData  string   `json:"qr_code"` // data URL
 	BackupCodes []string `json:"backup_codes"`
 }
 
@@ -178,17 +175,9 @@ func (p *mfaPlugin) handleSetup(host plugin.PluginHost) http.HandlerFunc {
 			}
 		}
 
-		png, err := qrcode.Encode(key.URL(), qrCodeRecoveryLevel, qrCodePixelSize)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to render qr code")
-			return
-		}
-		dataURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
-
 		writeJSON(w, http.StatusOK, setupResponse{
 			Secret:      secret,
 			OTPAuthURL:  key.URL(),
-			QRCodeData:  dataURL,
 			BackupCodes: plain,
 		})
 	}
@@ -198,6 +187,10 @@ func (p *mfaPlugin) handleSetup(host plugin.PluginHost) http.HandlerFunc {
 
 type confirmRequest struct {
 	Code string `json:"code"`
+}
+
+type mfaMessageResponse struct {
+	Message string `json:"message"`
 }
 
 func (p *mfaPlugin) handleConfirm(host plugin.PluginHost) http.HandlerFunc {
@@ -241,7 +234,7 @@ func (p *mfaPlugin) handleConfirm(host plugin.PluginHost) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to mark totp verified")
 			return
 		}
-		w.WriteHeader(http.StatusNoContent)
+		writeJSON(w, http.StatusOK, mfaMessageResponse{Message: "TOTP activated."})
 	}
 }
 
@@ -264,14 +257,14 @@ func (p *mfaPlugin) handleDelete(host plugin.PluginHost) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to delete backup codes")
 			return
 		}
-		w.WriteHeader(http.StatusNoContent)
+		writeJSON(w, http.StatusOK, mfaMessageResponse{Message: "TOTP removed."})
 	}
 }
 
 // --- GET /backup-codes (count of unused) ---------------------------------
 
 type backupCodesCountResponse struct {
-	Unused int `json:"unused"`
+	Remaining int `json:"remaining"`
 }
 
 func (p *mfaPlugin) handleBackupCodesCount(host plugin.PluginHost) http.HandlerFunc {
@@ -286,7 +279,7 @@ func (p *mfaPlugin) handleBackupCodesCount(host plugin.PluginHost) http.HandlerF
 			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to list backup codes")
 			return
 		}
-		writeJSON(w, http.StatusOK, backupCodesCountResponse{Unused: len(codes)})
+		writeJSON(w, http.StatusOK, backupCodesCountResponse{Remaining: len(codes)})
 	}
 }
 
@@ -339,8 +332,12 @@ type verifyRequest struct {
 	Code             string `json:"code"`
 }
 
+// verifyResponse mirrors the Rust shape: {user_id, email, display_name, email_verified}.
 type verifyResponse struct {
-	UserID string `json:"user_id"`
+	UserID        string  `json:"user_id"`
+	Email         string  `json:"email"`
+	DisplayName   *string `json:"display_name,omitempty"`
+	EmailVerified bool    `json:"email_verified"`
 }
 
 func (p *mfaPlugin) handleVerify(host plugin.PluginHost) http.HandlerFunc {
@@ -394,7 +391,14 @@ func (p *mfaPlugin) handleVerify(host plugin.PluginHost) http.HandlerFunc {
 			cookieOptionsFromHost(host, r, int(host.SessionTTL().Seconds())),
 			raw,
 		))
-		writeJSON(w, http.StatusOK, verifyResponse{UserID: userID})
+
+		resp := verifyResponse{UserID: userID}
+		if u, err := repoRef.GetUserByID(ctx, userID); err == nil && u != nil {
+			resp.Email = u.Email
+			resp.DisplayName = u.DisplayName
+			resp.EmailVerified = u.EmailVerified
+		}
+		writeJSON(w, http.StatusOK, resp)
 	}
 }
 

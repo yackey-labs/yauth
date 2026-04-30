@@ -21,23 +21,23 @@
 //
 // Routes (relative to prefix):
 //
-//	GET    {prefix}/oauth2/clients                — admin: list clients
-//	POST   {prefix}/oauth2/clients                — admin: register a client
-//	GET    {prefix}/oauth2/clients/{id}           — admin: fetch a client
-//	PATCH  {prefix}/oauth2/clients/{id}           — admin: ban/rotate-key
-//	DELETE {prefix}/oauth2/clients/{id}           — admin: ban (soft delete)
-//	POST   {prefix}/oauth2/clients/{id}/ban       — admin: ban with reason
-//	POST   {prefix}/oauth2/clients/{id}/unban     — admin: clear ban
-//	POST   {prefix}/oauth2/clients/{id}/rotate-public-key — admin: replace PKJWT key
-//	GET    {prefix}/oauth2/authorize              — return JSON consent payload
-//	POST   {prefix}/oauth2/consent                — approve/deny a pending request
-//	POST   {prefix}/oauth2/token                  — token endpoint (dispatch)
-//	POST   {prefix}/oauth2/revoke                 — RFC 7009
-//	POST   {prefix}/oauth2/introspect             — RFC 7662
-//	POST   {prefix}/oauth2/device_authorization   — RFC 8628 (device init)
-//	POST   {prefix}/oauth2/device                 — user enters user_code
+//	GET    {prefix}/oauth2/clients                — admin: list clients (Go-only admin namespace)
+//	POST   {prefix}/oauth2/clients                — admin: register a client (Go-only)
+//	GET    {prefix}/oauth2/clients/{id}           — admin: fetch a client (Go-only)
+//	PATCH  {prefix}/oauth2/clients/{id}           — admin: ban/rotate-key (Go-only)
+//	DELETE {prefix}/oauth2/clients/{id}           — admin: ban (soft delete) (Go-only)
+//	POST   {prefix}/oauth2/clients/{id}/ban       — admin: ban with reason (Go-only)
+//	POST   {prefix}/oauth2/clients/{id}/unban     — admin: clear ban (Go-only)
+//	POST   {prefix}/oauth2/clients/{id}/rotate-public-key — admin: replace PKJWT key (Go-only)
+//	GET    {prefix}/oauth/authorize               — return JSON consent payload
+//	POST   {prefix}/oauth2/consent                — approve/deny a pending request (Go-specific split; Rust merges into authorize)
+//	POST   {prefix}/oauth/token                   — token endpoint (dispatch)
+//	POST   {prefix}/oauth/revoke                  — RFC 7009
+//	POST   {prefix}/oauth/introspect              — RFC 7662
+//	POST   {prefix}/oauth/device/code             — RFC 8628 (device init)
+//	POST   {prefix}/oauth/device                  — user enters user_code
 //	GET    {prefix}/.well-known/oauth-authorization-server — RFC 8414 metadata
-//	POST   {prefix}/oauth2/register               — RFC 7591 dynamic client registration (opt-in: Config.DCREnabled)
+//	POST   {prefix}/oauth/register                — RFC 7591 dynamic client registration (opt-in: Config.DCREnabled)
 package oauth2server
 
 import (
@@ -73,18 +73,18 @@ type Config struct {
 	// clients in the device-authorization response. Default: 5.
 	DevicePollInterval int
 	// VerificationURI is the URL displayed to users in the device flow.
-	// Default: "/oauth2/device".
+	// Default: "/oauth/device".
 	VerificationURI string
 	// ConsentRequired forces the consent payload to be returned even if
 	// a prior matching Consent record exists. Set true while developing
 	// or for clients with sensitive scopes.
 	ConsentRequired bool
 	// DCREnabled enables the RFC 7591 dynamic client registration
-	// endpoint at POST /oauth2/register. Default: false. Open public
+	// endpoint at POST /oauth/register. Default: false. Open public
 	// DCR is a footgun without an issuer policy; opt in explicitly.
 	DCREnabled bool
 	// DCRRequireInitialAccessToken, when non-nil, controls whether POST
-	// /oauth2/register requires an admin-issued Bearer token in the
+	// /oauth/register requires an admin-issued Bearer token in the
 	// Authorization header. When nil (the default), the value is treated
 	// as true: open registration is opt-in only and must be enabled by
 	// explicitly setting this to a pointer to false. Documented as a
@@ -138,7 +138,7 @@ func New(cfg Config) plugin.Plugin {
 		cfg.Issuer = "yauth"
 	}
 	if cfg.VerificationURI == "" {
-		cfg.VerificationURI = "/oauth2/device"
+		cfg.VerificationURI = "/oauth/device"
 	}
 	return &oauth2Plugin{
 		cfg:     cfg,
@@ -172,20 +172,26 @@ func (p *oauth2Plugin) Routes(host plugin.PluginHost, mux *http.ServeMux, prefix
 	// --- authorization-code + consent ---
 	// /authorize is a session-protected endpoint: the caller must be a
 	// logged-in user before consent makes sense.
-	mux.Handle("GET "+prefix+"/oauth2/authorize", mw.RequireAuth(http.HandlerFunc(p.handleAuthorize(host))))
+	//
+	// Path note: /oauth/authorize, /oauth/token, etc. are literal patterns
+	// that take precedence over the wildcard /oauth/{provider}/* registered
+	// by the oauth client plugin (Go 1.22+ ServeMux specificity rules).
+	mux.Handle("GET "+prefix+"/oauth/authorize", mw.RequireAuth(http.HandlerFunc(p.handleAuthorize(host))))
+	mux.Handle("POST "+prefix+"/oauth/authorize", mw.RequireAuth(http.HandlerFunc(p.handleAuthorize(host))))
 	mux.Handle("POST "+prefix+"/oauth2/consent", mw.RequireAuth(http.HandlerFunc(p.handleConsent(host))))
 
 	// --- token / introspect / revoke ---
-	mux.Handle("POST "+prefix+"/oauth2/token", http.HandlerFunc(p.handleToken(host)))
-	mux.Handle("POST "+prefix+"/oauth2/introspect", http.HandlerFunc(p.handleIntrospect(host)))
-	mux.Handle("POST "+prefix+"/oauth2/revoke", http.HandlerFunc(p.handleRevoke(host)))
+	mux.Handle("POST "+prefix+"/oauth/token", http.HandlerFunc(p.handleToken(host)))
+	mux.Handle("POST "+prefix+"/oauth/introspect", http.HandlerFunc(p.handleIntrospect(host)))
+	mux.Handle("POST "+prefix+"/oauth/revoke", http.HandlerFunc(p.handleRevoke(host)))
 
 	// --- device flow ---
-	mux.Handle("POST "+prefix+"/oauth2/device_authorization", http.HandlerFunc(p.handleDeviceAuth(host)))
-	mux.Handle("POST "+prefix+"/oauth2/device", mw.RequireAuth(http.HandlerFunc(p.handleDeviceVerify(host))))
+	mux.Handle("POST "+prefix+"/oauth/device/code", http.HandlerFunc(p.handleDeviceAuth(host)))
+	mux.Handle("POST "+prefix+"/oauth/device", mw.RequireAuth(http.HandlerFunc(p.handleDeviceVerify(host))))
+	mux.Handle("GET "+prefix+"/oauth/device", mw.RequireAuth(http.HandlerFunc(p.handleDeviceVerify(host))))
 
 	// --- RFC 7591 dynamic client registration (opt-in) ---
 	if p.cfg.DCREnabled {
-		mux.Handle("POST "+prefix+"/oauth2/register", http.HandlerFunc(p.handleDCRRegister(host, prefix)))
+		mux.Handle("POST "+prefix+"/oauth/register", http.HandlerFunc(p.handleDCRRegister(host, prefix)))
 	}
 }

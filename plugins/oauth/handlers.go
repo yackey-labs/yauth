@@ -189,7 +189,7 @@ func (p *oauthPlugin) handleAuthorize(host plugin.PluginHost) http.HandlerFunc {
 // --- /oauth/{provider}/link --------------------------------------------
 
 type linkResponse struct {
-	AuthorizeURL string `json:"authorize_url"`
+	AuthURL string `json:"auth_url"`
 }
 
 func (p *oauthPlugin) handleLink(host plugin.PluginHost) http.HandlerFunc {
@@ -238,7 +238,7 @@ func (p *oauthPlugin) handleLink(host plugin.PluginHost) http.HandlerFunc {
 		}
 
 		authURL := prov.Config().AuthCodeURL(state, oauth2.AccessTypeOffline)
-		writeJSON(w, http.StatusOK, linkResponse{AuthorizeURL: authURL})
+		writeJSON(w, http.StatusOK, linkResponse{AuthURL: authURL})
 	}
 }
 
@@ -253,13 +253,28 @@ func (p *oauthPlugin) handleCallback(host plugin.PluginHost) http.HandlerFunc {
 			return
 		}
 
-		q := r.URL.Query()
-		if errCode := q.Get("error"); errCode != "" {
+		// Rust parity: callbacks may arrive via GET (query string), POST
+		// form_post (application/x-www-form-urlencoded), or POST JSON. Try
+		// each in turn so the handler is content-type-agnostic.
+		var code, state, errCode string
+		if r.Method == http.MethodPost && strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+			var body struct {
+				Code  string `json:"code"`
+				State string `json:"state"`
+				Error string `json:"error"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			code, state, errCode = body.Code, body.State, body.Error
+		} else {
+			_ = r.ParseForm()
+			code = r.FormValue("code")
+			state = r.FormValue("state")
+			errCode = r.FormValue("error")
+		}
+		if errCode != "" {
 			writeError(w, http.StatusBadRequest, "PROVIDER_ERROR", errCode)
 			return
 		}
-		code := q.Get("code")
-		state := q.Get("state")
 		if code == "" || state == "" {
 			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "missing code or state")
 			return
@@ -472,10 +487,13 @@ func (p *oauthPlugin) completeLogin(
 		http.Redirect(w, r, redirect, http.StatusFound)
 		return
 	}
-	writeJSON(w, http.StatusOK, callbackResponse{
-		User:     toUserJSON(userID, email),
-		Provider: provider,
-	})
+	resp := callbackResponse{UserID: userID, Email: email}
+	if u, err := repoRef.GetUserByID(ctx, userID); err == nil && u != nil {
+		resp.DisplayName = u.DisplayName
+		resp.EmailVerified = u.EmailVerified
+	}
+	_ = provider
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // completeLink attaches the OAuth account to an already-authed user.
@@ -541,9 +559,12 @@ func (p *oauthPlugin) completeLink(
 		return
 	}
 	writeJSON(w, http.StatusOK, callbackResponse{
-		User:     toUserJSON(au.User.ID, au.User.Email),
-		Provider: provider,
+		UserID:        au.User.ID,
+		Email:         au.User.Email,
+		DisplayName:   au.User.DisplayName,
+		EmailVerified: au.User.EmailVerified,
 	})
+	_ = provider
 }
 
 // --- /oauth/accounts ---------------------------------------------------
@@ -555,9 +576,6 @@ type accountJSON struct {
 	ExpiresAt      *time.Time `json:"expires_at,omitempty"`
 }
 
-type listAccountsResponse struct {
-	Accounts []accountJSON `json:"accounts"`
-}
 
 func (p *oauthPlugin) handleListAccounts(host plugin.PluginHost) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -580,7 +598,7 @@ func (p *oauthPlugin) handleListAccounts(host plugin.PluginHost) http.HandlerFun
 				ExpiresAt:      a.ExpiresAt,
 			})
 		}
-		writeJSON(w, http.StatusOK, listAccountsResponse{Accounts: out})
+		writeJSON(w, http.StatusOK, out)
 	}
 }
 
@@ -651,17 +669,15 @@ func (p *oauthPlugin) userHasAlternateAuth(ctx context.Context, r repo.Repositor
 
 // --- helpers -----------------------------------------------------------
 
+// callbackResponse mirrors the Rust shape (`OAuthAuthResponse`): flat
+// user identity fields. The session cookie carries the actual auth
+// state.
 type callbackResponse struct {
-	User     userJSON `json:"user"`
-	Provider string   `json:"provider"`
+	UserID        string  `json:"user_id"`
+	Email         string  `json:"email"`
+	DisplayName   *string `json:"display_name,omitempty"`
+	EmailVerified bool    `json:"email_verified"`
 }
-
-type userJSON struct {
-	ID    string `json:"id"`
-	Email string `json:"email"`
-}
-
-func toUserJSON(id, email string) userJSON { return userJSON{ID: id, Email: email} }
 
 func requestIP(r *http.Request) *string {
 	if v := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); v != "" {

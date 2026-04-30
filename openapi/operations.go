@@ -875,9 +875,14 @@ func addOAuth2Server(api *huma.OpenAPI) {
 		Summary:     "Register an OAuth2 client (RFC 7591)",
 		Description: "Public dynamic client registration endpoint. Disabled by default; opt in via plugin Config.DCREnabled. When DCRRequireInitialAccessToken is true (default), the request must carry an admin-issued Bearer token in the Authorization header.",
 		Security:    secNone(),
-		RequestBody: jsonRequestBody(oauth2RegisterRequest{}, "Client metadata per RFC 7591 §2"),
+		RequestBody: &huma.RequestBody{
+			Required: true,
+			Content: map[string]*huma.MediaType{
+				"application/json": {Schema: &huma.Schema{Type: "object"}},
+			},
+		},
 		Responses: map[string]*huma.Response{
-			"201": jsonResponse("Registered client + one-time client_secret (omitted for public clients) + registration_access_token.", oauth2RegisterResponse{}),
+			"201": {Description: "Registered client + one-time client_secret (omitted for public clients) + registration_access_token."},
 			"401": errorResponse("Missing or invalid initial access token."),
 			"400": errorResponse("Invalid client metadata."),
 			"404": errorResponse("DCR is disabled by configuration."),

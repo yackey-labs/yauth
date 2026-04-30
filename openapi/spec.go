@@ -175,8 +175,6 @@ func declareSchemas(r huma.Registry) {
 		reflect.TypeOf(oidcDiscoveryDoc{}),
 		reflect.TypeOf(oidcUserInfoResponse{}),
 
-		reflect.TypeOf(oauth2RegisterRequest{}),
-		reflect.TypeOf(oauth2RegisterResponse{}),
 		reflect.TypeOf(oauth2ConsentClient{}),
 		reflect.TypeOf(oauth2ConsentPayload{}),
 		reflect.TypeOf(oauth2AuthorizeRedirect{}),

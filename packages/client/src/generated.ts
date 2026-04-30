@@ -456,37 +456,6 @@ export interface Oauth2PatchClientRequest {
   public_key_pem?: string;
 }
 
-export interface Oauth2RegisterRequest {
-  client_name?: string;
-  /** @nullable */
-  grant_types?: string[] | null;
-  jwks_uri?: string;
-  /** @nullable */
-  redirect_uris: string[] | null;
-  /** @nullable */
-  response_types?: string[] | null;
-  scope?: string;
-  token_endpoint_auth_method?: string;
-}
-
-export interface Oauth2RegisterResponse {
-  client_id: string;
-  client_id_issued_at: number;
-  client_name?: string;
-  client_secret?: string;
-  client_secret_expires_at: number;
-  /** @nullable */
-  grant_types: string[] | null;
-  /** @nullable */
-  redirect_uris: string[] | null;
-  registration_access_token?: string;
-  registration_client_uri?: string;
-  /** @nullable */
-  response_types: string[] | null;
-  scope?: string;
-  token_endpoint_auth_method: string;
-}
-
 export interface Oauth2TokenResponse {
   access_token: string;
   expires_in: number;
@@ -762,6 +731,8 @@ export type Oauth2DeviceVerifyBodyTwo = { [key: string]: unknown };
 export type Oauth2DeviceAuthorizationBody = { [key: string]: unknown };
 
 export type Oauth2IntrospectBody = { [key: string]: unknown };
+
+export type Oauth2DynamicClientRegisterBody = { [key: string]: unknown };
 
 export type Oauth2RevokeBody = { [key: string]: unknown };
 
@@ -1907,15 +1878,15 @@ export const getOauth2DynamicClientRegisterUrl = () => {
   return `/oauth/register`
 }
 
-export const oauth2DynamicClientRegister = async (oauth2RegisterRequest: Oauth2RegisterRequest, options?: RequestInit): Promise<Oauth2RegisterResponse> => {
+export const oauth2DynamicClientRegister = async (oauth2DynamicClientRegisterBody: Oauth2DynamicClientRegisterBody, options?: RequestInit): Promise<void> => {
 
-  return customFetch<Oauth2RegisterResponse>(getOauth2DynamicClientRegisterUrl(),
+  return customFetch<void>(getOauth2DynamicClientRegisterUrl(),
   {
     ...options,
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...options?.headers },
     body: JSON.stringify(
-      oauth2RegisterRequest,)
+      oauth2DynamicClientRegisterBody,)
   }
 );}
 

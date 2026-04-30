@@ -468,37 +468,6 @@ export interface Oauth2PatchClientRequest {
   public_key_pem?: string;
 }
 
-export interface Oauth2RegisterRequest {
-  client_name?: string;
-  /** @nullable */
-  grant_types?: string[] | null;
-  jwks_uri?: string;
-  /** @nullable */
-  redirect_uris: string[] | null;
-  /** @nullable */
-  response_types?: string[] | null;
-  scope?: string;
-  token_endpoint_auth_method?: string;
-}
-
-export interface Oauth2RegisterResponse {
-  client_id: string;
-  client_id_issued_at: number;
-  client_name?: string;
-  client_secret?: string;
-  client_secret_expires_at: number;
-  /** @nullable */
-  grant_types: string[] | null;
-  /** @nullable */
-  redirect_uris: string[] | null;
-  registration_access_token?: string;
-  registration_client_uri?: string;
-  /** @nullable */
-  response_types: string[] | null;
-  scope?: string;
-  token_endpoint_auth_method: string;
-}
-
 export interface Oauth2TokenResponse {
   access_token: string;
   expires_in: number;
@@ -774,6 +743,8 @@ export type Oauth2DeviceVerifyBodyTwo = { [key: string]: unknown };
 export type Oauth2DeviceAuthorizationBody = { [key: string]: unknown };
 
 export type Oauth2IntrospectBody = { [key: string]: unknown };
+
+export type Oauth2DynamicClientRegisterBody = { [key: string]: unknown };
 
 export type Oauth2RevokeBody = { [key: string]: unknown };
 
@@ -1919,15 +1890,15 @@ export const getOauth2DynamicClientRegisterUrl = () => {
   return `/oauth/register`
 }
 
-export const oauth2DynamicClientRegister = async (oauth2RegisterRequest: Oauth2RegisterRequest, options?: RequestInit): Promise<Oauth2RegisterResponse> => {
+export const oauth2DynamicClientRegister = async (oauth2DynamicClientRegisterBody: Oauth2DynamicClientRegisterBody, options?: RequestInit): Promise<void> => {
 
-  return customFetch<Oauth2RegisterResponse>(getOauth2DynamicClientRegisterUrl(),
+  return customFetch<void>(getOauth2DynamicClientRegisterUrl(),
   {
     ...options,
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...options?.headers },
     body: JSON.stringify(
-      oauth2RegisterRequest,)
+      oauth2DynamicClientRegisterBody,)
   }
 );}
 
@@ -2958,8 +2929,6 @@ export const getOauth2AuthorizeResponseOauth2ConsentPayloadMock = (overrideRespo
 
 export const getOauth2AuthorizeResponseMock = (): Oauth2AuthorizeRedirect | Oauth2ConsentPayload => (faker.helpers.arrayElement([{...getOauth2AuthorizeResponseOauth2AuthorizeRedirectMock()},{...getOauth2AuthorizeResponseOauth2ConsentPayloadMock()},]))
 
-export const getOauth2DynamicClientRegisterResponseMock = (overrideResponse: Partial<Extract<Oauth2RegisterResponse, object>> = {}): Oauth2RegisterResponse => ({client_id: faker.string.alpha({length: {min: 10, max: 20}}), client_id_issued_at: faker.number.int(), client_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), client_secret: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), client_secret_expires_at: faker.number.int(), grant_types: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), null]), redirect_uris: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), null]), registration_access_token: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), registration_client_uri: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), response_types: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), null]), scope: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), token_endpoint_auth_method: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
-
 export const getOauthCallbackResponseMock = (overrideResponse: Partial<Extract<OauthCallbackResponse, object>> = {}): OauthCallbackResponse => ({display_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), email: faker.string.alpha({length: {min: 10, max: 20}}), email_verified: faker.datatype.boolean(), user_id: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
 export const getOauthCallbackPostResponseMock = (overrideResponse: Partial<Extract<OauthCallbackResponse, object>> = {}): OauthCallbackResponse => ({display_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), email: faker.string.alpha({length: {min: 10, max: 20}}), email_verified: faker.datatype.boolean(), user_id: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
@@ -3495,13 +3464,11 @@ export const getOauth2IntrospectMockHandler = (overrideResponse?: void | ((info:
   }, options)
 }
 
-export const getOauth2DynamicClientRegisterMockHandler = (overrideResponse?: Oauth2RegisterResponse | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<Oauth2RegisterResponse> | Oauth2RegisterResponse), options?: RequestHandlerOptions) => {
+export const getOauth2DynamicClientRegisterMockHandler = (overrideResponse?: void | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<void> | void), options?: RequestHandlerOptions) => {
   return http.post('*/oauth/register', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+  if (typeof overrideResponse === 'function') {await overrideResponse(info); }
 
-
-    return HttpResponse.json(overrideResponse !== undefined
-    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
-    : getOauth2DynamicClientRegisterResponseMock(),
+    return new HttpResponse(null,
       { status: 201
       })
   }, options)

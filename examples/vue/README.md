@@ -8,7 +8,10 @@ as a smoke test for the backend.
 
 - **Frontend** — Vue 3 + Vite + vue-router, using `@yackey-labs/yauth-go-ui-vue`
   for the `LoginForm`, `RegisterForm`, `useSession()` composable, and
-  `YAuthPlugin` provider.
+  `YAuthPlugin` provider. `main.ts` constructs the client explicitly with
+  `createYAuthClient({ baseUrl: "/api/auth" })` and passes it to the
+  plugin — this avoids vite's bare-specifier resolution running at runtime
+  inside the pre-built `ui-vue/dist`.
 - **Backend** — `examples/vue/server` boots an in-memory SQLite database,
   wires the `email-password`, `status`, and `admin` plugins, seeds a demo
   admin user, and serves `/api/auth/*` on `:3000`.

@@ -1,0 +1,1511 @@
+## yauth Rust bench
+host: Darwin 24.6.0 arm64
+cpus_physical: 14
+mem_bytes: 25769803776
+rustc: rustc 1.95.0 (59807616e 2026-04-14)
+cargo: cargo 1.95.0 (f2d3ce0bd 2026-03-21)
+rust_root: /Users/syackey/steveyackey/yackey-labs/yauth
+features: full,all-backends
+iters_per_phase: 3
+
+=== phase=build_cold iter=1 cmd=cargo build --workspace --features full,all-backends ===
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.45
+   Compiling unicode-ident v1.0.24
+   Compiling libc v0.2.184
+   Compiling cfg-if v1.0.4
+   Compiling serde v1.0.228
+   Compiling serde_core v1.0.228
+   Compiling version_check v0.9.5
+   Compiling zeroize v1.8.2
+   Compiling memchr v2.8.0
+   Compiling pin-project-lite v0.2.17
+   Compiling scopeguard v1.2.0
+   Compiling itoa v1.0.18
+   Compiling const-oid v0.9.6
+   Compiling futures-core v0.3.32
+   Compiling lock_api v0.4.14
+   Compiling typenum v1.19.0
+   Compiling autocfg v1.5.0
+   Compiling bytes v1.11.1
+   Compiling libm v0.2.16
+   Compiling parking_lot_core v0.9.12
+   Compiling shlex v1.3.0
+   Compiling find-msvc-tools v0.1.9
+   Compiling once_cell v1.21.4
+   Compiling cc v1.2.59
+   Compiling stable_deref_trait v1.2.1
+   Compiling subtle v2.6.1
+   Compiling log v0.4.29
+   Compiling percent-encoding v2.3.2
+   Compiling equivalent v1.0.2
+   Compiling generic-array v0.14.9
+   Compiling writeable v0.6.3
+   Compiling litemap v0.8.2
+   Compiling futures-io v0.3.32
+   Compiling futures-task v0.3.32
+   Compiling icu_normalizer_data v2.2.0
+   Compiling utf8_iter v1.0.4
+   Compiling num-traits v0.2.19
+   Compiling tracing-core v0.1.36
+   Compiling futures-sink v0.3.32
+   Compiling icu_properties_data v2.2.0
+   Compiling hashbrown v0.17.0
+   Compiling zmij v1.0.21
+   Compiling serde_json v1.0.149
+   Compiling syn v2.0.117
+   Compiling getrandom v0.2.17
+   Compiling mio v1.2.0
+   Compiling socket2 v0.6.3
+   Compiling errno v0.3.14
+   Compiling rand_core v0.6.4
+   Compiling signal-hook-registry v1.4.8
+   Compiling form_urlencoded v1.2.2
+   Compiling slab v0.4.12
+   Compiling base64 v0.22.1
+   Compiling fnv v1.0.7
+   Compiling indexmap v2.14.0
+   Compiling ring v0.17.14
+   Compiling thiserror v2.0.18
+   Compiling bitflags v2.11.0
+   Compiling cpufeatures v0.2.17
+   Compiling getrandom v0.4.2
+   Compiling zerocopy v0.8.48
+   Compiling rand_core v0.10.0
+   Compiling rustls-pki-types v1.14.0
+   Compiling vcpkg v0.2.15
+   Compiling crypto-common v0.1.6
+   Compiling block-buffer v0.10.4
+   Compiling digest v0.10.7
+   Compiling pkg-config v0.3.32
+   Compiling untrusted v0.9.0
+   Compiling futures-channel v0.3.32
+   Compiling crossbeam-utils v0.8.21
+   Compiling core-foundation-sys v0.8.7
+   Compiling base64ct v1.8.3
+   Compiling iana-time-zone v0.1.65
+   Compiling webpki-roots v1.0.6
+   Compiling spin v0.9.8
+   Compiling allocator-api2 v0.2.21
+   Compiling num-integer v0.1.46
+   Compiling pem-rfc7468 v0.7.0
+   Compiling http v1.4.0
+   Compiling synstructure v0.13.2
+   Compiling der v0.7.10
+   Compiling time-core v0.1.8
+   Compiling parking v2.2.1
+   Compiling num-conv v0.2.1
+   Compiling powerfmt v0.2.0
+   Compiling time-macros v0.2.27
+   Compiling deranged v0.5.8
+   Compiling http-body v1.0.1
+   Compiling uuid v1.23.0
+   Compiling sha2 v0.10.9
+   Compiling rustls v0.23.37
+   Compiling spki v0.7.3
+   Compiling tinyvec_macros v0.1.1
+   Compiling ryu v1.0.23
+   Compiling pkcs8 v0.10.2
+   Compiling tinyvec v1.11.0
+   Compiling lazy_static v1.5.0
+   Compiling tower-service v0.3.3
+   Compiling httparse v1.10.1
+   Compiling foldhash v0.1.5
+   Compiling hmac v0.12.1
+   Compiling unicode-properties v0.1.4
+   Compiling crc-catalog v2.4.0
+   Compiling ident_case v1.0.1
+   Compiling serde_derive v1.0.228
+   Compiling zerofrom-derive v0.1.7
+   Compiling displaydoc v0.2.5
+   Compiling yoke-derive v0.8.2
+   Compiling zerovec-derive v0.11.3
+   Compiling tracing-attributes v0.1.31
+   Compiling tokio-macros v2.7.0
+   Compiling futures-macro v0.3.32
+   Compiling thiserror-impl v2.0.18
+   Compiling zerocopy-derive v0.8.48
+   Compiling concurrent-queue v2.5.0
+   Compiling event-listener v5.4.1
+   Compiling time v0.3.47
+   Compiling crossbeam-queue v0.3.12
+   Compiling unicode-normalization v0.1.25
+   Compiling futures-util v0.3.32
+   Compiling hashbrown v0.15.5
+   Compiling try-lock v0.2.5
+   Compiling unicode-bidi v0.3.18
+   Compiling getrandom v0.3.4
+   Compiling zerofrom v0.1.7
+   Compiling atomic-waker v1.1.2
+   Compiling tracing v0.1.44
+   Compiling httpdate v1.0.3
+   Compiling want v0.3.1
+   Compiling yoke v0.8.2
+   Compiling stringprep v0.1.5
+   Compiling hashlink v0.10.0
+   Compiling crc v3.4.0
+   Compiling webpki-roots v0.26.11
+   Compiling hybrid-array v0.4.10
+   Compiling num-bigint-dig v0.8.6
+   Compiling hex v0.4.3
+   Compiling heck v0.5.0
+   Compiling sync_wrapper v1.0.2
+   Compiling byteorder v1.5.0
+   Compiling ipnet v2.12.0
+   Compiling cmov v0.5.3
+   Compiling zerovec v0.11.6
+   Compiling zerotrie v0.2.4
+   Compiling tower-layer v0.3.3
+   Compiling ctutils v0.4.2
+   Compiling crypto-common v0.2.1
+   Compiling block-buffer v0.12.0
+   Compiling hkdf v0.12.4
+   Compiling signature v2.2.0
+   Compiling const-oid v0.10.2
+   Compiling rand_core v0.9.5
+   Compiling digest v0.11.2
+   Compiling http-body-util v0.1.3
+   Compiling num-bigint v0.4.6
+   Compiling tokio v1.51.1
+   Compiling aho-corasick v1.1.4
+   Compiling strsim v0.11.1
+   Compiling regex-syntax v0.8.10
+   Compiling tinystr v0.8.3
+   Compiling potential_utf v0.1.5
+   Compiling smallvec v1.15.1
+   Compiling icu_collections v2.2.0
+   Compiling either v1.15.0
+   Compiling icu_locale_core v2.2.0
+   Compiling chrono v0.4.44
+   Compiling serde_urlencoded v0.7.1
+   Compiling parking_lot v0.12.5
+   Compiling async-trait v0.1.89
+   Compiling regex-automata v0.4.14
+   Compiling icu_provider v2.2.0
+   Compiling ppv-lite86 v0.2.21
+   Compiling futures-intrusive v0.5.0
+   Compiling openssl-sys v0.9.112
+   Compiling rand_chacha v0.3.1
+   Compiling icu_properties v2.2.0
+   Compiling icu_normalizer v2.2.0
+   Compiling rand v0.8.5
+   Compiling rand_chacha v0.9.0
+   Compiling thiserror v1.0.69
+   Compiling whoami v1.6.1
+   Compiling dotenvy v0.15.7
+   Compiling rand v0.9.2
+   Compiling idna_adapter v1.2.1
+   Compiling tokio-stream v0.1.18
+   Compiling num-iter v0.1.45
+   Compiling idna v1.1.0
+   Compiling regex v1.12.3
+   Compiling url v2.5.8
+   Compiling atoi v2.0.0
+   Compiling thiserror-impl v1.0.69
+   Compiling libsqlite3-sys v0.30.1
+   Compiling sha1 v0.10.6
+   Compiling cpufeatures v0.3.0
+   Compiling cookie v0.18.1
+   Compiling heck v0.4.1
+   Compiling minimal-lexical v0.2.1
+   Compiling pkcs1 v0.7.5
+   Compiling nom v7.1.3
+   Compiling itertools v0.14.0
+   Compiling futures-executor v0.3.32
+   Compiling md-5 v0.10.6
+   Compiling rustls-webpki v0.103.10
+   Compiling ff v0.13.1
+   Compiling home v0.5.12
+   Compiling anyhow v1.0.102
+   Compiling base16ct v0.2.0
+   Compiling group v0.13.0
+   Compiling sec1 v0.7.3
+   Compiling rsa v0.9.10
+   Compiling tokio-util v0.7.18
+   Compiling rusticata-macros v4.1.0
+   Compiling sha2 v0.11.0
+   Compiling darling_core v0.21.3
+   Compiling h2 v0.4.13
+   Compiling tower v0.5.3
+   Compiling flume v0.11.1
+   Compiling darling_core v0.20.11
+   Compiling asn1-rs-impl v0.2.0
+   Compiling asn1-rs-derive v0.5.1
+   Compiling crypto-bigint v0.5.5
+   Compiling fastrand v2.4.1
+   Compiling semver v1.0.28
+   Compiling crc32fast v1.5.0
+   Compiling litrs v1.0.0
+   Compiling psl-types v2.0.11
+   Compiling asn1-rs v0.6.2
+   Compiling publicsuffix v2.3.0
+   Compiling rustc_version v0.4.1
+   Compiling elliptic-curve v0.13.8
+   Compiling document-features v0.2.12
+   Compiling pin-project-internal v1.1.11
+   Compiling chacha20 v0.10.0
+   Compiling proc-macro2-diagnostics v0.10.1
+   Compiling oid-registry v0.7.1
+   Compiling sqlx-core v0.8.6
+   Compiling tokio-rustls v0.26.4
+   Compiling darling_macro v0.21.3
+   Compiling pastey v0.1.1
+   Compiling adler2 v2.0.1
+   Compiling foreign-types-shared v0.1.1
+   Compiling simd-adler32 v0.3.9
+   Compiling darling_macro v0.20.11
+   Compiling openssl v0.10.76
+   Compiling iri-string v0.7.12
+   Compiling base64 v0.21.7
+   Compiling darling v0.21.3
+   Compiling hyper v1.9.0
+   Compiling pin-project v1.1.11
+   Compiling base64urlsafedata v0.5.4
+   Compiling darling v0.20.11
+   Compiling miniz_oxide v0.8.9
+   Compiling foreign-types v0.3.2
+   Compiling cookie_store v0.22.1
+   Compiling rand v0.10.0
+   Compiling prost-derive v0.14.3
+   Compiling curve25519-dalek v4.1.3
+   Compiling tower-http v0.6.8
+   Compiling hyper-util v0.1.20
+   Compiling sqlx-postgres v0.8.6
+   Compiling sqlx-sqlite v0.8.6
+   Compiling sqlx-mysql v0.8.6
+   Compiling md-5 v0.11.0
+   Compiling hmac v0.13.0
+   Compiling opentelemetry v0.31.0
+   Compiling openssl-macros v0.1.1
+   Compiling rfc6979 v0.4.0
+   Compiling objc2-core-foundation v0.3.2
+   Compiling proc-macro-error-attr2 v2.0.0
+   Compiling fallible-iterator v0.2.0
+   Compiling siphasher v1.0.2
+   Compiling mysql_common v0.35.5
+   Compiling rustversion v1.0.22
+   Compiling yansi v1.0.1
+   Compiling webauthn-attestation-ca v0.5.4
+   Compiling hyper-timeout v0.5.2
+   Compiling hyper-rustls v0.27.7
+   Compiling rustix v1.1.4
+   Compiling diesel_derives v2.3.7
+   Compiling utf8parse v0.2.2
+   Compiling foldhash v0.2.0
+   Compiling mime v0.3.17
+   Compiling hashbrown v0.16.1
+   Compiling anstyle-parse v1.0.0
+   Compiling proc-macro-error2 v2.0.1
+   Compiling reqwest v0.12.28
+   Compiling tonic v0.14.5
+   Compiling prost v0.14.3
+   Compiling objc2-system-configuration v0.3.2
+   Compiling postgres-protocol v0.6.11
+   Compiling phf_shared v0.13.1
+   Compiling ecdsa v0.16.9
+   Compiling sea-query-derive v1.0.0-rc.12
+   Compiling flate2 v1.1.9
+   Compiling dsl_auto_type v0.2.0
+   Compiling der-parser v9.0.0
+   Compiling primeorder v0.13.6
+   Compiling sqlx-macros-core v0.8.6
+   Compiling half v2.7.1
+   Compiling inherent v1.0.13
+   Compiling diesel_table_macro_syntax v0.3.0
+   Compiling ordered-float v4.6.0
+   Compiling btoi v0.4.3
+   Compiling pem v3.0.6
+   Compiling serde_path_to_error v0.1.20
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling saturating v0.1.0
+   Compiling data-encoding v2.10.0
+   Compiling winnow v1.0.1
+   Compiling anstyle-query v1.1.5
+   Compiling colorchoice v1.0.5
+   Compiling webauthn-rs-core v0.5.4
+   Compiling unicode-xid v0.2.6
+   Compiling anstyle v1.0.14
+   Compiling x509-parser v0.16.0
+   Compiling derive_more-impl v2.1.1
+   Compiling toml_parser v1.1.2+spec-1.1.0
+   Compiling anstream v1.0.0
+   Compiling tonic-prost v0.14.5
+   Compiling sea-query v1.0.0-rc.33
+   Compiling serde_cbor_2 v0.13.0
+   Compiling sqlx-macros v0.8.6
+   Compiling sea-bae v0.2.1
+   Compiling postgres-types v0.2.13
+   Compiling phf v0.13.1
+   Compiling ouroboros_macro v0.18.5
+   Compiling lru v0.16.3
+   Compiling whoami v2.1.1
+   Compiling axum-core v0.5.6
+   Compiling opentelemetry_sdk v0.31.0
+   Compiling webauthn-rs-proto v0.5.4
+   Compiling pluralizer v0.5.0
+   Compiling ed25519 v2.2.3
+   Compiling event-listener-strategy v0.5.4
+   Compiling axum-macros v0.5.0
+   Compiling async-stream-impl v0.3.6
+   Compiling keyed_priority_queue v0.4.2
+   Compiling serde_spanned v1.1.1
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling socket2 v0.5.10
+   Compiling num_cpus v1.17.0
+   Compiling sqlx v0.8.6
+   Compiling deadpool-runtime v0.3.1
+   Compiling downcast-rs v2.0.2
+   Compiling static_assertions v1.1.0
+   Compiling matchit v0.8.4
+   Compiling unicode-width v0.2.2
+   Compiling aliasable v0.1.3
+   Compiling toml_writer v1.1.1+spec-1.1.0
+   Compiling twox-hash v2.1.2
+   Compiling clap_lex v1.1.0
+   Compiling mysql_async v0.36.2
+   Compiling toml v1.1.2+spec-1.1.0
+   Compiling console v0.16.3
+   Compiling ouroboros v0.18.5
+   Compiling clap_builder v4.6.0
+   Compiling async-stream v0.3.6
+   Compiling sea-query-sqlx v0.8.0-rc.15
+   Compiling deadpool v0.13.0
+   Compiling arc-swap v1.9.1
+   Compiling sea-orm-macros v2.0.0-rc.38
+   Compiling async-lock v3.4.2
+   Compiling ed25519-dalek v2.2.0
+   Compiling tokio-postgres v0.7.17
+   Compiling tempfile v3.27.0
+   Compiling derive_more v2.1.1
+   Compiling axum v0.8.8
+   Compiling p384 v0.13.1
+   Compiling p256 v0.13.2
+   Compiling opentelemetry-proto v0.31.0
+   Compiling opentelemetry-http v0.31.0
+   Compiling backon v1.6.0
+   Compiling combine v4.6.7
+   Compiling diesel v2.3.7
+   Compiling utoipa-gen v5.4.0
+   Compiling simple_asn1 v0.6.4
+   Compiling clap_derive v4.6.0
+   Compiling password-hash v0.5.0
+   Compiling blake2 v0.10.6
+   Compiling email-encoding v0.4.1
+   Compiling hostname v0.4.2
+   Compiling nom v8.0.0
+   Compiling scoped-futures v0.1.4
+   Compiling sha1_smol v1.0.1
+   Compiling shell-words v1.1.1
+   Compiling email_address v0.2.9
+   Compiling base32 v0.5.1
+   Compiling strum v0.28.0
+   Compiling similar v3.0.0
+   Compiling constant_time_eq v0.3.1
+   Compiling arcstr v1.2.0
+   Compiling xxhash-rust v0.8.15
+   Compiling urlencoding v2.1.3
+   Compiling quoted_printable v0.5.2
+   Compiling clap v4.6.0
+   Compiling dialoguer v0.12.0
+   Compiling totp-rs v5.7.1
+   Compiling argon2 v0.5.3
+   Compiling webauthn-rs v0.5.4
+   Compiling opentelemetry-otlp v0.31.1
+   Compiling jsonwebtoken v10.3.0
+   Compiling sea-orm v2.0.0-rc.38
+   Compiling axum-extra v0.12.5
+   Compiling yauth-migration v0.12.0 (/Users/syackey/steveyackey/yackey-labs/yauth/crates/yauth-migration)
+   Compiling oauth2 v5.0.0
+   Compiling redis v1.2.0
+   Compiling sha1 v0.11.0
+   Compiling yauth-entity v0.12.0 (/Users/syackey/steveyackey/yackey-labs/yauth/crates/yauth-entity)
+   Compiling opentelemetry-semantic-conventions v0.31.0
+   Compiling lettre v0.11.21
+   Compiling utoipa v5.4.0
+   Compiling cargo-yauth v0.12.0 (/Users/syackey/steveyackey/yackey-labs/yauth/crates/cargo-yauth)
+   Compiling diesel-async v0.8.0
+   Compiling yauth v0.12.0 (/Users/syackey/steveyackey/yackey-labs/yauth/crates/yauth)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 12s
+       72.19 real       238.51 user        30.58 sys
+          3010002944  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+             7852077  page reclaims
+               55496  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                 529  signals received
+               13939  voluntary context switches
+              553295  involuntary context switches
+         14364426415  instructions retired
+          9230861008  cycles elapsed
+           141755184  peak memory footprint
+=== end phase=build_cold iter=1 ===
+=== phase=build_warm iter=2 cmd=cargo build --workspace --features full,all-backends ===
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.64s
+        0.70 real         0.13 user         0.17 sys
+           138608640  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+                9375  page reclaims
+                 204  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   1  signals received
+                1555  voluntary context switches
+                4623  involuntary context switches
+          3007670433  instructions retired
+          1201699235  cycles elapsed
+           120521376  peak memory footprint
+=== end phase=build_warm iter=2 ===
+=== phase=build_warm iter=3 cmd=cargo build --workspace --features full,all-backends ===
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.27s
+        0.32 real         0.13 user         0.12 sys
+           137248768  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+                9519  page reclaims
+                   0  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   1  signals received
+                   1  voluntary context switches
+                4508  involuntary context switches
+          2523863945  instructions retired
+           974437199  cycles elapsed
+           119882376  peak memory footprint
+=== end phase=build_warm iter=3 ===
+=== phase=vet iter=1 cmd=cargo check --workspace --features full,all-backends ===
+    Checking cfg-if v1.0.4
+    Checking zeroize v1.8.2
+    Checking memchr v2.8.0
+    Checking pin-project-lite v0.2.17
+    Checking itoa v1.0.18
+    Checking libc v0.2.184
+    Checking serde_core v1.0.228
+    Checking typenum v1.19.0
+    Checking scopeguard v1.2.0
+    Checking subtle v2.6.1
+    Checking bytes v1.11.1
+    Checking futures-core v0.3.32
+    Checking once_cell v1.21.4
+    Checking const-oid v0.9.6
+    Checking futures-sink v0.3.32
+    Checking log v0.4.29
+    Checking lock_api v0.4.14
+    Checking libm v0.2.16
+    Checking zerofrom v0.1.7
+    Checking percent-encoding v2.3.2
+    Checking stable_deref_trait v1.2.1
+   Compiling serde v1.0.228
+    Checking equivalent v1.0.2
+    Checking slab v0.4.12
+    Checking yoke v0.8.2
+    Checking tracing-core v0.1.36
+    Checking futures-io v0.3.32
+    Checking futures-task v0.3.32
+    Checking base64 v0.22.1
+    Checking hashbrown v0.17.0
+    Checking litemap v0.8.2
+    Checking writeable v0.6.3
+    Checking utf8_iter v1.0.4
+    Checking zerovec v0.11.6
+    Checking futures-util v0.3.32
+    Checking errno v0.3.14
+    Checking getrandom v0.2.17
+    Checking mio v1.2.0
+    Checking socket2 v0.6.3
+    Checking tracing v0.1.44
+    Checking zerotrie v0.2.4
+    Checking generic-array v0.14.9
+    Checking signal-hook-registry v1.4.8
+    Checking zmij v1.0.21
+    Checking rand_core v0.10.0
+    Checking icu_properties_data v2.2.0
+    Checking icu_normalizer_data v2.2.0
+    Checking zerocopy v0.8.48
+    Checking num-traits v0.2.19
+    Checking rand_core v0.6.4
+    Checking form_urlencoded v1.2.2
+    Checking futures-channel v0.3.32
+    Checking getrandom v0.4.2
+    Checking tinystr v0.8.3
+    Checking potential_utf v0.1.5
+    Checking base64ct v1.8.3
+    Checking icu_collections v2.2.0
+   Compiling either v1.15.0
+    Checking block-buffer v0.10.4
+    Checking crypto-common v0.1.6
+    Checking icu_locale_core v2.2.0
+    Checking pem-rfc7468 v0.7.0
+   Compiling smallvec v1.15.1
+    Checking cpufeatures v0.2.17
+    Checking num-integer v0.1.46
+    Checking http v1.4.0
+    Checking digest v0.10.7
+    Checking indexmap v2.14.0
+    Checking bitflags v2.11.0
+    Checking serde_json v1.0.149
+    Checking rustls-pki-types v1.14.0
+    Checking der v0.7.10
+    Checking thiserror v2.0.18
+    Checking untrusted v0.9.0
+   Compiling num-conv v0.2.1
+    Checking powerfmt v0.2.0
+   Compiling time-core v0.1.8
+    Checking deranged v0.5.8
+    Checking ring v0.17.14
+    Checking http-body v1.0.1
+    Checking parking_lot_core v0.9.12
+    Checking sha2 v0.10.9
+   Compiling time-macros v0.2.27
+    Checking icu_provider v2.2.0
+    Checking uuid v1.23.0
+    Checking parking_lot v0.12.5
+    Checking icu_properties v2.2.0
+    Checking icu_normalizer v2.2.0
+    Checking spki v0.7.3
+    Checking core-foundation-sys v0.8.7
+    Checking crossbeam-utils v0.8.21
+    Checking tokio v1.51.1
+    Checking pkcs8 v0.10.2
+    Checking iana-time-zone v0.1.65
+    Checking tower-service v0.3.3
+    Checking webpki-roots v1.0.6
+    Checking hmac v0.12.1
+    Checking chrono v0.4.44
+    Checking fnv v1.0.7
+    Checking atomic-waker v1.1.2
+    Checking try-lock v0.2.5
+    Checking httpdate v1.0.3
+    Checking httparse v1.10.1
+    Checking want v0.3.1
+    Checking rustls-webpki v0.103.10
+    Checking hybrid-array v0.4.10
+    Checking spin v0.9.8
+    Checking idna_adapter v1.2.1
+    Checking allocator-api2 v0.2.21
+    Checking getrandom v0.3.4
+    Checking time v0.3.47
+    Checking sync_wrapper v1.0.2
+    Checking idna v1.1.0
+    Checking rustls v0.23.37
+    Checking cmov v0.5.3
+    Checking byteorder v1.5.0
+    Checking tinyvec_macros v0.1.1
+    Checking ryu v1.0.23
+    Checking tower-layer v0.3.3
+    Checking ipnet v2.12.0
+    Checking ppv-lite86 v0.2.21
+    Checking ctutils v0.4.2
+    Checking url v2.5.8
+    Checking tinyvec v1.11.0
+    Checking block-buffer v0.12.0
+    Checking crypto-common v0.2.1
+    Checking hkdf v0.12.4
+    Checking concurrent-queue v2.5.0
+    Checking signature v2.2.0
+   Compiling foldhash v0.1.5
+    Checking parking v2.2.1
+    Checking const-oid v0.10.2
+    Checking event-listener v5.4.1
+   Compiling hashbrown v0.15.5
+    Checking digest v0.11.2
+   Compiling rand_chacha v0.3.1
+    Checking unicode-normalization v0.1.25
+    Checking serde_urlencoded v0.7.1
+    Checking rand_core v0.9.5
+    Checking lazy_static v1.5.0
+    Checking http-body-util v0.1.3
+    Checking num-bigint v0.4.6
+    Checking unicode-bidi v0.3.18
+    Checking tokio-util v0.7.18
+    Checking tokio-stream v0.1.18
+   Compiling crc-catalog v2.4.0
+    Checking unicode-properties v0.1.4
+   Compiling crc v3.4.0
+    Checking stringprep v0.1.5
+    Checking rand_chacha v0.9.0
+   Compiling webpki-roots v0.26.11
+   Compiling hashlink v0.10.0
+    Checking rand v0.8.5
+   Compiling futures-intrusive v0.5.0
+    Checking h2 v0.4.13
+    Checking tower v0.5.3
+   Compiling crossbeam-queue v0.3.12
+    Checking hex v0.4.3
+    Checking rand v0.9.2
+   Compiling num-iter v0.1.45
+   Compiling atoi v2.0.0
+    Checking sha1 v0.10.6
+    Checking cpufeatures v0.3.0
+    Checking minimal-lexical v0.2.1
+    Checking thiserror v1.0.69
+   Compiling pkcs1 v0.7.5
+   Compiling num-bigint-dig v0.8.6
+    Checking futures-executor v0.3.32
+    Checking nom v7.1.3
+   Compiling md-5 v0.10.6
+   Compiling aho-corasick v1.1.4
+   Compiling itertools v0.14.0
+    Checking ff v0.13.1
+   Compiling dotenvy v0.15.7
+   Compiling regex-syntax v0.8.10
+   Compiling strsim v0.11.1
+    Checking base16ct v0.2.0
+   Compiling whoami v1.6.1
+    Checking sec1 v0.7.3
+   Compiling darling_core v0.21.3
+   Compiling rsa v0.9.10
+    Checking sqlx-core v0.8.6
+    Checking group v0.13.0
+    Checking libsqlite3-sys v0.30.1
+    Checking cookie v0.18.1
+    Checking sha2 v0.11.0
+    Checking rusticata-macros v4.1.0
+    Checking hyper v1.9.0
+    Checking tokio-rustls v0.26.4
+   Compiling flume v0.11.1
+   Compiling darling_core v0.20.11
+    Checking crypto-bigint v0.5.5
+    Checking psl-types v2.0.11
+   Compiling home v0.5.12
+    Checking fastrand v2.4.1
+    Checking publicsuffix v2.3.0
+    Checking asn1-rs v0.6.2
+    Checking chacha20 v0.10.0
+    Checking base64 v0.21.7
+   Compiling regex-automata v0.4.14
+    Checking iri-string v0.7.12
+    Checking adler2 v2.0.1
+    Checking simd-adler32 v0.3.9
+    Checking hyper-util v0.1.20
+    Checking elliptic-curve v0.13.8
+    Checking foreign-types-shared v0.1.1
+    Checking miniz_oxide v0.8.9
+    Checking foreign-types v0.3.2
+    Checking base64urlsafedata v0.5.4
+    Checking rand v0.10.0
+    Checking pin-project v1.1.11
+    Checking cookie_store v0.22.1
+   Compiling prost-derive v0.14.3
+    Checking crc32fast v1.5.0
+    Checking openssl-sys v0.9.112
+   Compiling darling_macro v0.21.3
+    Checking hmac v0.13.0
+    Checking md-5 v0.11.0
+    Checking rfc6979 v0.4.0
+    Checking opentelemetry v0.31.0
+    Checking objc2-core-foundation v0.3.2
+    Checking mime v0.3.17
+    Checking foldhash v0.2.0
+    Checking utf8parse v0.2.2
+    Checking siphasher v1.0.2
+    Checking fallible-iterator v0.2.0
+    Checking tower-http v0.6.8
+   Compiling darling v0.21.3
+    Checking openssl v0.10.76
+    Checking phf_shared v0.13.1
+    Checking objc2-system-configuration v0.3.2
+    Checking sqlx-postgres v0.8.6
+    Checking hyper-timeout v0.5.2
+    Checking hyper-rustls v0.27.7
+   Compiling regex v1.12.3
+   Compiling sqlx-mysql v0.8.6
+   Compiling darling_macro v0.20.11
+   Compiling sqlx-sqlite v0.8.6
+    Checking tonic v0.14.5
+    Checking reqwest v0.12.28
+   Compiling dsl_auto_type v0.2.0
+    Checking postgres-protocol v0.6.11
+    Checking hashbrown v0.16.1
+   Compiling darling v0.20.11
+    Checking prost v0.14.3
+    Checking anstyle-parse v1.0.0
+    Checking ecdsa v0.16.9
+    Checking flate2 v1.1.9
+    Checking primeorder v0.13.6
+    Checking oid-registry v0.7.1
+    Checking der-parser v9.0.0
+    Checking half v2.7.1
+    Checking serde_path_to_error v0.1.20
+    Checking ordered-float v4.6.0
+    Checking btoi v0.4.3
+    Checking pem v3.0.6
+    Checking colorchoice v1.0.5
+    Checking saturating v0.1.0
+   Compiling sea-query-derive v1.0.0-rc.12
+    Checking data-encoding v2.10.0
+    Checking winnow v1.0.1
+    Checking anstyle-query v1.1.5
+    Checking anstyle v1.0.14
+    Checking is_terminal_polyfill v1.70.2
+    Checking mysql_common v0.35.5
+    Checking webauthn-attestation-ca v0.5.4
+   Compiling diesel_derives v2.3.7
+    Checking x509-parser v0.16.0
+    Checking anstream v1.0.0
+    Checking toml_parser v1.1.2+spec-1.1.0
+    Checking serde_cbor_2 v0.13.0
+    Checking curve25519-dalek v4.1.3
+    Checking lru v0.16.3
+    Checking rustix v1.1.4
+    Checking postgres-types v0.2.13
+    Checking tonic-prost v0.14.5
+   Compiling pluralizer v0.5.0
+    Checking phf v0.13.1
+    Checking whoami v2.1.1
+    Checking opentelemetry_sdk v0.31.0
+    Checking axum-core v0.5.6
+    Checking webauthn-rs-proto v0.5.4
+    Checking event-listener-strategy v0.5.4
+    Checking ed25519 v2.2.3
+    Checking sea-query v1.0.0-rc.33
+    Checking keyed_priority_queue v0.4.2
+    Checking serde_spanned v1.1.1
+    Checking toml_datetime v1.1.1+spec-1.1.0
+    Checking socket2 v0.5.10
+    Checking num_cpus v1.17.0
+    Checking twox-hash v2.1.2
+    Checking toml_writer v1.1.1+spec-1.1.0
+    Checking static_assertions v1.1.0
+    Checking aliasable v0.1.3
+    Checking matchit v0.8.4
+    Checking unicode-width v0.2.2
+    Checking deadpool-runtime v0.3.1
+    Checking clap_lex v1.1.0
+    Checking downcast-rs v2.0.2
+    Checking toml v1.1.2+spec-1.1.0
+    Checking console v0.16.3
+    Checking deadpool v0.13.0
+    Checking ouroboros v0.18.5
+    Checking tempfile v3.27.0
+    Checking async-stream v0.3.6
+    Checking webauthn-rs-core v0.5.4
+    Checking mysql_async v0.36.2
+    Checking clap_builder v4.6.0
+    Checking ed25519-dalek v2.2.0
+   Compiling sqlx-macros-core v0.8.6
+    Checking async-lock v3.4.2
+    Checking tokio-postgres v0.7.17
+   Compiling sea-orm-macros v2.0.0-rc.38
+    Checking arc-swap v1.9.1
+    Checking axum v0.8.8
+    Checking derive_more v2.1.1
+    Checking p256 v0.13.2
+    Checking p384 v0.13.1
+    Checking opentelemetry-http v0.31.0
+   Compiling utoipa-gen v5.4.0
+    Checking backon v1.6.0
+    Checking opentelemetry-proto v0.31.0
+    Checking combine v4.6.7
+    Checking simple_asn1 v0.6.4
+    Checking blake2 v0.10.6
+    Checking password-hash v0.5.0
+    Checking email-encoding v0.4.1
+    Checking hostname v0.4.2
+    Checking nom v8.0.0
+    Checking scoped-futures v0.1.4
+    Checking strum v0.28.0
+    Checking constant_time_eq v0.3.1
+    Checking shell-words v1.1.1
+    Checking quoted_printable v0.5.2
+    Checking email_address v0.2.9
+    Checking arcstr v1.2.0
+    Checking xxhash-rust v0.8.15
+    Checking similar v3.0.0
+    Checking base32 v0.5.1
+    Checking urlencoding v2.1.3
+    Checking sha1_smol v1.0.1
+    Checking dialoguer v0.12.0
+    Checking opentelemetry-otlp v0.31.1
+    Checking argon2 v0.5.3
+   Compiling sqlx-macros v0.8.6
+    Checking totp-rs v5.7.1
+    Checking webauthn-rs v0.5.4
+    Checking clap v4.6.0
+    Checking jsonwebtoken v10.3.0
+    Checking oauth2 v5.0.0
+    Checking yauth-migration v0.12.0 (/Users/syackey/steveyackey/yackey-labs/yauth/crates/yauth-migration)
+    Checking sha1 v0.11.0
+    Checking yauth-entity v0.12.0 (/Users/syackey/steveyackey/yackey-labs/yauth/crates/yauth-entity)
+    Checking opentelemetry-semantic-conventions v0.31.0
+    Checking cargo-yauth v0.12.0 (/Users/syackey/steveyackey/yackey-labs/yauth/crates/cargo-yauth)
+    Checking diesel v2.3.7
+    Checking axum-extra v0.12.5
+    Checking sqlx v0.8.6
+    Checking lettre v0.11.21
+    Checking redis v1.2.0
+    Checking sea-query-sqlx v0.8.0-rc.15
+    Checking sea-orm v2.0.0-rc.38
+    Checking utoipa v5.4.0
+    Checking diesel-async v0.8.0
+    Checking yauth v0.12.0 (/Users/syackey/steveyackey/yackey-labs/yauth/crates/yauth)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 39.60s
+       39.66 real       124.82 user        18.89 sys
+          1956462592  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+             5071398  page reclaims
+                2803  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                 151  signals received
+                8491  voluntary context switches
+              290306  involuntary context switches
+         14197540469  instructions retired
+          8618159894  cycles elapsed
+           138068856  peak memory footprint
+=== end phase=vet iter=1 ===
+=== phase=vet iter=2 cmd=cargo check --workspace --features full,all-backends ===
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.68s
+        0.75 real         0.14 user         0.17 sys
+           139427840  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+                9480  page reclaims
+                 181  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   1  signals received
+                1548  voluntary context switches
+                4866  involuntary context switches
+          3053597766  instructions retired
+          1229395475  cycles elapsed
+           123273888  peak memory footprint
+=== end phase=vet iter=2 ===
+=== phase=vet iter=3 cmd=cargo check --workspace --features full,all-backends ===
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.31s
+        0.34 real         0.13 user         0.13 sys
+           145965056  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+               10069  page reclaims
+                   0  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   1  signals received
+                   1  voluntary context switches
+                4784  involuntary context switches
+          2564506821  instructions retired
+          1019335340  cycles elapsed
+           128549584  peak memory footprint
+=== end phase=vet iter=3 ===
+=== phase=lint iter=1 cmd=cargo clippy --workspace --features full,all-backends -- -D warnings ===
+    Checking yauth-migration v0.12.0 (/Users/syackey/steveyackey/yackey-labs/yauth/crates/yauth-migration)
+    Checking yauth-entity v0.12.0 (/Users/syackey/steveyackey/yackey-labs/yauth/crates/yauth-entity)
+    Checking cargo-yauth v0.12.0 (/Users/syackey/steveyackey/yackey-labs/yauth/crates/cargo-yauth)
+    Checking yauth v0.12.0 (/Users/syackey/steveyackey/yackey-labs/yauth/crates/yauth)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 23.56s
+       23.67 real        22.37 user         1.05 sys
+          1942634496  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+              235758  page reclaims
+                 587  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   1  signals received
+                 732  voluntary context switches
+               12654  involuntary context switches
+           260514696  instructions retired
+           132559079  cycles elapsed
+             7864824  peak memory footprint
+=== end phase=lint iter=1 ===
+=== phase=lint iter=2 cmd=cargo clippy --workspace --features full,all-backends -- -D warnings ===
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.63s
+        0.74 real         0.14 user         0.18 sys
+           138412032  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+               13016  page reclaims
+                 184  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   1  signals received
+                1548  voluntary context switches
+                4995  involuntary context switches
+           267767618  instructions retired
+           141196820  cycles elapsed
+             7160264  peak memory footprint
+=== end phase=lint iter=2 ===
+=== phase=lint iter=3 cmd=cargo clippy --workspace --features full,all-backends -- -D warnings ===
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.28s
+        0.38 real         0.14 user         0.14 sys
+           146014208  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+               13672  page reclaims
+                   0  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   1  signals received
+                   2  voluntary context switches
+                4918  involuntary context switches
+           256100142  instructions retired
+           127747034  cycles elapsed
+             7406048  peak memory footprint
+=== end phase=lint iter=3 ===
+=== phase=test_cold iter=1 cmd=cargo test --workspace --features full,all-backends --lib ===
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.45
+   Compiling libc v0.2.184
+   Compiling cfg-if v1.0.4
+   Compiling serde_core v1.0.228
+   Compiling serde v1.0.228
+   Compiling memchr v2.8.0
+   Compiling zeroize v1.8.2
+   Compiling version_check v0.9.5
+   Compiling pin-project-lite v0.2.17
+   Compiling scopeguard v1.2.0
+   Compiling itoa v1.0.18
+   Compiling futures-core v0.3.32
+   Compiling bytes v1.11.1
+   Compiling autocfg v1.5.0
+   Compiling lock_api v0.4.14
+   Compiling once_cell v1.21.4
+   Compiling libm v0.2.16
+   Compiling const-oid v0.9.6
+   Compiling parking_lot_core v0.9.12
+   Compiling find-msvc-tools v0.1.9
+   Compiling shlex v1.3.0
+   Compiling typenum v1.19.0
+   Compiling subtle v2.6.1
+   Compiling cc v1.2.59
+   Compiling percent-encoding v2.3.2
+   Compiling log v0.4.29
+   Compiling stable_deref_trait v1.2.1
+   Compiling zmij v1.0.21
+   Compiling equivalent v1.0.2
+   Compiling futures-sink v0.3.32
+   Compiling futures-task v0.3.32
+   Compiling serde_json v1.0.149
+   Compiling futures-io v0.3.32
+   Compiling num-traits v0.2.19
+   Compiling litemap v0.8.2
+   Compiling writeable v0.6.3
+   Compiling hashbrown v0.17.0
+   Compiling form_urlencoded v1.2.2
+   Compiling icu_normalizer_data v2.2.0
+   Compiling utf8_iter v1.0.4
+   Compiling tracing-core v0.1.36
+   Compiling getrandom v0.2.17
+   Compiling mio v1.2.0
+   Compiling socket2 v0.6.3
+   Compiling errno v0.3.14
+   Compiling signal-hook-registry v1.4.8
+   Compiling icu_properties_data v2.2.0
+   Compiling generic-array v0.14.9
+   Compiling slab v0.4.12
+   Compiling futures-channel v0.3.32
+   Compiling base64 v0.22.1
+   Compiling syn v2.0.117
+   Compiling core-foundation-sys v0.8.7
+   Compiling fnv v1.0.7
+   Compiling rand_core v0.6.4
+   Compiling ring v0.17.14
+   Compiling rustls-pki-types v1.14.0
+   Compiling thiserror v2.0.18
+   Compiling untrusted v0.9.0
+   Compiling zerocopy v0.8.48
+   Compiling cpufeatures v0.2.17
+   Compiling http v1.4.0
+   Compiling rand_core v0.10.0
+   Compiling getrandom v0.4.2
+   Compiling vcpkg v0.2.15
+   Compiling pkg-config v0.3.32
+   Compiling ryu v1.0.23
+   Compiling webpki-roots v1.0.6
+   Compiling iana-time-zone v0.1.65
+   Compiling spin v0.9.8
+   Compiling httparse v1.10.1
+   Compiling crossbeam-utils v0.8.21
+   Compiling num-integer v0.1.46
+   Compiling http-body v1.0.1
+   Compiling bitflags v2.11.0
+   Compiling indexmap v2.14.0
+   Compiling rustls v0.23.37
+   Compiling aho-corasick v1.1.4
+   Compiling powerfmt v0.2.0
+   Compiling block-buffer v0.10.4
+   Compiling crypto-common v0.1.6
+   Compiling digest v0.10.7
+   Compiling regex-syntax v0.8.10
+   Compiling time-core v0.1.8
+   Compiling num-conv v0.2.1
+   Compiling tower-service v0.3.3
+   Compiling base64ct v1.8.3
+   Compiling synstructure v0.13.2
+   Compiling ident_case v1.0.1
+   Compiling deranged v0.5.8
+   Compiling time-macros v0.2.27
+   Compiling httpdate v1.0.3
+   Compiling atomic-waker v1.1.2
+   Compiling try-lock v0.2.5
+   Compiling want v0.3.1
+   Compiling allocator-api2 v0.2.21
+   Compiling pem-rfc7468 v0.7.0
+   Compiling lazy_static v1.5.0
+   Compiling getrandom v0.3.4
+   Compiling ipnet v2.12.0
+   Compiling concurrent-queue v2.5.0
+   Compiling uuid v1.23.0
+   Compiling der v0.7.10
+   Compiling sync_wrapper v1.0.2
+   Compiling hex v0.4.3
+   Compiling tower-layer v0.3.3
+   Compiling parking v2.2.1
+   Compiling sha2 v0.10.9
+   Compiling http-body-util v0.1.3
+   Compiling event-listener v5.4.1
+   Compiling tinyvec_macros v0.1.1
+   Compiling tinyvec v1.11.0
+   Compiling crossbeam-queue v0.3.12
+   Compiling num-bigint v0.4.6
+   Compiling foldhash v0.1.5
+   Compiling hmac v0.12.1
+   Compiling hashbrown v0.15.5
+   Compiling rand_core v0.9.5
+   Compiling serde_derive v1.0.228
+   Compiling zerofrom-derive v0.1.7
+   Compiling displaydoc v0.2.5
+   Compiling yoke-derive v0.8.2
+   Compiling zerovec-derive v0.11.3
+   Compiling tracing-attributes v0.1.31
+   Compiling tokio-macros v2.7.0
+   Compiling futures-macro v0.3.32
+   Compiling thiserror-impl v2.0.18
+   Compiling zerocopy-derive v0.8.48
+   Compiling time v0.3.47
+   Compiling spki v0.7.3
+   Compiling unicode-normalization v0.1.25
+   Compiling pkcs8 v0.10.2
+   Compiling async-trait v0.1.89
+   Compiling futures-util v0.3.32
+   Compiling strsim v0.11.1
+   Compiling unicode-properties v0.1.4
+   Compiling zerofrom v0.1.7
+   Compiling crc-catalog v2.4.0
+   Compiling tracing v0.1.44
+   Compiling unicode-bidi v0.3.18
+   Compiling hashlink v0.10.0
+   Compiling crc v3.4.0
+   Compiling webpki-roots v0.26.11
+   Compiling yoke v0.8.2
+   Compiling hybrid-array v0.4.10
+   Compiling num-bigint-dig v0.8.6
+   Compiling stringprep v0.1.5
+   Compiling mime v0.3.17
+   Compiling anyhow v1.0.102
+   Compiling regex-automata v0.4.14
+   Compiling zerovec v0.11.6
+   Compiling zerotrie v0.2.4
+   Compiling serde_path_to_error v0.1.20
+   Compiling byteorder v1.5.0
+   Compiling cmov v0.5.3
+   Compiling axum-core v0.5.6
+   Compiling crypto-common v0.2.1
+   Compiling ctutils v0.4.2
+   Compiling block-buffer v0.12.0
+   Compiling axum-macros v0.5.0
+   Compiling hkdf v0.12.4
+   Compiling signature v2.2.0
+   Compiling tinystr v0.8.3
+   Compiling potential_utf v0.1.5
+   Compiling num-iter v0.1.45
+   Compiling icu_collections v2.2.0
+   Compiling icu_locale_core v2.2.0
+   Compiling matchit v0.8.4
+   Compiling const-oid v0.10.2
+   Compiling smallvec v1.15.1
+   Compiling either v1.15.0
+   Compiling serde_urlencoded v0.7.1
+   Compiling chrono v0.4.44
+   Compiling digest v0.11.2
+   Compiling itertools v0.14.0
+   Compiling futures-executor v0.3.32
+   Compiling pin-project-internal v1.1.11
+   Compiling parking_lot v0.12.5
+   Compiling security-framework-sys v2.17.0
+   Compiling tokio v1.51.1
+   Compiling icu_provider v2.2.0
+   Compiling core-foundation v0.10.1
+   Compiling icu_properties v2.2.0
+   Compiling icu_normalizer v2.2.0
+   Compiling ppv-lite86 v0.2.21
+   Compiling prost-derive v0.14.3
+   Compiling rand_chacha v0.3.1
+   Compiling heck v0.5.0
+   Compiling rand_chacha v0.9.0
+   Compiling home v0.5.12
+   Compiling idna_adapter v1.2.1
+   Compiling rand v0.9.2
+   Compiling regex v1.12.3
+   Compiling rand v0.8.5
+   Compiling rustls-webpki v0.103.10
+   Compiling idna v1.1.0
+   Compiling url v2.5.8
+   Compiling pin-project v1.1.11
+   Compiling security-framework v3.7.0
+   Compiling prost v0.14.3
+   Compiling futures-intrusive v0.5.0
+   Compiling openssl-sys v0.9.112
+   Compiling thiserror v1.0.69
+   Compiling whoami v1.6.1
+   Compiling dotenvy v0.15.7
+   Compiling rustls-native-certs v0.8.3
+   Compiling atoi v2.0.0
+   Compiling thiserror-impl v1.0.69
+   Compiling sha1 v0.10.6
+   Compiling libsqlite3-sys v0.30.1
+   Compiling tokio-util v0.7.18
+   Compiling tokio-stream v0.1.18
+   Compiling cpufeatures v0.3.0
+   Compiling cookie v0.18.1
+   Compiling heck v0.4.1
+   Compiling rustix v1.1.4
+   Compiling base64 v0.21.7
+   Compiling h2 v0.4.13
+   Compiling tower v0.5.3
+   Compiling minimal-lexical v0.2.1
+   Compiling nom v7.1.3
+   Compiling pkcs1 v0.7.5
+   Compiling md-5 v0.10.6
+   Compiling tokio-rustls v0.26.4
+   Compiling sqlx-core v0.8.6
+   Compiling ff v0.13.1
+   Compiling base16ct v0.2.0
+   Compiling group v0.13.0
+   Compiling sec1 v0.7.3
+   Compiling rsa v0.9.10
+   Compiling rusticata-macros v4.1.0
+   Compiling sha2 v0.11.0
+   Compiling flume v0.11.1
+   Compiling darling_core v0.23.0
+   Compiling darling_core v0.21.3
+   Compiling asn1-rs-derive v0.5.1
+   Compiling asn1-rs-impl v0.2.0
+   Compiling hyper v1.9.0
+   Compiling ureq-proto v0.6.0
+   Compiling darling_core v0.20.11
+   Compiling crypto-bigint v0.5.5
+   Compiling psl-types v2.0.11
+   Compiling bollard-buildkit-proto v0.7.0
+   Compiling semver v1.0.28
+   Compiling utf8-zero v0.8.1
+   Compiling crc32fast v1.5.0
+   Compiling litrs v1.0.0
+   Compiling portable-atomic v1.13.1
+   Compiling ureq v3.3.0
+   Compiling hyper-util v0.1.20
+   Compiling document-features v0.2.12
+   Compiling elliptic-curve v0.13.8
+   Compiling rustc_version v0.4.1
+   Compiling publicsuffix v2.3.0
+   Compiling sqlx-sqlite v0.8.6
+   Compiling darling_macro v0.23.0
+   Compiling asn1-rs v0.6.2
+   Compiling darling_macro v0.21.3
+   Compiling sqlx-postgres v0.8.6
+   Compiling sqlx-mysql v0.8.6
+   Compiling prost-types v0.14.3
+   Compiling opentelemetry v0.31.0
+   Compiling structmeta-derive v0.3.0
+   Compiling darling_macro v0.20.11
+   Compiling async-stream-impl v0.3.6
+   Compiling chacha20 v0.10.0
+   Compiling proc-macro2-diagnostics v0.10.1
+   Compiling openssl v0.10.76
+   Compiling foreign-types-shared v0.1.1
+   Compiling axum v0.8.8
+   Compiling hyper-timeout v0.5.2
+   Compiling hyper-rustls v0.27.7
+   Compiling adler2 v2.0.1
+   Compiling pastey v0.1.1
+   Compiling simd-adler32 v0.3.9
+   Compiling oid-registry v0.7.1
+   Compiling iri-string v0.7.12
+   Compiling fastrand v2.4.1
+   Compiling miniz_oxide v0.8.9
+   Compiling structmeta v0.3.0
+   Compiling async-stream v0.3.6
+   Compiling foreign-types v0.3.2
+   Compiling darling v0.20.11
+   Compiling rand v0.10.0
+   Compiling base64urlsafedata v0.5.4
+   Compiling darling v0.21.3
+   Compiling darling v0.23.0
+   Compiling cookie_store v0.22.1
+   Compiling tower-http v0.6.8
+   Compiling curve25519-dalek v4.1.3
+   Compiling md-5 v0.11.0
+   Compiling hmac v0.13.0
+   Compiling num-rational v0.4.2
+   Compiling openssl-macros v0.1.1
+   Compiling serde_repr v0.1.20
+   Compiling rfc6979 v0.4.0
+   Compiling objc2-core-foundation v0.3.2
+   Compiling sqlx-macros-core v0.8.6
+   Compiling num-complex v0.4.6
+   Compiling proc-macro-error-attr2 v2.0.0
+   Compiling siphasher v1.0.2
+   Compiling mysql_common v0.35.5
+   Compiling rustversion v1.0.22
+   Compiling winnow v1.0.1
+   Compiling yansi v1.0.1
+   Compiling foldhash v0.2.0
+   Compiling webauthn-attestation-ca v0.5.4
+   Compiling fallible-iterator v0.2.0
+   Compiling diesel_derives v2.3.7
+   Compiling toml_parser v1.1.2+spec-1.1.0
+   Compiling proc-macro-error2 v2.0.1
+   Compiling dsl_auto_type v0.2.0
+   Compiling postgres-protocol v0.6.11
+   Compiling hashbrown v0.16.1
+   Compiling serde_with_macros v3.18.0
+   Compiling tonic v0.14.5
+   Compiling num v0.4.3
+   Compiling phf_shared v0.13.1
+   Compiling objc2-system-configuration v0.3.2
+   Compiling reqwest v0.12.28
+   Compiling sea-query-derive v1.0.0-rc.12
+   Compiling ecdsa v0.16.9
+   Compiling sqlx-macros v0.8.6
+   Compiling flate2 v1.1.9
+   Compiling parse-display-derive v0.9.1
+   Compiling der-parser v9.0.0
+   Compiling hyperlocal v0.9.1
+   Compiling primeorder v0.13.6
+   Compiling xattr v1.6.1
+   Compiling half v2.7.1
+   Compiling inherent v1.0.13
+   Compiling diesel_table_macro_syntax v0.3.0
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling serde_spanned v1.1.1
+   Compiling ordered-float v4.6.0
+   Compiling btoi v0.4.3
+   Compiling pem v3.0.6
+   Compiling filetime v0.2.27
+   Compiling data-encoding v2.10.0
+   Compiling utf8parse v0.2.2
+   Compiling rustc-hash v2.1.2
+   Compiling unicode-xid v0.2.6
+   Compiling webauthn-rs-core v0.5.4
+   Compiling saturating v0.1.0
+   Compiling toml_writer v1.1.1+spec-1.1.0
+   Compiling derive_more-impl v2.1.1
+   Compiling parse-display v0.9.1
+   Compiling x509-parser v0.16.0
+   Compiling toml v1.1.2+spec-1.1.0
+   Compiling astral-tokio-tar v0.6.0
+   Compiling tonic-prost v0.14.5
+   Compiling sea-query v1.0.0-rc.33
+   Compiling anstyle-parse v1.0.0
+   Compiling serde_cbor_2 v0.13.0
+   Compiling sqlx v0.8.6
+   Compiling serde_with v3.18.0
+   Compiling sea-bae v0.2.1
+   Compiling phf v0.13.1
+   Compiling whoami v2.1.1
+   Compiling lru v0.16.3
+   Compiling postgres-types v0.2.13
+   Compiling ouroboros_macro v0.18.5
+   Compiling webauthn-rs-proto v0.5.4
+   Compiling ferroid v0.8.9
+   Compiling opentelemetry_sdk v0.31.0
+   Compiling docker_credential v1.3.2
+   Compiling pluralizer v0.5.0
+   Compiling futures v0.3.32
+   Compiling matchers v0.2.0
+   Compiling ed25519 v2.2.3
+   Compiling bollard-stubs v1.52.1-rc.29.1.3
+   Compiling event-listener-strategy v0.5.4
+   Compiling sharded-slab v0.1.7
+   Compiling keyed_priority_queue v0.4.2
+   Compiling tracing-log v0.2.0
+   Compiling socket2 v0.5.10
+   Compiling num_cpus v1.17.0
+   Compiling thread_local v1.1.9
+   Compiling etcetera v0.11.0
+   Compiling deadpool-runtime v0.3.1
+   Compiling downcast-rs v2.0.2
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling static_assertions v1.1.0
+   Compiling nu-ansi-term v0.50.3
+   Compiling anstyle-query v1.1.5
+   Compiling similar v3.0.0
+   Compiling aliasable v0.1.3
+   Compiling anstyle v1.0.14
+   Compiling colorchoice v1.0.5
+   Compiling twox-hash v2.1.2
+   Compiling deadpool v0.13.0
+   Compiling async-lock v3.4.2
+   Compiling ed25519-dalek v2.2.0
+   Compiling ouroboros v0.18.5
+   Compiling anstream v1.0.0
+   Compiling mysql_async v0.36.2
+   Compiling tracing-subscriber v0.3.23
+   Compiling sea-orm-macros v2.0.0-rc.38
+   Compiling arc-swap v1.9.1
+   Compiling tokio-postgres v0.7.17
+   Compiling sea-query-sqlx v0.8.0-rc.15
+   Compiling derive_more v2.1.1
+   Compiling opentelemetry-http v0.31.0
+   Compiling p384 v0.13.1
+   Compiling p256 v0.13.2
+   Compiling opentelemetry-proto v0.31.0
+   Compiling backon v1.6.0
+   Compiling combine v4.6.7
+   Compiling env_filter v1.0.1
+   Compiling utoipa-gen v5.4.0
+   Compiling diesel v2.3.7
+   Compiling simple_asn1 v0.6.4
+   Compiling password-hash v0.5.0
+   Compiling blake2 v0.10.6
+   Compiling email-encoding v0.4.1
+   Compiling hostname v0.4.2
+   Compiling nom v8.0.0
+   Compiling scoped-futures v0.1.4
+   Compiling quoted_printable v0.5.2
+   Compiling xxhash-rust v0.8.15
+   Compiling constant_time_eq v0.3.1
+   Compiling jiff v0.2.23
+   Compiling email_address v0.2.9
+   Compiling strum v0.28.0
+   Compiling sha1_smol v1.0.1
+   Compiling arcstr v1.2.0
+   Compiling base32 v0.5.1
+   Compiling urlencoding v2.1.3
+   Compiling opentelemetry-otlp v0.31.1
+   Compiling webauthn-rs v0.5.4
+   Compiling totp-rs v5.7.1
+   Compiling argon2 v0.5.3
+   Compiling jsonwebtoken v10.3.0
+   Compiling tracing-opentelemetry v0.32.1
+   Compiling yauth-migration v0.12.0 (/Users/syackey/steveyackey/yackey-labs/yauth/crates/yauth-migration)
+   Compiling oauth2 v5.0.0
+   Compiling axum-extra v0.12.5
+   Compiling lettre v0.11.21
+   Compiling redis v1.2.0
+   Compiling tempfile v3.27.0
+   Compiling sha1 v0.11.0
+   Compiling sea-orm v2.0.0-rc.38
+   Compiling yauth-entity v0.12.0 (/Users/syackey/steveyackey/yackey-labs/yauth/crates/yauth-entity)
+   Compiling opentelemetry-semantic-conventions v0.31.0
+   Compiling env_logger v0.11.10
+   Compiling utoipa v5.4.0
+   Compiling bollard v0.20.2
+   Compiling testcontainers v0.27.2
+   Compiling testcontainers-modules v0.15.0
+   Compiling diesel-async v0.8.0
+   Compiling yauth v0.12.0 (/Users/syackey/steveyackey/yackey-labs/yauth/crates/yauth)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 54.99s
+     Running unittests src/lib.rs (target/debug/deps/yauth-51e89dab05647086)
+     Running unittests src/lib.rs (target/debug/deps/yauth_entity-c3555d2ddd20d289)
+     Running unittests src/lib.rs (target/debug/deps/yauth_migration-c9928f8a6cb2879b)
+       57.84 real       235.66 user        31.63 sys
+          1932427264  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+             8193483  page reclaims
+               25096  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                 575  signals received
+               12146  voluntary context switches
+              617238  involuntary context switches
+         16478191484  instructions retired
+          9607846662  cycles elapsed
+           144753528  peak memory footprint
+=== end phase=test_cold iter=1 ===
+=== phase=test_warm iter=2 cmd=cargo test --workspace --features full,all-backends --lib ===
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.65s
+     Running unittests src/lib.rs (target/debug/deps/yauth-51e89dab05647086)
+     Running unittests src/lib.rs (target/debug/deps/yauth_entity-c3555d2ddd20d289)
+     Running unittests src/lib.rs (target/debug/deps/yauth_migration-c9928f8a6cb2879b)
+        2.77 real         3.19 user         0.25 sys
+           144637952  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+               19732  page reclaims
+                 181  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   1  signals received
+                1661  voluntary context switches
+                6885  involuntary context switches
+          3190618061  instructions retired
+          1229579726  cycles elapsed
+           127419064  peak memory footprint
+=== end phase=test_warm iter=2 ===
+=== phase=test_warm iter=3 cmd=cargo test --workspace --features full,all-backends --lib ===
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s
+     Running unittests src/lib.rs (target/debug/deps/yauth-51e89dab05647086)
+     Running unittests src/lib.rs (target/debug/deps/yauth_entity-c3555d2ddd20d289)
+     Running unittests src/lib.rs (target/debug/deps/yauth_migration-c9928f8a6cb2879b)
+        2.48 real         3.21 user         0.22 sys
+           146227200  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+               19958  page reclaims
+                   0  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   1  signals received
+                   4  voluntary context switches
+                6647  involuntary context switches
+          3101869251  instructions retired
+          1129318469  cycles elapsed
+           128664320  peak memory footprint
+=== end phase=test_warm iter=3 ===
+
+## done

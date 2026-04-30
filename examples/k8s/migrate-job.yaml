@@ -1,0 +1,38 @@
+# Run as a one-shot Job before rolling out app replicas. The Deployment
+# in deployment.yaml depends on this completing — wire it up with an
+# initContainer, a Helm pre-upgrade hook, or a CI step that waits on
+# `kubectl wait --for=condition=complete job/yauth-migrate`.
+#
+# Why a Job, not an initContainer on the Deployment? The Deployment has
+# multiple replicas. If each replica's initContainer ran AutoMigrate,
+# they'd race. A single-shot Job runs migrations exactly once.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: yauth-migrate
+  labels:
+    app: yauth
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: yauth-migrate
+          image: yauth-cli:latest
+          args: ["migrate", "-c", "/etc/yauth/yauth.yaml"]
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: yauth-secrets
+                  key: DATABASE_URL
+          volumeMounts:
+            - name: config
+              mountPath: /etc/yauth
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: yauth-config

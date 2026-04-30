@@ -1,0 +1,249 @@
+## yauth-go bench
+host: Darwin 24.6.0 arm64
+cpus_physical: 14
+mem_bytes: 25769803776
+go: go version go1.26.2 darwin/arm64
+iters_per_phase: 3
+
+=== phase=build_cold iter=1 cmd=go build ./... ===
+       25.21 real        83.63 user        22.27 sys
+           775536640  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+             3712197  page reclaims
+              142866  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+               15888  signals received
+               27850  voluntary context switches
+              848370  involuntary context switches
+         33740052264  instructions retired
+         22457397464  cycles elapsed
+            74334904  peak memory footprint
+=== end phase=build_cold iter=1 ===
+=== phase=build_warm iter=2 cmd=go build ./... ===
+        7.81 real        33.57 user         8.47 sys
+           451706880  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+             1288262  page reclaims
+              133032  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                4673  signals received
+                8202  voluntary context switches
+              374826  involuntary context switches
+         12108820075  instructions retired
+          6545557868  cycles elapsed
+            79643296  peak memory footprint
+=== end phase=build_warm iter=2 ===
+=== phase=build_warm iter=3 cmd=go build ./... ===
+        7.20 real        33.73 user         7.09 sys
+           445956096  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+             1330851  page reclaims
+              107015  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                4089  signals received
+                6828  voluntary context switches
+              252634  involuntary context switches
+         11973351455  instructions retired
+          6478961042  cycles elapsed
+            74531512  peak memory footprint
+=== end phase=build_warm iter=3 ===
+=== phase=vet iter=1 cmd=go vet ./... ===
+        2.55 real         7.81 user         7.30 sys
+           119095296  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+             1086329  page reclaims
+                1081  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+               17944  signals received
+               10166  voluntary context switches
+              270082  involuntary context switches
+         16718710613  instructions retired
+         15579125288  cycles elapsed
+            43139720  peak memory footprint
+=== end phase=vet iter=1 ===
+=== phase=vet iter=2 cmd=go vet ./... ===
+        0.41 real         0.30 user         1.74 sys
+            55902208  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+               16350  page reclaims
+                  67  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                 992  signals received
+                 609  voluntary context switches
+               31228  involuntary context switches
+          6707803346  instructions retired
+          7347897290  cycles elapsed
+            40370848  peak memory footprint
+=== end phase=vet iter=2 ===
+=== phase=vet iter=3 cmd=go vet ./... ===
+        0.39 real         0.30 user         1.50 sys
+            55902208  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+               16133  page reclaims
+                  67  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                 982  signals received
+                 639  voluntary context switches
+               31856  involuntary context switches
+          6709927634  instructions retired
+          6502729347  cycles elapsed
+            40141472  peak memory footprint
+=== end phase=vet iter=3 ===
+=== phase=lint iter=1 cmd=/opt/homebrew/bin/golangci-lint run ./... ===
+        1.78 real         5.14 user         5.22 sys
+           109772800  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+              298503  page reclaims
+                2146  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                3438  signals received
+                5061  voluntary context switches
+              212957  involuntary context switches
+         15563578549  instructions retired
+         13889177069  cycles elapsed
+            83034928  peak memory footprint
+=== end phase=lint iter=1 ===
+=== phase=lint iter=2 cmd=/opt/homebrew/bin/golangci-lint run ./... ===
+        0.71 real         0.96 user         2.73 sys
+           106758144  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+               31990  page reclaims
+                 644  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                2248  signals received
+                1266  voluntary context switches
+              120155  involuntary context switches
+         12132209251  instructions retired
+          9312636144  cycles elapsed
+            79774512  peak memory footprint
+=== end phase=lint iter=2 ===
+=== phase=lint iter=3 cmd=/opt/homebrew/bin/golangci-lint run ./... ===
+        0.74 real         0.96 user         3.01 sys
+           114753536  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+               32477  page reclaims
+                 528  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                2388  signals received
+                1329  voluntary context switches
+              121082  involuntary context switches
+         12105937569  instructions retired
+         10084395985  cycles elapsed
+            88605488  peak memory footprint
+=== end phase=lint iter=3 ===
+=== phase=test_cold iter=1 cmd=go test ./... ===
+        8.09 real        18.26 user        10.06 sys
+           378617856  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+             1820238  page reclaims
+               51511  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                 356  messages sent
+                 356  messages received
+               20035  signals received
+               11142  voluntary context switches
+              345784  involuntary context switches
+         18942548075  instructions retired
+         15550620777  cycles elapsed
+            48153248  peak memory footprint
+=== end phase=test_cold iter=1 ===
+=== phase=test_warm iter=2 cmd=go test ./... ===
+        0.43 real         0.33 user         1.89 sys
+            58245120  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+               18198  page reclaims
+                  65  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                1052  signals received
+                 709  voluntary context switches
+               33107  involuntary context switches
+          7204746297  instructions retired
+          8017177087  cycles elapsed
+            42631888  peak memory footprint
+=== end phase=test_warm iter=2 ===
+=== phase=test_warm iter=3 cmd=go test ./... ===
+        0.43 real         0.33 user         1.96 sys
+            57819136  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+               17785  page reclaims
+                  66  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                1089  signals received
+                 721  voluntary context switches
+               33738  involuntary context switches
+          7227418660  instructions retired
+          8280753925  cycles elapsed
+            42222264  peak memory footprint
+=== end phase=test_warm iter=3 ===
+
+## done

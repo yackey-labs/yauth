@@ -1,0 +1,214 @@
+package yauth
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"os"
+	"strings"
+
+	"github.com/yackey-labs/yauth-go/plugins/emailpassword"
+	"github.com/yackey-labs/yauth-go/repo/gormrepo"
+	"github.com/yackey-labs/yauth-go/telemetry"
+	"github.com/yackey-labs/yauth-go/yauthcfg"
+	"gorm.io/gorm"
+)
+
+// NewFromConfig builds a fully-wired *YAuth from a yauthcfg.Config.
+//
+// Migration policy: NewFromConfig NEVER calls AutoMigrate by default.
+// Run `yauth migrate` (cmd/yauth) as a one-shot job before rolling out
+// app replicas — concurrent AutoMigrate calls race in multi-replica
+// deployments. The optional cfg.Database.AutoMigrate flag overrides
+// this for development only and prints a stderr warning when set.
+//
+// Supported plugins for NewFromConfig today: email_password, telemetry.
+// Bearer/api-key/etc. land in subsequent tasks (#10–#19) and will be
+// wired into the same switch-by-section structure below.
+func NewFromConfig(ctx context.Context, cfg *yauthcfg.Config) (*YAuth, error) {
+	if cfg == nil {
+		return nil, errors.New("yauth: NewFromConfig requires a non-nil config")
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("yauth: invalid config: %w", err)
+	}
+
+	db, err := openDB(cfg.Database)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := pingDB(ctx, db); err != nil {
+		return nil, fmt.Errorf("yauth: database unreachable: %w", err)
+	}
+
+	if cfg.Database.AutoMigrate {
+		fmt.Fprintln(os.Stderr, "yauth: WARNING database.auto_migrate=true is for DEV/TEST only — use `yauth migrate` in production")
+		if err := gormrepo.Migrate(ctx, db); err != nil {
+			return nil, fmt.Errorf("yauth: auto_migrate failed: %w", err)
+		}
+	}
+
+	repo := gormrepo.New(db)
+	builder := New(repo, configToYAuthConfig(cfg))
+
+	if cfg.Telemetry.Enabled {
+		shutdown, err := telemetry.Init(ctx, telemetry.Config{
+			Enabled:     true,
+			Endpoint:    cfg.Telemetry.OTLPEndpoint,
+			ServiceName: cfg.Telemetry.ServiceName,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("yauth: telemetry init: %w", err)
+		}
+		builder = builder.
+			WithTelemetry(telemetry.Config{Enabled: true}).
+			WithTelemetryShutdown(shutdown)
+	}
+
+	if cfg.Plugins.EmailPassword.Enabled {
+		builder = builder.WithPlugin(emailpassword.New(emailpassword.Config{
+			MinPasswordLength:        cfg.Plugins.EmailPassword.MinPasswordLength,
+			RequireEmailVerification: cfg.Plugins.EmailPassword.RequireEmailVerification,
+		}))
+	}
+
+	// TODO(#10) bearer plugin wiring
+	// TODO(#11) api-key plugin wiring
+	// TODO(#12) magic-link / account-lock plugin wiring
+	// TODO(#13) status / admin plugin wiring
+	// TODO(#14) mfa plugin wiring
+	// TODO(#15) passkey plugin wiring
+	// TODO(#16) oauth client plugin wiring
+	// TODO(#17) webhooks plugin wiring
+	// TODO(#18) asym-jwt / oidc plugin wiring
+	// TODO(#19) oauth2-server plugin wiring
+
+	return builder.Build()
+}
+
+// Migrate opens the database described by cfg and runs every yauth-go
+// AutoMigrate. Intended for the CLI and for tests; production should
+// run `yauth migrate` as a separate job.
+func Migrate(ctx context.Context, cfg *yauthcfg.Config) error {
+	if cfg == nil {
+		return errors.New("yauth: Migrate requires a non-nil config")
+	}
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("yauth: invalid config: %w", err)
+	}
+	db, err := openDB(cfg.Database)
+	if err != nil {
+		return err
+	}
+	return gormrepo.Migrate(ctx, db)
+}
+
+// SchemaCheck connects to the database and verifies that the tables
+// required by the enabled plugins are present. Returns a non-nil error
+// listing any missing tables. Use it as a preflight check at app
+// startup or in CI to catch unmigrated environments.
+func SchemaCheck(ctx context.Context, cfg *yauthcfg.Config) error {
+	if cfg == nil {
+		return errors.New("yauth: SchemaCheck requires a non-nil config")
+	}
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("yauth: invalid config: %w", err)
+	}
+	db, err := openDB(cfg.Database)
+	if err != nil {
+		return err
+	}
+	if err := pingDB(ctx, db); err != nil {
+		return fmt.Errorf("yauth: database unreachable: %w", err)
+	}
+
+	have, err := listTables(ctx, db)
+	if err != nil {
+		return fmt.Errorf("yauth: list tables: %w", err)
+	}
+	haveSet := make(map[string]struct{}, len(have))
+	for _, t := range have {
+		haveSet[t] = struct{}{}
+	}
+
+	var missing []string
+	for _, want := range cfg.ExpectedTables() {
+		if _, ok := haveSet[want]; !ok {
+			missing = append(missing, want)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("yauth: schema drift — missing tables: %s (run `yauth migrate`)", strings.Join(missing, ", "))
+	}
+	return nil
+}
+
+func openDB(d yauthcfg.DatabaseConfig) (*gorm.DB, error) {
+	switch d.Driver {
+	case "sqlite":
+		return gormrepo.OpenSQLite(d.DSN)
+	case "postgres":
+		return gormrepo.OpenPostgres(d.DSN)
+	default:
+		return nil, fmt.Errorf("yauth: unsupported database driver %q", d.Driver)
+	}
+}
+
+func pingDB(ctx context.Context, db *gorm.DB) error {
+	sqlDB, err := db.DB()
+	if err != nil {
+		return err
+	}
+	return sqlDB.PingContext(ctx)
+}
+
+func listTables(ctx context.Context, db *gorm.DB) ([]string, error) {
+	sqlDB, err := db.DB()
+	if err != nil {
+		return nil, err
+	}
+	dialect := db.Dialector.Name()
+	var rows *sql.Rows
+	switch dialect {
+	case "sqlite":
+		rows, err = sqlDB.QueryContext(ctx, "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'yauth_%'")
+	case "postgres":
+		rows, err = sqlDB.QueryContext(ctx, "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename LIKE 'yauth_%'")
+	default:
+		return nil, fmt.Errorf("listTables: unsupported dialect %q", dialect)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		out = append(out, name)
+	}
+	return out, rows.Err()
+}
+
+func configToYAuthConfig(c *yauthcfg.Config) YAuthConfig {
+	out := NewDefaultConfig()
+	if c.Session.TTL > 0 {
+		out.SessionTTL = c.Session.TTL
+	}
+	if c.Session.CookieName != "" {
+		out.CookieName = c.Session.CookieName
+	}
+	if c.Session.CookiePath != "" {
+		out.CookiePath = c.Session.CookiePath
+	}
+	out.CookieDomain = c.Session.CookieDomain
+	out.CookieSecure = c.Session.CookieSecure
+	if c.Session.CookieSameSite != "" {
+		out.CookieSameSite = c.Session.CookieSameSite
+	}
+	return out
+}

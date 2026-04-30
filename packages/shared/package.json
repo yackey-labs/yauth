@@ -1,0 +1,39 @@
+{
+	"name": "@yackey-labs/yauth-go-shared",
+	"version": "0.0.1",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/yackey-labs/yauth-go"
+	},
+	"type": "module",
+	"main": "dist/index.js",
+	"module": "dist/index.js",
+	"types": "src/index.ts",
+	"exports": {
+		".": {
+			"import": "./dist/index.js",
+			"types": "./src/index.ts",
+			"default": "./src/index.ts"
+		},
+		"./types": {
+			"import": "./src/types.ts",
+			"types": "./src/types.ts"
+		},
+		"./aaguid": {
+			"import": "./src/aaguid.ts",
+			"types": "./src/aaguid.ts"
+		}
+	},
+	"files": [
+		"dist",
+		"src"
+	],
+	"scripts": {
+		"build": "bun build src/index.ts --outdir dist --target bun",
+		"typecheck": "tsc --noEmit",
+		"test": "bun test"
+	},
+	"devDependencies": {
+		"typescript": "^5.7.2"
+	}
+}

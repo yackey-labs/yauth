@@ -1,0 +1,34 @@
+# Binaries
+bin/
+*.test
+*.out
+
+# Go
+vendor/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+
+# Demo / runtime artifacts
+.demo-keys/
+*.db
+*.sqlite
+*.sqlite3
+
+# Node / TS
+node_modules/
+dist/
+packages/*/dist/
+packages/*/node_modules/
+
+# Bench outputs (kept under scripts/bench-output/, but no runtime tmps)
+/tmp/
+
+# Env
+.env
+.env.local

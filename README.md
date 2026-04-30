@@ -1,1 +1,330 @@
 # yauth-go
+
+Modular, plugin-based authentication library for Go (`net/http`) with a
+generated TypeScript client, Vue 3 components, and SolidJS components.
+
+- **Plugin system** — register only the auth methods you want
+- **Two database backends** — Postgres + SQLite via GORM (the Rust crate
+  ships 14 backend permutations; Go's GORM reach covers the two that
+  matter cleanly — see "Pick a Backend" for the pluggable contract)
+- **Tri-mode auth** — session cookies, JWT bearer tokens, and `X-Api-Key`
+  headers, all simultaneous; resolved into one `*domain.AuthUser`
+- **Full OAuth2 / OIDC provider** — authorization code + PKCE, device
+  flow, client credentials; published JWKS for cross-trust-domain
+  validation
+- **OpenAPI 3.1 spec out of the box** — code-first via [Huma](https://huma.rocks),
+  served at `/openapi.json` + a Stoplight Elements UI at `/docs`
+- **TypeScript included** — auto-generated HTTP client (`orval`) plus
+  pre-built Vue 3 and SolidJS components
+
+## Try It in 30 Seconds
+
+No external database needed. SQLite + email/password ships first.
+
+```bash
+go get github.com/yackey-labs/yauth-go@latest
+```
+
+```go
+package main
+
+import (
+    "context"
+    "log"
+    "net/http"
+
+    yauth "github.com/yackey-labs/yauth-go"
+    "github.com/yackey-labs/yauth-go/openapi"
+    "github.com/yackey-labs/yauth-go/plugins/emailpassword"
+    "github.com/yackey-labs/yauth-go/repo/gormrepo"
+)
+
+func main() {
+    db, err := gormrepo.OpenSQLite("file::memory:?cache=shared&_pragma=foreign_keys(1)")
+    if err != nil { log.Fatal(err) }
+    if err := gormrepo.Migrate(context.Background(), db); err != nil { log.Fatal(err) }
+
+    ya, err := yauth.New(gormrepo.New(db), yauth.NewDefaultConfig()).
+        WithPlugin(emailpassword.New(emailpassword.Config{})).
+        Build()
+    if err != nil { log.Fatal(err) }
+
+    mux := http.NewServeMux()
+    mux.Handle("/api/auth/", http.StripPrefix("/api/auth", ya.Router()))
+    mux.Handle("/", openapi.YAuth(ya))           // /openapi.json + /docs
+    log.Fatal(http.ListenAndServe(":3000", mux))
+}
+```
+
+```bash
+# Register
+curl -X POST http://localhost:3000/api/auth/register \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"test@example.com","password":"correct horse battery staple"}'
+
+# Login (cookie carries the session)
+curl -i -c jar.txt -X POST http://localhost:3000/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"test@example.com","password":"correct horse battery staple"}'
+
+# Authenticated session
+curl -b jar.txt http://localhost:3000/api/auth/session
+
+# Live API docs
+open http://localhost:3000/docs
+```
+
+A runnable copy lives at [`examples/sqlite/main.go`](examples/sqlite/main.go).
+
+## How It Works
+
+**Plugins** implement `plugin.Plugin` — `Name()` and
+`Routes(host PluginHost, mux *http.ServeMux, prefix string)`. Each plugin
+owns its own URL paths and uses the `PluginHost` to reach the repository,
+the auth middleware, the event bus, and config. Plugins can also
+implement `events.Handler` to short-circuit decisions across the
+codebase (e.g., the lockout plugin watches `login.failed` events; the
+mfa plugin returns `RequireMfa` on `login.succeeded` so the caller
+doesn't issue a session yet). Plugins can implement `ShutdownAware` to
+drain background work before process exit (the webhooks dispatcher uses
+this).
+
+**Tri-mode auth middleware** (`middleware.Middleware`) tries credentials
+in order: session cookie, then `Authorization: Bearer <jwt>`, then
+`X-Api-Key`. The first plugin that registers an `AuthResolver` for a
+given mode handles it. On success the resolved `*domain.AuthUser` is
+injected via `context.WithValue`; retrieve it with
+`middleware.AuthUserFromContext(ctx)`.
+
+**Event system** — every authentication operation emits an
+`events.AuthEvent` (`UserRegistered`, `LoginAttempt`, `LoginSucceeded`,
+`LoginFailed`, `Logout`, `PasswordChanged`, ...). Handlers respond with
+`Continue`, `Block { status, message }`, or `RequireMfa { pending_session_id }`.
+The first non-Continue decision short-circuits the chain.
+
+## Pick a Backend
+
+| Backend | Constructor | Database |
+| --- | --- | --- |
+| GORM Postgres | `gormrepo.OpenPostgres(dsn)` | PostgreSQL |
+| GORM SQLite   | `gormrepo.OpenSQLite(dsn)`   | SQLite (incl. `:memory:`) |
+
+The Rust crate ships 14 ORM/dialect permutations (Diesel, sqlx, SeaORM,
+Toasty across PG/MySQL/SQLite). yauth-go intentionally ships only the
+two GORM-backed combinations and exposes the `repo.Repository` interface
+as the extension point. New backends plug in by implementing
+`repo.Repository` + the per-feature sub-interfaces under `repo/`. PRs
+that add a sqlx- or pgx-native repo are welcome.
+
+Migrations run via `gormrepo.Migrate(ctx, db)` (uses GORM `AutoMigrate`
+under the hood).
+
+## Pick Your Plugins
+
+| Plugin           | Package                      | Status |
+| ---------------- | ---------------------------- | ------ |
+| email-password   | `plugins/emailpassword`      | ✅     |
+| bearer JWT       | `plugins/bearer`             | ✅     |
+| api-key          | `plugins/apikey`             | ✅     |
+| magic-link       | `plugins/magiclink`          | ✅     |
+| account-lockout  | `plugins/lockout`            | ✅     |
+| status           | `plugins/status`             | ✅     |
+| admin            | `plugins/admin`              | ✅     |
+| MFA (TOTP)       | `plugins/mfa`                | ✅     |
+| passkey          | `plugins/passkey`            | ✅     |
+| OAuth client     | `plugins/oauth`              | ✅     |
+| webhooks         | `plugins/webhooks`           | ✅     |
+| asymmetric-jwt   | `plugins/asymjwt`            | ✅     |
+| oidc             | `plugins/oidc`               | ✅     |
+| oauth2-server    | `plugins/oauth2server`       | ✅     |
+
+Every plugin in the table maps 1:1 to a Rust feature flag. Each ships
+with one or more runnable examples under [`examples/`](examples/).
+
+### Webhooks lifecycle
+
+The webhooks plugin starts a background worker pool when `Build()` runs.
+To drain in-flight deliveries on process exit, call `ya.Shutdown(ctx)` —
+it invokes `Shutdown(ctx)` on every plugin that implements
+`plugin.ShutdownAware`. Pair the call with a context deadline so a stuck
+receiver cannot wedge process exit:
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+defer cancel()
+_ = ya.Shutdown(ctx)
+```
+
+See [`examples/webhooks/main.go`](examples/webhooks/main.go) for a
+SIGTERM-aware setup with an in-process receiver.
+
+## Configuration
+
+`yauth.YAuthConfig` is the runtime config shape (cookie name/domain,
+session TTL, etc.). The companion package `yauthcfg` parses an external
+YAML config + `YAUTH_*` environment variables into a fully-resolved
+`yauth.YAuthConfig`. Use it whenever you want config-driven setups
+(twelve-factor, k8s ConfigMap-backed, etc.).
+
+The `yauth` CLI (`cmd/yauth`) is the operator-facing companion, mirroring
+`cargo-yauth`:
+
+```bash
+go install github.com/yackey-labs/yauth-go/cmd/yauth@latest
+
+yauth init               # scaffold yauth.yaml
+yauth migrate up         # run AutoMigrate against the configured DSN
+yauth check              # validate yauth.yaml + reachability
+yauth gen-secrets        # cryptographically random session/JWT secrets
+yauth gen-keys --type RS256 --out ./keys # asymmetric JWT keypair
+yauth status             # ping the running yauth instance
+yauth dump-schema        # emit the table layout
+yauth version            # version info
+```
+
+## Telemetry
+
+`telemetry` wraps OpenTelemetry tracing. Every plugin handler runs inside
+a server span when telemetry is enabled, and outbound HTTP from the
+webhooks dispatcher carries traceparent headers automatically.
+
+```go
+shutdown, err := telemetry.Init(ctx, telemetry.Config{
+    Enabled:     true,
+    ServiceName: "my-app",
+    Endpoint:    "otlp://otel-collector:4317",
+})
+defer shutdown(context.Background())
+
+ya, _ := yauth.New(repo, cfg).
+    WithTelemetry(telemetry.DefaultConfig()).
+    WithTelemetryShutdown(shutdown).
+    Build()
+```
+
+## OpenAPI
+
+The OpenAPI 3.1 spec for every yauth-go route is authored in
+`openapi/spec.go` using the
+[Huma](https://github.com/danielgtaylor/huma) primitives — code-first,
+the same philosophy as the Rust `utoipa` integration.
+
+Why Huma over schema-first generators (e.g. `ogen`)? The plugins are
+hand-written `net/http` handlers that already exist; rewriting every
+plugin to a schema-first request/response struct would change the
+runtime surface. Huma's primitive types (`*huma.OpenAPI`,
+`huma.Operation`, `huma.Schema`, `huma.Registry`) let us declare the
+spec by hand without touching plugin code, which is exactly the
+abstraction we needed.
+
+```bash
+go generate ./openapi/   # writes openapi.json at the repo root
+```
+
+`openapi.YAuth(ya)` returns an `http.Handler` that serves
+`/openapi.json` and a Stoplight Elements UI at `/docs`. Mount it
+alongside your main router:
+
+```go
+mux := http.NewServeMux()
+mux.Handle("/api/auth/", http.StripPrefix("/api/auth", ya.Router()))
+mux.Handle("/", openapi.YAuth(ya))
+```
+
+## TypeScript / Vue / SolidJS
+
+The TS workspace under [`packages/`](packages) ships:
+
+| Package                              | Purpose                                                      |
+| ------------------------------------ | ------------------------------------------------------------ |
+| `@yackey-labs/yauth-go-client`       | Auto-generated HTTP client (`bunx orval` reads `openapi.json`) |
+| `@yackey-labs/yauth-go-shared`       | Shared types (`AuthUser`, `AuthMethod`, AAGUID map)          |
+| `@yackey-labs/yauth-go-ui-vue`       | Vue 3 components + composables                               |
+| `@yackey-labs/yauth-go-ui-solidjs`   | SolidJS components + provider                                |
+
+```bash
+bun install
+bun generate            # go generate ./openapi/  &&  bunx orval
+bun run --filter '*' build
+bun run --filter '*' typecheck
+```
+
+The UI components were forked from the Rust client and adjusted to
+match the Go-side OpenAPI surface; see
+[`packages/client/DIVERGENCES.md`](packages/client/DIVERGENCES.md) for
+the delta (a handful of Rust-only flows — forgot/reset password, email
+verification, hard-delete user — are stubbed out until they land in
+Go).
+
+## Status: Parity Table
+
+| Rust feature           | yauth-go     | Notes                                                                                    |
+| ---------------------- | ------------ | ---------------------------------------------------------------------------------------- |
+| email-password         | ✅           | Argon2id, dummy-verify on miss to defeat enumeration timing                              |
+| bearer JWT             | ✅           | HS256 access + opaque refresh; family rotation with reuse-revocation                     |
+| api-key                | ✅           | `yak_<prefix>_<secret>` header credential, scoped + per-user cap                         |
+| magic-link             | ✅           | LoggingMailer for dev; SMTP / Resend mailers via the `Mailer` interface                  |
+| account-lockout        | ✅           | Exponential ladder; events-based interception of `login.attempt/failed/succeeded`        |
+| status                 | ✅           | Admin-gated diagnostic                                                                   |
+| admin                  | ✅           | Users CRUD-ish + ban/unban/impersonate + audit log                                       |
+| MFA (TOTP)             | ✅           | TOTP secrets encrypted with AES-256-GCM at rest; backup codes hashed with SHA-256        |
+| passkey                | ✅           | go-webauthn library; supports discoverable + non-discoverable flows                      |
+| OAuth client           | ✅           | Google + GitHub + generic OIDC; tokens encrypted at rest; lockout-guard on unlink        |
+| webhooks               | ✅           | HMAC-SHA256-signed delivery; async worker pool; replay through `/test`                   |
+| asymmetric-jwt         | ✅           | Loads RS256 / ES256 keypair; publishes `/.well-known/jwks.json`                          |
+| oidc                   | ✅           | Discovery + UserInfo (`/userinfo`); id_token issuance via oauth2-server                  |
+| oauth2-server          | ✅           | RFC 6749 (auth code, refresh, client_credentials), RFC 7636 PKCE S256, RFC 7009 revoke, RFC 7662 introspect, RFC 8628 device flow |
+| HIBP password breach   | ❌           | Not implemented; planned (`auth.HIBPCheck` interface)                                    |
+| Password history       | ❌           | Not implemented                                                                          |
+| Configurable complexity policy | ❌   | Today: minimum length only; full policy engine planned                                   |
+| Session IP/UA binding  | ⚙️ partial   | Sessions store IP + UA; rejection on mismatch is opt-in via a custom event handler      |
+| OpenTelemetry          | ✅           | Server spans on every handler; configurable via `telemetry.Config`                       |
+| OpenAPI                | ✅           | Huma-driven; equivalent to utoipa                                                        |
+| Forgot/reset password  | 🚧           | Endpoints not yet wired; magic-link is the recommended path today                        |
+| Email verification     | 🚧           | Plumbed in domain layer; verify endpoint not yet wired                                   |
+| 14 DB backends         | ⚙️ 2 of 14   | GORM PG + SQLite; the `repo.Repository` interface is the extension point                |
+
+`✅ done · 🚧 partial · ❌ not yet`
+
+## Project Layout
+
+- `auth/`         — Argon2id, session token gen, cookies (leaf, no internal deps)
+- `domain/`       — `User`, `Session`, `AuthUser`, ...
+- `events/`       — `AuthEvent`, `Decision`, `Handler`
+- `plugin/`       — `Plugin` and `PluginHost` interfaces
+- `middleware/`   — tri-mode auth resolver + `RequireAuth` / `RequireAdmin`
+- `repo/`         — repository interface + sub-interfaces
+- `repo/gormrepo/`— GORM-backed implementation (Postgres + SQLite)
+- `plugins/`      — every plugin (one directory per name)
+- `telemetry/`    — OpenTelemetry init + HTTP middleware
+- `openapi/`      — hand-rolled Huma spec + `/docs` + `/openapi.json` handlers
+- `yauthcfg/`     — YAML + env config loader
+- `cmd/yauth/`    — operator CLI (cobra)
+- `cmd/openapigen/` — `go generate` target for `openapi.json`
+- `examples/`     — runnable single-file demos per plugin
+- `packages/`     — TypeScript workspace (client + shared + ui-vue + ui-solidjs)
+
+## Development
+
+```bash
+# Go
+go build ./...
+go test ./...
+go vet ./...
+gofmt -l .                    # report any unformatted files
+go generate ./openapi/        # regenerate openapi.json
+
+# Lint (golangci-lint)
+brew install golangci-lint
+golangci-lint run ./...
+
+# TypeScript
+bun install
+bun generate                  # go generate ./openapi/  &&  bunx orval
+bun run --filter '*' build
+bun run --filter '*' typecheck
+```
+
+## License
+
+MIT

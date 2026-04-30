@@ -1,0 +1,177 @@
+name: CI
+
+on:
+  push:
+    branches: [main, release]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build (Go ${{ matrix.go }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ['1.22', '1.23']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+          cache: true
+      - name: Build
+        run: go build ./...
+
+  vet:
+    name: go vet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+      - run: go vet ./...
+
+  lint:
+    name: golangci-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          args: --timeout=5m
+
+  test-sqlite:
+    name: Test (sqlite)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+      - name: Run tests
+        run: go test ./...
+
+  test-postgres:
+    name: Test (postgres)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: yauth
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/yauth?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+      - name: Run gormrepo tests with PG
+        run: go test ./repo/gormrepo/... ./...
+
+  build-cli:
+    name: Build CLI (bin/yauth)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+      - name: Build yauth CLI
+        run: go build -o bin/yauth ./cmd/yauth
+      - name: Smoke run --help
+        run: ./bin/yauth --help || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: yauth-cli-linux
+          path: bin/yauth
+          if-no-files-found: error
+
+  integration:
+    name: Integration (curl smoke)
+    runs-on: ubuntu-latest
+    needs: build-cli
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+      - name: Build CLI
+        run: go build -o bin/yauth ./cmd/yauth
+      - name: yauth init
+        run: ./bin/yauth init --out yauth.yaml
+      - name: yauth migrate (sqlite)
+        run: |
+          # rewrite default DSN to a file-backed sqlite for migrate
+          mkdir -p tmp
+          sed -i 's|dsn:.*|dsn: file:tmp/yauth.db?_pragma=foreign_keys(1)|' yauth.yaml
+          sed -i 's|driver:.*|driver: sqlite|' yauth.yaml
+          ./bin/yauth migrate -c yauth.yaml
+      - name: Build sqlite example
+        run: go build -o bin/example-sqlite ./examples/sqlite
+      - name: Run sqlite example + smoke curl
+        run: |
+          ./bin/example-sqlite &
+          SERVER_PID=$!
+          # give server time to bind
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            if curl -sf -o /dev/null http://127.0.0.1:3000/api/auth/session; then
+              echo "server up"
+              break
+            fi
+            sleep 1
+          done
+          # register endpoint smoke
+          set -e
+          curl -fsS -X POST http://127.0.0.1:3000/api/auth/register \
+            -H 'Content-Type: application/json' \
+            -d '{"email":"alice@example.com","password":"correct horse battery staple"}' \
+            -o /dev/null -w "register: %{http_code}\n"
+          kill $SERVER_PID || true
+          wait $SERVER_PID 2>/dev/null || true
+
+  bench:
+    name: Build benchmark (artifact)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+      - name: Install GNU time (for -v on linux)
+        run: sudo apt-get update && sudo apt-get install -y time
+      - name: Run scripts/bench.sh
+        run: bash scripts/bench.sh /tmp/yauth-go-bench.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bench-go
+          path: /tmp/yauth-go-bench.txt
+          if-no-files-found: error

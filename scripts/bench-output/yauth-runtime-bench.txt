@@ -1,0 +1,118 @@
+## yauth runtime bench
+host: Darwin 24.6.0 arm64
+loadgen: hey
+duration: 30s  threads: 4  conns: 100
+
+starting Go server (port 3000)...
+
+=== runtime: go ===
+go: server pid resolved via lsof to 3207
+go: idle_rss_kb=18720
+go: load-gen=hey duration=30s threads=4 conns=100
+go: peak_load_rss_kb=176400
+go: --- raw load output ---
+
+Summary:
+  Total:	30.0058 secs
+  Slowest:	0.0701 secs
+  Fastest:	0.0001 secs
+  Average:	0.0058 secs
+  Requests/sec:	17209.9508
+  
+  Total data:	86755032 bytes
+  Size/request:	168 bytes
+
+Response time histogram:
+  0.000 [1]	|
+  0.007 [286598]	|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+  0.014 [182511]	|■■■■■■■■■■■■■■■■■■■■■■■■■
+  0.021 [38613]	|■■■■■
+  0.028 [6409]	|■
+  0.035 [1682]	|
+  0.042 [472]	|
+  0.049 [87]	|
+  0.056 [18]	|
+  0.063 [6]	|
+  0.070 [2]	|
+
+
+Latency distribution:
+  10%% in 0.0005 secs
+  25%% in 0.0008 secs
+  50%% in 0.0018 secs
+  75%% in 0.0098 secs
+  90%% in 0.0120 secs
+  95%% in 0.0183 secs
+  99%% in 0.0259 secs
+
+Details (average, fastest, slowest):
+  DNS+dialup:	0.0000 secs, 0.0000 secs, 0.0047 secs
+  DNS-lookup:	0.0000 secs, 0.0000 secs, 0.0000 secs
+  req write:	0.0000 secs, 0.0000 secs, 0.0014 secs
+  resp wait:	0.0058 secs, 0.0001 secs, 0.0701 secs
+  resp read:	0.0000 secs, 0.0000 secs, 0.0023 secs
+
+Status code distribution:
+  [200]	516399 responses
+
+
+
+go: --- end raw output ---
+
+starting Rust server (port 3000)...
+
+=== runtime: rust ===
+rust: lsof returned no pid for tcp:3000 — using launcher pid 3611
+rust: idle_rss_kb=32896
+rust: load-gen=hey duration=30s threads=4 conns=100
+rust: peak_load_rss_kb=101808
+rust: --- raw load output ---
+
+Summary:
+  Total:	30.0011 secs
+  Slowest:	0.0457 secs
+  Fastest:	0.0001 secs
+  Average:	0.0030 secs
+  Requests/sec:	86973.2112
+  
+  Total data:	456625925 bytes
+  Size/request:	456 bytes
+
+Response time histogram:
+  0.000 [1]	|
+  0.005 [996889]	|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+  0.009 [2447]	|
+  0.014 [435]	|
+  0.018 [118]	|
+  0.023 [49]	|
+  0.027 [24]	|
+  0.032 [11]	|
+  0.037 [20]	|
+  0.041 [4]	|
+  0.046 [2]	|
+
+
+Latency distribution:
+  10%% in 0.0006 secs
+  25%% in 0.0008 secs
+  50%% in 0.0011 secs
+  75%% in 0.0014 secs
+  90%% in 0.0017 secs
+  95%% in 0.0020 secs
+  99%% in 0.0029 secs
+
+Details (average, fastest, slowest):
+  DNS+dialup:	0.0000 secs, 0.0000 secs, 0.0047 secs
+  DNS-lookup:	0.0000 secs, 0.0000 secs, 0.0000 secs
+  req write:	0.0000 secs, 0.0000 secs, 0.0049 secs
+  resp wait:	0.0029 secs, 0.0001 secs, 0.0457 secs
+  resp read:	0.0000 secs, 0.0000 secs, 0.0161 secs
+
+Status code distribution:
+  [200]	1000000 responses
+
+
+
+rust: --- end raw output ---
+
+## done

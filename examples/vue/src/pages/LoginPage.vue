@@ -6,9 +6,10 @@ const router = useRouter();
 </script>
 
 <template>
-  <h1>Login</h1>
+  <h1 class="mb-4 text-2xl font-semibold tracking-tight">Login</h1>
   <LoginForm @success="router.push('/dashboard')" />
-  <p style="margin-top: 12px; font-size: 14px;">
-    Don't have an account? <RouterLink to="/register">Register</RouterLink>
+  <p class="mt-4 text-sm text-muted-foreground">
+    Don't have an account?
+    <RouterLink to="/register" class="font-medium text-foreground hover:underline">Register</RouterLink>
   </p>
 </template>

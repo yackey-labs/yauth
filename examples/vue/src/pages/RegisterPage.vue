@@ -13,10 +13,16 @@ const handleSuccess = (message?: string) => {
 </script>
 
 <template>
-  <h1>Register</h1>
-  <div v-if="successMessage" class="message success">{{ successMessage }}</div>
+  <h1 class="mb-4 text-2xl font-semibold tracking-tight">Register</h1>
+  <div
+    v-if="successMessage"
+    class="rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800"
+  >
+    {{ successMessage }}
+  </div>
   <RegisterForm v-else @success="handleSuccess" />
-  <p style="margin-top: 12px; font-size: 14px;">
-    Already have an account? <RouterLink to="/login">Login</RouterLink>
+  <p class="mt-4 text-sm text-muted-foreground">
+    Already have an account?
+    <RouterLink to="/login" class="font-medium text-foreground hover:underline">Login</RouterLink>
   </p>
 </template>

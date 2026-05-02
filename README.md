@@ -135,13 +135,16 @@ The first non-Continue decision short-circuits the chain.
 | --- | --- | --- |
 | GORM Postgres | `gormrepo.OpenPostgres(dsn)` | PostgreSQL |
 | GORM SQLite   | `gormrepo.OpenSQLite(dsn)`   | SQLite (incl. `:memory:`) |
+| GORM MySQL    | `gormrepo.OpenMySQL(dsn)`    | MySQL / MariaDB |
+| Redis cache   | `redisrepo.New(inner, client, opts)` | — wraps any backend; caches sessions, rate limits, and revocations in Redis |
+| In-memory     | `memrepo.New()`              | — no persistence; for testing and zero-config quickstart |
 
 The Rust crate ships 14 ORM/dialect permutations (Diesel, sqlx, SeaORM,
-Toasty across PG/MySQL/SQLite). yauth-go intentionally ships only the
-two GORM-backed combinations and exposes the `repo.Repository` interface
-as the extension point. New backends plug in by implementing
-`repo.Repository` + the per-feature sub-interfaces under `repo/`. PRs
-that add a sqlx- or pgx-native repo are welcome.
+Toasty across PG/MySQL/SQLite). yauth-go covers PG, SQLite, and MySQL via
+GORM and exposes the `repo.Repository` interface as the extension point.
+New backends plug in by implementing `repo.Repository` + the per-feature
+sub-interfaces under `repo/`. A conformance harness at `repo/conformance/`
+validates any new backend against the full interface contract.
 
 Migrations run via `gormrepo.Migrate(ctx, db)` (uses GORM `AutoMigrate`
 under the hood).
@@ -189,9 +192,36 @@ SIGTERM-aware setup with an in-process receiver.
 
 `yauth.YAuthConfig` is the runtime config shape (cookie name/domain,
 session TTL, etc.). The companion package `yauthcfg` parses an external
-YAML config + `YAUTH_*` environment variables into a fully-resolved
+YAML/TOML config + `YAUTH_*` environment variables into a fully-resolved
 `yauth.YAuthConfig`. Use it whenever you want config-driven setups
 (twelve-factor, k8s ConfigMap-backed, etc.).
+
+Notable fields beyond cookie/session settings:
+
+| Field | Default | Purpose |
+| --- | --- | --- |
+| `AllowSignups` | `true` | Set `false` to disable new user registration (`SIGNUPS_DISABLED` 403) |
+| `AutoAdminFirstUser` | `false` | Promote the first registered user to role `admin` |
+| `CORS.AllowedOrigins` | `[]` (off) | CORS middleware; empty slice disables it entirely |
+| `AllowAdminMachineCallers` | `false` | Allow bearer/API-key callers to pass `RequireAdmin` (default: cookie-only) |
+| `RateLimit.*` | various | Per-operation max+window pairs; `Max=0` disables that operation's limit |
+| `SessionBinding.BindIP/UA` | `false` | Reject sessions on IP or User-Agent mismatch |
+
+To layer a Redis read-cache over any primary backend, add a `cache:` block
+to `yauth.yaml`:
+
+```yaml
+cache:
+  enabled: true
+  provider: redis
+  redis_addr: "localhost:6379"
+  key_prefix: "yauth:"   # optional; default "yauth:"
+```
+
+Or in Go: `redisrepo.New(primaryRepo, redisClient, redisrepo.Options{})`.
+The decorator accelerates session lookup, challenge reads, revocation
+checks, and rate-limit counters without changing the `repo.Repository`
+interface seen by the rest of the library.
 
 The `yauth` CLI (`cmd/yauth`) is the operator-facing companion, mirroring
 `cargo-yauth`:
@@ -301,35 +331,39 @@ Go).
 | asymmetric-jwt         | ✅           | Loads RS256 / ES256 keypair; publishes `/.well-known/jwks.json`                          |
 | oidc                   | ✅           | Discovery + UserInfo (`/userinfo`); id_token issuance via oauth2-server                  |
 | oauth2-server          | ✅           | RFC 6749 (auth code, refresh, client_credentials), RFC 7636 PKCE S256, RFC 7009 revoke, RFC 7662 introspect, RFC 8628 device flow |
-| HIBP password breach   | ❌           | Not implemented; planned (`auth.HIBPCheck` interface)                                    |
-| Password history       | ❌           | Not implemented                                                                          |
-| Configurable complexity policy | ❌   | Today: minimum length only; full policy engine planned                                   |
+| HIBP password breach   | ✅           | k-anonymity range query via `auth/hibp/`; default-on at registration and password change |
+| Password history       | ✅           | Hashed history with configurable depth (email-password plugin)                           |
+| Configurable complexity policy | ✅   | Uppercase / lowercase / digit / special / common-word / history checks (`auth/passwordpolicy/`) |
 | Session IP/UA binding  | ⚙️ partial   | Sessions store IP + UA; rejection on mismatch is opt-in via a custom event handler      |
 | OpenTelemetry          | ✅           | Server spans on every handler; configurable via `telemetry.Config`                       |
 | OpenAPI                | ✅           | Huma-driven; equivalent to utoipa                                                        |
-| Forgot/reset password  | 🚧           | Endpoints not yet wired; magic-link is the recommended path today                        |
-| Email verification     | 🚧           | Plumbed in domain layer; verify endpoint not yet wired                                   |
-| 14 DB backends         | ⚙️ 2 of 14   | GORM PG + SQLite; the `repo.Repository` interface is the extension point                |
+| Forgot/reset password  | ✅           | `/forgot-password` + `/reset-password` wired in email-password plugin                   |
+| Email verification     | ✅           | `/verify-email` + `/resend-verification` wired in email-password plugin                  |
+| 14 DB backends         | ⚙️ 3 of 14   | GORM PG + SQLite + MySQL; the `repo.Repository` interface is the extension point        |
 
-`✅ done · 🚧 partial · ❌ not yet`
+`✅ done · ⚙️ partial · ❌ not yet`
 
 ## Project Layout
 
-- `auth/`         — Argon2id, session token gen, cookies (leaf, no internal deps)
-- `domain/`       — `User`, `Session`, `AuthUser`, ...
-- `events/`       — `AuthEvent`, `Decision`, `Handler`
-- `plugin/`       — `Plugin` and `PluginHost` interfaces
-- `middleware/`   — tri-mode auth resolver + `RequireAuth` / `RequireAdmin`
-- `repo/`         — repository interface + sub-interfaces
-- `repo/gormrepo/`— GORM-backed implementation (Postgres + SQLite)
-- `plugins/`      — every plugin (one directory per name)
-- `telemetry/`    — OpenTelemetry init + HTTP middleware
-- `openapi/`      — hand-rolled Huma spec + `/docs` + `/openapi.json` handlers
-- `yauthcfg/`     — YAML + env config loader
-- `cmd/yauth/`    — operator CLI (cobra)
-- `cmd/openapigen/` — `go generate` target for `openapi.json`
-- `examples/`     — runnable single-file demos per plugin
-- `packages/`     — TypeScript workspace (client + shared + ui-vue + ui-solidjs)
+- `auth/`              — Argon2id, session token gen, cookies, HIBP check, password policy (leaf, no internal deps)
+- `domain/`            — `User`, `Session`, `AuthUser`, ...
+- `events/`            — `AuthEvent`, `Decision`, `Handler`
+- `plugin/`            — `Plugin` and `PluginHost` interfaces
+- `middleware/`        — tri-mode auth resolver + `RequireAuth` / `RequireAdmin` + CORS + rate-limit wrapper
+- `repo/`              — repository interface + sub-interfaces
+- `repo/gormrepo/`     — GORM-backed implementation (Postgres + SQLite + MySQL)
+- `repo/redisrepo/`    — Redis caching decorator (sessions, rate limits, revocations)
+- `repo/memrepo/`      — in-memory backend (testing + zero-config quickstart)
+- `repo/conformance/`  — portable conformance harness for any `repo.Repository` implementation
+- `plugins/`           — every plugin (one directory per name)
+- `yautherr/`          — sentinel errors as a leaf package (avoids import cycles across sub-packages)
+- `telemetry/`         — OpenTelemetry init + HTTP middleware
+- `openapi/`           — hand-rolled Huma spec + `/docs` + `/openapi.json` handlers
+- `yauthcfg/`          — YAML/TOML + env config loader (supports `cache:` block for Redis)
+- `cmd/yauth/`         — operator CLI (cobra)
+- `cmd/openapigen/`    — `go generate` target for `openapi.json`
+- `examples/`          — runnable single-file demos per plugin
+- `packages/`          — TypeScript workspace (client + shared + ui-vue + ui-solidjs)
 
 ## Development
 

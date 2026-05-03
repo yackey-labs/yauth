@@ -60,12 +60,12 @@ func main() {
 # Register
 curl -X POST http://localhost:3000/api/auth/register \
   -H 'Content-Type: application/json' \
-  -d '{"email":"test@example.com","password":"correct horse battery staple"}'
+  -d '{"email":"test@example.com","password":"yauth-quickstart!Aq7z"}'
 
 # Login (cookie carries the session)
 curl -i -c jar.txt -X POST http://localhost:3000/api/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"email":"test@example.com","password":"correct horse battery staple"}'
+  -d '{"email":"test@example.com","password":"yauth-quickstart!Aq7z"}'
 
 # Authenticated session
 curl -b jar.txt http://localhost:3000/api/auth/session
@@ -73,6 +73,22 @@ curl -b jar.txt http://localhost:3000/api/auth/session
 # Live API docs
 open http://localhost:3000/docs
 ```
+
+> **HIBP check:** Registration rejects passwords found in the
+> [HaveIBeenPwned](https://haveibeenpwned.com/Passwords) database (the
+> k-anonymity range API — no full password is sent). The example
+> password above passes. To disable it during local development:
+>
+> ```go
+> emailpassword.New(emailpassword.Config{
+>     HIBPCheck:    false,
+>     HIBPCheckSet: true,   // sentinel — without this, false is ignored
+> })
+> ```
+>
+> `HIBPCheckSet` is required because the zero value of `bool` is `false`,
+> so setting only `HIBPCheck: false` is indistinguishable from "not
+> configured" and the default (enabled) wins.
 
 A runnable copy lives at [`examples/sqlite/main.go`](examples/sqlite/main.go).
 

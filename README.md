@@ -119,6 +119,26 @@ Open <http://localhost:5173>, log in with the seeded admin
 (`admin@example.com` / `correct horse battery staple`), and watch
 `useSession()` populate the dashboard from `GET /api/auth/session`.
 
+**CORS for SPA development:** When your frontend runs on a different
+origin (e.g. Vite on `:5173`, backend on `:3000`), browsers block
+cross-origin requests unless the server sets CORS headers. The example
+uses a Vite proxy so CORS is not needed there, but if you wire up the
+backend directly (no proxy), configure it via `YAuthConfig.CORS`:
+
+```go
+cfg := yauth.NewDefaultConfig()
+cfg.CORS = yauth.CORSConfig{
+    AllowedOrigins:   []string{"http://localhost:5173"},
+    AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+    AllowedHeaders:   []string{"Content-Type"},
+    AllowCredentials: true,   // required — session cookies are credentials
+}
+ya, err := yauth.New(repo, cfg).WithPlugin(...).Build()
+```
+
+`AllowCredentials: true` is essential — without it the browser refuses
+to include cookies on cross-origin requests, breaking session auth.
+
 ## How It Works
 
 **Plugins** implement `plugin.Plugin` — `Name()` and

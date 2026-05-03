@@ -155,6 +155,33 @@ The first non-Continue decision short-circuits the chain.
 | Redis cache   | `redisrepo.New(inner, client, opts)` | — wraps any backend; caches sessions, rate limits, and revocations in Redis |
 | In-memory     | `memrepo.New()`              | — no persistence; for testing and zero-config quickstart |
 
+**Zero-config quickstart with `memrepo`** — no database, no migrations,
+no `context` import needed:
+
+```go
+package main
+
+import (
+    "log"
+    "net/http"
+
+    yauth "github.com/yackey-labs/yauth-go"
+    "github.com/yackey-labs/yauth-go/plugins/emailpassword"
+    "github.com/yackey-labs/yauth-go/repo/memrepo"
+)
+
+func main() {
+    ya, err := yauth.New(memrepo.New(), yauth.NewDefaultConfig()).
+        WithPlugin(emailpassword.New(emailpassword.Config{})).
+        Build()
+    if err != nil { log.Fatal(err) }
+
+    mux := http.NewServeMux()
+    mux.Handle("/api/auth/", http.StripPrefix("/api/auth", ya.Router()))
+    log.Fatal(http.ListenAndServe(":3000", mux))
+}
+```
+
 The Rust crate ships 14 ORM/dialect permutations (Diesel, sqlx, SeaORM,
 Toasty across PG/MySQL/SQLite). yauth-go covers PG, SQLite, and MySQL via
 GORM and exposes the `repo.Repository` interface as the extension point.

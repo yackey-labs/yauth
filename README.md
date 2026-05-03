@@ -159,6 +159,27 @@ given mode handles it. On success the resolved `*domain.AuthUser` is
 injected via `context.WithValue`; retrieve it with
 `middleware.AuthUserFromContext(ctx)`.
 
+**Protecting your own routes** — wrap any `http.Handler` or `http.HandlerFunc`
+with the helpers on `ya.Middleware()`:
+
+```go
+// Require any authenticated user
+mux.Handle("/api/profile", ya.Middleware().RequireAuth(profileHandler))
+
+// Require admin role
+mux.Handle("/api/admin/", ya.Middleware().RequireAdmin(adminHandler))
+
+// Extract the resolved user inside a handler
+func profileHandler(w http.ResponseWriter, r *http.Request) {
+    user := middleware.AuthUserFromContext(r.Context()) // *domain.AuthUser
+    fmt.Fprintf(w, "hello %s", user.Email)
+}
+```
+
+`RequireAuth` returns `401` for unauthenticated requests; `RequireAdmin`
+returns `403` for non-admin users. Import `middleware` from
+`github.com/yackey-labs/yauth-go/middleware`.
+
 **Event system** — every authentication operation emits an
 `events.AuthEvent` (`UserRegistered`, `LoginAttempt`, `LoginSucceeded`,
 `LoginFailed`, `Logout`, `PasswordChanged`, ...). Handlers respond with
@@ -413,6 +434,58 @@ yauth-go repo. Re-run step 1 whenever you pull changes.
 
 > **npm / pnpm users:** `npm link` and `pnpm link --global` follow the
 > same pattern — build first, then link.
+
+### Wiring the Vue plugin
+
+Install `YAuthPlugin` in your app's `main.ts` before mounting:
+
+```ts
+import { createApp } from 'vue'
+import { YAuthPlugin } from '@yackey-labs/yauth-go-ui-vue'
+import App from './App.vue'
+
+const app = createApp(App)
+app.use(YAuthPlugin, { baseUrl: '/api/auth' })
+app.mount('#app')
+```
+
+The `baseUrl` option is the only required field. It is passed to the
+auto-generated client so every component and composable resolves to the
+right API origin. To pass a pre-built client instance instead, use the
+`client` option (useful when you need custom fetch options or interceptors).
+
+#### Component prop API
+
+Components use **callback props** (React style), not Vue emits. The pattern
+is `<LoginForm :on-success="handler" />`:
+
+| Component      | Prop         | Callback signature                         | Notes                                     |
+| -------------- | ------------ | ------------------------------------------ | ----------------------------------------- |
+| `LoginForm`    | `onSuccess`  | `(user: AuthUser) => void`                 | Called after successful login             |
+| `LoginForm`    | `onMfa`      | `(pendingId: string) => void`              | Called when server returns `require_mfa`  |
+| `RegisterForm` | `onSuccess`  | `(message: string) => void`                | Called with the server's success message  |
+
+`useSession()` returns a `{ user, loading, error }` reactive ref; `user` is
+`null` when unauthenticated and a bare `AuthUser` object after login. Call it
+inside any component to read or react to the current session state.
+
+```vue
+<script setup lang="ts">
+import { LoginForm } from '@yackey-labs/yauth-go-ui-vue'
+import { useSession }  from '@yackey-labs/yauth-go-ui-vue'
+import { useRouter } from 'vue-router'
+
+const router = useRouter()
+const { user } = useSession()
+</script>
+
+<template>
+  <LoginForm :on-success="() => router.push('/dashboard')" />
+</template>
+```
+
+> **Note:** `@success="handler"` (Vue emit syntax) silently does nothing —
+> you must use `:on-success="handler"` (prop binding).
 
 ## Status: Parity Table
 

@@ -288,6 +288,12 @@ mux.Handle("/api/auth/", http.StripPrefix("/api/auth", ya.Router()))
 mux.Handle("/", openapi.YAuth(ya))
 ```
 
+> **Note:** The `ya` argument is currently unused — the spec is fully
+> static and built at startup. The parameter exists so the API can later
+> embed runtime fields (e.g. loaded plugin names) without a breaking
+> change. If you prefer, `openapi.Handler()` is an identical no-arg
+> alternative.
+
 ## TypeScript / Vue / SolidJS
 
 The TS workspace under [`packages/`](packages) ships:

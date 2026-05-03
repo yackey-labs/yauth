@@ -382,6 +382,38 @@ the delta (a handful of Rust-only flows — forgot/reset password, email
 verification, hard-delete user — are stubbed out until they land in
 Go).
 
+### Using packages outside the monorepo
+
+The packages are not yet published to npm. `file:` and `link:` path
+dependencies from an external project fail without the packages being
+built first. Use `bun link` to make them available globally:
+
+```bash
+# 1. Build all packages inside the yauth-go repo (one-time setup)
+cd /path/to/yauth-go
+bun install
+bun run --filter '*' build
+
+# 2. Register each package you need as a global link
+cd packages/client   && bun link
+cd ../shared         && bun link
+cd ../ui-vue         && bun link   # if using Vue components
+cd ../ui-solidjs     && bun link   # if using SolidJS components
+
+# 3. In your project, install the linked packages
+cd /path/to/your-project
+bun link @yackey-labs/yauth-go-client
+bun link @yackey-labs/yauth-go-shared
+bun link @yackey-labs/yauth-go-ui-vue      # if needed
+bun link @yackey-labs/yauth-go-ui-solidjs  # if needed
+```
+
+After linking, imports resolve to the built `dist/` output in the
+yauth-go repo. Re-run step 1 whenever you pull changes.
+
+> **npm / pnpm users:** `npm link` and `pnpm link --global` follow the
+> same pattern — build first, then link.
+
 ## Status: Parity Table
 
 | Rust feature           | yauth-go     | Notes                                                                                    |

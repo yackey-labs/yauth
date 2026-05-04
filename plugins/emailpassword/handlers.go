@@ -111,10 +111,13 @@ type registerRequest struct {
 	DisplayName *string `json:"display_name,omitempty"`
 }
 
-// registerResponse mirrors the Rust shape: a generic message. The
-// session cookie carries the actual auth state.
+// registerResponse mirrors the Rust shape: the freshly-created user plus
+// an optional human-readable message. SPAs can read `User` to skip the
+// post-register login redirect; the session cookie has already been
+// issued.
 type registerResponse struct {
-	Message string `json:"message"`
+	User    userJSON `json:"user"`
+	Message string   `json:"message,omitempty"`
 }
 
 func (p *emailPasswordPlugin) handleRegister(host plugin.PluginHost) http.HandlerFunc {
@@ -255,7 +258,10 @@ func (p *emailPasswordPlugin) handleRegister(host plugin.PluginHost) http.Handle
 			cookieOptionsFromHost(host, r, int(host.SessionTTL().Seconds())),
 			raw,
 		))
-		writeJSON(w, http.StatusCreated, registerResponse{Message: "Account created."})
+		writeJSON(w, http.StatusCreated, registerResponse{
+			User:    toUserJSON(user),
+			Message: "Account created.",
+		})
 	}
 }
 

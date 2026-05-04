@@ -277,13 +277,10 @@ jobs:
             cp scripts/yauth-rust-openapi.json tmp/rust-openapi.json
             echo "source=snapshot" >> "$GITHUB_OUTPUT"
           fi
-      - name: Diff Rust ↔ Go openapi.json
-        id: diff
+      - name: Diff Rust ↔ Go openapi.json (diagnostic report)
         run: |
-          set +e
           python3 scripts/openapi-diff.py tmp/rust-openapi.json openapi.json \
-            | tee tmp/openapi-conformance.md
-          echo "exit=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+            | tee tmp/openapi-conformance.md || true
       - name: Upload conformance report
         if: always()
         uses: actions/upload-artifact@v4
@@ -291,12 +288,11 @@ jobs:
           name: openapi-conformance-report
           path: tmp/openapi-conformance.md
           if-no-files-found: error
-      - name: Fail on MUST gaps
-        run: |
-          if [ "${{ steps.diff.outputs.exit }}" != "0" ]; then
-            echo "openapi-diff reported MUST-level gaps (see report artifact)."
-            exit 1
-          fi
+      - name: Strict conformance gate
+        # Hard-fails on any BREAKING / MISSING / SHAPE / GO-EXTRA divergence.
+        # Phase 1 of the convergence plan closed all of those categories;
+        # any new drift here is a real regression.
+        run: python3 scripts/openapi-conformance.py tmp/rust-openapi.json openapi.json
 
   bench:
     name: Build benchmark (artifact)

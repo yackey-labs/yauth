@@ -167,10 +167,17 @@ mux.Handle("/api/profile", ya.Middleware().RequireAuth(profileHandler))
 // Require admin role
 mux.Handle("/api/admin/", ya.Middleware().RequireAdmin(adminHandler))
 
-// Extract the resolved user inside a handler
+// Extract the resolved user inside a handler.
+// Returns (*domain.AuthUser, bool) — the bool is true when the request was
+// authenticated. RequireAuth guarantees that, but in unprotected handlers
+// you should still check.
 func profileHandler(w http.ResponseWriter, r *http.Request) {
-    user := middleware.AuthUserFromContext(r.Context()) // *domain.AuthUser
-    fmt.Fprintf(w, "hello %s", user.Email)
+    user, ok := middleware.AuthUserFromContext(r.Context())
+    if !ok {
+        http.Error(w, "unauthenticated", http.StatusUnauthorized)
+        return
+    }
+    fmt.Fprintf(w, "hello %s", user.User.Email)
 }
 ```
 

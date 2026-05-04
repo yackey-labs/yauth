@@ -3432,34 +3432,9 @@
               }
             },
             "description": "Config subset."
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            },
-            "description": "Not authenticated."
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            },
-            "description": "Caller is not admin."
           }
         },
-        "security": [
-          {
-            "sessionCookie": []
-          }
-        ],
-        "summary": "Return the host configuration subset exposed for clients",
+        "summary": "Return the host configuration subset exposed to clients (public — SPAs read this at boot to drive UI gating; no sensitive fields).",
         "tags": [
           "status"
         ]

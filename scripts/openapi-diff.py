@@ -14,6 +14,11 @@ Findings are categorised:
   diverges on shape decisions (e.g. wrapped pagination metadata over bare
   arrays, {user: {...}} envelopes for forward compatibility). Feature parity
   is required; shape parity is not.
+- SECURITY: per-operation `security` requirements differ. Catches cases where
+  one side gates a route on auth that the other exposes publicly (or vice
+  versa). Surfaced after a Vue-SPA E2E found yauth-go's /config required
+  admin auth where yauth's was public; the contract was advertised in both
+  specs but the SHAPE/MISSING checks didn't flag it.
 - DOC     : description/summary-only differences (informational).
 
 Anything in Go that is not in Rust is *not* a breaking finding — yauth-go is
@@ -148,6 +153,23 @@ def success_response_schema(
     return None
 
 
+def security_signature(security: Any) -> set[str]:
+    """Reduce an OpenAPI `security` block to a comparable set of scheme
+    names. `None`/empty maps to `{"<public>"}` so two specs that both omit
+    security match each other while differing from a spec that requires a
+    scheme. Multiple alternative requirements are joined with `+`.
+    """
+    if not isinstance(security, list) or not security:
+        return {"<public>"}
+    out: set[str] = set()
+    for req in security:
+        if not isinstance(req, dict) or not req:
+            out.add("<public>")
+            continue
+        out.add("+".join(sorted(req.keys())))
+    return out
+
+
 def diff_specs(
     rust: dict[str, Any], go: dict[str, Any]
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -253,6 +275,20 @@ def diff_specs(
                     }
                 )
 
+        rust_sec = security_signature(rop.get("security"))
+        go_sec = security_signature(gop.get("security"))
+        if rust_sec != go_sec:
+            info.append(
+                {
+                    "category": "SECURITY",
+                    "path": path,
+                    "method": method.upper(),
+                    "detail": "operation security requirements diverge",
+                    "only_in_rust": sorted(rust_sec - go_sec),
+                    "only_in_go": sorted(go_sec - rust_sec),
+                }
+            )
+
         rust_desc = (rop.get("description") or "").strip()
         go_desc = (gop.get("description") or "").strip()
         rust_sum = (rop.get("summary") or "").strip()
@@ -299,6 +335,7 @@ def render_report(
     breaking = [f for f in must if f["category"] == "BREAKING"]
     missing = [f for f in must if f["category"] == "MISSING"]
     shape = [f for f in info if f["category"] == "SHAPE"]
+    security = [f for f in info if f["category"] == "SECURITY"]
     go_extra = [f for f in info if f["category"] == "GO-EXTRA"]
     doc = [f for f in info if f["category"] == "DOC"]
 
@@ -307,6 +344,7 @@ def render_report(
     lines.append(f"- BREAKING (path missing in Go): **{len(breaking)}**")
     lines.append(f"- MISSING (operation missing in Go): **{len(missing)}**")
     lines.append(f"- SHAPE (request/response field divergence, informational): **{len(shape)}**")
+    lines.append(f"- SECURITY (auth requirements diverge, informational): **{len(security)}**")
     lines.append(f"- DOC (description-only diffs): **{len(doc)}**")
     lines.append(f"- GO-EXTRA (Go-only routes/operations, informational): **{len(go_extra)}**")
     lines.append("")
@@ -332,6 +370,7 @@ def render_report(
     section("BREAKING — paths missing in Go", breaking)
     section("MISSING — operations missing in Go", missing)
     section("SHAPE — request/response top-level field differences", shape)
+    section("SECURITY — operation security-requirement differences", security)
     section("DOC — description-only differences", doc)
     section("GO-EXTRA — Go-only routes (informational)", go_extra)
 

@@ -311,12 +311,9 @@ func addStatus(api *huma.OpenAPI) {
 	api.AddOperation(&huma.Operation{
 		Method: http.MethodGet, Path: "/config",
 		Tags: []string{"status"}, OperationID: "config",
-		Summary:  "Return the host configuration subset exposed for clients",
-		Security: secCookie(),
+		Summary: "Return the host configuration subset exposed to clients (public — SPAs read this at boot to drive UI gating; no sensitive fields).",
 		Responses: map[string]*huma.Response{
 			"200": jsonResponse("Config subset.", configResponse{}),
-			"401": errorResponse("Not authenticated."),
-			"403": errorResponse("Caller is not admin."),
 		},
 	})
 }

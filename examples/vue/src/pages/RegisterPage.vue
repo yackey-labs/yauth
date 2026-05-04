@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { RegisterForm } from "@yackey-labs/yauth-go-ui-vue";
+import { RegisterForm } from "@yackey-labs/yauth-ui-vue";
 import { ref } from "vue";
 import { useRouter } from "vue-router";
 

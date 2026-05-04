@@ -153,20 +153,21 @@ pagination UI without a second request.
   yauth-go intentionally diverges on shape; the goal is forward
   compatibility, not byte parity.
 
-If you're moving from a Rust frontend to a Go backend, expect to update
-client code wherever the shape table above lists a wrapper or rename.
-TS clients generated from the Go `openapi.json` (via orval, in
-`packages/client`) already match.
+If you're moving from a Rust frontend to a Go backend, no client changes
+are required: yauth and yauth-go share a single set of npm packages
+(`@yackey-labs/yauth-{client,shared,ui-vue,ui-solidjs}`) generated from
+the same converged OpenAPI spec. CI gates byte-equivalence on every PR;
+see `scripts/openapi-conformance.py` and the `openapi-conformance`
+job in both repos.
 
-## Documented divergences (Go superset)
+## Documented divergences
 
-These remain Go-only and the conformance check accepts them as
-informational:
-
-- `/admin/audit`, `/admin/users/{id}/sessions`
-- `/oauth2/clients`, `/oauth2/clients/{id}`, `/oauth2/consent`
-- `/lockout/state`
-- `/status`
+After Phase 1 of the convergence plan there are **none** — yauth and
+yauth-go agree on every path, every method, and every top-level
+request/response field. Previously Go-only routes (`/admin/audit`,
+`/admin/users/{id}/sessions`, `/oauth2/clients{,/{id}}`, `/oauth2/consent`,
+`/lockout/state`, `/status`) all ship in the Rust backend too; the
+strict CI gate (Phase 2) enforces this.
 - `PATCH /admin/users/{id}` (kept alongside the new PUT)
 - `PATCH /webhooks/{id}` (kept alongside the new PUT)
 - `GET /oauth/{provider}/callback` (Rust only ships POST)

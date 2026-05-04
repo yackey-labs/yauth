@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { useSession } from "@yackey-labs/yauth-go-ui-vue";
+import { useSession } from "@yackey-labs/yauth-ui-vue";
 import { useRouter } from "vue-router";
 
 const { user, isAuthenticated, loading, logout } = useSession();

@@ -48,14 +48,25 @@ def main(rust_path: str, go_path: str) -> int:
     breaking = [f for f in must if f["category"] == "BREAKING"]
     missing = [f for f in must if f["category"] == "MISSING"]
     shape = [f for f in info if f["category"] == "SHAPE"]
+    security = [f for f in info if f["category"] == "SECURITY"]
     go_extra = [f for f in info if f["category"] == "GO-EXTRA"]
 
+    # SECURITY is reported but currently informational while we close the
+    # 9 pre-existing divergences (mostly yauth's spec under-advertising
+    # tri-mode auth on /api-keys / /token/revoke / /userinfo, and missing
+    # security on /oauth/authorize / /oauth/device). Once those are fixed,
+    # promote SECURITY into the blocking total alongside SHAPE.
     blocking_total = len(breaking) + len(missing) + len(shape) + len(go_extra)
     if blocking_total == 0:
+        sec_note = f" / {len(security)} SECURITY (informational)" if security else ""
         print(
             f"OK: {rust_path} and {go_path} are in conformance "
-            f"(0 BREAKING / 0 MISSING / 0 SHAPE / 0 GO-EXTRA)."
+            f"(0 BREAKING / 0 MISSING / 0 SHAPE / 0 GO-EXTRA{sec_note})."
         )
+        if security:
+            sys.stdout.write(
+                diff.render_report(rust_path, go_path, rust, go, must, info)
+            )
         return 0
 
     # Print the same human-readable report so CI logs explain what to fix.

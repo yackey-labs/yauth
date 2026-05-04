@@ -23,6 +23,7 @@ No external database needed. SQLite + email/password ships first.
 
 ```bash
 go get github.com/yackey-labs/yauth-go@latest
+go mod tidy   # pulls transitive deps for the openapi subpackage (Huma)
 ```
 
 ```go
@@ -438,9 +439,11 @@ is `<LoginForm :on-success="handler" />`:
 | `LoginForm`    | `onMfa`      | `(pendingId: string) => void`              | Called when server returns `require_mfa`  |
 | `RegisterForm` | `onSuccess`  | `(message: string) => void`                | Called with the server's success message  |
 
-`useSession()` returns a `{ user, loading, error }` reactive ref; `user` is
-`null` when unauthenticated and a bare `AuthUser` object after login. Call it
-inside any component to read or react to the current session state.
+`useSession()` returns reactive session state plus helpers:
+`{ user, loading, isAuthenticated, isLoading, isEmailVerified, userRole, userEmail, displayName, refetch, logout }`.
+`user` is `null` when unauthenticated and a bare `AuthUser` object after
+login. Call it inside any component to read or react to the current session
+state, or `await logout()` to end the session.
 
 ```vue
 <script setup lang="ts">

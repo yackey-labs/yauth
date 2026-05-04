@@ -5,12 +5,7 @@
 		"moduleResolution": "bundler",
 		"strict": true,
 		"jsx": "preserve",
-		"skipLibCheck": true,
-		"paths": {
-			"@yackey-labs/yauth-go-client": ["../../packages/client/src/index.ts"],
-			"@yackey-labs/yauth-go-shared": ["../../packages/shared/src/index.ts"],
-			"@yackey-labs/yauth-go-ui-vue": ["../../packages/ui-vue/src/index.ts"]
-		}
+		"skipLibCheck": true
 	},
 	"include": ["src/**/*.ts", "src/**/*.vue", "vite-env.d.ts"]
 }

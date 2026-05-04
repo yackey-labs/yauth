@@ -115,6 +115,9 @@ One item, advisory only.
 - Round 3 commit: `900ce1a`.
 - Original priority list in full: see git history of this file at commit `c507177`.
 - Build/test perf comparison (Rust vs Go): `BUILD_PERF.md`.
-- Frontend client divergences: `packages/client/DIVERGENCES.md`.
+- Frontend client + UI components: now live in the
+  [yauth (Rust)](https://github.com/yackey-labs/yauth) repo as
+  `@yackey-labs/yauth-{client,shared,ui-vue,ui-solidjs}`; both backends
+  share a single converged spec.
 
 **Status:** Ready to tag v0.1.0.

@@ -96,23 +96,20 @@ A runnable copy lives at [`examples/sqlite/main.go`](examples/sqlite/main.go).
 
 `examples/vue` is a full SPA + Go backend wired together. It boots the
 in-memory SQLite repo, the email-password / status / admin plugins, and
-a Vue 3 frontend that uses `@yackey-labs/yauth-go-ui-vue` for the
+a Vue 3 frontend that uses `@yackey-labs/yauth-ui-vue` for the
 login/register/dashboard flow. See
 [`examples/vue/README.md`](examples/vue/README.md) for the walkthrough;
 the short version:
 
 ```bash
-# build the workspace TS packages once
-bun install
-(cd packages/client && bun run build)
-(cd packages/shared && bun run build)
-(cd packages/ui-vue && bun run build)
+# Install JS deps from npm (the unified yauth client + UI components).
+cd examples/vue && npm install && cd ../..
 
 # terminal 1 — backend on :3000
 go run ./examples/vue/server
 
 # terminal 2 — frontend on :5173 (proxies /api → :3000)
-cd examples/vue && bun dev
+cd examples/vue && npm run dev
 ```
 
 Open <http://localhost:5173>, log in with the seeded admin
@@ -380,60 +377,36 @@ mux.Handle("/", openapi.YAuth(ya))
 
 ## TypeScript / Vue / SolidJS
 
-The TS workspace under [`packages/`](packages) ships:
+The TypeScript client and UI components live in the
+[yauth (Rust)](https://github.com/yackey-labs/yauth) repo. yauth-go's
+`openapi.json` is converged with yauth's, so a single set of npm packages
+serves both backends:
 
-| Package                              | Purpose                                                      |
-| ------------------------------------ | ------------------------------------------------------------ |
-| `@yackey-labs/yauth-go-client`       | Auto-generated HTTP client (`bunx orval` reads `openapi.json`) |
-| `@yackey-labs/yauth-go-shared`       | Shared types (`AuthUser`, `AuthMethod`, AAGUID map)          |
-| `@yackey-labs/yauth-go-ui-vue`       | Vue 3 components + composables                               |
-| `@yackey-labs/yauth-go-ui-solidjs`   | SolidJS components + provider                                |
-
-```bash
-bun install
-bun generate            # go generate ./openapi/  &&  bunx orval
-bun run --filter '*' build
-bun run --filter '*' typecheck
-```
-
-The UI components were forked from the Rust client and adjusted to
-match the Go-side OpenAPI surface; see
-[`packages/client/DIVERGENCES.md`](packages/client/DIVERGENCES.md) for
-the delta (a handful of Rust-only flows — forgot/reset password, email
-verification, hard-delete user — are stubbed out until they land in
-Go).
-
-### Using packages outside the monorepo
-
-The packages are not yet published to npm. `file:` and `link:` path
-dependencies from an external project fail without the packages being
-built first. Use `bun link` to make them available globally:
+| Package                            | Purpose                                                        |
+| ---------------------------------- | -------------------------------------------------------------- |
+| `@yackey-labs/yauth-client`        | Auto-generated HTTP client (orval reads the unified spec)      |
+| `@yackey-labs/yauth-shared`        | Shared types (`AuthUser`, `AuthMethod`, AAGUID map)            |
+| `@yackey-labs/yauth-ui-vue`        | Vue 3 components + composables                                 |
+| `@yackey-labs/yauth-ui-solidjs`    | SolidJS components + provider                                  |
 
 ```bash
-# 1. Build all packages inside the yauth-go repo (one-time setup)
-cd /path/to/yauth-go
-bun install
-bun run --filter '*' build
-
-# 2. Register each package you need as a global link
-cd packages/client   && bun link
-cd ../shared         && bun link
-cd ../ui-vue         && bun link   # if using Vue components
-cd ../ui-solidjs     && bun link   # if using SolidJS components
-
-# 3. In your project, install the linked packages
-cd /path/to/your-project
-bun link @yackey-labs/yauth-go-client
-bun link @yackey-labs/yauth-go-shared
-bun link @yackey-labs/yauth-go-ui-vue      # if needed
-bun link @yackey-labs/yauth-go-ui-solidjs  # if needed
+npm install @yackey-labs/yauth-client @yackey-labs/yauth-ui-vue
+# or pnpm / yarn / bun
 ```
 
-After linking, imports resolve to the built `dist/` output in the
-yauth-go repo. Re-run step 1 whenever you pull changes.
+> **Migrating from `@yackey-labs/yauth-go-*`:** the previously-published
+> Go-suffixed packages are deprecated; their last release redirects to the
+> unified ones. Drop the `-go` infix from imports and reinstall:
+>
+> ```diff
+> - import { createYAuthClient } from "@yackey-labs/yauth-go-client";
+> + import { createYAuthClient } from "@yackey-labs/yauth-client";
+> ```
 
-> **npm / pnpm users:** `npm link` and `pnpm link --global` follow the
-> same pattern — build first, then link.
+CI guarantees yauth and yauth-go's `openapi.json` files are equivalent
+(see the `openapi-conformance` job and
+[`scripts/openapi-conformance.py`](scripts/openapi-conformance.py)) — any
+contract drift fails the build on both sides.
 
 ### Wiring the Vue plugin
 
@@ -441,7 +414,7 @@ Install `YAuthPlugin` in your app's `main.ts` before mounting:
 
 ```ts
 import { createApp } from 'vue'
-import { YAuthPlugin } from '@yackey-labs/yauth-go-ui-vue'
+import { YAuthPlugin } from '@yackey-labs/yauth-ui-vue'
 import App from './App.vue'
 
 const app = createApp(App)
@@ -471,8 +444,8 @@ inside any component to read or react to the current session state.
 
 ```vue
 <script setup lang="ts">
-import { LoginForm } from '@yackey-labs/yauth-go-ui-vue'
-import { useSession }  from '@yackey-labs/yauth-go-ui-vue'
+import { LoginForm } from '@yackey-labs/yauth-ui-vue'
+import { useSession }  from '@yackey-labs/yauth-ui-vue'
 import { useRouter } from 'vue-router'
 
 const router = useRouter()
@@ -536,8 +509,9 @@ const { user } = useSession()
 - `yauthcfg/`          — YAML/TOML + env config loader (supports `cache:` block for Redis)
 - `cmd/yauth/`         — operator CLI (cobra)
 - `cmd/openapigen/`    — `go generate` target for `openapi.json`
-- `examples/`          — runnable single-file demos per plugin
-- `packages/`          — TypeScript workspace (client + shared + ui-vue + ui-solidjs)
+- `examples/`          — runnable single-file demos per plugin (plus
+  `examples/vue` — full SPA wired against the unified `@yackey-labs/yauth-*`
+  npm packages)
 
 ## Development
 
@@ -552,13 +526,11 @@ go generate ./openapi/        # regenerate openapi.json
 # Lint (golangci-lint)
 brew install golangci-lint
 golangci-lint run ./...
-
-# TypeScript
-bun install
-bun generate                  # go generate ./openapi/  &&  bunx orval
-bun run --filter '*' build
-bun run --filter '*' typecheck
 ```
+
+The TS client + UI components live in the
+[yauth (Rust)](https://github.com/yackey-labs/yauth) repo; develop them
+there and consume from npm here.
 
 ## Releases
 

@@ -284,8 +284,8 @@ var sessionCases = []testCase{
 		now := nowUTC()
 		for i, h := range []string{"h1", "h2", "h3"} {
 			_ = r.CreateSession(ctx(), domain.NewSession{
-				ID:        fmt.Sprintf("s%d", i+1),
-				UserID:    "u1", TokenHash: h,
+				ID:     fmt.Sprintf("s%d", i+1),
+				UserID: "u1", TokenHash: h,
 				ExpiresAt: now.Add(time.Hour), CreatedAt: now,
 			})
 		}
@@ -984,7 +984,7 @@ var authorizationCodeCases = []testCase{
 			ID: "ac1", CodeHash: "ch", ClientID: "cli", UserID: "u1",
 			Scopes: json.RawMessage(`[]`), RedirectURI: "http://x",
 			CodeChallenge: "cc", CodeChallengeMethod: "S256",
-			ExpiresAt:     now.Add(time.Hour), CreatedAt: now,
+			ExpiresAt: now.Add(time.Hour), CreatedAt: now,
 		})
 		got, err := r.ConsumeAuthorizationCode(ctx(), "ch")
 		if err != nil || got == nil {
@@ -1007,7 +1007,7 @@ var authorizationCodeCases = []testCase{
 			ID: "ac1", CodeHash: "ch", ClientID: "cli", UserID: "u1",
 			Scopes: json.RawMessage(`[]`), RedirectURI: "http://x",
 			CodeChallenge: "cc", CodeChallengeMethod: "S256",
-			ExpiresAt:     now.Add(time.Hour), CreatedAt: now,
+			ExpiresAt: now.Add(time.Hour), CreatedAt: now,
 		})
 		_, _ = r.ConsumeAuthorizationCode(ctx(), "ch")
 		got, err := r.GetAuthorizationCodeByHash(ctx(), "ch")
@@ -1054,7 +1054,7 @@ var deviceCodeCases = []testCase{
 		_ = r.CreateDeviceCode(ctx(), domain.NewDeviceCode{
 			ID: "d1", DeviceCodeHash: "dh", UserCode: "ABCD-1234",
 			ClientID: "cli", Scopes: json.RawMessage(`[]`),
-			Status:   "pending", Interval: 5,
+			Status: "pending", Interval: 5,
 			ExpiresAt: now.Add(time.Hour), CreatedAt: now,
 		})
 		got, err := r.GetDeviceCodeByUserCodePending(ctx(), "ABCD-1234")
@@ -1073,7 +1073,7 @@ var deviceCodeCases = []testCase{
 		_ = r.CreateDeviceCode(ctx(), domain.NewDeviceCode{
 			ID: "d1", DeviceCodeHash: "dh", UserCode: "WXYZ-5678",
 			ClientID: "cli", Scopes: json.RawMessage(`[]`),
-			Status:    "pending", Interval: 5,
+			Status: "pending", Interval: 5,
 			ExpiresAt: now.Add(time.Hour), CreatedAt: now,
 		})
 		uid := "u1"
@@ -1102,7 +1102,7 @@ var oidcNonceCases = []testCase{
 			ID: "ac1", CodeHash: "ch", ClientID: "cli", UserID: "u1",
 			Scopes: json.RawMessage(`[]`), RedirectURI: "http://x",
 			CodeChallenge: "cc", CodeChallengeMethod: "S256",
-			ExpiresAt:     now.Add(time.Hour), CreatedAt: now,
+			ExpiresAt: now.Add(time.Hour), CreatedAt: now,
 		})
 		_ = r.CreateOIDCNonce(ctx(), domain.NewOIDCNonce{
 			ID: "n1", NonceHash: "nh", AuthorizationCodeID: "ac1", CreatedAt: now,

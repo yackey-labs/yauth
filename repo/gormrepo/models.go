@@ -54,11 +54,11 @@ func userFromDomain(in domain.NewUser) User {
 
 // Session mirrors yauth_sessions.
 type Session struct {
-	ID        string    `gorm:"column:id;primaryKey"`
-	UserID    string    `gorm:"column:user_id;not null;index"`
-	TokenHash string    `gorm:"column:token_hash;not null;uniqueIndex"`
-	IPAddress *string   `gorm:"column:ip_address"`
-	UserAgent *string   `gorm:"column:user_agent"`
+	ID        string  `gorm:"column:id;primaryKey"`
+	UserID    string  `gorm:"column:user_id;not null;index"`
+	TokenHash string  `gorm:"column:token_hash;not null;uniqueIndex"`
+	IPAddress *string `gorm:"column:ip_address"`
+	UserAgent *string `gorm:"column:user_agent"`
 	// ActiveOrgID is the org this session is currently operating under.
 	// NULL = no active org. yauth Rust #89 / Go #15.
 	ActiveOrgID *string   `gorm:"column:active_org_id;index"`

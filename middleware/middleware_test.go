@@ -185,6 +185,10 @@ func (f *fakeRepo) ListSessions(_ context.Context, _ domain.ListSessionsFilters)
 	return nil, 0, nil
 }
 
+func (f *fakeRepo) SetSessionActiveOrg(_ context.Context, _ string, _ *string) error {
+	return nil
+}
+
 // --- Audit list ---
 
 func (f *fakeRepo) ListAuditLog(_ context.Context, _ domain.ListAuditFilters) ([]*domain.AuditLog, error) {

@@ -23,16 +23,37 @@ func (r *Repo) CreateSession(ctx context.Context, input domain.NewSession) error
 	}
 
 	s := &domain.Session{
-		ID:        input.ID,
-		UserID:    input.UserID,
-		TokenHash: input.TokenHash,
-		IPAddress: input.IPAddress,
-		UserAgent: input.UserAgent,
-		ExpiresAt: input.ExpiresAt.UTC(),
-		CreatedAt: created.UTC(),
+		ID:          input.ID,
+		UserID:      input.UserID,
+		TokenHash:   input.TokenHash,
+		IPAddress:   input.IPAddress,
+		UserAgent:   input.UserAgent,
+		ActiveOrgID: input.ActiveOrgID,
+		ExpiresAt:   input.ExpiresAt.UTC(),
+		CreatedAt:   created.UTC(),
 	}
 	r.sessions[s.ID] = s
 	r.sessionTokenIdx[s.TokenHash] = s.ID
+	return nil
+}
+
+// SetSessionActiveOrg updates the in-memory session's active_org_id.
+// nil clears the field. Returns yautherr.ErrNotFound when the session
+// does not exist.
+func (r *Repo) SetSessionActiveOrg(ctx context.Context, sessionID string, activeOrgID *string) error {
+	_ = ensureCtx(ctx)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	s, ok := r.sessions[sessionID]
+	if !ok {
+		return yautherr.ErrNotFound
+	}
+	if activeOrgID == nil {
+		s.ActiveOrgID = nil
+		return nil
+	}
+	v := *activeOrgID
+	s.ActiveOrgID = &v
 	return nil
 }
 

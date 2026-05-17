@@ -96,7 +96,7 @@ func TestResolver_Valid_ReturnsAuthUser(t *testing.T) {
 	host := newFakeHost(fr, cfg.JWTSecret)
 	res := newResolver(host, cfg)
 
-	tok, _, err := signAccessToken(cfg.JWTSecret, user.ID, uuid.NewString(), cfg, now)
+	tok, _, err := signAccessToken(cfg.JWTSecret, user.ID, uuid.NewString(), cfg, now, activeOrgClaims{})
 	if err != nil {
 		t.Fatalf("sign: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestResolver_BannedUser(t *testing.T) {
 	host := newFakeHost(fr, cfg.JWTSecret)
 	res := newResolver(host, cfg)
 
-	tok, _, _ := signAccessToken(cfg.JWTSecret, user.ID, uuid.NewString(), cfg, now)
+	tok, _, _ := signAccessToken(cfg.JWTSecret, user.ID, uuid.NewString(), cfg, now, activeOrgClaims{})
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("Authorization", "Bearer "+tok)
 
@@ -152,7 +152,7 @@ func TestVerifyAccessToken_Expired(t *testing.T) {
 		AccessTTL: time.Minute, Issuer: "yauth-test",
 	}
 	past := time.Now().UTC().Add(-2 * time.Hour)
-	tok, _, err := signAccessToken(cfg.JWTSecret, "user-1", uuid.NewString(), cfg, past)
+	tok, _, err := signAccessToken(cfg.JWTSecret, "user-1", uuid.NewString(), cfg, past, activeOrgClaims{})
 	if err != nil {
 		t.Fatalf("sign: %v", err)
 	}
@@ -168,7 +168,7 @@ func TestVerifyAccessToken_WrongIssuer(t *testing.T) {
 		AccessTTL: time.Minute, Issuer: "yauth-test",
 	}
 	now := time.Now().UTC()
-	tok, _, _ := signAccessToken(cfg.JWTSecret, "user-1", uuid.NewString(), cfg, now)
+	tok, _, _ := signAccessToken(cfg.JWTSecret, "user-1", uuid.NewString(), cfg, now, activeOrgClaims{})
 
 	other := cfg
 	other.Issuer = "different-issuer"
@@ -183,7 +183,7 @@ func TestVerifyAccessToken_AudienceEnforced(t *testing.T) {
 		AccessTTL: time.Minute, Issuer: "yauth-test", Audience: "yauth-clients",
 	}
 	now := time.Now().UTC()
-	tok, _, _ := signAccessToken(cfg.JWTSecret, "user-1", uuid.NewString(), cfg, now)
+	tok, _, _ := signAccessToken(cfg.JWTSecret, "user-1", uuid.NewString(), cfg, now, activeOrgClaims{})
 
 	if _, err := verifyAccessToken(cfg.JWTSecret, tok, cfg); err != nil {
 		t.Fatalf("expected matching audience to verify, got %v", err)

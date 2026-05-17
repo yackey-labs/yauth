@@ -32,19 +32,22 @@ func (b *bearerResolver) Name() string { return "bearer" }
 //   - Bearer header present and JWT valid → recognized=true, AuthUser.
 //
 // The returned AuthUser has an empty Session; bearer credentials are
-// stateless and do not correspond to a session row.
+// stateless and do not correspond to a session row. yauth #89 active-
+// org claims (org/role) — when present in the token — are pre-loaded
+// into AuthUser.ActiveOrgID + OrgRole so middleware.HydrateActiveOrg
+// can reconcile them against the live membership list.
 func (b *bearerResolver) Resolve(r *http.Request) (*domain.AuthUser, bool, error) {
 	raw := extractBearer(r)
 	if raw == "" {
 		return nil, false, nil
 	}
 
-	userID, err := verifyAccessToken(b.cfg.JWTSecret, raw, b.cfg)
+	parsed, err := verifyAccessToken(b.cfg.JWTSecret, raw, b.cfg)
 	if err != nil {
 		return nil, true, yautherr.ErrInvalidToken
 	}
 
-	user, err := b.host.Repo().GetUserByID(r.Context(), userID)
+	user, err := b.host.Repo().GetUserByID(r.Context(), parsed.UserID)
 	if err != nil {
 		if errors.Is(err, yautherr.ErrNotFound) {
 			return nil, true, yautherr.ErrUnauthorized
@@ -54,7 +57,16 @@ func (b *bearerResolver) Resolve(r *http.Request) (*domain.AuthUser, bool, error
 	if user.Banned {
 		return nil, true, yautherr.ErrUserBanned
 	}
-	return &domain.AuthUser{User: *user, Method: domain.AuthMethodBearer}, true, nil
+	au := &domain.AuthUser{User: *user, Method: domain.AuthMethodBearer}
+	if parsed.Org != "" {
+		org := parsed.Org
+		au.ActiveOrgID = &org
+	}
+	if parsed.Role != "" {
+		role := parsed.Role
+		au.OrgRole = &role
+	}
+	return au, true, nil
 }
 
 // extractBearer pulls the JWT out of an "Authorization: Bearer <jwt>"

@@ -127,6 +127,21 @@ func (f *fakeRepo) DeleteExpiredSessions(_ context.Context, _ time.Time) (int64,
 func (f *fakeRepo) ListSessions(_ context.Context, _ domain.ListSessionsFilters) ([]*domain.Session, int64, error) {
 	return nil, 0, nil
 }
+func (f *fakeRepo) SetSessionActiveOrg(_ context.Context, sessionID string, activeOrgID *string) error {
+	for h, s := range f.sessions {
+		if s.ID == sessionID {
+			if activeOrgID == nil {
+				s.ActiveOrgID = nil
+			} else {
+				v := *activeOrgID
+				s.ActiveOrgID = &v
+			}
+			f.sessions[h] = s
+			return nil
+		}
+	}
+	return yautherr.ErrNotFound
+}
 
 // --- PasswordRepository ---
 

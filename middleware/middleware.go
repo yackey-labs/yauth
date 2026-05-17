@@ -51,6 +51,13 @@ type Config struct {
 	// user has role=admin. Set true to allow admin automation via
 	// machine credentials.
 	AllowAdminMachineCallers bool
+
+	// EnableOrgHydration toggles active-org context decoration on
+	// successful auth resolution. Set true by the YAuth builder when
+	// the organizations plugin is registered; left false otherwise so
+	// single-user deployments pay zero overhead per request. yauth
+	// Rust #89 / Go #15.
+	EnableOrgHydration bool
 }
 
 // Mismatch action constants. Empty string is treated as MismatchActionWarn.
@@ -139,8 +146,15 @@ func withAuthUser(ctx context.Context, au *domain.AuthUser) context.Context {
 // an error result short-circuits the chain (subsequent resolvers are not
 // consulted). If no resolver claims the request, ErrUnauthorized is
 // returned.
+//
+// When Config.EnableOrgHydration is true the resolved AuthUser is
+// decorated with active-org context (ActiveOrgID, OrgRole, AllOrgs) via
+// HydrateActiveOrg. Cookies use Session.ActiveOrgID as the source;
+// bearer resolvers can pre-populate AuthUser.ActiveOrgID from a JWT
+// claim and hydration will reconcile + role-resolve.
 func (m *Middleware) ResolveAuth(r *http.Request) (*domain.AuthUser, error) {
 	if au, err := m.resolveCookie(r); err == nil {
+		m.maybeHydrateOrg(r.Context(), au)
 		return au, nil
 	} else if !isAuthMiss(err) {
 		return nil, err
@@ -155,11 +169,22 @@ func (m *Middleware) ResolveAuth(r *http.Request) (*domain.AuthUser, error) {
 			return nil, err
 		}
 		if au != nil {
+			m.maybeHydrateOrg(r.Context(), au)
 			return au, nil
 		}
 	}
 
 	return nil, yautherr.ErrUnauthorized
+}
+
+// maybeHydrateOrg decorates au with active-org context iff the
+// EnableOrgHydration flag is on. The repo is treated as the
+// MembershipsLookup — repo.Repository satisfies the narrow interface.
+func (m *Middleware) maybeHydrateOrg(ctx context.Context, au *domain.AuthUser) {
+	if !m.cfg.EnableOrgHydration || au == nil {
+		return
+	}
+	HydrateActiveOrg(ctx, m.repo, au)
 }
 
 // isAuthMiss reports whether err represents "this credential did not

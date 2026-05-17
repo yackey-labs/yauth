@@ -197,6 +197,9 @@ func (f *fakeRepo) DeleteExpiredSessions(_ context.Context, _ time.Time) (int64,
 func (f *fakeRepo) ListSessions(_ context.Context, _ domain.ListSessionsFilters) ([]*domain.Session, int64, error) {
 	panic("fakeRepo: ListSessions not implemented")
 }
+func (f *fakeRepo) SetSessionActiveOrg(_ context.Context, _ string, _ *string) error {
+	panic("fakeRepo: SetSessionActiveOrg not implemented")
+}
 func (f *fakeRepo) UpsertPassword(_ context.Context, _ domain.NewPassword) error {
 	panic("fakeRepo: UpsertPassword not implemented")
 }

@@ -256,9 +256,17 @@ under the hood).
 | asymmetric-jwt   | `plugins/asymjwt`            | ✅     |
 | oidc             | `plugins/oidc`               | ✅     |
 | oauth2-server    | `plugins/oauth2server`       | ✅     |
+| organizations    | `plugins/organizations`      | ✅     |
 
 Every plugin in the table maps 1:1 to a Rust feature flag. Each ships
 with one or more runnable examples under [`examples/`](examples/).
+
+The `organizations` plugin (port of yauth Rust PR #98 / issue #87) is
+the multi-tenancy primitive — `Organization` + `Membership` +
+`Invitation`. It is OFF by default: nothing happens until you opt in
+with `.WithPlugin(organizations.New(organizations.Config{}))`. The
+data model is identical to Better Auth / WorkOS / Stytch — see the
+package doc for the route surface and invariants.
 
 ### Webhooks lifecycle
 

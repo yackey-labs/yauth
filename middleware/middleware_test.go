@@ -930,3 +930,62 @@ func (f *fakeRepo) ClaimDueRetries(_ context.Context, _ time.Time, _ int) ([]*do
 	return nil, nil
 }
 func (f *fakeRepo) DeleteScheduledRetry(_ context.Context, _ string) error { return nil }
+
+// --- OrganizationRepository / MembershipRepository / InvitationRepository
+// no-op stubs (used only by other plugins' tests; PR #87/#98 added these
+// to satisfy the repo.Repository interface extension).
+
+func (f *fakeRepo) CreateOrganization(_ context.Context, _ domain.NewOrganization) (domain.Organization, error) {
+	return domain.Organization{}, yautherr.ErrNotFound
+}
+func (f *fakeRepo) GetOrganizationByID(_ context.Context, _ string) (*domain.Organization, error) {
+	return nil, yautherr.ErrNotFound
+}
+func (f *fakeRepo) GetOrganizationBySlug(_ context.Context, _ string) (*domain.Organization, error) {
+	return nil, yautherr.ErrNotFound
+}
+func (f *fakeRepo) UpdateOrganization(_ context.Context, _ string, _ domain.UpdateOrganization) (domain.Organization, error) {
+	return domain.Organization{}, yautherr.ErrNotFound
+}
+func (f *fakeRepo) DeleteOrganization(_ context.Context, _ string) error { return nil }
+func (f *fakeRepo) ListOrganizationsForUser(_ context.Context, _ string) ([]*domain.Organization, error) {
+	return nil, nil
+}
+func (f *fakeRepo) ListOrganizations(_ context.Context, _ string, _, _ int) ([]*domain.Organization, int64, error) {
+	return nil, 0, nil
+}
+func (f *fakeRepo) CreateMembership(_ context.Context, _ domain.NewMembership) (domain.Membership, error) {
+	return domain.Membership{}, yautherr.ErrNotFound
+}
+func (f *fakeRepo) GetMembershipByID(_ context.Context, _ string) (*domain.Membership, error) {
+	return nil, yautherr.ErrNotFound
+}
+func (f *fakeRepo) GetMembershipByOrgUser(_ context.Context, _, _ string) (*domain.Membership, error) {
+	return nil, nil
+}
+func (f *fakeRepo) UpdateMembership(_ context.Context, _ string, _ domain.UpdateMembership) (domain.Membership, error) {
+	return domain.Membership{}, yautherr.ErrNotFound
+}
+func (f *fakeRepo) DeleteMembership(_ context.Context, _ string) error { return nil }
+func (f *fakeRepo) ListMembershipsByOrg(_ context.Context, _ string) ([]*domain.Membership, error) {
+	return nil, nil
+}
+func (f *fakeRepo) ListMembershipsByUser(_ context.Context, _ string) ([]*domain.Membership, error) {
+	return nil, nil
+}
+func (f *fakeRepo) CreateInvitation(_ context.Context, _ domain.NewInvitation) (domain.Invitation, error) {
+	return domain.Invitation{}, yautherr.ErrNotFound
+}
+func (f *fakeRepo) GetInvitationByID(_ context.Context, _ string) (*domain.Invitation, error) {
+	return nil, yautherr.ErrNotFound
+}
+func (f *fakeRepo) GetInvitationByTokenHash(_ context.Context, _ string) (*domain.Invitation, error) {
+	return nil, nil
+}
+func (f *fakeRepo) MarkInvitationAccepted(_ context.Context, _ string, _ time.Time) (domain.Invitation, error) {
+	return domain.Invitation{}, yautherr.ErrNotFound
+}
+func (f *fakeRepo) DeleteInvitation(_ context.Context, _ string) error { return nil }
+func (f *fakeRepo) ListPendingInvitationsForOrg(_ context.Context, _ string) ([]*domain.Invitation, error) {
+	return nil, nil
+}

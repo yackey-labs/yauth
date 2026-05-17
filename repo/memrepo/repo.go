@@ -121,6 +121,22 @@ type Repo struct {
 	// from the map under the same write lock that returned them, which
 	// is the in-memory analogue of FOR UPDATE SKIP LOCKED.
 	webhookRetries map[string]*domain.ScheduledWebhookRetry
+
+	// Organizations keyed by ID; orgSlugIdx maps lowercased slug -> id
+	// (the case-insensitive uniqueness invariant lives in this index).
+	organizations map[string]*domain.Organization
+	orgSlugIdx    map[string]string
+
+	// Memberships keyed by ID; membershipOrgUserIdx maps
+	// "<orgID>:<userID>" -> membership ID for the (org_id, user_id)
+	// uniqueness check.
+	memberships          map[string]*domain.Membership
+	membershipOrgUserIdx map[string]string
+
+	// Invitations keyed by ID; invitationTokenIdx maps token hash ->
+	// invitation ID.
+	invitations        map[string]*domain.Invitation
+	invitationTokenIdx map[string]string
 }
 
 // rateLimitState is a fixed-window counter row.
@@ -171,6 +187,12 @@ func New() *Repo {
 		unlockTokenHashIdx:    make(map[string]string),
 		webhooks:              make(map[string]*domain.Webhook),
 		webhookRetries:        make(map[string]*domain.ScheduledWebhookRetry),
+		organizations:         make(map[string]*domain.Organization),
+		orgSlugIdx:            make(map[string]string),
+		memberships:           make(map[string]*domain.Membership),
+		membershipOrgUserIdx:  make(map[string]string),
+		invitations:           make(map[string]*domain.Invitation),
+		invitationTokenIdx:    make(map[string]string),
 	}
 }
 

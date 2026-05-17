@@ -43,5 +43,8 @@ func Migrate(ctx context.Context, db *gorm.DB) error {
 		&UnlockToken{},
 		&WebhookDelivery{},
 		&WebhookRetry{},
+		&Organization{},
+		&Membership{},
+		&Invitation{},
 	)
 }

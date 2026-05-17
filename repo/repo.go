@@ -272,6 +272,82 @@ type WebhookDeliveryRepository interface {
 	ListWebhookDeliveriesByWebhookID(ctx context.Context, webhookID string, limit int) ([]*domain.WebhookDelivery, error)
 }
 
+// OrganizationRepository covers Organization CRUD for the multi-tenant
+// primitive (yauth Rust PR #98 / issue #87).
+//
+// Invariants every backend MUST honor:
+//
+//   - CreateOrganization MUST reject duplicate slugs (case-insensitive)
+//     with yautherr.ErrConflict.
+//   - GetOrganizationBySlug MUST be case-insensitive.
+//   - DeleteOrganization MUST cascade to memberships and invitations
+//     (FK ON DELETE CASCADE in SQL backends; explicit in memrepo).
+type OrganizationRepository interface {
+	GetOrganizationByID(ctx context.Context, id string) (*domain.Organization, error)
+	// GetOrganizationBySlug is case-insensitive on slug.
+	GetOrganizationBySlug(ctx context.Context, slug string) (*domain.Organization, error)
+	// CreateOrganization returns yautherr.ErrConflict when a row with
+	// a matching slug (case-insensitive) already exists.
+	CreateOrganization(ctx context.Context, input domain.NewOrganization) (domain.Organization, error)
+	UpdateOrganization(ctx context.Context, id string, changes domain.UpdateOrganization) (domain.Organization, error)
+	// DeleteOrganization removes the org and cascades to memberships
+	// and invitations.
+	DeleteOrganization(ctx context.Context, id string) error
+	// ListOrganizationsForUser returns every org the user is a member
+	// of in deterministic order (created_at ascending).
+	ListOrganizationsForUser(ctx context.Context, userID string) ([]*domain.Organization, error)
+	// ListOrganizations returns a page of orgs plus the total matching
+	// the (optional) case-insensitive search filter on name/slug.
+	ListOrganizations(ctx context.Context, search string, limit, offset int) ([]*domain.Organization, int64, error)
+}
+
+// MembershipRepository covers Membership CRUD.
+//
+// Invariants:
+//
+//   - CreateMembership MUST reject duplicate (organization_id, user_id)
+//     pairs with yautherr.ErrConflict.
+//   - Deleting a non-existent membership returns nil (idempotent).
+type MembershipRepository interface {
+	GetMembershipByID(ctx context.Context, id string) (*domain.Membership, error)
+	// GetMembershipByOrgUser returns the join row tying user to org,
+	// or nil if not a member. yautherr.ErrNotFound is NOT returned —
+	// "not a member" is a normal state, not an error.
+	GetMembershipByOrgUser(ctx context.Context, organizationID, userID string) (*domain.Membership, error)
+	CreateMembership(ctx context.Context, input domain.NewMembership) (domain.Membership, error)
+	UpdateMembership(ctx context.Context, id string, changes domain.UpdateMembership) (domain.Membership, error)
+	DeleteMembership(ctx context.Context, id string) error
+	// ListMembershipsByOrg returns all memberships in an org.
+	ListMembershipsByOrg(ctx context.Context, organizationID string) ([]*domain.Membership, error)
+	// ListMembershipsByUser returns all memberships for a user (one
+	// per org).
+	ListMembershipsByUser(ctx context.Context, userID string) ([]*domain.Membership, error)
+}
+
+// InvitationRepository covers Invitation CRUD.
+//
+// Invariants:
+//
+//   - GetInvitationByTokenHash returns nil for expired or already
+//     accepted invitations. Callers do not need to filter.
+//   - MarkInvitationAccepted is single-shot — once accepted, a second
+//     call returns yautherr.ErrNotFound.
+type InvitationRepository interface {
+	GetInvitationByID(ctx context.Context, id string) (*domain.Invitation, error)
+	// GetInvitationByTokenHash returns nil for expired or already
+	// accepted entries.
+	GetInvitationByTokenHash(ctx context.Context, tokenHash string) (*domain.Invitation, error)
+	CreateInvitation(ctx context.Context, input domain.NewInvitation) (domain.Invitation, error)
+	// MarkInvitationAccepted stamps accepted_at and returns the
+	// updated row. Returns yautherr.ErrNotFound if the invitation was
+	// already accepted or does not exist.
+	MarkInvitationAccepted(ctx context.Context, id string, acceptedAt time.Time) (domain.Invitation, error)
+	DeleteInvitation(ctx context.Context, id string) error
+	// ListPendingInvitationsForOrg returns invitations with
+	// accepted_at IS NULL for the given org.
+	ListPendingInvitationsForOrg(ctx context.Context, organizationID string) ([]*domain.Invitation, error)
+}
+
 // WebhookRetryRepository covers persisted webhook retries — the
 // crash-safe queue that survives process restarts. ClaimDueRetries is
 // the linchpin: it MUST atomically remove each returned row from the
@@ -319,4 +395,7 @@ type Repository interface {
 	WebhookRepository
 	WebhookDeliveryRepository
 	WebhookRetryRepository
+	OrganizationRepository
+	MembershipRepository
+	InvitationRepository
 }

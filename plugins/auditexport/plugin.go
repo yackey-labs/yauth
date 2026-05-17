@@ -77,8 +77,8 @@ type plugin struct {
 
 	host pluginpkg.PluginHost
 
-	mu       sync.Mutex
-	workers  map[string]*WorkerHandle
+	mu      sync.Mutex
+	workers map[string]*WorkerHandle
 }
 
 // New constructs the audit-export plugin.

@@ -24,19 +24,19 @@ var secretConfigKeys = map[string]struct{}{
 }
 
 type destinationResponse struct {
-	ID             string             `json:"id"`
-	OrganizationID *string            `json:"organization_id,omitempty"`
-	Name           string             `json:"name"`
-	Kind           string             `json:"kind"`
-	Format         string             `json:"format"`
-	Config         map[string]string  `json:"config"`
-	Status         string             `json:"status"`
-	HMACConfigured bool               `json:"hmac_configured,omitempty"`
-	LastSuccessAt  *time.Time         `json:"last_success_at,omitempty"`
-	LastFailureAt  *time.Time         `json:"last_failure_at,omitempty"`
-	CreatedAt      time.Time          `json:"created_at"`
-	UpdatedAt      time.Time          `json:"updated_at"`
-	Implemented    bool               `json:"implemented"`
+	ID             string            `json:"id"`
+	OrganizationID *string           `json:"organization_id,omitempty"`
+	Name           string            `json:"name"`
+	Kind           string            `json:"kind"`
+	Format         string            `json:"format"`
+	Config         map[string]string `json:"config"`
+	Status         string            `json:"status"`
+	HMACConfigured bool              `json:"hmac_configured,omitempty"`
+	LastSuccessAt  *time.Time        `json:"last_success_at,omitempty"`
+	LastFailureAt  *time.Time        `json:"last_failure_at,omitempty"`
+	CreatedAt      time.Time         `json:"created_at"`
+	UpdatedAt      time.Time         `json:"updated_at"`
+	Implemented    bool              `json:"implemented"`
 }
 
 func toResponse(d *domain.AuditExportDestination) destinationResponse {

@@ -53,10 +53,10 @@ var (
 // without parsing strings.
 func VerifyHMACSignature(secret string, header string, body []byte, now time.Time, window time.Duration) error {
 	var (
-		ts        int64
-		tsSet     bool
-		sigHex    string
-		sigSet    bool
+		ts     int64
+		tsSet  bool
+		sigHex string
+		sigSet bool
 	)
 	for _, part := range strings.Split(header, ",") {
 		k, v, ok := strings.Cut(part, "=")

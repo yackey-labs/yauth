@@ -93,12 +93,12 @@ type AuditExportDestination struct {
 	// headers. Syslog: host, port, transport, facility. S3: bucket,
 	// prefix, region, partition. Splunk: hec_url, hec_token. Datadog:
 	// site, api_key.
-	Config         map[string]string
-	Status         DestinationStatus
-	LastSuccessAt  *time.Time
-	LastFailureAt  *time.Time
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	Config        map[string]string
+	Status        DestinationStatus
+	LastSuccessAt *time.Time
+	LastFailureAt *time.Time
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 // NewAuditExportDestination is the insert input.

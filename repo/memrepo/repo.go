@@ -149,6 +149,18 @@ type Repo struct {
 	// OrganizationPolicies keyed by organization_id (one row per org
 	// — there is no separate primary id). yauth #92 / yauth-go #21.
 	orgPolicies map[string]*domain.OrganizationPolicy
+
+	// SsoConnections keyed by ID. yauth #93 / yauth-go #23.
+	ssoConnections map[string]*domain.SsoConnection
+
+	// ExternalIdentities keyed by ID. extIdentityProviderIdx maps
+	// "<provider>|<external_id>" -> identity ID for the unique-pair
+	// invariant.
+	extIdentities          map[string]*domain.ExternalIdentity
+	extIdentityProviderIdx map[string]string
+
+	// SsoLoginStates keyed by the state token.
+	ssoLoginStates map[string]*domain.SsoLoginState
 }
 
 // rateLimitState is a fixed-window counter row.
@@ -205,9 +217,13 @@ func New() *Repo {
 		membershipOrgUserIdx:  make(map[string]string),
 		invitations:           make(map[string]*domain.Invitation),
 		invitationTokenIdx:    make(map[string]string),
-		orgDomains:            make(map[string]*domain.OrganizationDomain),
-		orgDomainNameIdx:      make(map[string]string),
-		orgPolicies:           make(map[string]*domain.OrganizationPolicy),
+		orgDomains:             make(map[string]*domain.OrganizationDomain),
+		orgDomainNameIdx:       make(map[string]string),
+		orgPolicies:            make(map[string]*domain.OrganizationPolicy),
+		ssoConnections:         make(map[string]*domain.SsoConnection),
+		extIdentities:          make(map[string]*domain.ExternalIdentity),
+		extIdentityProviderIdx: make(map[string]string),
+		ssoLoginStates:         make(map[string]*domain.SsoLoginState),
 	}
 }
 
@@ -276,6 +292,12 @@ func (r *Repo) Cleanup() {
 		if !ut.ExpiresAt.UTC().After(now) {
 			delete(r.unlockTokenHashIdx, ut.TokenHash)
 			delete(r.unlockTokens, id)
+		}
+	}
+	// SSO login states are short-lived (<10 min). yauth #93 / yauth-go #23.
+	for s, st := range r.ssoLoginStates {
+		if !st.ExpiresAt.UTC().After(now) {
+			delete(r.ssoLoginStates, s)
 		}
 	}
 }

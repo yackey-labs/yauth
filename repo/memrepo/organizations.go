@@ -157,6 +157,14 @@ func (r *Repo) DeleteOrganization(ctx context.Context, id string) error {
 	}
 	// Cascade per-org auth policy (yauth #92 / yauth-go #21).
 	delete(r.orgPolicies, id)
+	// Cascade SSO connections (yauth #93 / yauth-go #23). External
+	// identities are *not* cascaded — they survive the org so a user
+	// can be re-invited to a fresh org and keep the link.
+	for cid, c := range r.ssoConnections {
+		if c.OrganizationID == id {
+			delete(r.ssoConnections, cid)
+		}
+	}
 	return nil
 }
 

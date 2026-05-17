@@ -258,6 +258,10 @@ func (r *Repo) DeleteOrganization(ctx context.Context, id string) error {
 		if err := tx.Where("organization_id = ?", id).Delete(&Membership{}).Error; err != nil {
 			return err
 		}
+		// Cascade verified-domain claims (yauth #90).
+		if err := tx.Where("organization_id = ?", id).Delete(&OrganizationDomain{}).Error; err != nil {
+			return err
+		}
 		return tx.Where("id = ?", id).Delete(&Organization{}).Error
 	})
 }

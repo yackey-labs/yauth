@@ -141,6 +141,13 @@ func (r *Repo) DeleteOrganization(ctx context.Context, id string) error {
 			delete(r.invitations, iID)
 		}
 	}
+	// Cascade verified domains (yauth #90).
+	for dID, dom := range r.orgDomains {
+		if dom.OrganizationID == id {
+			delete(r.orgDomainNameIdx, strings.ToLower(dom.Domain))
+			delete(r.orgDomains, dID)
+		}
+	}
 	return nil
 }
 

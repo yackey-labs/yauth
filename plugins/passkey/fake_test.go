@@ -561,3 +561,27 @@ func (f *fakeRepo) DeleteInvitation(_ context.Context, _ string) error { return 
 func (f *fakeRepo) ListPendingInvitationsForOrg(_ context.Context, _ string) ([]*domain.Invitation, error) {
 	return nil, nil
 }
+
+// OrganizationDomain stubs (yauth #90 / Go #17).
+func (f *fakeRepo) CreateOrganizationDomain(_ context.Context, _ domain.NewOrganizationDomain) (domain.OrganizationDomain, error) {
+	return domain.OrganizationDomain{}, yautherr.ErrNotFound
+}
+func (f *fakeRepo) GetOrganizationDomainByID(_ context.Context, _ string) (*domain.OrganizationDomain, error) {
+	return nil, yautherr.ErrNotFound
+}
+func (f *fakeRepo) GetOrganizationDomainByDomain(_ context.Context, _ string) (*domain.OrganizationDomain, error) {
+	return nil, yautherr.ErrNotFound
+}
+func (f *fakeRepo) ListOrganizationDomainsByOrg(_ context.Context, _ string) ([]*domain.OrganizationDomain, error) {
+	return nil, nil
+}
+func (f *fakeRepo) ListVerifiedAutoJoinOrganizationDomains(_ context.Context, _ string) ([]*domain.OrganizationDomain, error) {
+	return nil, nil
+}
+func (f *fakeRepo) UpdateOrganizationDomain(_ context.Context, _ string, _ domain.UpdateOrganizationDomain) (domain.OrganizationDomain, error) {
+	return domain.OrganizationDomain{}, yautherr.ErrNotFound
+}
+func (f *fakeRepo) SetOrganizationDomainVerification(_ context.Context, _ string, _ domain.DomainStatus, _ *time.Time, _ time.Time) (domain.OrganizationDomain, error) {
+	return domain.OrganizationDomain{}, yautherr.ErrNotFound
+}
+func (f *fakeRepo) DeleteOrganizationDomain(_ context.Context, _ string) error { return nil }

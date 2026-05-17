@@ -41,4 +41,12 @@ var (
 	// MFA.
 	ErrMFARequired = errors.New("yauth: mfa required")
 	ErrInvalidMFA  = errors.New("yauth: invalid mfa code")
+
+	// Organization RBAC (#88 port).
+	//
+	// ErrOwnerProtected is returned by the membership repo when an
+	// UpdateMembership demotes the last owner of an org, or
+	// DeleteMembership removes them. Callers must first transfer
+	// ownership via the dedicated handler.
+	ErrOwnerProtected = errors.New("yauth: org owner cannot be demoted or removed without transferring ownership")
 )

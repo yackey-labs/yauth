@@ -311,6 +311,50 @@ in #87) — owner is a strict superset of admin under the default
 catalogue, so admin-gated endpoints continue to work for the creator
 without changes.
 
+#### Active-org switcher (yauth #89 / Go #15)
+
+For users with memberships in multiple organizations, every request
+needs to answer "which org am I acting in?". yauth-go answers this
+with a per-session **active org** that flows through both cookie and
+JWT identity paths:
+
+- **Cookie sessions** carry the active org in the `active_org_id`
+  column on `yauth_sessions`. Switching updates the row; the cookie
+  itself is unchanged.
+- **JWT bearer tokens** carry the additive `org` / `role` / `orgs`
+  claims when the `organizations` plugin is registered alongside
+  bearer. Switching the active org returns a payload; the client must
+  call `/token` to mint a fresh JWT (older tokens keep working until
+  expiry — document this for clients).
+
+Selection rules on login / refresh / signup:
+
+1. 0 active memberships → no active org (legacy single-user path)
+2. 1 active membership → auto-picked
+3. multiple → first by name (case-insensitive), tiebreak by id
+
+Endpoints (mounted only when `organizations.New(...)` is registered):
+
+- `GET    /sessions/active-org` — read current active org + memberships
+- `POST   /sessions/active-org { organization_id }` — switch (403 if not an active member)
+- `DELETE /sessions/active-org` — clear
+
+Inside handlers, read the active context off `domain.AuthUser`:
+
+```go
+au, _ := middleware.AuthUserFromContext(ctx)
+if au.ActiveOrgID != nil {
+    // tenant-scoped path; au.OrgRole carries the caller's role
+    // au.AllOrgs lists every membership for switcher UIs
+} else {
+    // single-user / no-org path — backward compatible
+}
+```
+
+Single-user deployments that never register the `organizations` plugin
+pay zero overhead: `ActiveOrgID` stays nil and the JWT/cookie shapes
+are identical to pre-#89 yauth-go.
+
 ### Webhooks lifecycle
 
 The webhooks plugin starts a background worker pool when `Build()` runs.

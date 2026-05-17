@@ -126,7 +126,11 @@ func decode(t *testing.T, res *http.Response, v any) {
 	}
 }
 
-func TestCreateOrgMakesCallerAdmin(t *testing.T) {
+func TestCreateOrgMakesCallerOwner(t *testing.T) {
+	// Post-#88: creator is promoted to "owner" (was "admin" in
+	// #87). owner is a strict superset of admin under the default
+	// permission catalogue, so any prior admin-gated endpoint still
+	// passes for the creator.
 	user := seededUser()
 	srv, r := newTestServer(t, user)
 
@@ -141,7 +145,6 @@ func TestCreateOrgMakesCallerAdmin(t *testing.T) {
 	if got.Slug != "acme" || got.Name != "Acme" {
 		t.Fatalf("create response: %+v", got)
 	}
-	// Caller is admin.
 	m, err := r.GetMembershipByOrgUser(context.Background(), got.ID, user.ID)
 	if err != nil {
 		t.Fatalf("membership lookup: %v", err)
@@ -149,8 +152,8 @@ func TestCreateOrgMakesCallerAdmin(t *testing.T) {
 	if m == nil {
 		t.Fatal("expected creator membership row")
 	}
-	if m.Role != RoleAdmin {
-		t.Fatalf("expected admin role, got %q", m.Role)
+	if m.Role != RoleOwner {
+		t.Fatalf("expected owner role, got %q", m.Role)
 	}
 }
 
@@ -216,14 +219,22 @@ func TestListOrgsReturnsOnlyCallerOrgs(t *testing.T) {
 func TestUpdateOrgRequiresAdmin(t *testing.T) {
 	user := seededUser()
 	srv, r := newTestServer(t, user)
-	// Create org via API; caller is admin.
+	// Create org via API; caller is owner.
 	res := doJSON(t, http.MethodPost, srv.URL+"/organizations", map[string]string{"name": "A", "slug": "a"})
 	if res.StatusCode != http.StatusCreated {
 		t.Fatalf("create: %d", res.StatusCode)
 	}
 	var org organizationJSON
 	decode(t, res, &org)
-	// Demote caller to member.
+	// Seed a second owner so we can demote the original owner —
+	// the repo enforces owner-protection on the last owner.
+	now := time.Now().UTC()
+	if _, err := r.CreateMembership(context.Background(), domain.NewMembership{
+		ID: "co-owner-mem", OrganizationID: org.ID, UserID: "co-owner",
+		Role: RoleOwner, Status: domain.MembershipActive, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("seed co-owner: %v", err)
+	}
 	mem, _ := r.GetMembershipByOrgUser(context.Background(), org.ID, user.ID)
 	memberRole := RoleMember
 	if _, err := r.UpdateMembership(context.Background(), mem.ID, domain.UpdateMembership{Role: &memberRole}); err != nil {

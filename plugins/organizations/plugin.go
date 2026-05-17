@@ -48,11 +48,15 @@ import (
 	"github.com/yackey-labs/yauth-go/plugin"
 )
 
-// Plugin role constants. Free-form strings to leave room for #88's
-// RBAC plugin to layer on top without changing the wire format.
+// Plugin role constants. Mirror the auth/rbac built-in roles (yauth #88
+// port). Free-form strings on the wire to leave room for application-
+// defined roles.
 const (
-	RoleAdmin  = "admin"
-	RoleMember = "member"
+	RoleOwner        = "owner"
+	RoleAdmin        = "admin"
+	RoleBillingAdmin = "billing_admin"
+	RoleMember       = "member"
+	RoleViewer       = "viewer"
 )
 
 // defaultInvitationTTL matches the Rust reference (7 days).
@@ -106,4 +110,11 @@ func (p *orgsPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux, prefix s
 	mux.Handle("GET "+prefix+"/organizations/{id}/members", mw.RequireAuth(http.HandlerFunc(p.handleListMembers(host))))
 	mux.Handle("POST "+prefix+"/organizations/{id}/invitations", mw.RequireAuth(http.HandlerFunc(p.handleCreateInvitation(host))))
 	mux.Handle("POST "+prefix+"/invitations/accept", mw.RequireAuth(http.HandlerFunc(p.handleAcceptInvitation(host))))
+
+	// RBAC routes (yauth #88 port). Mounted unconditionally — the
+	// plugin already gates membership-bearing routes behind
+	// RequireAuth + membership lookups; the RBAC helpers reuse those.
+	mux.Handle("POST "+prefix+"/organizations/{id}/members/{user_id}/role", mw.RequireAuth(http.HandlerFunc(p.handleChangeMemberRole(host))))
+	mux.Handle("POST "+prefix+"/organizations/{id}/transfer-ownership", mw.RequireAuth(http.HandlerFunc(p.handleTransferOwnership(host))))
+	mux.Handle("GET "+prefix+"/organizations/{id}/permissions", mw.RequireAuth(http.HandlerFunc(p.handleListPermissions(host))))
 }

@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/yackey-labs/yauth-go/auth"
 	"github.com/yackey-labs/yauth-go/domain"
 	"github.com/yackey-labs/yauth-go/middleware"
 	"github.com/yackey-labs/yauth-go/plugin"
@@ -165,7 +166,11 @@ func hashInvitationToken(raw string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// requireOrgAdmin checks that the caller is an admin of the org.
+// requireOrgAdmin checks that the caller is admin-or-higher in the org.
+// "Higher" means "owner" under the built-in role ordering — RBAC
+// permission helpers (auth.RoleAtLeast) implement the comparison so the
+// owner role automatically passes every admin gate.
+//
 // Returns the membership row or writes a 403/500 and returns false.
 func requireOrgAdmin(w http.ResponseWriter, r *http.Request, host plugin.PluginHost, orgID, userID string) (*domain.Membership, bool) {
 	m, err := host.Repo().GetMembershipByOrgUser(r.Context(), orgID, userID)
@@ -177,7 +182,7 @@ func requireOrgAdmin(w http.ResponseWriter, r *http.Request, host plugin.PluginH
 		writeError(w, http.StatusForbidden, "FORBIDDEN", "not a member of this organization")
 		return nil, false
 	}
-	if m.Role != RoleAdmin {
+	if !auth.RoleAtLeast(m.Role, auth.RoleAdmin) {
 		writeError(w, http.StatusForbidden, "FORBIDDEN", "organization admin role required")
 		return nil, false
 	}
@@ -271,12 +276,15 @@ func (p *orgsPlugin) handleCreate(host plugin.PluginHost) http.HandlerFunc {
 			return
 		}
 
-		// Creator becomes admin automatically.
+		// Creator becomes owner (yauth #88 port). Prior behavior
+		// was "creator becomes admin"; the upgrade is invisible to
+		// callers since owner is strictly a superset of admin under
+		// the default permission catalogue.
 		if _, err := host.Repo().CreateMembership(r.Context(), domain.NewMembership{
 			ID:             uuid.NewString(),
 			OrganizationID: org.ID,
 			UserID:         au.User.ID,
-			Role:           RoleAdmin,
+			Role:           RoleOwner,
 			Status:         domain.MembershipActive,
 			JoinedAt:       &now,
 			CreatedAt:      now,

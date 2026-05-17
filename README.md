@@ -268,6 +268,49 @@ with `.WithPlugin(organizations.New(organizations.Config{}))`. The
 data model is identical to Better Auth / WorkOS / Stytch — see the
 package doc for the route surface and invariants.
 
+#### Org-scoped RBAC
+
+The `organizations` plugin ships with built-in role-based access
+control (port of yauth Rust issue #88). Built-in role strings are in
+`auth/rbac.go`:
+
+- `auth.RoleOwner` — exactly one per org; cannot be demoted or removed
+  unless ownership is transferred first
+- `auth.RoleAdmin` — manage members, settings, invite
+- `auth.RoleBillingAdmin` — billing-only
+- `auth.RoleMember` — default for invitees; read-mostly
+- `auth.RoleViewer` — strict read-only
+
+Each role maps to a default permission set under
+`auth.DefaultPermissions(role)`. Custom role strings on
+`Membership.Role` are persisted verbatim but get an empty default
+permission set — applications are responsible for layering their own
+permission map on top.
+
+Gate handlers using the helpers in `middleware/rbac.go`:
+
+```go
+err := middleware.RequireOrgRole(ctx, repo, orgID, auth.RoleAdmin)
+err := middleware.RequireOrgPermission(ctx, repo, orgID, auth.PermMembersInvite)
+```
+
+Owner-protection is enforced at the repo layer: `UpdateMembership` /
+`DeleteMembership` refuse to demote or remove the last owner of an
+org, returning `yautherr.ErrOwnerProtected`. To swap the owner, call
+`POST /organizations/{id}/transfer-ownership`, which atomically
+promotes the new owner and demotes the prior owner to admin.
+
+RBAC routes (mounted alongside the base org routes):
+
+- `POST /organizations/{id}/members/{user_id}/role` — change a non-owner's role (admin+)
+- `POST /organizations/{id}/transfer-ownership` — transfer ownership (owner-only)
+- `GET  /organizations/{id}/permissions` — list caller's permissions on the org
+
+The creator of an org is automatically the `owner` (previously `admin`
+in #87) — owner is a strict superset of admin under the default
+catalogue, so admin-gated endpoints continue to work for the creator
+without changes.
+
 ### Webhooks lifecycle
 
 The webhooks plugin starts a background worker pool when `Build()` runs.

@@ -184,7 +184,7 @@ func TestHandleList_ReturnsOwnedKeys(t *testing.T) {
 		t.Fatalf("generate: %v", err)
 	}
 	repo.putKey(domain.APIKey{
-		ID: uuid.NewString(), UserID: other.ID, KeyPrefix: gen.Prefix, KeyHash: gen.Hash,
+		ID: uuid.NewString(), UserID: &other.ID, KeyPrefix: gen.Prefix, KeyHash: gen.Hash,
 		Name: "stranger", Scopes: []byte("[]"), CreatedAt: time.Now().UTC(),
 	})
 
@@ -261,7 +261,7 @@ func TestHandleDelete_RejectsForeignKey(t *testing.T) {
 	}
 	foreignID := uuid.NewString()
 	repo.putKey(domain.APIKey{
-		ID: foreignID, UserID: other.ID, KeyPrefix: gen.Prefix, KeyHash: gen.Hash,
+		ID: foreignID, UserID: &other.ID, KeyPrefix: gen.Prefix, KeyHash: gen.Hash,
 		Name: "stranger", Scopes: []byte("[]"), CreatedAt: time.Now().UTC(),
 	})
 

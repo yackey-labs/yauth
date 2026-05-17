@@ -182,6 +182,23 @@ type RefreshTokenRepository interface {
 }
 
 // APIKeyRepository covers long-lived API keys identified by prefix.
+//
+// Ownership invariants (yauth #91 / yauth-go #19):
+//
+//   - Every row has exactly one owner: NewAPIKey.UserID XOR
+//     NewAPIKey.OrganizationID is non-nil. Backends MUST reject rows
+//     that violate the invariant with yautherr.ErrInvalidRequest.
+//   - CreateOrgAPIKey is a convenience wrapper around CreateAPIKey
+//     that fills the org slot — backends may treat the two as one
+//     code path, but the interface keeps the surface explicit so
+//     callers cannot accidentally mint a user-scoped key when they
+//     meant an org one (and vice versa).
+//   - GetAPIKeyByIDAndUser MUST scope by UserID and ignore org-scoped
+//     rows; GetAPIKeyByIDAndOrg is the org-scoped twin.
+//   - ListAPIKeysByOrgID returns org-scoped rows only (UserID == nil).
+//   - SetAPIKeyExpiry sets ExpiresAt without otherwise touching the
+//     row. Used by the grace-period rotation flow; nil clears the
+//     expiry.
 type APIKeyRepository interface {
 	CreateAPIKey(ctx context.Context, input domain.NewAPIKey) error
 	GetAPIKeyByPrefix(ctx context.Context, prefix string) (*domain.APIKey, error)
@@ -189,6 +206,22 @@ type APIKeyRepository interface {
 	ListAPIKeysByUserID(ctx context.Context, userID string) ([]*domain.APIKey, error)
 	UpdateAPIKeyLastUsed(ctx context.Context, id string, at time.Time) error
 	DeleteAPIKey(ctx context.Context, id string) error
+
+	// Org-scoped API key (service-account) methods. yauth #91 /
+	// yauth-go #19.
+
+	// GetAPIKeyByIDAndOrg looks up an org-scoped key by id and
+	// owning organization. Returns yautherr.ErrNotFound when the
+	// row does not exist, belongs to a different org, or is
+	// user-scoped.
+	GetAPIKeyByIDAndOrg(ctx context.Context, id, organizationID string) (*domain.APIKey, error)
+	// ListAPIKeysByOrgID returns every org-scoped key owned by
+	// organizationID in deterministic order (created_at descending).
+	ListAPIKeysByOrgID(ctx context.Context, organizationID string) ([]*domain.APIKey, error)
+	// SetAPIKeyExpiry overwrites the ExpiresAt column on id without
+	// otherwise modifying the row. Pass nil to clear the expiry.
+	// Returns yautherr.ErrNotFound when id does not exist.
+	SetAPIKeyExpiry(ctx context.Context, id string, expiresAt *time.Time) error
 }
 
 // OAuth2ClientRepository covers registered OAuth2 server clients.

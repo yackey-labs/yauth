@@ -148,6 +148,13 @@ func (r *Repo) DeleteOrganization(ctx context.Context, id string) error {
 			delete(r.orgDomains, dID)
 		}
 	}
+	// Cascade org-scoped API keys (yauth #91 / yauth-go #19).
+	for kID, k := range r.apiKeys {
+		if k.OrganizationID != nil && *k.OrganizationID == id {
+			delete(r.apiKeyPrefixIdx, k.KeyPrefix)
+			delete(r.apiKeys, kID)
+		}
+	}
 	return nil
 }
 

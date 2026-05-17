@@ -733,7 +733,21 @@ func (r *Repo) RevokeRefreshTokenFamily(ctx context.Context, familyID string) (i
 
 // --- APIKey ---
 
+// validateAPIKeyOwner enforces the "exactly one of UserID /
+// OrganizationID is set" invariant (yauth #91 / yauth-go #19).
+func validateAPIKeyOwner(in domain.NewAPIKey) error {
+	hasUser := in.UserID != nil && *in.UserID != ""
+	hasOrg := in.OrganizationID != nil && *in.OrganizationID != ""
+	if hasUser == hasOrg {
+		return yautherr.ErrInvalidRequest
+	}
+	return nil
+}
+
 func (r *Repo) CreateAPIKey(ctx context.Context, input domain.NewAPIKey) error {
+	if err := validateAPIKeyOwner(input); err != nil {
+		return err
+	}
 	m := apiKeyFromDomain(input)
 	return r.ctx(ctx).Create(&m).Error
 }
@@ -767,6 +781,19 @@ func (r *Repo) GetAPIKeyByIDAndUser(ctx context.Context, id, userID string) (*do
 	return &d, nil
 }
 
+func (r *Repo) GetAPIKeyByIDAndOrg(ctx context.Context, id, organizationID string) (*domain.APIKey, error) {
+	var m APIKey
+	err := r.ctx(ctx).Where("id = ? AND organization_id = ?", id, organizationID).First(&m).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, yautherr.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	d := m.toDomain()
+	return &d, nil
+}
+
 func (r *Repo) ListAPIKeysByUserID(ctx context.Context, userID string) ([]*domain.APIKey, error) {
 	var rows []APIKey
 	if err := r.ctx(ctx).Where("user_id = ?", userID).Order("created_at DESC").Find(&rows).Error; err != nil {
@@ -780,8 +807,37 @@ func (r *Repo) ListAPIKeysByUserID(ctx context.Context, userID string) ([]*domai
 	return out, nil
 }
 
+func (r *Repo) ListAPIKeysByOrgID(ctx context.Context, organizationID string) ([]*domain.APIKey, error) {
+	var rows []APIKey
+	if err := r.ctx(ctx).Where("organization_id = ?", organizationID).Order("created_at DESC").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]*domain.APIKey, len(rows))
+	for i := range rows {
+		d := rows[i].toDomain()
+		out[i] = &d
+	}
+	return out, nil
+}
+
 func (r *Repo) UpdateAPIKeyLastUsed(ctx context.Context, id string, at time.Time) error {
 	res := r.ctx(ctx).Model(&APIKey{}).Where("id = ?", id).Update("last_used_at", at.UTC())
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return yautherr.ErrNotFound
+	}
+	return nil
+}
+
+func (r *Repo) SetAPIKeyExpiry(ctx context.Context, id string, expiresAt *time.Time) error {
+	var val *time.Time
+	if expiresAt != nil {
+		v := expiresAt.UTC()
+		val = &v
+	}
+	res := r.ctx(ctx).Model(&APIKey{}).Where("id = ?", id).Update("expires_at", val)
 	if res.Error != nil {
 		return res.Error
 	}

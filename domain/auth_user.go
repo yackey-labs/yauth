@@ -8,6 +8,13 @@ const (
 	AuthMethodCookie = "cookie"
 	AuthMethodBearer = "bearer"
 	AuthMethodAPIKey = "api-key"
+	// AuthMethodServiceAccount tags a request authenticated via an
+	// org-scoped API key (yauth #91 / yauth-go #19). The credential
+	// format is identical to AuthMethodAPIKey but the resolved
+	// principal is a ServiceAccount; the distinct method string lets
+	// admin/permission gates reject org-key callers explicitly when
+	// allow_machine_callers is false.
+	AuthMethodServiceAccount = "service-account"
 )
 
 // OrgMembershipSummary is a compact, JSON-safe view of an org the
@@ -50,4 +57,17 @@ type AuthUser struct {
 	// or the organizations plugin isn't loaded. Bounded by membership
 	// cardinality (small in practice).
 	AllOrgs []OrgMembershipSummary
+
+	// Principal is the post-authentication identity discriminator
+	// (yauth #91 / yauth-go #19). For human-callers (cookie, bearer
+	// JWT, user-scoped API key) it carries Kind=User and UserID
+	// matches User.ID. For service-account callers (org-scoped API
+	// key) it carries Kind=ServiceAccount with OrgID/KeyID/CreatedBy
+	// populated and User.ID synthesised from CreatedBy so existing
+	// audit code that reads User.ID still receives a useful value.
+	//
+	// The zero Principal (Kind == "") is treated as a User principal
+	// for backwards compatibility with handlers that build AuthUser
+	// by hand without setting this field.
+	Principal Principal
 }

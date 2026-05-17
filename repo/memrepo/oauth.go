@@ -216,8 +216,32 @@ func (r *Repo) RevokeRefreshTokenFamily(ctx context.Context, familyID string) (i
 
 // --- APIKey ---
 
+// strPtrCopy duplicates a *string so callers cannot mutate the stored row.
+func strPtrCopy(p *string) *string {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
+}
+
+// validateAPIKeyOwner enforces the "exactly one of UserID /
+// OrganizationID is set" invariant (yauth #91). Returns
+// yautherr.ErrInvalidRequest when both are set or both are nil.
+func validateAPIKeyOwner(in domain.NewAPIKey) error {
+	hasUser := in.UserID != nil && *in.UserID != ""
+	hasOrg := in.OrganizationID != nil && *in.OrganizationID != ""
+	if hasUser == hasOrg {
+		return yautherr.ErrInvalidRequest
+	}
+	return nil
+}
+
 func (r *Repo) CreateAPIKey(ctx context.Context, input domain.NewAPIKey) error {
 	_ = ensureCtx(ctx)
+	if err := validateAPIKeyOwner(input); err != nil {
+		return err
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	created := input.CreatedAt
@@ -225,13 +249,16 @@ func (r *Repo) CreateAPIKey(ctx context.Context, input domain.NewAPIKey) error {
 		created = time.Now().UTC()
 	}
 	k := &domain.APIKey{
-		ID:        input.ID,
-		UserID:    input.UserID,
-		KeyPrefix: input.KeyPrefix,
-		KeyHash:   input.KeyHash,
-		Name:      input.Name,
-		ExpiresAt: input.ExpiresAt,
-		CreatedAt: created.UTC(),
+		ID:              input.ID,
+		UserID:          strPtrCopy(input.UserID),
+		OrganizationID:  strPtrCopy(input.OrganizationID),
+		KeyPrefix:       input.KeyPrefix,
+		KeyHash:         input.KeyHash,
+		Name:            input.Name,
+		Role:            strPtrCopy(input.Role),
+		ExpiresAt:       input.ExpiresAt,
+		CreatedAt:       created.UTC(),
+		CreatedByUserID: input.CreatedByUserID,
 	}
 	if len(input.Scopes) > 0 {
 		k.Scopes = append([]byte(nil), input.Scopes...)
@@ -265,7 +292,18 @@ func (r *Repo) GetAPIKeyByIDAndUser(ctx context.Context, id, userID string) (*do
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	k, ok := r.apiKeys[id]
-	if !ok || k.UserID != userID {
+	if !ok || k.UserID == nil || *k.UserID != userID {
+		return nil, yautherr.ErrNotFound
+	}
+	return cloneAPIKey(k), nil
+}
+
+func (r *Repo) GetAPIKeyByIDAndOrg(ctx context.Context, id, organizationID string) (*domain.APIKey, error) {
+	_ = ensureCtx(ctx)
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	k, ok := r.apiKeys[id]
+	if !ok || k.OrganizationID == nil || *k.OrganizationID != organizationID {
 		return nil, yautherr.ErrNotFound
 	}
 	return cloneAPIKey(k), nil
@@ -277,7 +315,27 @@ func (r *Repo) ListAPIKeysByUserID(ctx context.Context, userID string) ([]*domai
 	defer r.mu.RUnlock()
 	matches := make([]*domain.APIKey, 0)
 	for _, k := range r.apiKeys {
-		if k.UserID == userID {
+		if k.UserID != nil && *k.UserID == userID {
+			matches = append(matches, k)
+		}
+	}
+	sort.Slice(matches, func(i, j int) bool {
+		return matches[i].CreatedAt.After(matches[j].CreatedAt)
+	})
+	out := make([]*domain.APIKey, len(matches))
+	for i := range matches {
+		out[i] = cloneAPIKey(matches[i])
+	}
+	return out, nil
+}
+
+func (r *Repo) ListAPIKeysByOrgID(ctx context.Context, organizationID string) ([]*domain.APIKey, error) {
+	_ = ensureCtx(ctx)
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	matches := make([]*domain.APIKey, 0)
+	for _, k := range r.apiKeys {
+		if k.OrganizationID != nil && *k.OrganizationID == organizationID {
 			matches = append(matches, k)
 		}
 	}
@@ -301,6 +359,23 @@ func (r *Repo) UpdateAPIKeyLastUsed(ctx context.Context, id string, at time.Time
 	}
 	t := at.UTC()
 	k.LastUsedAt = &t
+	return nil
+}
+
+func (r *Repo) SetAPIKeyExpiry(ctx context.Context, id string, expiresAt *time.Time) error {
+	_ = ensureCtx(ctx)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	k, ok := r.apiKeys[id]
+	if !ok {
+		return yautherr.ErrNotFound
+	}
+	if expiresAt == nil {
+		k.ExpiresAt = nil
+		return nil
+	}
+	t := expiresAt.UTC()
+	k.ExpiresAt = &t
 	return nil
 }
 

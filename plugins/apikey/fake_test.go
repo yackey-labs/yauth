@@ -106,7 +106,17 @@ func (f *fakeRepo) GetAPIKeyByIDAndUser(_ context.Context, id, userID string) (*
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	k, ok := f.keys[id]
-	if !ok || k.UserID != userID {
+	if !ok || k.UserID == nil || *k.UserID != userID {
+		return nil, yautherr.ErrNotFound
+	}
+	return &k, nil
+}
+
+func (f *fakeRepo) GetAPIKeyByIDAndOrg(_ context.Context, id, organizationID string) (*domain.APIKey, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	k, ok := f.keys[id]
+	if !ok || k.OrganizationID == nil || *k.OrganizationID != organizationID {
 		return nil, yautherr.ErrNotFound
 	}
 	return &k, nil
@@ -117,12 +127,42 @@ func (f *fakeRepo) ListAPIKeysByUserID(_ context.Context, userID string) ([]*dom
 	defer f.mu.Unlock()
 	out := []*domain.APIKey{}
 	for _, k := range f.keys {
-		if k.UserID == userID {
+		if k.UserID != nil && *k.UserID == userID {
 			k := k
 			out = append(out, &k)
 		}
 	}
 	return out, nil
+}
+
+func (f *fakeRepo) ListAPIKeysByOrgID(_ context.Context, organizationID string) ([]*domain.APIKey, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := []*domain.APIKey{}
+	for _, k := range f.keys {
+		if k.OrganizationID != nil && *k.OrganizationID == organizationID {
+			k := k
+			out = append(out, &k)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeRepo) SetAPIKeyExpiry(_ context.Context, id string, expiresAt *time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	k, ok := f.keys[id]
+	if !ok {
+		return yautherr.ErrNotFound
+	}
+	if expiresAt == nil {
+		k.ExpiresAt = nil
+	} else {
+		t := expiresAt.UTC()
+		k.ExpiresAt = &t
+	}
+	f.keys[id] = k
+	return nil
 }
 
 func (f *fakeRepo) UpdateAPIKeyLastUsed(_ context.Context, id string, at time.Time) error {

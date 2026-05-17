@@ -1,6 +1,18 @@
 {
   "components": {
     "schemas": {
+      "AcceptInvitationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "token"
+        ],
+        "type": "object"
+      },
       "AdminAuditEntryJSON": {
         "additionalProperties": false,
         "properties": {
@@ -456,6 +468,56 @@
         ],
         "type": "object"
       },
+      "CreateInvitationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "email"
+        ],
+        "type": "object"
+      },
+      "CreateInvitationResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "invitation": {
+            "$ref": "#/components/schemas/InvitationJSON"
+          },
+          "token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "invitation",
+          "token"
+        ],
+        "type": "object"
+      },
+      "CreateOrgRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "slug"
+        ],
+        "type": "object"
+      },
       "EmailForgotPasswordRequest": {
         "additionalProperties": false,
         "properties": {
@@ -727,6 +789,38 @@
         ],
         "type": "object"
       },
+      "InvitationJSON": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "organization_id": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "organization_id",
+          "email",
+          "role",
+          "expires_at",
+          "created_at"
+        ],
+        "type": "object"
+      },
       "JwksDocument": {
         "additionalProperties": false,
         "properties": {
@@ -926,6 +1020,41 @@
         },
         "required": [
           "user"
+        ],
+        "type": "object"
+      },
+      "MembershipJSON": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "joined_at": {
+            "type": "string"
+          },
+          "organization_id": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "user_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "organization_id",
+          "user_id",
+          "role",
+          "status",
+          "created_at"
         ],
         "type": "object"
       },
@@ -1732,6 +1861,40 @@
         ],
         "type": "object"
       },
+      "OrganizationJSON": {
+        "additionalProperties": false,
+        "properties": {
+          "avatar_url": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "slug",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
       "PasskeyJSON": {
         "additionalProperties": false,
         "properties": {
@@ -1970,6 +2133,24 @@
           "plugins",
           "version"
         ],
+        "type": "object"
+      },
+      "UpdateOrgRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "avatar_url": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          }
+        },
         "type": "object"
       },
       "UserJSON": {
@@ -3481,6 +3662,89 @@
         "summary": "Email a single-use password-reset token",
         "tags": [
           "email-password"
+        ]
+      }
+    },
+    "/invitations/accept": {
+      "post": {
+        "operationId": "organizationsAcceptInvitation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcceptInvitationRequest"
+              }
+            }
+          },
+          "description": "Invitation token from the email.",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MembershipJSON"
+                }
+              }
+            },
+            "description": "Membership created."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Missing or malformed token."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Token invalid, already consumed, or expired."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Caller is already a member of the organization."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "summary": "Accept an invitation by token (idempotent — second call yields 404)",
+        "tags": [
+          "organizations"
         ]
       }
     },
@@ -5174,6 +5438,541 @@
         ]
       }
     },
+    "/organizations": {
+      "get": {
+        "operationId": "organizationsList",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/OrganizationJSON"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Caller's organizations."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "summary": "List organizations the caller is a member of",
+        "tags": [
+          "organizations"
+        ]
+      },
+      "post": {
+        "operationId": "organizationsCreate",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateOrgRequest"
+              }
+            }
+          },
+          "description": "Org name, slug, and optional display name.",
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationJSON"
+                }
+              }
+            },
+            "description": "Organization created."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Invalid name or slug."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Slug already in use."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "summary": "Create an organization; caller becomes owner+admin",
+        "tags": [
+          "organizations"
+        ]
+      }
+    },
+    "/organizations/{id}": {
+      "delete": {
+        "operationId": "organizationsDelete",
+        "parameters": [
+          {
+            "description": "Organization id (UUID).",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Organization deleted."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Caller is not an admin of this organization."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Organization not found."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "summary": "Delete an organization and cascade members + invitations (admin-gated)",
+        "tags": [
+          "organizations"
+        ]
+      },
+      "get": {
+        "operationId": "organizationsGet",
+        "parameters": [
+          {
+            "description": "Organization id (UUID).",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationJSON"
+                }
+              }
+            },
+            "description": "Organization."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Caller is not a member of this organization."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Organization not found."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "summary": "Fetch a single organization (membership-gated)",
+        "tags": [
+          "organizations"
+        ]
+      },
+      "patch": {
+        "operationId": "organizationsUpdate",
+        "parameters": [
+          {
+            "description": "Organization id (UUID).",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateOrgRequest"
+              }
+            }
+          },
+          "description": "Fields to update; omit fields to leave unchanged.",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationJSON"
+                }
+              }
+            },
+            "description": "Updated organization."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Invalid field value."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Caller is not an admin of this organization."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Organization not found."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Slug already in use."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "summary": "Update an organization (admin-gated)",
+        "tags": [
+          "organizations"
+        ]
+      }
+    },
+    "/organizations/{id}/invitations": {
+      "post": {
+        "operationId": "organizationsCreateInvitation",
+        "parameters": [
+          {
+            "description": "Organization id (UUID).",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateInvitationRequest"
+              }
+            }
+          },
+          "description": "Email + optional role (defaults to member).",
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateInvitationResponse"
+                }
+              }
+            },
+            "description": "Invitation + one-time plaintext token."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Invalid email or role."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Caller is not an admin of this organization."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Organization not found."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Active invitation already exists for that email."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "summary": "Create an invitation for an email (admin-gated)",
+        "tags": [
+          "organizations"
+        ]
+      }
+    },
+    "/organizations/{id}/members": {
+      "get": {
+        "operationId": "organizationsListMembers",
+        "parameters": [
+          {
+            "description": "Organization id (UUID).",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/MembershipJSON"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Members."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Caller is not a member of this organization."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Organization not found."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "summary": "List members of an organization (membership-gated)",
+        "tags": [
+          "organizations"
+        ]
+      }
+    },
     "/passkey/login/begin": {
       "post": {
         "operationId": "passkeyLoginBegin",
@@ -6447,6 +7246,10 @@
     {
       "description": "RFC 6749 / 7636 / 7009 / 7662 / 8628 authorization server.",
       "name": "oauth2-server"
+    },
+    {
+      "description": "Multi-tenancy primitive — org CRUD, membership, invitations, and RBAC.",
+      "name": "organizations"
     }
   ]
 }

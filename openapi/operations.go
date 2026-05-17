@@ -183,8 +183,8 @@ func addAPIKey(api *huma.OpenAPI) {
 	api.AddOperation(&huma.Operation{
 		Method: http.MethodGet, Path: "/api-keys",
 		Tags: []string{"api-key"}, OperationID: "apiKeyList",
-		Summary:    "List the caller's API keys (no secrets)",
-		Security:   secAny(),
+		Summary:  "List the caller's API keys (no secrets)",
+		Security: secAny(),
 		Parameters: []*huma.Param{
 			queryIntParam("page", "Page number (1-based)."),
 			queryIntParam("per_page", "Page size (default 50, max 200)."),

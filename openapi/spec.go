@@ -56,6 +56,7 @@ func Build() *huma.OpenAPI {
 			{Name: "asymmetric-jwt", Description: "RS256 / ES256 JWKS publication."},
 			{Name: "oidc", Description: "OpenID Connect discovery + UserInfo."},
 			{Name: "oauth2-server", Description: "RFC 6749 / 7636 / 7009 / 7662 / 8628 authorization server."},
+			{Name: "organizations", Description: "Multi-tenancy primitive — org CRUD, membership, invitations, and RBAC."},
 		},
 	}
 
@@ -73,6 +74,7 @@ func Build() *huma.OpenAPI {
 	addAsymJWT(api)
 	addOIDC(api)
 	addOAuth2Server(api)
+	addOrganizations(api)
 
 	return api
 }
@@ -197,6 +199,15 @@ func declareSchemas(r huma.Registry) {
 		reflect.TypeOf(oauth2DeviceAuthResponse{}),
 		reflect.TypeOf(oauth2DeviceVerifyRequest{}),
 		reflect.TypeOf(oauth2DeviceVerifyResponse{}),
+
+		reflect.TypeOf(organizationJSON{}),
+		reflect.TypeOf(membershipJSON{}),
+		reflect.TypeOf(invitationJSON{}),
+		reflect.TypeOf(createOrgRequest{}),
+		reflect.TypeOf(updateOrgRequest{}),
+		reflect.TypeOf(createInvitationRequest{}),
+		reflect.TypeOf(createInvitationResponse{}),
+		reflect.TypeOf(acceptInvitationRequest{}),
 	} {
 		_ = r.Schema(t, true, t.Name())
 	}

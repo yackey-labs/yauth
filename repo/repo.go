@@ -308,6 +308,12 @@ type OrganizationRepository interface {
 //   - CreateMembership MUST reject duplicate (organization_id, user_id)
 //     pairs with yautherr.ErrConflict.
 //   - Deleting a non-existent membership returns nil (idempotent).
+//   - Owner-protection (yauth #88): UpdateMembership and
+//     DeleteMembership MUST refuse to demote or remove a membership
+//     whose role == "owner" when it is the last owner of the org,
+//     returning yautherr.ErrOwnerProtected. The transfer-ownership
+//     handler is responsible for promoting the new owner before the
+//     destructive op runs against the prior owner.
 type MembershipRepository interface {
 	GetMembershipByID(ctx context.Context, id string) (*domain.Membership, error)
 	// GetMembershipByOrgUser returns the join row tying user to org,

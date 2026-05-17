@@ -260,6 +260,23 @@ func (r *Repo) GetMembershipByOrgUser(ctx context.Context, orgID, userID string)
 	return cloneMembership(r.memberships[id]), nil
 }
 
+// memrepoOwnerRole is the string the RBAC plugin (auth/rbac.go) uses
+// for the owner role. Duplicated here to keep memrepo standalone — the
+// auth package depends on memrepo for tests, not the other way around.
+const memrepoOwnerRole = "owner"
+
+// countOwnersInOrg returns how many active memberships in orgID hold
+// the owner role. Caller MUST hold r.mu (read or write lock).
+func (r *Repo) countOwnersInOrg(orgID string) int {
+	n := 0
+	for _, m := range r.memberships {
+		if m.OrganizationID == orgID && m.Role == memrepoOwnerRole {
+			n++
+		}
+	}
+	return n
+}
+
 func (r *Repo) UpdateMembership(ctx context.Context, id string, changes domain.UpdateMembership) (domain.Membership, error) {
 	_ = ensureCtx(ctx)
 	r.mu.Lock()
@@ -267,6 +284,15 @@ func (r *Repo) UpdateMembership(ctx context.Context, id string, changes domain.U
 	m, ok := r.memberships[id]
 	if !ok {
 		return domain.Membership{}, yautherr.ErrNotFound
+	}
+	// Owner-protection: refuse to demote the last owner. The
+	// transfer-ownership handler atomically promotes the new owner
+	// before this path runs, so a legitimate transfer never sees
+	// "count == 1".
+	if changes.Role != nil && m.Role == memrepoOwnerRole && *changes.Role != memrepoOwnerRole {
+		if r.countOwnersInOrg(m.OrganizationID) <= 1 {
+			return domain.Membership{}, yautherr.ErrOwnerProtected
+		}
 	}
 	if changes.Role != nil {
 		m.Role = *changes.Role
@@ -292,6 +318,11 @@ func (r *Repo) DeleteMembership(ctx context.Context, id string) error {
 	m, ok := r.memberships[id]
 	if !ok {
 		return nil
+	}
+	// Owner-protection: refuse to remove the last owner. The
+	// transfer-ownership handler covers the legitimate path.
+	if m.Role == memrepoOwnerRole && r.countOwnersInOrg(m.OrganizationID) <= 1 {
+		return yautherr.ErrOwnerProtected
 	}
 	delete(r.membershipOrgUserIdx, membershipKey(m.OrganizationID, m.UserID))
 	delete(r.memberships, id)

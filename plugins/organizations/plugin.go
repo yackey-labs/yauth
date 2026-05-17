@@ -117,4 +117,12 @@ func (p *orgsPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux, prefix s
 	mux.Handle("POST "+prefix+"/organizations/{id}/members/{user_id}/role", mw.RequireAuth(http.HandlerFunc(p.handleChangeMemberRole(host))))
 	mux.Handle("POST "+prefix+"/organizations/{id}/transfer-ownership", mw.RequireAuth(http.HandlerFunc(p.handleTransferOwnership(host))))
 	mux.Handle("GET "+prefix+"/organizations/{id}/permissions", mw.RequireAuth(http.HandlerFunc(p.handleListPermissions(host))))
+
+	// Active-org switcher routes (yauth #89 / Go #15). Mounted only
+	// when the plugin is registered — single-user / anonymous
+	// deployments that never register `organizations.New(...)` get
+	// none of these endpoints and AuthUser.ActiveOrgID stays nil.
+	mux.Handle("GET "+prefix+"/sessions/active-org", mw.RequireAuth(http.HandlerFunc(p.handleGetActiveOrg(host))))
+	mux.Handle("POST "+prefix+"/sessions/active-org", mw.RequireAuth(http.HandlerFunc(p.handleSetActiveOrg(host))))
+	mux.Handle("DELETE "+prefix+"/sessions/active-org", mw.RequireAuth(http.HandlerFunc(p.handleClearActiveOrg(host))))
 }

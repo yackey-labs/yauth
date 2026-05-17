@@ -236,6 +236,34 @@ func (p *emailPasswordPlugin) handleRegister(host plugin.PluginHost) http.Handle
 			log.Printf("yauth: issue verification email for %s: %v", user.Email, err)
 		}
 
+		// JIT-membership auto-join (yauth #90 port). The hook is
+		// idempotent and short-circuits to a no-op when no verified
+		// OrganizationDomain matches the user's email domain. Errors
+		// are logged but never bubble up — a transient repo failure
+		// here shouldn't block the registration.
+		if results, err := auth.AutoJoinFromEmail(ctx, repo, user.ID, user.Email, user.EmailVerified, now); err != nil {
+			log.Printf("yauth: auto-join from email for %s: %v", user.Email, err)
+		} else {
+			for _, res := range results {
+				if res.AlreadyMember {
+					continue
+				}
+				uid := user.ID
+				orgID := res.OrganizationID
+				role := res.Role
+				_, _ = host.Emit(ctx, events.AuthEvent{
+					Type:   "membership.auto_joined",
+					UserID: &uid,
+					Email:  &user.Email,
+					Metadata: map[string]any{
+						"organization_id": orgID,
+						"role":            role,
+						"membership_id":   res.MembershipID,
+					},
+				})
+			}
+		}
+
 		raw, _, err := auth.IssueSession(ctx, repo, user.ID, requestIP(r), requestUA(r), host.SessionTTL())
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to issue session")
@@ -784,6 +812,38 @@ func (p *emailPasswordPlugin) handleVerifyEmail(host plugin.PluginHost) http.Han
 			UserID:    &uid,
 			IPAddress: requestIP(r),
 		})
+
+		// JIT-membership auto-join (yauth #90). The verify-email
+		// hook is the second chance for any verified
+		// OrganizationDomain row whose RequireEmailVerified gate
+		// caused signup-time auto-join to skip the user. Look the
+		// user up to recover the email; on any error we silently
+		// skip the hook — the verification succeeded and the user
+		// shouldn't be penalized by a transient repo failure.
+		if u, lookupErr := repoRef.GetUserByID(ctx, ev.UserID); lookupErr == nil && u != nil {
+			if results, err := auth.AutoJoinFromEmail(ctx, repoRef, u.ID, u.Email, true, now); err != nil {
+				log.Printf("yauth: auto-join after email-verify for %s: %v", u.Email, err)
+			} else {
+				for _, res := range results {
+					if res.AlreadyMember {
+						continue
+					}
+					uidCopy := u.ID
+					orgID := res.OrganizationID
+					role := res.Role
+					_, _ = host.Emit(ctx, events.AuthEvent{
+						Type:   "membership.auto_joined",
+						UserID: &uidCopy,
+						Email:  &u.Email,
+						Metadata: map[string]any{
+							"organization_id": orgID,
+							"role":            role,
+							"membership_id":   res.MembershipID,
+						},
+					})
+				}
+			}
+		}
 
 		writeJSON(w, http.StatusOK, verifyEmailResponse{Message: "Email verified."})
 	}

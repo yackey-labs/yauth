@@ -70,6 +70,7 @@ type emailPasswordRegisterRequest struct {
 	Password    string  `json:"password"`
 	DisplayName *string `json:"display_name,omitempty"`
 }
+
 // emailPasswordRegisterResponse returns either the user (when no email
 // verification is required) or a {message} prompt directing the caller
 // to check their inbox. The User pointer is omitted when only the
@@ -204,6 +205,7 @@ type apiKeyJSON struct {
 	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
 	CreatedAt  time.Time  `json:"created_at"`
 }
+
 // apiKeyListResponse wraps the GET /api-keys list with pagination
 // metadata. Wrapping (instead of a bare array) preserves forward
 // compatibility for adding fields later without breaking clients.
@@ -240,6 +242,7 @@ type magicLinkSendResponse struct {
 type magicLinkVerifyRequest struct {
 	Token string `json:"token"`
 }
+
 // magicLinkVerifyResponse wraps the verified user under `user`. The
 // inner shape mirrors the other auth endpoints' user representation.
 type magicLinkVerifyResponse struct {
@@ -303,6 +306,7 @@ type adminBanRequest struct {
 	Reason string     `json:"reason"`
 	Until  *time.Time `json:"until,omitempty"`
 }
+
 // adminImpersonateResponse wraps the impersonated user under `user`
 // alongside the impersonator's own identity, so audit-aware clients can
 // surface "you are X impersonating Y" UI without a separate fetch.
@@ -371,6 +375,7 @@ type mfaVerifyRequest struct {
 	PendingSessionID string `json:"pending_session_id"`
 	Code             string `json:"code"`
 }
+
 // mfaVerifyResponse wraps the verified user under `user` for forward
 // compatibility (future MFA metadata can be added at the top level).
 type mfaVerifyResponse struct {
@@ -411,6 +416,7 @@ type passkeyLoginFinishRequest struct {
 	ChallengeID string         `json:"challenge_id"`
 	Credential  map[string]any `json:"credential"`
 }
+
 // passkeyLoginFinishResponse wraps the authenticated user under `user`.
 type passkeyLoginFinishResponse struct {
 	User userJSON `json:"user"`
@@ -444,6 +450,7 @@ type oauthAccountJSON struct {
 	CreatedAt      time.Time  `json:"created_at"`
 	ExpiresAt      *time.Time `json:"expires_at,omitempty"`
 }
+
 // oauthCallbackBody is the JSON body for POST /oauth/{provider}/callback
 // (Rust parity).
 type oauthCallbackBody struct {
@@ -657,4 +664,62 @@ type oauth2DeviceVerifyRequest struct {
 }
 type oauth2DeviceVerifyResponse struct {
 	Status string `json:"status"`
+}
+
+// --- organizations + RBAC (yauth #87 / #88 ports) ---
+
+type organizationJSON struct {
+	ID          string  `json:"id"`
+	Name        string  `json:"name"`
+	Slug        string  `json:"slug"`
+	DisplayName *string `json:"display_name,omitempty"`
+	AvatarURL   *string `json:"avatar_url,omitempty"`
+	CreatedAt   string  `json:"created_at"`
+	UpdatedAt   string  `json:"updated_at"`
+}
+
+type membershipJSON struct {
+	ID             string  `json:"id"`
+	OrganizationID string  `json:"organization_id"`
+	UserID         string  `json:"user_id"`
+	Role           string  `json:"role"`
+	Status         string  `json:"status"`
+	JoinedAt       *string `json:"joined_at,omitempty"`
+	CreatedAt      string  `json:"created_at"`
+}
+
+type invitationJSON struct {
+	ID             string `json:"id"`
+	OrganizationID string `json:"organization_id"`
+	Email          string `json:"email"`
+	Role           string `json:"role"`
+	ExpiresAt      string `json:"expires_at"`
+	CreatedAt      string `json:"created_at"`
+}
+
+type createOrgRequest struct {
+	Name        string  `json:"name"`
+	Slug        string  `json:"slug"`
+	DisplayName *string `json:"display_name,omitempty"`
+}
+
+type updateOrgRequest struct {
+	Name        *string `json:"name,omitempty"`
+	Slug        *string `json:"slug,omitempty"`
+	DisplayName *string `json:"display_name,omitempty"`
+	AvatarURL   *string `json:"avatar_url,omitempty"`
+}
+
+type createInvitationRequest struct {
+	Email string  `json:"email"`
+	Role  *string `json:"role,omitempty"`
+}
+
+type createInvitationResponse struct {
+	Invitation invitationJSON `json:"invitation"`
+	Token      string         `json:"token"`
+}
+
+type acceptInvitationRequest struct {
+	Token string `json:"token"`
 }

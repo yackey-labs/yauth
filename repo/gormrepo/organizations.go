@@ -348,6 +348,11 @@ func (r *Repo) GetMembershipByOrgUser(ctx context.Context, orgID, userID string)
 	return &d, nil
 }
 
+// gormrepoOwnerRole is the string the RBAC plugin uses for the owner
+// role. Duplicated here to keep gormrepo standalone from the auth
+// package.
+const gormrepoOwnerRole = "owner"
+
 func (r *Repo) UpdateMembership(ctx context.Context, id string, changes domain.UpdateMembership) (domain.Membership, error) {
 	var m Membership
 	err := r.ctx(ctx).Transaction(func(tx *gorm.DB) error {
@@ -356,6 +361,21 @@ func (r *Repo) UpdateMembership(ctx context.Context, id string, changes domain.U
 				return yautherr.ErrNotFound
 			}
 			return err
+		}
+		// Owner-protection: refuse to demote the last owner. The
+		// transfer-ownership handler atomically promotes the new
+		// owner before running this update, so a legitimate
+		// transfer never sees count == 1.
+		if changes.Role != nil && m.Role == gormrepoOwnerRole && *changes.Role != gormrepoOwnerRole {
+			var count int64
+			if err := tx.Model(&Membership{}).
+				Where("organization_id = ? AND role = ?", m.OrganizationID, gormrepoOwnerRole).
+				Count(&count).Error; err != nil {
+				return err
+			}
+			if count <= 1 {
+				return yautherr.ErrOwnerProtected
+			}
 		}
 		updates := map[string]any{}
 		if changes.Role != nil {
@@ -387,7 +407,27 @@ func (r *Repo) UpdateMembership(ctx context.Context, id string, changes domain.U
 }
 
 func (r *Repo) DeleteMembership(ctx context.Context, id string) error {
-	return r.ctx(ctx).Where("id = ?", id).Delete(&Membership{}).Error
+	return r.ctx(ctx).Transaction(func(tx *gorm.DB) error {
+		var m Membership
+		if err := tx.Where("id = ?", id).First(&m).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil
+			}
+			return err
+		}
+		if m.Role == gormrepoOwnerRole {
+			var count int64
+			if err := tx.Model(&Membership{}).
+				Where("organization_id = ? AND role = ?", m.OrganizationID, gormrepoOwnerRole).
+				Count(&count).Error; err != nil {
+				return err
+			}
+			if count <= 1 {
+				return yautherr.ErrOwnerProtected
+			}
+		}
+		return tx.Where("id = ?", id).Delete(&Membership{}).Error
+	})
 }
 
 func (r *Repo) ListMembershipsByOrg(ctx context.Context, orgID string) ([]*domain.Membership, error) {

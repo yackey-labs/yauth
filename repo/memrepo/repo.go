@@ -145,6 +145,10 @@ type Repo struct {
 	// as a unique-violation in gormrepo.
 	orgDomains       map[string]*domain.OrganizationDomain
 	orgDomainNameIdx map[string]string
+
+	// OrganizationPolicies keyed by organization_id (one row per org
+	// — there is no separate primary id). yauth #92 / yauth-go #21.
+	orgPolicies map[string]*domain.OrganizationPolicy
 }
 
 // rateLimitState is a fixed-window counter row.
@@ -203,6 +207,7 @@ func New() *Repo {
 		invitationTokenIdx:    make(map[string]string),
 		orgDomains:            make(map[string]*domain.OrganizationDomain),
 		orgDomainNameIdx:      make(map[string]string),
+		orgPolicies:           make(map[string]*domain.OrganizationPolicy),
 	}
 }
 

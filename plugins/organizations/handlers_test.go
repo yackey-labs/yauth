@@ -40,6 +40,7 @@ func (h *fakeHost) CookieDomain() string                       { return "" }
 func (h *fakeHost) CookieSecure() bool                         { return false }
 func (h *fakeHost) CookiePath() string                         { return "/" }
 func (h *fakeHost) CookieSameSite() http.SameSite              { return http.SameSiteLaxMode }
+func (h *fakeHost) SessionBinding() (bool, bool)               { return false, false }
 func (h *fakeHost) BaseURL() string                            { return "" }
 func (h *fakeHost) AllowSignups() bool                         { return true }
 func (h *fakeHost) AutoAdminFirstUser() bool                   { return false }

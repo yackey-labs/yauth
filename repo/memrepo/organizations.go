@@ -155,6 +155,8 @@ func (r *Repo) DeleteOrganization(ctx context.Context, id string) error {
 			delete(r.apiKeys, kID)
 		}
 	}
+	// Cascade per-org auth policy (yauth #92 / yauth-go #21).
+	delete(r.orgPolicies, id)
 	return nil
 }
 

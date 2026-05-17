@@ -169,6 +169,20 @@ func (r *Repo) DeleteExpiredSessions(ctx context.Context, now time.Time) (int64,
 	return res.RowsAffected, res.Error
 }
 
+// SetSessionActiveOrg writes the session's active_org_id column. nil
+// clears it. yauth Rust #89 / Go #15.
+func (r *Repo) SetSessionActiveOrg(ctx context.Context, sessionID string, activeOrgID *string) error {
+	res := r.ctx(ctx).Model(&Session{}).Where("id = ?", sessionID).
+		Update("active_org_id", activeOrgID)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return yautherr.ErrNotFound
+	}
+	return nil
+}
+
 // --- Password ---
 
 func (r *Repo) UpsertPassword(ctx context.Context, input domain.NewPassword) error {

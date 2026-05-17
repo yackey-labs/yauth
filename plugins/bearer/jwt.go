@@ -8,16 +8,34 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// accessClaims is the JWT body for an issued access token.
+// accessClaims is the JWT body for an issued access token. yauth #89
+// adds the optional "org" / "role" / "orgs" claims used by the
+// active-org subsystem. All three are omitempty so old clients that
+// ignore them keep parsing fine, and tokens issued before the
+// organizations plugin loads stay backward-compatible.
 type accessClaims struct {
 	jwt.RegisteredClaims
+	Org  string   `json:"org,omitempty"`
+	Role string   `json:"role,omitempty"`
+	Orgs []string `json:"orgs,omitempty"`
+}
+
+// activeOrgClaims is the trio of additive claims yauth #89 layers on
+// top of the standard registered set. Pulled into its own struct so
+// callers (mintTokens) can build a value without touching the jwt
+// library directly. A zero value emits no claims.
+type activeOrgClaims struct {
+	Org  string
+	Role string
+	Orgs []string
 }
 
 // signAccessToken issues an HS256 JWT for userID with the given TTL.
 // The "sub" claim carries userID; "iss"/"aud" are taken from cfg.
 // "jti" is a fresh UUID so revocation lists can target individual
-// tokens later.
-func signAccessToken(secret []byte, userID, jti string, cfg Config, now time.Time) (string, time.Time, error) {
+// tokens later. yauth #89 active-org claims are encoded when active
+// is non-zero.
+func signAccessToken(secret []byte, userID, jti string, cfg Config, now time.Time, active activeOrgClaims) (string, time.Time, error) {
 	exp := now.Add(cfg.AccessTTL)
 	c := accessClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -28,6 +46,9 @@ func signAccessToken(secret []byte, userID, jti string, cfg Config, now time.Tim
 			NotBefore: jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(exp),
 		},
+		Org:  active.Org,
+		Role: active.Role,
+		Orgs: active.Orgs,
 	}
 	if cfg.Audience != "" {
 		c.Audience = jwt.ClaimStrings{cfg.Audience}
@@ -39,9 +60,21 @@ func signAccessToken(secret []byte, userID, jti string, cfg Config, now time.Tim
 	return tok, exp, nil
 }
 
+// parsedToken carries the verified claim set returned by
+// verifyAccessToken: the user id plus the yauth #89 active-org claims
+// so the resolver can hydrate AuthUser without an extra repo lookup
+// on the hot path.
+type parsedToken struct {
+	UserID string
+	Org    string
+	Role   string
+	Orgs   []string
+}
+
 // verifyAccessToken parses and validates a Bearer JWT against secret and
-// cfg. Returns the user ID from "sub" on success.
-func verifyAccessToken(secret []byte, raw string, cfg Config) (userID string, err error) {
+// cfg. Returns the user ID from "sub" plus the yauth #89 active-org
+// claims (empty when not present in the token).
+func verifyAccessToken(secret []byte, raw string, cfg Config) (parsedToken, error) {
 	opts := []jwt.ParserOption{
 		jwt.WithValidMethods([]string{"HS256"}),
 		jwt.WithIssuer(cfg.Issuer),
@@ -52,18 +85,23 @@ func verifyAccessToken(secret []byte, raw string, cfg Config) (userID string, er
 	}
 	parser := jwt.NewParser(opts...)
 
-	var claims jwt.RegisteredClaims
+	var claims accessClaims
 	tok, err := parser.ParseWithClaims(raw, &claims, func(t *jwt.Token) (interface{}, error) {
 		return secret, nil
 	})
 	if err != nil {
-		return "", err
+		return parsedToken{}, err
 	}
 	if !tok.Valid {
-		return "", errors.New("bearer: token not valid")
+		return parsedToken{}, errors.New("bearer: token not valid")
 	}
 	if claims.Subject == "" {
-		return "", errors.New("bearer: missing sub claim")
+		return parsedToken{}, errors.New("bearer: missing sub claim")
 	}
-	return claims.Subject, nil
+	return parsedToken{
+		UserID: claims.Subject,
+		Org:    claims.Org,
+		Role:   claims.Role,
+		Orgs:   claims.Orgs,
+	}, nil
 }

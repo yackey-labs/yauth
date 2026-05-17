@@ -247,11 +247,15 @@ func (p *bearerPlugin) handleRevoke(host plugin.PluginHost) http.HandlerFunc {
 
 // mintTokens issues an access JWT and a fresh refresh token under
 // familyID, persists the refresh-token row, and returns the response
-// body.
+// body. yauth #89: the JWT carries the user's default active org +
+// role + memberships when the host's repo can satisfy the
+// MembershipsLookup interface (i.e. the organizations plugin is in
+// use). Single-user / no-orgs deployments emit a bare JWT.
 func (p *bearerPlugin) mintTokens(ctx context.Context, host plugin.PluginHost, userID, familyID string) (tokenResponse, error) {
 	now := time.Now().UTC()
 
-	access, _, err := signAccessToken(p.cfg.JWTSecret, userID, uuid.NewString(), p.cfg, now)
+	active := computeActiveOrgClaims(ctx, host, userID)
+	access, _, err := signAccessToken(p.cfg.JWTSecret, userID, uuid.NewString(), p.cfg, now, active)
 	if err != nil {
 		return tokenResponse{}, err
 	}

@@ -59,33 +59,38 @@ type Session struct {
 	TokenHash string    `gorm:"column:token_hash;not null;uniqueIndex"`
 	IPAddress *string   `gorm:"column:ip_address"`
 	UserAgent *string   `gorm:"column:user_agent"`
-	ExpiresAt time.Time `gorm:"column:expires_at;not null"`
-	CreatedAt time.Time `gorm:"column:created_at;not null"`
+	// ActiveOrgID is the org this session is currently operating under.
+	// NULL = no active org. yauth Rust #89 / Go #15.
+	ActiveOrgID *string   `gorm:"column:active_org_id;index"`
+	ExpiresAt   time.Time `gorm:"column:expires_at;not null"`
+	CreatedAt   time.Time `gorm:"column:created_at;not null"`
 }
 
 func (Session) TableName() string { return "yauth_sessions" }
 
 func (m *Session) toDomain() domain.Session {
 	return domain.Session{
-		ID:        m.ID,
-		UserID:    m.UserID,
-		TokenHash: m.TokenHash,
-		IPAddress: m.IPAddress,
-		UserAgent: m.UserAgent,
-		ExpiresAt: m.ExpiresAt.UTC(),
-		CreatedAt: m.CreatedAt.UTC(),
+		ID:          m.ID,
+		UserID:      m.UserID,
+		TokenHash:   m.TokenHash,
+		IPAddress:   m.IPAddress,
+		UserAgent:   m.UserAgent,
+		ActiveOrgID: m.ActiveOrgID,
+		ExpiresAt:   m.ExpiresAt.UTC(),
+		CreatedAt:   m.CreatedAt.UTC(),
 	}
 }
 
 func sessionFromDomain(in domain.NewSession) Session {
 	return Session{
-		ID:        in.ID,
-		UserID:    in.UserID,
-		TokenHash: in.TokenHash,
-		IPAddress: in.IPAddress,
-		UserAgent: in.UserAgent,
-		ExpiresAt: in.ExpiresAt.UTC(),
-		CreatedAt: in.CreatedAt.UTC(),
+		ID:          in.ID,
+		UserID:      in.UserID,
+		TokenHash:   in.TokenHash,
+		IPAddress:   in.IPAddress,
+		UserAgent:   in.UserAgent,
+		ActiveOrgID: in.ActiveOrgID,
+		ExpiresAt:   in.ExpiresAt.UTC(),
+		CreatedAt:   in.CreatedAt.UTC(),
 	}
 }
 

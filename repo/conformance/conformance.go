@@ -338,6 +338,46 @@ var sessionCases = []testCase{
 			t.Fatalf("expected 2 for u1; got total=%d list=%d", total, len(got))
 		}
 	}},
+	{"set_session_active_org_round_trip", func(t *testing.T, r repo.Repository) {
+		mustCreateUser(t, r, "u1", "alice@example.com")
+		now := nowUTC()
+		if err := r.CreateSession(ctx(), domain.NewSession{
+			ID: "s1", UserID: "u1", TokenHash: "h1",
+			ExpiresAt: now.Add(time.Hour), CreatedAt: now,
+		}); err != nil {
+			t.Fatalf("CreateSession: %v", err)
+		}
+		got, err := r.GetSessionByTokenHash(ctx(), "h1")
+		if err != nil || got == nil {
+			t.Fatalf("setup get: %+v err=%v", got, err)
+		}
+		if got.ActiveOrgID != nil {
+			t.Fatalf("fresh session ActiveOrgID should be nil; got %v", *got.ActiveOrgID)
+		}
+		org := "org-1"
+		if err := r.SetSessionActiveOrg(ctx(), "s1", &org); err != nil {
+			t.Fatalf("SetSessionActiveOrg: %v", err)
+		}
+		got, err = r.GetSessionByTokenHash(ctx(), "h1")
+		if err != nil || got == nil || got.ActiveOrgID == nil || *got.ActiveOrgID != "org-1" {
+			t.Fatalf("after set, expected ActiveOrgID=org-1; got %+v err=%v", got, err)
+		}
+		// Clear by passing nil.
+		if err := r.SetSessionActiveOrg(ctx(), "s1", nil); err != nil {
+			t.Fatalf("SetSessionActiveOrg(nil): %v", err)
+		}
+		got, _ = r.GetSessionByTokenHash(ctx(), "h1")
+		if got == nil || got.ActiveOrgID != nil {
+			t.Fatalf("after clear, expected ActiveOrgID=nil; got %+v", got)
+		}
+	}},
+	{"set_session_active_org_not_found", func(t *testing.T, r repo.Repository) {
+		org := "org-1"
+		err := r.SetSessionActiveOrg(ctx(), "nope", &org)
+		if !errors.Is(err, yautherr.ErrNotFound) {
+			t.Fatalf("expected ErrNotFound; got %v", err)
+		}
+	}},
 }
 
 // ----- passwords -----

@@ -26,9 +26,6 @@ type ssoConnectionJSON struct {
 	UpdatedAt              time.Time `json:"updated_at"`
 }
 
-// Rust returns a flat list, not a wrapped object.
-type ssoConnectionListResponse = []ssoConnectionJSON
-
 // createSsoConnectionRequest mirrors yauth (Rust) CreateSsoConnectionRequest.
 // Supply exactly one of `oidc` or `saml` depending on `kind`.
 type createSsoConnectionRequest struct {

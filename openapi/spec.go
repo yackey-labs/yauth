@@ -76,6 +76,7 @@ func Build() *huma.OpenAPI {
 	addOAuth2Server(api)
 	addOrganizations(api)
 	addActiveOrg(api)
+	addDomains(api)
 
 	return api
 }
@@ -218,6 +219,13 @@ func declareSchemas(r huma.Registry) {
 		reflect.TypeOf(activeOrgEntry{}),
 		reflect.TypeOf(activeOrgResponse{}),
 		reflect.TypeOf(orgMembershipJSON{}),
+
+		// yauth #90 — verified domains + JIT membership
+		reflect.TypeOf(domainResponse{}),
+		reflect.TypeOf(createDomainRequest{}),
+		reflect.TypeOf(createDomainResponse{}),
+		reflect.TypeOf(updateDomainRequest{}),
+		reflect.TypeOf(verifyDomainResponse{}),
 	} {
 		_ = r.Schema(t, true, t.Name())
 	}

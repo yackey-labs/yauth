@@ -95,6 +95,17 @@ func (b *YAuthBuilder) WithJWTSecret(secret []byte) *YAuthBuilder {
 // middleware, asks each plugin to register its routes onto an internal
 // ServeMux, and returns the assembled object.
 func (b *YAuthBuilder) Build() (*YAuth, error) {
+	// yauth #89 / Go #15: enable active-org hydration on the
+	// middleware iff the organizations plugin is registered. Without
+	// the plugin the AuthUser stays in legacy single-user shape with
+	// ActiveOrgID=nil.
+	enableOrgHydration := false
+	for _, p := range b.plugins {
+		if p.Name() == "organizations" {
+			enableOrgHydration = true
+			break
+		}
+	}
 	mw := middleware.New(b.repo, middleware.Config{
 		CookieName:               b.cfg.CookieName,
 		BindIP:                   b.cfg.SessionBinding.BindIP,
@@ -102,6 +113,7 @@ func (b *YAuthBuilder) Build() (*YAuth, error) {
 		IPMismatchAction:         b.cfg.SessionBinding.IPMismatchAction,
 		UAMismatchAction:         b.cfg.SessionBinding.UAMismatchAction,
 		AllowAdminMachineCallers: b.cfg.AllowAdminMachineCallers,
+		EnableOrgHydration:       enableOrgHydration,
 	})
 	mux := http.NewServeMux()
 

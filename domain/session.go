@@ -9,19 +9,25 @@ type Session struct {
 	TokenHash string
 	IPAddress *string
 	UserAgent *string
-	ExpiresAt time.Time
-	CreatedAt time.Time
+	// ActiveOrgID is the organization the session is currently
+	// operating under. nil means "no active org" — either the user
+	// has no memberships, or the deployment isn't using the
+	// organizations plugin. yauth Rust issue #89 / Go issue #15.
+	ActiveOrgID *string
+	ExpiresAt   time.Time
+	CreatedAt   time.Time
 }
 
 // NewSession is the input for creating a session.
 type NewSession struct {
-	ID        string
-	UserID    string
-	TokenHash string
-	IPAddress *string
-	UserAgent *string
-	ExpiresAt time.Time
-	CreatedAt time.Time
+	ID          string
+	UserID      string
+	TokenHash   string
+	IPAddress   *string
+	UserAgent   *string
+	ActiveOrgID *string
+	ExpiresAt   time.Time
+	CreatedAt   time.Time
 }
 
 // ListSessionsFilters is the filter set for SessionRepository.ListSessions.

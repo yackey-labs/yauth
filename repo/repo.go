@@ -37,6 +37,11 @@ type SessionRepository interface {
 	DeleteOtherUserSessions(ctx context.Context, userID, keepTokenHash string) (int64, error)
 	DeleteExpiredSessions(ctx context.Context, now time.Time) (int64, error)
 	ListSessions(ctx context.Context, filters domain.ListSessionsFilters) ([]*domain.Session, int64, error)
+
+	// SetSessionActiveOrg updates the session's active_org_id column
+	// (nil clears it). Returns yautherr.ErrNotFound when the session
+	// row does not exist. yauth Rust #89 / Go #15.
+	SetSessionActiveOrg(ctx context.Context, sessionID string, activeOrgID *string) error
 }
 
 // PasswordRepository covers password hash storage.

@@ -196,6 +196,32 @@ func (r *Repo) DeleteUserSessions(ctx context.Context, userID string) (int64, er
 	return count, nil
 }
 
+// SetSessionActiveOrg writes through to the inner repo and invalidates
+// the cached session payload so the next read returns the fresh row.
+// yauth Rust #89 / Go #15.
+func (r *Repo) SetSessionActiveOrg(ctx context.Context, sessionID string, activeOrgID *string) error {
+	ctx = ctxOrBackground(ctx)
+
+	// Look up the inner row first so we can invalidate by tokenHash.
+	// Best-effort — if the row isn't there the inner call returns the
+	// canonical ErrNotFound.
+	var tokenHash string
+	if s, err := r.Repository.GetSessionByID(ctx, sessionID); err == nil && s != nil {
+		tokenHash = s.TokenHash
+	}
+
+	if err := r.Repository.SetSessionActiveOrg(ctx, sessionID, activeOrgID); err != nil {
+		return err
+	}
+
+	if tokenHash != "" {
+		if err := r.client.Del(ctx, r.sessionKey(tokenHash)).Err(); err != nil {
+			r.warn("set session active org: cache invalidate: %v", err)
+		}
+	}
+	return nil
+}
+
 // DeleteOtherUserSessions invalidates everything in the user's cached set
 // except keepTokenHash.
 func (r *Repo) DeleteOtherUserSessions(ctx context.Context, userID, keepTokenHash string) (int64, error) {

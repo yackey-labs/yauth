@@ -42,12 +42,12 @@ func TestToken_IssuesAccessAndRefresh(t *testing.T) {
 	}
 
 	// Access token should verify.
-	uid, err := verifyAccessToken(h.cfg.JWTSecret, tr.AccessToken, h.cfg)
+	parsed, err := verifyAccessToken(h.cfg.JWTSecret, tr.AccessToken, h.cfg)
 	if err != nil {
 		t.Fatalf("verify access: %v", err)
 	}
-	if uid != user.ID {
-		t.Fatalf("sub mismatch: got %q want %q", uid, user.ID)
+	if parsed.UserID != user.ID {
+		t.Fatalf("sub mismatch: got %q want %q", parsed.UserID, user.ID)
 	}
 
 	// Refresh row persisted.

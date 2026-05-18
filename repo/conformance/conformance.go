@@ -284,8 +284,8 @@ var sessionCases = []testCase{
 		now := nowUTC()
 		for i, h := range []string{"h1", "h2", "h3"} {
 			_ = r.CreateSession(ctx(), domain.NewSession{
-				ID:        fmt.Sprintf("s%d", i+1),
-				UserID:    "u1", TokenHash: h,
+				ID:     fmt.Sprintf("s%d", i+1),
+				UserID: "u1", TokenHash: h,
 				ExpiresAt: now.Add(time.Hour), CreatedAt: now,
 			})
 		}
@@ -336,6 +336,46 @@ var sessionCases = []testCase{
 		}
 		if total != 2 || len(got) != 2 {
 			t.Fatalf("expected 2 for u1; got total=%d list=%d", total, len(got))
+		}
+	}},
+	{"set_session_active_org_round_trip", func(t *testing.T, r repo.Repository) {
+		mustCreateUser(t, r, "u1", "alice@example.com")
+		now := nowUTC()
+		if err := r.CreateSession(ctx(), domain.NewSession{
+			ID: "s1", UserID: "u1", TokenHash: "h1",
+			ExpiresAt: now.Add(time.Hour), CreatedAt: now,
+		}); err != nil {
+			t.Fatalf("CreateSession: %v", err)
+		}
+		got, err := r.GetSessionByTokenHash(ctx(), "h1")
+		if err != nil || got == nil {
+			t.Fatalf("setup get: %+v err=%v", got, err)
+		}
+		if got.ActiveOrgID != nil {
+			t.Fatalf("fresh session ActiveOrgID should be nil; got %v", *got.ActiveOrgID)
+		}
+		org := "org-1"
+		if err := r.SetSessionActiveOrg(ctx(), "s1", &org); err != nil {
+			t.Fatalf("SetSessionActiveOrg: %v", err)
+		}
+		got, err = r.GetSessionByTokenHash(ctx(), "h1")
+		if err != nil || got == nil || got.ActiveOrgID == nil || *got.ActiveOrgID != "org-1" {
+			t.Fatalf("after set, expected ActiveOrgID=org-1; got %+v err=%v", got, err)
+		}
+		// Clear by passing nil.
+		if err := r.SetSessionActiveOrg(ctx(), "s1", nil); err != nil {
+			t.Fatalf("SetSessionActiveOrg(nil): %v", err)
+		}
+		got, _ = r.GetSessionByTokenHash(ctx(), "h1")
+		if got == nil || got.ActiveOrgID != nil {
+			t.Fatalf("after clear, expected ActiveOrgID=nil; got %+v", got)
+		}
+	}},
+	{"set_session_active_org_not_found", func(t *testing.T, r repo.Repository) {
+		org := "org-1"
+		err := r.SetSessionActiveOrg(ctx(), "nope", &org)
+		if !errors.Is(err, yautherr.ErrNotFound) {
+			t.Fatalf("expected ErrNotFound; got %v", err)
 		}
 	}},
 }
@@ -944,7 +984,7 @@ var authorizationCodeCases = []testCase{
 			ID: "ac1", CodeHash: "ch", ClientID: "cli", UserID: "u1",
 			Scopes: json.RawMessage(`[]`), RedirectURI: "http://x",
 			CodeChallenge: "cc", CodeChallengeMethod: "S256",
-			ExpiresAt:     now.Add(time.Hour), CreatedAt: now,
+			ExpiresAt: now.Add(time.Hour), CreatedAt: now,
 		})
 		got, err := r.ConsumeAuthorizationCode(ctx(), "ch")
 		if err != nil || got == nil {
@@ -967,7 +1007,7 @@ var authorizationCodeCases = []testCase{
 			ID: "ac1", CodeHash: "ch", ClientID: "cli", UserID: "u1",
 			Scopes: json.RawMessage(`[]`), RedirectURI: "http://x",
 			CodeChallenge: "cc", CodeChallengeMethod: "S256",
-			ExpiresAt:     now.Add(time.Hour), CreatedAt: now,
+			ExpiresAt: now.Add(time.Hour), CreatedAt: now,
 		})
 		_, _ = r.ConsumeAuthorizationCode(ctx(), "ch")
 		got, err := r.GetAuthorizationCodeByHash(ctx(), "ch")
@@ -1014,7 +1054,7 @@ var deviceCodeCases = []testCase{
 		_ = r.CreateDeviceCode(ctx(), domain.NewDeviceCode{
 			ID: "d1", DeviceCodeHash: "dh", UserCode: "ABCD-1234",
 			ClientID: "cli", Scopes: json.RawMessage(`[]`),
-			Status:   "pending", Interval: 5,
+			Status: "pending", Interval: 5,
 			ExpiresAt: now.Add(time.Hour), CreatedAt: now,
 		})
 		got, err := r.GetDeviceCodeByUserCodePending(ctx(), "ABCD-1234")
@@ -1033,7 +1073,7 @@ var deviceCodeCases = []testCase{
 		_ = r.CreateDeviceCode(ctx(), domain.NewDeviceCode{
 			ID: "d1", DeviceCodeHash: "dh", UserCode: "WXYZ-5678",
 			ClientID: "cli", Scopes: json.RawMessage(`[]`),
-			Status:    "pending", Interval: 5,
+			Status: "pending", Interval: 5,
 			ExpiresAt: now.Add(time.Hour), CreatedAt: now,
 		})
 		uid := "u1"
@@ -1062,7 +1102,7 @@ var oidcNonceCases = []testCase{
 			ID: "ac1", CodeHash: "ch", ClientID: "cli", UserID: "u1",
 			Scopes: json.RawMessage(`[]`), RedirectURI: "http://x",
 			CodeChallenge: "cc", CodeChallengeMethod: "S256",
-			ExpiresAt:     now.Add(time.Hour), CreatedAt: now,
+			ExpiresAt: now.Add(time.Hour), CreatedAt: now,
 		})
 		_ = r.CreateOIDCNonce(ctx(), domain.NewOIDCNonce{
 			ID: "n1", NonceHash: "nh", AuthorizationCodeID: "ac1", CreatedAt: now,

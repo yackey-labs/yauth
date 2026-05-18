@@ -133,6 +133,9 @@ func (f *fakeRepo) DeleteExpiredSessions(_ context.Context, _ time.Time) (int64,
 func (f *fakeRepo) ListSessions(_ context.Context, _ domain.ListSessionsFilters) ([]*domain.Session, int64, error) {
 	return nil, 0, nil
 }
+func (f *fakeRepo) SetSessionActiveOrg(_ context.Context, _ string, _ *string) error {
+	return nil
+}
 
 // --- ChallengeRepository ---
 

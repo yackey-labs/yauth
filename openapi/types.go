@@ -55,14 +55,27 @@ type adminUserJSON struct {
 // sessionUserJSON is the flat user shape returned by /session, /me and
 // the various login endpoints. Mirrors the Rust spec.
 type sessionUserJSON struct {
-	ID            string   `json:"id"`
-	Email         string   `json:"email"`
-	DisplayName   *string  `json:"display_name,omitempty"`
-	EmailVerified bool     `json:"email_verified"`
-	Role          string   `json:"role"`
-	Banned        bool     `json:"banned"`
-	AuthMethod    string   `json:"auth_method"`
-	Scopes        []string `json:"scopes"`
+	ID            string           `json:"id"`
+	Email         string           `json:"email"`
+	DisplayName   *string          `json:"display_name,omitempty"`
+	EmailVerified bool             `json:"email_verified"`
+	Role          string           `json:"role"`
+	Banned        bool             `json:"banned"`
+	AuthMethod    string           `json:"auth_method"`
+	Scopes        []string         `json:"scopes"`
+	// yauth #89: active-org claim surfaced on AuthUser.
+	ActiveOrgID *string             `json:"active_org_id,omitempty"`
+	OrgRole     *string             `json:"org_role,omitempty"`
+	AllOrgs     []orgMembershipJSON `json:"all_orgs,omitempty"`
+}
+
+// orgMembershipJSON is a compact membership descriptor surfaced on
+// sessionUserJSON.all_orgs (yauth #89). Distinct from membershipJSON
+// (the full /organizations/{id}/members payload) — only the fields a
+// client needs to render an org switcher.
+type orgMembershipJSON struct {
+	OrganizationID string `json:"organization_id"`
+	Role           string `json:"role"`
 }
 
 type emailPasswordRegisterRequest struct {
@@ -744,4 +757,34 @@ type listPermissionsResponseJSON struct {
 	OrganizationID string   `json:"organization_id"`
 	Role           string   `json:"role"`
 	Permissions    []string `json:"permissions"`
+}
+
+// --- active-org switcher (yauth #89 port) ----------------------------------
+
+// setActiveOrgRequest is the body of POST /sessions/active-org.
+type setActiveOrgRequest struct {
+	OrganizationID string `json:"organization_id"`
+}
+
+// activeOrgEntry is one entry in the caller's membership list returned
+// from the active-org endpoints. The role for the currently-active org
+// is read from the entry whose `organization_id` matches the response's
+// top-level `active_org_id` — there is no top-level `role` field.
+type activeOrgEntry struct {
+	OrganizationID string  `json:"organization_id"`
+	Role           string  `json:"role"`
+	DisplayName    *string `json:"display_name,omitempty"`
+	Slug           *string `json:"slug,omitempty"`
+}
+
+// activeOrgResponse is the response shape for all three /sessions/active-org
+// endpoints (GET/POST/DELETE). `active_org_id` is null when cleared or
+// the user has no memberships. `bearer_access_token` is populated ONLY
+// for bearer-auth callers on switch: cookie sessions update server-side
+// and need no token rotation, while JWT bearer requires a freshly-issued
+// token carrying the new `org`/`role`/`orgs` claims.
+type activeOrgResponse struct {
+	ActiveOrgID       *string          `json:"active_org_id,omitempty"`
+	BearerAccessToken *string          `json:"bearer_access_token,omitempty"`
+	Orgs              []activeOrgEntry `json:"orgs"`
 }

@@ -7,19 +7,22 @@ import (
 )
 
 // addOrganizations declares the routes mounted by
-// plugins/organizations/plugin.go for the org primitive (yauth #87 port).
-// Routes are emitted at their canonical unprefixed paths; embedders
-// mount under whatever prefix they choose.
+// plugins/organizations/plugin.go for the org primitive (yauth #87 port)
+// and the org-scoped RBAC handlers (yauth #88 port).
 //
-// Org-scoped RBAC handlers (POST /organizations/{id}/members/{user_id}/role,
-// POST /organizations/{id}/transfer-ownership, GET
-// /organizations/{id}/permissions) exist as code in plugins/organizations
-// but are intentionally NOT advertised here while yauth (Rust)'s spec
-// also omits them — the strict openapi-conformance gate treats Go-only
-// routes as blocking, so the canonical OpenAPI surface stays in lockstep
-// with Rust and the RBAC endpoints remain callable but undocumented.
+// Routes are emitted at their canonical unprefixed paths; embedders mount
+// under whatever prefix they choose.
+//
+// The four RBAC endpoints (DELETE /organizations/{id}/members/{user_id},
+// POST /organizations/{id}/members/{user_id}/role, POST
+// /organizations/{id}/transfer-ownership, GET
+// /organizations/{id}/permissions) are declared here as of yauth (Rust)
+// PR #110, which exposes them in the canonical Rust spec. The strict
+// openapi-conformance gate compares paths bidirectionally, so the four
+// RBAC routes had to land in both specs simultaneously.
 func addOrganizations(api *huma.OpenAPI) {
 	orgIDParam := pathParam("id", "Organization id (UUID).")
+	userIDParam := pathParam("user_id", "Target user id (UUID).")
 
 	// --- Org CRUD + listing ---
 	api.AddOperation(&huma.Operation{
@@ -151,4 +154,69 @@ func addOrganizations(api *huma.OpenAPI) {
 		},
 	})
 
+	// --- RBAC: remove member ---
+	api.AddOperation(&huma.Operation{
+		Method: http.MethodDelete, Path: "/organizations/{id}/members/{user_id}",
+		Tags: []string{"organizations"}, OperationID: "organizationsRemoveMember",
+		Summary:    "Remove a member from an organization (admin-gated)",
+		Security:   secAny(),
+		Parameters: []*huma.Param{orgIDParam, userIDParam},
+		Responses: map[string]*huma.Response{
+			"200": emptyResponse("Member removed."),
+			"401": errorResponse("Not authenticated."),
+			"403": errorResponse("Caller is not an admin of this organization."),
+			"404": errorResponse("Organization or membership not found."),
+			"409": errorResponse("Cannot remove the last owner; transfer ownership first."),
+		},
+	})
+
+	// --- RBAC: change member role ---
+	api.AddOperation(&huma.Operation{
+		Method: http.MethodPost, Path: "/organizations/{id}/members/{user_id}/role",
+		Tags: []string{"organizations"}, OperationID: "organizationsChangeRole",
+		Summary:     "Change a member's role (admin-gated; `owner` is reserved for transfer-ownership)",
+		Security:    secAny(),
+		Parameters:  []*huma.Param{orgIDParam, userIDParam},
+		RequestBody: jsonRequestBody(changeRoleRequest{}, "New role to assign (cannot be `owner`)."),
+		Responses: map[string]*huma.Response{
+			"200": jsonResponse("Updated membership.", membershipJSON{}),
+			"400": errorResponse("Invalid or missing role, or attempt to assign `owner`."),
+			"401": errorResponse("Not authenticated."),
+			"403": errorResponse("Caller is not an admin of this organization."),
+			"404": errorResponse("Organization or membership not found."),
+			"409": errorResponse("Cannot demote the last owner; transfer ownership first."),
+		},
+	})
+
+	// --- RBAC: transfer ownership ---
+	api.AddOperation(&huma.Operation{
+		Method: http.MethodPost, Path: "/organizations/{id}/transfer-ownership",
+		Tags: []string{"organizations"}, OperationID: "organizationsTransferOwnership",
+		Summary:     "Transfer ownership of an organization (current owner only)",
+		Security:    secAny(),
+		Parameters:  []*huma.Param{orgIDParam},
+		RequestBody: jsonRequestBody(transferOwnershipRequest{}, "UUID of the existing member to promote to owner."),
+		Responses: map[string]*huma.Response{
+			"200": emptyResponse("Ownership transferred."),
+			"400": errorResponse("Missing new_owner_user_id or self-transfer."),
+			"401": errorResponse("Not authenticated."),
+			"403": errorResponse("Caller is not the current owner."),
+			"404": errorResponse("Organization or target membership not found."),
+		},
+	})
+
+	// --- RBAC: list caller's permissions ---
+	api.AddOperation(&huma.Operation{
+		Method: http.MethodGet, Path: "/organizations/{id}/permissions",
+		Tags: []string{"organizations"}, OperationID: "organizationsListPermissions",
+		Summary:    "List the caller's effective permissions in this organization",
+		Security:   secAny(),
+		Parameters: []*huma.Param{orgIDParam},
+		Responses: map[string]*huma.Response{
+			"200": jsonResponse("Caller's role + permission list.", listPermissionsResponseJSON{}),
+			"401": errorResponse("Not authenticated."),
+			"403": errorResponse("Caller is not a member of this organization."),
+			"404": errorResponse("Organization not found."),
+		},
+	})
 }

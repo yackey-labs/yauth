@@ -723,3 +723,25 @@ type createInvitationResponse struct {
 type acceptInvitationRequest struct {
 	Token string `json:"token"`
 }
+
+// changeRoleRequest is the body of POST
+// /organizations/{id}/members/{user_id}/role.
+type changeRoleRequest struct {
+	Role string `json:"role"`
+}
+
+// transferOwnershipRequest is the body of POST
+// /organizations/{id}/transfer-ownership.
+type transferOwnershipRequest struct {
+	NewOwnerUserID string `json:"new_owner_user_id"`
+}
+
+// listPermissionsResponseJSON is the canonical wire shape for the
+// GET /organizations/{id}/permissions response. Distinct from the
+// plugins/organizations/rbac_handlers.go internal struct so the openapi
+// package owns its own (necessarily uppercased) field names.
+type listPermissionsResponseJSON struct {
+	OrganizationID string   `json:"organization_id"`
+	Role           string   `json:"role"`
+	Permissions    []string `json:"permissions"`
+}

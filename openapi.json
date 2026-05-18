@@ -452,6 +452,18 @@
         ],
         "type": "object"
       },
+      "ChangeRoleRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "role": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "role"
+        ],
+        "type": "object"
+      },
       "ConfigResponse": {
         "additionalProperties": false,
         "properties": {
@@ -874,6 +886,32 @@
           "kty",
           "kid",
           "alg"
+        ],
+        "type": "object"
+      },
+      "ListPermissionsResponseJSON": {
+        "additionalProperties": false,
+        "properties": {
+          "organization_id": {
+            "type": "string"
+          },
+          "permissions": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "role": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "organization_id",
+          "role",
+          "permissions"
         ],
         "type": "object"
       },
@@ -2132,6 +2170,18 @@
         "required": [
           "plugins",
           "version"
+        ],
+        "type": "object"
+      },
+      "TransferOwnershipRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "new_owner_user_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "new_owner_user_id"
         ],
         "type": "object"
       },
@@ -5968,6 +6018,364 @@
           }
         ],
         "summary": "List members of an organization (membership-gated)",
+        "tags": [
+          "organizations"
+        ]
+      }
+    },
+    "/organizations/{id}/members/{user_id}": {
+      "delete": {
+        "operationId": "organizationsRemoveMember",
+        "parameters": [
+          {
+            "description": "Organization id (UUID).",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Target user id (UUID).",
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Member removed."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Caller is not an admin of this organization."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Organization or membership not found."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Cannot remove the last owner; transfer ownership first."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "summary": "Remove a member from an organization (admin-gated)",
+        "tags": [
+          "organizations"
+        ]
+      }
+    },
+    "/organizations/{id}/members/{user_id}/role": {
+      "post": {
+        "operationId": "organizationsChangeRole",
+        "parameters": [
+          {
+            "description": "Organization id (UUID).",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Target user id (UUID).",
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeRoleRequest"
+              }
+            }
+          },
+          "description": "New role to assign (cannot be `owner`).",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MembershipJSON"
+                }
+              }
+            },
+            "description": "Updated membership."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Invalid or missing role, or attempt to assign `owner`."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Caller is not an admin of this organization."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Organization or membership not found."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Cannot demote the last owner; transfer ownership first."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "summary": "Change a member's role (admin-gated; `owner` is reserved for transfer-ownership)",
+        "tags": [
+          "organizations"
+        ]
+      }
+    },
+    "/organizations/{id}/permissions": {
+      "get": {
+        "operationId": "organizationsListPermissions",
+        "parameters": [
+          {
+            "description": "Organization id (UUID).",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListPermissionsResponseJSON"
+                }
+              }
+            },
+            "description": "Caller's role + permission list."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Caller is not a member of this organization."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Organization not found."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "summary": "List the caller's effective permissions in this organization",
+        "tags": [
+          "organizations"
+        ]
+      }
+    },
+    "/organizations/{id}/transfer-ownership": {
+      "post": {
+        "operationId": "organizationsTransferOwnership",
+        "parameters": [
+          {
+            "description": "Organization id (UUID).",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TransferOwnershipRequest"
+              }
+            }
+          },
+          "description": "UUID of the existing member to promote to owner.",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Ownership transferred."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Missing new_owner_user_id or self-transfer."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Caller is not the current owner."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Organization or target membership not found."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "summary": "Transfer ownership of an organization (current owner only)",
         "tags": [
           "organizations"
         ]

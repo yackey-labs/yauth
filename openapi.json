@@ -617,6 +617,45 @@
         ],
         "type": "object"
       },
+      "CreateSsoConnectionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "config": {},
+          "default_role_on_jit": {
+            "type": "string"
+          },
+          "jit_provisioning_enabled": {
+            "type": "boolean"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "name",
+          "config"
+        ],
+        "type": "object"
+      },
+      "CreateSsoConnectionResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "connection": {
+            "$ref": "#/components/schemas/SsoConnectionJSON"
+          }
+        },
+        "required": [
+          "connection"
+        ],
+        "type": "object"
+      },
       "DomainResponse": {
         "additionalProperties": false,
         "properties": {
@@ -2396,6 +2435,86 @@
         ],
         "type": "object"
       },
+      "SsoConnectionJSON": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "default_role_on_jit": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "jit_provisioning_enabled": {
+            "type": "boolean"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "organization_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "organization_id",
+          "kind",
+          "name",
+          "status",
+          "jit_provisioning_enabled",
+          "default_role_on_jit",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "SsoConnectionListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "connections": {
+            "items": {
+              "$ref": "#/components/schemas/SsoConnectionJSON"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "connections"
+        ],
+        "type": "object"
+      },
+      "SsoTestResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "message"
+        ],
+        "type": "object"
+      },
       "StatusResponse": {
         "additionalProperties": false,
         "properties": {
@@ -2498,6 +2617,25 @@
             "type": "boolean"
           },
           "session_binding": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "UpdateSsoConnectionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "config": {},
+          "default_role_on_jit": {
+            "type": "string"
+          },
+          "jit_provisioning_enabled": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
             "type": "string"
           }
         },
@@ -7211,6 +7349,429 @@
         ]
       }
     },
+    "/organizations/{id}/sso/connections": {
+      "get": {
+        "operationId": "organizationsListSsoConnections",
+        "parameters": [
+          {
+            "description": "Organization id (UUID).",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SsoConnectionListResponse"
+                }
+              }
+            },
+            "description": "SSO connection list."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Caller is not an admin of this organization."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Organization not found."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "summary": "List SSO connections for an organization",
+        "tags": [
+          "organizations"
+        ]
+      },
+      "post": {
+        "operationId": "organizationsCreateSsoConnection",
+        "parameters": [
+          {
+            "description": "Organization id (UUID).",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSsoConnectionRequest"
+              }
+            }
+          },
+          "description": "SSO connection to create.",
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateSsoConnectionResponse"
+                }
+              }
+            },
+            "description": "Created SSO connection."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Invalid connection configuration."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Caller is not an admin of this organization."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Organization not found."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "summary": "Create an SSO connection for an organization",
+        "tags": [
+          "organizations"
+        ]
+      }
+    },
+    "/organizations/{id}/sso/connections/{cid}": {
+      "delete": {
+        "operationId": "organizationsDeleteSsoConnection",
+        "parameters": [
+          {
+            "description": "Organization id (UUID).",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "SSO connection id (UUID).",
+            "in": "path",
+            "name": "cid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Connection deleted."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Caller is not an admin of this organization."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "SSO connection not found."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "summary": "Delete an SSO connection",
+        "tags": [
+          "organizations"
+        ]
+      },
+      "patch": {
+        "operationId": "organizationsUpdateSsoConnection",
+        "parameters": [
+          {
+            "description": "Organization id (UUID).",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "SSO connection id (UUID).",
+            "in": "path",
+            "name": "cid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSsoConnectionRequest"
+              }
+            }
+          },
+          "description": "Fields to update; omit to leave unchanged.",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateSsoConnectionResponse"
+                }
+              }
+            },
+            "description": "Updated SSO connection."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Invalid field value."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Caller is not an admin of this organization."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "SSO connection not found."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "summary": "Update an SSO connection",
+        "tags": [
+          "organizations"
+        ]
+      }
+    },
+    "/organizations/{id}/sso/connections/{cid}/test": {
+      "post": {
+        "operationId": "organizationsTestSsoConnection",
+        "parameters": [
+          {
+            "description": "Organization id (UUID).",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "SSO connection id (UUID).",
+            "in": "path",
+            "name": "cid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SsoTestResponse"
+                }
+              }
+            },
+            "description": "Test result."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Caller is not an admin of this organization."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "SSO connection not found."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "summary": "Test an SSO connection (validates discovery doc + client credentials)",
+        "tags": [
+          "organizations"
+        ]
+      }
+    },
     "/organizations/{id}/transfer-ownership": {
       "post": {
         "operationId": "organizationsTransferOwnership",
@@ -7898,6 +8459,120 @@
           }
         ],
         "summary": "Switch the caller's active organization",
+        "tags": [
+          "organizations"
+        ]
+      }
+    },
+    "/sso/callback": {
+      "get": {
+        "operationId": "ssoCallback",
+        "parameters": [
+          {
+            "description": "Authorization code from IdP.",
+            "in": "query",
+            "name": "code",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "State token from /sso/login.",
+            "in": "query",
+            "name": "state",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Redirect to app (post-login URL or /)."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Missing or invalid code/state."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Token exchange or id_token validation failed."
+          }
+        },
+        "security": [],
+        "summary": "OIDC authorization-code callback — exchanges code, provisions user, sets session cookie",
+        "tags": [
+          "organizations"
+        ]
+      }
+    },
+    "/sso/login": {
+      "get": {
+        "operationId": "ssoLogin",
+        "parameters": [
+          {
+            "description": "Organization slug or id.",
+            "in": "query",
+            "name": "org",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Verified email domain for home-realm discovery.",
+            "in": "query",
+            "name": "domain",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Post-login redirect URL (optional).",
+            "in": "query",
+            "name": "redirect_to",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Redirect to IdP authorize URL."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Missing or ambiguous org/domain parameter."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Organization or SSO connection not found."
+          }
+        },
+        "security": [],
+        "summary": "Initiate SSO login — redirects to the IdP authorize URL",
         "tags": [
           "organizations"
         ]

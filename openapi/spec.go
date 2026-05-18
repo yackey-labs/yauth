@@ -78,6 +78,7 @@ func Build() *huma.OpenAPI {
 	addActiveOrg(api)
 	addDomains(api)
 	addPolicy(api)
+	addSsoOidc(api)
 
 	return api
 }
@@ -231,6 +232,14 @@ func declareSchemas(r huma.Registry) {
 		// yauth #92 — per-org auth policy
 		reflect.TypeOf(policyResponse{}),
 		reflect.TypeOf(updatePolicyRequest{}),
+
+		// yauth #93 — SSO OIDC federated sign-in
+		reflect.TypeOf(ssoConnectionJSON{}),
+		reflect.TypeOf(ssoConnectionListResponse{}),
+		reflect.TypeOf(createSsoConnectionRequest{}),
+		reflect.TypeOf(createSsoConnectionResponse{}),
+		reflect.TypeOf(updateSsoConnectionRequest{}),
+		reflect.TypeOf(ssoTestResponse{}),
 	} {
 		_ = r.Schema(t, true, t.Name())
 	}

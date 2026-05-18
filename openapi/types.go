@@ -759,6 +759,37 @@ type listPermissionsResponseJSON struct {
 	Permissions    []string `json:"permissions"`
 }
 
+// --- per-org auth policy (yauth #92 port) ---------------------------------
+
+// policyResponse is the wire shape returned by GET /organizations/{id}/policy
+// and PATCH /organizations/{id}/policy.
+type policyResponse struct {
+	OrganizationID         string   `json:"organization_id"`
+	MFARequired            bool     `json:"mfa_required"`
+	MFAGracePeriodDays     int32    `json:"mfa_grace_period_days"`
+	IPAllowlist            []string `json:"ip_allowlist"`
+	AllowedAuthMethods     []string `json:"allowed_auth_methods"`
+	SessionBinding         string   `json:"session_binding"`
+	MaxSessionDurationSecs *int64   `json:"max_session_duration_secs,omitempty"`
+	IdleTimeoutSecs        *int64   `json:"idle_timeout_secs,omitempty"`
+	MaxConcurrentSessions  *int32   `json:"max_concurrent_sessions,omitempty"`
+	CreatedAt              string   `json:"created_at"`
+	UpdatedAt              string   `json:"updated_at"`
+}
+
+// updatePolicyRequest is the body of PATCH /organizations/{id}/policy.
+// Every field is optional; omitted fields are left unchanged.
+type updatePolicyRequest struct {
+	MFARequired            *bool     `json:"mfa_required,omitempty"`
+	MFAGracePeriodDays     *int32    `json:"mfa_grace_period_days,omitempty"`
+	IPAllowlist            *[]string `json:"ip_allowlist,omitempty"`
+	AllowedAuthMethods     *[]string `json:"allowed_auth_methods,omitempty"`
+	SessionBinding         *string   `json:"session_binding,omitempty"`
+	MaxSessionDurationSecs *int64    `json:"max_session_duration_secs,omitempty"`
+	IdleTimeoutSecs        *int64    `json:"idle_timeout_secs,omitempty"`
+	MaxConcurrentSessions  *int32    `json:"max_concurrent_sessions,omitempty"`
+}
+
 // --- verified domains + JIT membership (yauth #90 port) -------------------
 
 // domainResponse is the wire shape returned by GET /organizations/{id}/domains

@@ -57,6 +57,7 @@ func Build() *huma.OpenAPI {
 			{Name: "oidc", Description: "OpenID Connect discovery + UserInfo."},
 			{Name: "oauth2-server", Description: "RFC 6749 / 7636 / 7009 / 7662 / 8628 authorization server."},
 			{Name: "organizations", Description: "Multi-tenancy primitive — org CRUD, membership, invitations, and RBAC."},
+		{Name: "audit-export", Description: "Audit log SIEM/syslog export destinations and replay."},
 		},
 	}
 
@@ -79,6 +80,9 @@ func Build() *huma.OpenAPI {
 	addDomains(api)
 	addPolicy(api)
 	addSsoOidc(api)
+	addSaml(api)
+	addScim(api)
+	addAuditExport(api)
 
 	return api
 }
@@ -233,13 +237,27 @@ func declareSchemas(r huma.Registry) {
 		reflect.TypeOf(policyResponse{}),
 		reflect.TypeOf(updatePolicyRequest{}),
 
-		// yauth #93 — SSO OIDC federated sign-in
+		// yauth #93/#94 — SSO (OIDC + SAML) federated sign-in
 		reflect.TypeOf(ssoConnectionJSON{}),
-		reflect.TypeOf(ssoConnectionListResponse{}),
 		reflect.TypeOf(createSsoConnectionRequest{}),
-		reflect.TypeOf(createSsoConnectionResponse{}),
 		reflect.TypeOf(updateSsoConnectionRequest{}),
 		reflect.TypeOf(ssoTestResponse{}),
+
+		// yauth #94 — SAML 2.0 Service Provider (no new schema types; uses ssoConnectionJSON)
+
+		// yauth #95 — SCIM 2.0 provisioning
+		reflect.TypeOf(scimUserResponse{}),
+		reflect.TypeOf(scimGroupResponse{}),
+		reflect.TypeOf(scimListResponse{}),
+		reflect.TypeOf(scimServiceProviderConfig{}),
+
+		// yauth #96 — audit-export SIEM/syslog destinations
+		reflect.TypeOf(auditDestinationResponse{}),
+		reflect.TypeOf(createAuditDestinationRequest{}),
+		reflect.TypeOf(updateAuditDestinationRequest{}),
+		reflect.TypeOf(outboxEntryResponse{}),
+		reflect.TypeOf(replayRequest{}),
+		reflect.TypeOf(replayResponse{}),
 	} {
 		_ = r.Schema(t, true, t.Name())
 	}
@@ -279,6 +297,22 @@ func jsonResponse(description string, typ any) *huma.Response {
 	return &huma.Response{
 		Description: description,
 		Content:     jsonContent(typ),
+	}
+}
+
+// arrayResponse constructs a 200 response whose body is an array of items,
+// each matching typ. Used when Rust returns []T directly (no wrapper object).
+func arrayResponse(description string, itemTyp any) *huma.Response {
+	return &huma.Response{
+		Description: description,
+		Content: map[string]*huma.MediaType{
+			"application/json": {
+				Schema: &huma.Schema{
+					Type:  "array",
+					Items: schemaRef(itemTyp),
+				},
+			},
+		},
 	}
 }
 

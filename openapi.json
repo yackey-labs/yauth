@@ -430,6 +430,53 @@
         ],
         "type": "object"
       },
+      "AuditDestinationResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "kind": {},
+          "kind_tag": {
+            "type": "string"
+          },
+          "last_failure_at": {
+            "type": "string"
+          },
+          "last_success_at": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "organization_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "kind_tag",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
       "BearerRefreshRequest": {
         "additionalProperties": false,
         "properties": {
@@ -523,6 +570,24 @@
         "required": [
           "allow_signups",
           "require_email_verification"
+        ],
+        "type": "object"
+      },
+      "CreateAuditDestinationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {},
+          "name": {
+            "type": "string"
+          },
+          "organization_id": {
+            "description": "nil =\u003e deployment-wide destination.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "kind"
         ],
         "type": "object"
       },
@@ -620,7 +685,6 @@
       "CreateSsoConnectionRequest": {
         "additionalProperties": false,
         "properties": {
-          "config": {},
           "default_role_on_jit": {
             "type": "string"
           },
@@ -633,26 +697,12 @@
           "name": {
             "type": "string"
           },
-          "status": {
-            "type": "string"
-          }
+          "oidc": {},
+          "saml": {}
         },
         "required": [
           "kind",
-          "name",
-          "config"
-        ],
-        "type": "object"
-      },
-      "CreateSsoConnectionResponse": {
-        "additionalProperties": false,
-        "properties": {
-          "connection": {
-            "$ref": "#/components/schemas/SsoConnectionJSON"
-          }
-        },
-        "required": [
-          "connection"
+          "name"
         ],
         "type": "object"
       },
@@ -2125,6 +2175,49 @@
         ],
         "type": "object"
       },
+      "OutboxEntryResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "attempts": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "audit_log_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "destination_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "last_attempt_at": {
+            "type": "string"
+          },
+          "last_error": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "audit_log_id",
+          "destination_id",
+          "status",
+          "attempts",
+          "created_at"
+        ],
+        "type": "object"
+      },
       "PasskeyJSON": {
         "additionalProperties": false,
         "properties": {
@@ -2363,6 +2456,134 @@
         ],
         "type": "object"
       },
+      "ReplayRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "audit_log_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "destination_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "audit_log_ids",
+          "destination_ids"
+        ],
+        "type": "object"
+      },
+      "ReplayResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "enqueued": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "gone": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "enqueued",
+          "gone"
+        ],
+        "type": "object"
+      },
+      "ScimGroupResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "displayName": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "displayName"
+        ],
+        "type": "object"
+      },
+      "ScimListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "itemsPerPage": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "startIndex": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "totalResults": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "totalResults",
+          "startIndex",
+          "itemsPerPage"
+        ],
+        "type": "object"
+      },
+      "ScimServiceProviderConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "schemas": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "schemas"
+        ],
+        "type": "object"
+      },
+      "ScimUserResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "userName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "userName",
+          "active"
+        ],
+        "type": "object"
+      },
       "SessionUserJSON": {
         "additionalProperties": false,
         "properties": {
@@ -2457,9 +2678,11 @@
           "name": {
             "type": "string"
           },
+          "oidc": {},
           "organization_id": {
             "type": "string"
           },
+          "saml": {},
           "status": {
             "type": "string"
           },
@@ -2481,28 +2704,10 @@
         ],
         "type": "object"
       },
-      "SsoConnectionListResponse": {
-        "additionalProperties": false,
-        "properties": {
-          "connections": {
-            "items": {
-              "$ref": "#/components/schemas/SsoConnectionJSON"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "connections"
-        ],
-        "type": "object"
-      },
       "SsoTestResponse": {
         "additionalProperties": false,
         "properties": {
-          "message": {
+          "detail": {
             "type": "string"
           },
           "ok": {
@@ -2511,7 +2716,7 @@
         },
         "required": [
           "ok",
-          "message"
+          "detail"
         ],
         "type": "object"
       },
@@ -2547,6 +2752,19 @@
         "required": [
           "new_owner_user_id"
         ],
+        "type": "object"
+      },
+      "UpdateAuditDestinationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {},
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
         "type": "object"
       },
       "UpdateDomainRequest": {
@@ -2625,7 +2843,6 @@
       "UpdateSsoConnectionRequest": {
         "additionalProperties": false,
         "properties": {
-          "config": {},
           "default_role_on_jit": {
             "type": "string"
           },
@@ -2635,6 +2852,8 @@
           "name": {
             "type": "string"
           },
+          "oidc": {},
+          "saml": {},
           "status": {
             "type": "string"
           }
@@ -4043,6 +4262,1457 @@
         "summary": "Revoke an API key the caller owns",
         "tags": [
           "api-key"
+        ]
+      }
+    },
+    "/api/scim/v2/organizations/{org_id}/Groups": {
+      "get": {
+        "operationId": "scimListGroups",
+        "parameters": [
+          {
+            "description": "Organization id (UUID).",
+            "in": "path",
+            "name": "org_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimListResponse"
+                }
+              }
+            },
+            "description": "SCIM group list."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "summary": "SCIM: list groups",
+        "tags": [
+          "organizations"
+        ]
+      },
+      "post": {
+        "operationId": "scimCreateGroup",
+        "parameters": [
+          {
+            "description": "Organization id (UUID).",
+            "in": "path",
+            "name": "org_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimGroupResponse"
+                }
+              }
+            },
+            "description": "Created SCIM group."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Invalid SCIM request."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "summary": "SCIM: create a group",
+        "tags": [
+          "organizations"
+        ]
+      }
+    },
+    "/api/scim/v2/organizations/{org_id}/Groups/{group_id}": {
+      "delete": {
+        "operationId": "scimDeleteGroup",
+        "parameters": [
+          {
+            "description": "Organization id (UUID).",
+            "in": "path",
+            "name": "org_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "SCIM group id.",
+            "in": "path",
+            "name": "group_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Group deleted."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Group not found."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "summary": "SCIM: delete a group",
+        "tags": [
+          "organizations"
+        ]
+      },
+      "get": {
+        "operationId": "scimGetGroup",
+        "parameters": [
+          {
+            "description": "Organization id (UUID).",
+            "in": "path",
+            "name": "org_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "SCIM group id.",
+            "in": "path",
+            "name": "group_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimGroupResponse"
+                }
+              }
+            },
+            "description": "SCIM group."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Group not found."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "summary": "SCIM: get a group",
+        "tags": [
+          "organizations"
+        ]
+      },
+      "patch": {
+        "operationId": "scimPatchGroup",
+        "parameters": [
+          {
+            "description": "Organization id (UUID).",
+            "in": "path",
+            "name": "org_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "SCIM group id.",
+            "in": "path",
+            "name": "group_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimGroupResponse"
+                }
+              }
+            },
+            "description": "Patched SCIM group."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Invalid SCIM PatchOp."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Group not found."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "summary": "SCIM: patch a group",
+        "tags": [
+          "organizations"
+        ]
+      },
+      "put": {
+        "operationId": "scimReplaceGroup",
+        "parameters": [
+          {
+            "description": "Organization id (UUID).",
+            "in": "path",
+            "name": "org_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "SCIM group id.",
+            "in": "path",
+            "name": "group_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimGroupResponse"
+                }
+              }
+            },
+            "description": "Updated SCIM group."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Invalid SCIM request."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Group not found."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "summary": "SCIM: replace a group (full PUT)",
+        "tags": [
+          "organizations"
+        ]
+      }
+    },
+    "/api/scim/v2/organizations/{org_id}/ResourceTypes": {
+      "get": {
+        "operationId": "scimResourceTypes",
+        "parameters": [
+          {
+            "description": "Organization id (UUID).",
+            "in": "path",
+            "name": "org_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimListResponse"
+                }
+              }
+            },
+            "description": "SCIM resource types."
+          }
+        },
+        "security": [],
+        "summary": "SCIM: ResourceTypes discovery",
+        "tags": [
+          "organizations"
+        ]
+      }
+    },
+    "/api/scim/v2/organizations/{org_id}/Schemas": {
+      "get": {
+        "operationId": "scimSchemas",
+        "parameters": [
+          {
+            "description": "Organization id (UUID).",
+            "in": "path",
+            "name": "org_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimListResponse"
+                }
+              }
+            },
+            "description": "SCIM schemas."
+          }
+        },
+        "security": [],
+        "summary": "SCIM: Schemas discovery",
+        "tags": [
+          "organizations"
+        ]
+      }
+    },
+    "/api/scim/v2/organizations/{org_id}/ServiceProviderConfig": {
+      "get": {
+        "operationId": "scimServiceProviderConfig",
+        "parameters": [
+          {
+            "description": "Organization id (UUID).",
+            "in": "path",
+            "name": "org_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimServiceProviderConfig"
+                }
+              }
+            },
+            "description": "ServiceProviderConfig."
+          }
+        },
+        "security": [],
+        "summary": "SCIM: ServiceProviderConfig discovery",
+        "tags": [
+          "organizations"
+        ]
+      }
+    },
+    "/api/scim/v2/organizations/{org_id}/Users": {
+      "get": {
+        "operationId": "scimListUsers",
+        "parameters": [
+          {
+            "description": "Organization id (UUID).",
+            "in": "path",
+            "name": "org_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimListResponse"
+                }
+              }
+            },
+            "description": "SCIM user list."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "summary": "SCIM: list users",
+        "tags": [
+          "organizations"
+        ]
+      },
+      "post": {
+        "operationId": "scimCreateUser",
+        "parameters": [
+          {
+            "description": "Organization id (UUID).",
+            "in": "path",
+            "name": "org_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimUserResponse"
+                }
+              }
+            },
+            "description": "Created SCIM user."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Invalid SCIM request."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "User already exists."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "summary": "SCIM: provision a user",
+        "tags": [
+          "organizations"
+        ]
+      }
+    },
+    "/api/scim/v2/organizations/{org_id}/Users/{user_id}": {
+      "delete": {
+        "operationId": "scimDeleteUser",
+        "parameters": [
+          {
+            "description": "Organization id (UUID).",
+            "in": "path",
+            "name": "org_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "SCIM user id.",
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "User deprovisioned."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "User not found."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "summary": "SCIM: deprovision a user",
+        "tags": [
+          "organizations"
+        ]
+      },
+      "get": {
+        "operationId": "scimGetUser",
+        "parameters": [
+          {
+            "description": "Organization id (UUID).",
+            "in": "path",
+            "name": "org_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "SCIM user id.",
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimUserResponse"
+                }
+              }
+            },
+            "description": "SCIM user."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "User not found."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "summary": "SCIM: get a user",
+        "tags": [
+          "organizations"
+        ]
+      },
+      "patch": {
+        "operationId": "scimPatchUser",
+        "parameters": [
+          {
+            "description": "Organization id (UUID).",
+            "in": "path",
+            "name": "org_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "SCIM user id.",
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimUserResponse"
+                }
+              }
+            },
+            "description": "Patched SCIM user."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Invalid SCIM PatchOp."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "User not found."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "summary": "SCIM: patch a user",
+        "tags": [
+          "organizations"
+        ]
+      },
+      "put": {
+        "operationId": "scimReplaceUser",
+        "parameters": [
+          {
+            "description": "Organization id (UUID).",
+            "in": "path",
+            "name": "org_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "SCIM user id.",
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimUserResponse"
+                }
+              }
+            },
+            "description": "Updated SCIM user."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Invalid SCIM request."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "User not found."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "summary": "SCIM: replace a user (full PUT)",
+        "tags": [
+          "organizations"
+        ]
+      }
+    },
+    "/audit/destinations": {
+      "get": {
+        "operationId": "auditExport_listDestinations",
+        "parameters": [
+          {
+            "description": "Filter by organization id.",
+            "in": "query",
+            "name": "organization_id",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter scope (org or global).",
+            "in": "query",
+            "name": "scope",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/"
+                }
+              }
+            },
+            "description": "Destination list."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Admin only."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "summary": "List audit export destinations",
+        "tags": [
+          "audit-export"
+        ]
+      },
+      "post": {
+        "operationId": "auditExport_createDestination",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAuditDestinationRequest"
+              }
+            }
+          },
+          "description": "Destination to create.",
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditDestinationResponse"
+                }
+              }
+            },
+            "description": "Created destination."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Invalid configuration."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Admin only."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "summary": "Create an audit export destination",
+        "tags": [
+          "audit-export"
+        ]
+      }
+    },
+    "/audit/destinations/{id}": {
+      "delete": {
+        "operationId": "auditExport_deleteDestination",
+        "parameters": [
+          {
+            "description": "Destination id (UUID).",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Destination deleted."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Admin only."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Destination not found."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "summary": "Delete an audit export destination",
+        "tags": [
+          "audit-export"
+        ]
+      },
+      "get": {
+        "operationId": "auditExport_getDestination",
+        "parameters": [
+          {
+            "description": "Destination id (UUID).",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditDestinationResponse"
+                }
+              }
+            },
+            "description": "Destination."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Admin only."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Destination not found."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "summary": "Get an audit export destination",
+        "tags": [
+          "audit-export"
+        ]
+      },
+      "patch": {
+        "operationId": "auditExport_updateDestination",
+        "parameters": [
+          {
+            "description": "Destination id (UUID).",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAuditDestinationRequest"
+              }
+            }
+          },
+          "description": "Fields to update.",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditDestinationResponse"
+                }
+              }
+            },
+            "description": "Updated destination."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Invalid field value."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Admin only."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Destination not found."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "summary": "Update an audit export destination",
+        "tags": [
+          "audit-export"
+        ]
+      }
+    },
+    "/audit/destinations/{id}/outbox": {
+      "get": {
+        "operationId": "auditExport_listDestinationOutbox",
+        "parameters": [
+          {
+            "description": "Destination id (UUID).",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Maximum entries to return.",
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/"
+                }
+              }
+            },
+            "description": "Outbox entries."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Admin only."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Destination not found."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "summary": "List pending outbox entries for a destination",
+        "tags": [
+          "audit-export"
+        ]
+      }
+    },
+    "/audit/replay": {
+      "post": {
+        "operationId": "auditExport_replay",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplayRequest"
+              }
+            }
+          },
+          "description": "Audit log and destination IDs to replay.",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReplayResponse"
+                }
+              }
+            },
+            "description": "Replay result."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Invalid request."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Admin only."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "summary": "Re-enqueue audit log entries for a set of destinations",
+        "tags": [
+          "audit-export"
         ]
       }
     },
@@ -7368,7 +9038,10 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SsoConnectionListResponse"
+                  "items": {
+                    "$ref": "#/components/schemas/SsoConnectionJSON"
+                  },
+                  "type": "array"
                 }
               }
             },
@@ -7450,7 +9123,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CreateSsoConnectionResponse"
+                  "$ref": "#/components/schemas/SsoConnectionJSON"
                 }
               }
             },
@@ -7626,7 +9299,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CreateSsoConnectionResponse"
+                  "$ref": "#/components/schemas/SsoConnectionJSON"
                 }
               }
             },
@@ -8464,30 +10137,12 @@
         ]
       }
     },
-    "/sso/callback": {
-      "get": {
-        "operationId": "ssoCallback",
-        "parameters": [
-          {
-            "description": "Authorization code from IdP.",
-            "in": "query",
-            "name": "code",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "State token from /sso/login.",
-            "in": "query",
-            "name": "state",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
+    "/sso/saml/acs": {
+      "post": {
+        "operationId": "samlAcs",
         "responses": {
           "302": {
-            "description": "Redirect to app (post-login URL or /)."
+            "description": "Redirect to application after successful assertion."
           },
           "400": {
             "content": {
@@ -8497,50 +10152,32 @@
                 }
               }
             },
-            "description": "Missing or invalid code/state."
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            },
-            "description": "Token exchange or id_token validation failed."
+            "description": "Invalid or expired SAMLResponse."
           }
         },
         "security": [],
-        "summary": "OIDC authorization-code callback — exchanges code, provisions user, sets session cookie",
+        "summary": "SAML Assertion Consumer Service — receive IdP response",
         "tags": [
           "organizations"
         ]
       }
     },
-    "/sso/login": {
+    "/sso/saml/login": {
       "get": {
-        "operationId": "ssoLogin",
+        "operationId": "samlLogin",
         "parameters": [
           {
-            "description": "Organization slug or id.",
+            "description": "SSO connection UUID to authenticate against.",
             "in": "query",
-            "name": "org",
+            "name": "connection_id",
             "schema": {
               "type": "string"
             }
           },
           {
-            "description": "Verified email domain for home-realm discovery.",
+            "description": "Post-login redirect URL.",
             "in": "query",
-            "name": "domain",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Post-login redirect URL (optional).",
-            "in": "query",
-            "name": "redirect_to",
+            "name": "next",
             "schema": {
               "type": "string"
             }
@@ -8548,7 +10185,7 @@
         ],
         "responses": {
           "302": {
-            "description": "Redirect to IdP authorize URL."
+            "description": "Redirect to IdP SSO URL."
           },
           "400": {
             "content": {
@@ -8558,7 +10195,7 @@
                 }
               }
             },
-            "description": "Missing or ambiguous org/domain parameter."
+            "description": "Missing or invalid connection_id."
           },
           "404": {
             "content": {
@@ -8568,11 +10205,110 @@
                 }
               }
             },
-            "description": "Organization or SSO connection not found."
+            "description": "Connection not found."
           }
         },
         "security": [],
-        "summary": "Initiate SSO login — redirects to the IdP authorize URL",
+        "summary": "Initiate SP-initiated SAML SSO (redirect binding)",
+        "tags": [
+          "organizations"
+        ]
+      }
+    },
+    "/sso/saml/logout": {
+      "get": {
+        "operationId": "samlLogout",
+        "responses": {
+          "302": {
+            "description": "Redirect to IdP SLO endpoint."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No active SAML session."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "summary": "SP-initiated SAML Single Logout redirect",
+        "tags": [
+          "organizations"
+        ]
+      }
+    },
+    "/sso/saml/metadata/{cid}": {
+      "get": {
+        "operationId": "samlMetadata",
+        "parameters": [
+          {
+            "description": "SSO connection id (UUID).",
+            "in": "path",
+            "name": "cid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/xml": {}
+            },
+            "description": "SAML metadata XML."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Connection not found."
+          }
+        },
+        "security": [],
+        "summary": "SP metadata XML for IdP registration",
+        "tags": [
+          "organizations"
+        ]
+      }
+    },
+    "/sso/saml/slo": {
+      "post": {
+        "operationId": "samlSlo",
+        "responses": {
+          "302": {
+            "description": "SLO complete, redirect to login."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Invalid LogoutRequest."
+          }
+        },
+        "security": [],
+        "summary": "Receive IdP-initiated SAML Single Logout",
         "tags": [
           "organizations"
         ]
@@ -9403,6 +11139,10 @@
     {
       "description": "Multi-tenancy primitive — org CRUD, membership, invitations, and RBAC.",
       "name": "organizations"
+    },
+    {
+      "description": "Audit log SIEM/syslog export destinations and replay.",
+      "name": "audit-export"
     }
   ]
 }

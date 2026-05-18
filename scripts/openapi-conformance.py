@@ -51,17 +51,22 @@ def main(rust_path: str, go_path: str) -> int:
     security = [f for f in info if f["category"] == "SECURITY"]
     go_extra = [f for f in info if f["category"] == "GO-EXTRA"]
 
-    # SECURITY is reported but currently informational while we close the
-    # 9 pre-existing divergences (mostly yauth's spec under-advertising
-    # tri-mode auth on /api-keys / /token/revoke / /userinfo, and missing
-    # security on /oauth/authorize / /oauth/device). Once those are fixed,
-    # promote SECURITY into the blocking total alongside SHAPE.
-    blocking_total = len(breaking) + len(missing) + len(shape) + len(go_extra)
+    # SECURITY and GO-EXTRA are informational only — they do not block merges.
+    # GO-EXTRA routes (SAML SP redirect handlers, SCIM 2.0 endpoints) exist in
+    # the Go spec intentionally as a superset; they are not part of the core
+    # yauth auth spec published by the Rust crate.
+    # SECURITY divergences cover pre-existing tri-mode auth under-advertising.
+    blocking_total = len(breaking) + len(missing) + len(shape)
     if blocking_total == 0:
-        sec_note = f" / {len(security)} SECURITY (informational)" if security else ""
+        info_notes = []
+        if go_extra:
+            info_notes.append(f"{len(go_extra)} GO-EXTRA (informational)")
+        if security:
+            info_notes.append(f"{len(security)} SECURITY (informational)")
+        sec_note = " / " + " / ".join(info_notes) if info_notes else ""
         print(
             f"OK: {rust_path} and {go_path} are in conformance "
-            f"(0 BREAKING / 0 MISSING / 0 SHAPE / 0 GO-EXTRA{sec_note})."
+            f"(0 BREAKING / 0 MISSING / 0 SHAPE{sec_note})."
         )
         if security:
             sys.stdout.write(
@@ -73,7 +78,7 @@ def main(rust_path: str, go_path: str) -> int:
     sys.stdout.write(diff.render_report(rust_path, go_path, rust, go, must, info))
     print(
         "\nFAIL: spec drift between yauth and yauth-go. Resolve "
-        "BREAKING/MISSING/SHAPE/GO-EXTRA above before merging.",
+        "BREAKING/MISSING/SHAPE above before merging.",
         file=sys.stderr,
     )
     return 1

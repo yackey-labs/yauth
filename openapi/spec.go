@@ -77,6 +77,7 @@ func Build() *huma.OpenAPI {
 	addOrganizations(api)
 	addActiveOrg(api)
 	addDomains(api)
+	addPolicy(api)
 
 	return api
 }
@@ -226,6 +227,10 @@ func declareSchemas(r huma.Registry) {
 		reflect.TypeOf(createDomainResponse{}),
 		reflect.TypeOf(updateDomainRequest{}),
 		reflect.TypeOf(verifyDomainResponse{}),
+
+		// yauth #92 — per-org auth policy
+		reflect.TypeOf(policyResponse{}),
+		reflect.TypeOf(updatePolicyRequest{}),
 	} {
 		_ = r.Schema(t, true, t.Name())
 	}

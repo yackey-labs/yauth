@@ -262,6 +262,10 @@ func (r *Repo) DeleteOrganization(ctx context.Context, id string) error {
 		if err := tx.Where("organization_id = ?", id).Delete(&OrganizationDomain{}).Error; err != nil {
 			return err
 		}
+		// Cascade org-scoped API keys (yauth #91 / yauth-go #19).
+		if err := tx.Where("organization_id = ?", id).Delete(&APIKey{}).Error; err != nil {
+			return err
+		}
 		return tx.Where("id = ?", id).Delete(&Organization{}).Error
 	})
 }

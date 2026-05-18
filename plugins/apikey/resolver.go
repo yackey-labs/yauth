@@ -90,7 +90,46 @@ func (r *apiKeyResolver) Resolve(req *http.Request) (*domain.AuthUser, bool, err
 		return nil, true, yautherr.ErrUnauthorized
 	}
 
-	user, err := repo.GetUserByID(ctx, rec.UserID)
+	// Org-scoped (service account) key path: yauth #91 / yauth-go #19.
+	// The credential carries no logged-in user — the bearer is the
+	// organization in the role recorded on the key row. We synthesise
+	// an AuthUser whose User.ID is the human creator (so existing
+	// audit code keeps working) and tag the Principal as a service
+	// account so explicit downstream gates can distinguish.
+	if rec.OrganizationID != nil {
+		creator, err := repo.GetUserByID(ctx, rec.CreatedByUserID)
+		if err != nil {
+			if errors.Is(err, yautherr.ErrNotFound) {
+				// Creator was deleted — the key is orphaned but
+				// the org still owns it. Surface as a clean 401
+				// rather than crashing on a nil deref.
+				return nil, true, yautherr.ErrUnauthorized
+			}
+			return nil, true, err
+		}
+		// A banned creator does NOT invalidate the org key on its
+		// own (the key belongs to the org, not the creator). The
+		// upstream audit trail records the creator anyway.
+		r.touchLastUsed(rec.ID)
+		au := &domain.AuthUser{
+			User:        *creator,
+			Method:      domain.AuthMethodServiceAccount,
+			ActiveOrgID: rec.OrganizationID,
+			OrgRole:     rec.Role,
+			Principal: domain.NewServiceAccountPrincipal(
+				*rec.OrganizationID, rec.ID, rec.CreatedByUserID),
+		}
+		return au, true, nil
+	}
+
+	// User-scoped key path.
+	if rec.UserID == nil {
+		// Defensive — every row has exactly one owner per the
+		// invariant. A nil UserID with nil OrganizationID indicates
+		// data corruption; treat as 401.
+		return nil, true, yautherr.ErrUnauthorized
+	}
+	user, err := repo.GetUserByID(ctx, *rec.UserID)
 	if err != nil {
 		if errors.Is(err, yautherr.ErrNotFound) {
 			return nil, true, yautherr.ErrUnauthorized
@@ -103,7 +142,11 @@ func (r *apiKeyResolver) Resolve(req *http.Request) (*domain.AuthUser, bool, err
 
 	r.touchLastUsed(rec.ID)
 
-	return &domain.AuthUser{User: *user, Method: domain.AuthMethodAPIKey}, true, nil
+	return &domain.AuthUser{
+		User:      *user,
+		Method:    domain.AuthMethodAPIKey,
+		Principal: domain.NewUserPrincipal(user.ID),
+	}, true, nil
 }
 
 // touchLastUsed fires UpdateAPIKeyLastUsed asynchronously. Errors are

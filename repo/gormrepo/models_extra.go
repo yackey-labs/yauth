@@ -454,45 +454,70 @@ func refreshTokenFromDomain(in domain.NewRefreshToken) RefreshToken {
 // --- APIKey ---
 
 // APIKey mirrors yauth_api_keys.
+//
+// Ownership is encoded by the (UserID, OrganizationID) nullable pair:
+// exactly one of the two is non-nil per row (yauth #91 / yauth-go #19).
+// Backends MUST enforce the invariant — gormrepo relies on the
+// validation in CreateAPIKey + an application-level CHECK; the in-
+// memory backend rejects mismatched inputs with
+// yautherr.ErrInvalidRequest.
 type APIKey struct {
-	ID         string     `gorm:"column:id;primaryKey"`
-	UserID     string     `gorm:"column:user_id;index"`
-	KeyPrefix  string     `gorm:"column:key_prefix;not null;uniqueIndex"`
-	KeyHash    string     `gorm:"column:key_hash;not null"`
-	Name       string     `gorm:"column:name;not null"`
-	Scopes     *string    `gorm:"column:scopes;type:text"`
-	LastUsedAt *time.Time `gorm:"column:last_used_at"`
-	ExpiresAt  *time.Time `gorm:"column:expires_at"`
-	CreatedAt  time.Time  `gorm:"column:created_at;not null"`
+	ID              string     `gorm:"column:id;primaryKey"`
+	UserID          *string    `gorm:"column:user_id;index"`
+	OrganizationID  *string    `gorm:"column:organization_id;index"`
+	KeyPrefix       string     `gorm:"column:key_prefix;not null;uniqueIndex"`
+	KeyHash         string     `gorm:"column:key_hash;not null"`
+	Name            string     `gorm:"column:name;not null"`
+	Scopes          *string    `gorm:"column:scopes;type:text"`
+	Role            *string    `gorm:"column:role"`
+	LastUsedAt      *time.Time `gorm:"column:last_used_at"`
+	ExpiresAt       *time.Time `gorm:"column:expires_at"`
+	CreatedAt       time.Time  `gorm:"column:created_at;not null"`
+	CreatedByUserID string     `gorm:"column:created_by_user_id;not null;index"`
 }
 
 func (APIKey) TableName() string { return "yauth_api_keys" }
 
 func (m *APIKey) toDomain() domain.APIKey {
 	return domain.APIKey{
-		ID:         m.ID,
-		UserID:     m.UserID,
-		KeyPrefix:  m.KeyPrefix,
-		KeyHash:    m.KeyHash,
-		Name:       m.Name,
-		Scopes:     rawJSONToBytes(m.Scopes),
-		LastUsedAt: ptrUTC(m.LastUsedAt),
-		ExpiresAt:  ptrUTC(m.ExpiresAt),
-		CreatedAt:  m.CreatedAt.UTC(),
+		ID:              m.ID,
+		UserID:          strPtrCopy(m.UserID),
+		OrganizationID:  strPtrCopy(m.OrganizationID),
+		KeyPrefix:       m.KeyPrefix,
+		KeyHash:         m.KeyHash,
+		Name:            m.Name,
+		Scopes:          rawJSONToBytes(m.Scopes),
+		Role:            strPtrCopy(m.Role),
+		LastUsedAt:      ptrUTC(m.LastUsedAt),
+		ExpiresAt:       ptrUTC(m.ExpiresAt),
+		CreatedAt:       m.CreatedAt.UTC(),
+		CreatedByUserID: m.CreatedByUserID,
 	}
 }
 
 func apiKeyFromDomain(in domain.NewAPIKey) APIKey {
 	return APIKey{
-		ID:        in.ID,
-		UserID:    in.UserID,
-		KeyPrefix: in.KeyPrefix,
-		KeyHash:   in.KeyHash,
-		Name:      in.Name,
-		Scopes:    strFromBytes(in.Scopes),
-		ExpiresAt: ptrUTC(in.ExpiresAt),
-		CreatedAt: in.CreatedAt.UTC(),
+		ID:              in.ID,
+		UserID:          strPtrCopy(in.UserID),
+		OrganizationID:  strPtrCopy(in.OrganizationID),
+		KeyPrefix:       in.KeyPrefix,
+		KeyHash:         in.KeyHash,
+		Name:            in.Name,
+		Scopes:          strFromBytes(in.Scopes),
+		Role:            strPtrCopy(in.Role),
+		ExpiresAt:       ptrUTC(in.ExpiresAt),
+		CreatedAt:       in.CreatedAt.UTC(),
+		CreatedByUserID: in.CreatedByUserID,
 	}
+}
+
+// strPtrCopy duplicates a *string for safe ownership transfer.
+func strPtrCopy(p *string) *string {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
 }
 
 // --- AuthorizationCode ---

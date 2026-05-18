@@ -861,16 +861,20 @@ var refreshTokenCases = []testCase{
 
 // ----- api keys -----
 
+// strRef is a tiny helper for &"literal" in the test rows below.
+func strRef(s string) *string { return &s }
+
 var apiKeyCases = []testCase{
 	{"create_get_by_prefix", func(t *testing.T, r repo.Repository) {
 		mustCreateUser(t, r, "u1", "alice@example.com")
 		now := nowUTC()
 		_ = r.CreateAPIKey(ctx(), domain.NewAPIKey{
-			ID: "k1", UserID: "u1", KeyPrefix: "pre_abc", KeyHash: "hash",
+			ID: "k1", UserID: strRef("u1"), KeyPrefix: "pre_abc", KeyHash: "hash",
 			Name: "default", Scopes: json.RawMessage(`[]`), CreatedAt: now,
+			CreatedByUserID: "u1",
 		})
 		got, err := r.GetAPIKeyByPrefix(ctx(), "pre_abc")
-		if err != nil || got == nil || got.UserID != "u1" {
+		if err != nil || got == nil || got.UserID == nil || *got.UserID != "u1" {
 			t.Fatalf("unexpected: %+v err=%v", got, err)
 		}
 	}},
@@ -884,7 +888,8 @@ var apiKeyCases = []testCase{
 		mustCreateUser(t, r, "u1", "alice@example.com")
 		now := nowUTC()
 		_ = r.CreateAPIKey(ctx(), domain.NewAPIKey{
-			ID: "k1", UserID: "u1", KeyPrefix: "p1", KeyHash: "h", Name: "n", CreatedAt: now,
+			ID: "k1", UserID: strRef("u1"), KeyPrefix: "p1", KeyHash: "h", Name: "n", CreatedAt: now,
+			CreatedByUserID: "u1",
 		})
 		t1 := now.Add(time.Minute)
 		if err := r.UpdateAPIKeyLastUsed(ctx(), "k1", t1); err != nil {
@@ -899,7 +904,8 @@ var apiKeyCases = []testCase{
 		mustCreateUser(t, r, "u1", "alice@example.com")
 		now := nowUTC()
 		_ = r.CreateAPIKey(ctx(), domain.NewAPIKey{
-			ID: "k1", UserID: "u1", KeyPrefix: "p1", KeyHash: "h", Name: "n", CreatedAt: now,
+			ID: "k1", UserID: strRef("u1"), KeyPrefix: "p1", KeyHash: "h", Name: "n", CreatedAt: now,
+			CreatedByUserID: "u1",
 		})
 		if err := r.DeleteAPIKey(ctx(), "k1"); err != nil {
 			t.Fatalf("DeleteAPIKey: %v", err)
@@ -907,6 +913,129 @@ var apiKeyCases = []testCase{
 		got, err := r.GetAPIKeyByPrefix(ctx(), "p1")
 		if got != nil || !errors.Is(err, yautherr.ErrNotFound) {
 			t.Fatalf("expected (nil, ErrNotFound); got (%+v, %v)", got, err)
+		}
+	}},
+	// --- yauth #91 / yauth-go #19 — org-scoped API keys (service accounts) ---
+	{"reject_no_owner", func(t *testing.T, r repo.Repository) {
+		mustCreateUser(t, r, "u1", "alice@example.com")
+		err := r.CreateAPIKey(ctx(), domain.NewAPIKey{
+			ID: "k1", KeyPrefix: "p1", KeyHash: "h", Name: "n",
+			CreatedAt: nowUTC(), CreatedByUserID: "u1",
+		})
+		if !errors.Is(err, yautherr.ErrInvalidRequest) {
+			t.Fatalf("expected ErrInvalidRequest for no-owner row; got %v", err)
+		}
+	}},
+	{"reject_both_owners", func(t *testing.T, r repo.Repository) {
+		mustCreateUser(t, r, "u1", "alice@example.com")
+		_, _ = r.CreateOrganization(ctx(), domain.NewOrganization{
+			ID: "o1", Name: "Acme", Slug: "acme",
+			CreatedAt: nowUTC(), UpdatedAt: nowUTC(),
+		})
+		err := r.CreateAPIKey(ctx(), domain.NewAPIKey{
+			ID: "k1", UserID: strRef("u1"), OrganizationID: strRef("o1"),
+			KeyPrefix: "p1", KeyHash: "h", Name: "n",
+			CreatedAt: nowUTC(), CreatedByUserID: "u1",
+		})
+		if !errors.Is(err, yautherr.ErrInvalidRequest) {
+			t.Fatalf("expected ErrInvalidRequest for two-owner row; got %v", err)
+		}
+	}},
+	{"create_org_key_and_list", func(t *testing.T, r repo.Repository) {
+		mustCreateUser(t, r, "u1", "alice@example.com")
+		_, _ = r.CreateOrganization(ctx(), domain.NewOrganization{
+			ID: "o1", Name: "Acme", Slug: "acme",
+			CreatedAt: nowUTC(), UpdatedAt: nowUTC(),
+		})
+		role := "admin"
+		now := nowUTC()
+		err := r.CreateAPIKey(ctx(), domain.NewAPIKey{
+			ID: "k1", OrganizationID: strRef("o1"),
+			KeyPrefix: "p1", KeyHash: "h", Name: "ci-runner",
+			Scopes:    json.RawMessage(`["scim:write"]`),
+			Role:      &role,
+			CreatedAt: now, CreatedByUserID: "u1",
+		})
+		if err != nil {
+			t.Fatalf("CreateAPIKey org-scoped: %v", err)
+		}
+		// List by org returns it.
+		got, err := r.ListAPIKeysByOrgID(ctx(), "o1")
+		if err != nil || len(got) != 1 {
+			t.Fatalf("ListAPIKeysByOrgID = %+v err=%v", got, err)
+		}
+		if got[0].OrganizationID == nil || *got[0].OrganizationID != "o1" {
+			t.Fatalf("org id mismatch: %+v", got[0])
+		}
+		if got[0].Role == nil || *got[0].Role != "admin" {
+			t.Fatalf("role mismatch: %+v", got[0])
+		}
+		if got[0].CreatedByUserID != "u1" {
+			t.Fatalf("created_by mismatch: %+v", got[0])
+		}
+		// List by user does NOT return it (org-scoped, not user-scoped).
+		userKeys, _ := r.ListAPIKeysByUserID(ctx(), "u1")
+		if len(userKeys) != 0 {
+			t.Fatalf("user list should not include org-scoped keys; got %+v", userKeys)
+		}
+		// GetAPIKeyByIDAndOrg succeeds.
+		one, err := r.GetAPIKeyByIDAndOrg(ctx(), "k1", "o1")
+		if err != nil || one == nil {
+			t.Fatalf("GetAPIKeyByIDAndOrg: %+v err=%v", one, err)
+		}
+		// Wrong org returns not found.
+		_, err = r.GetAPIKeyByIDAndOrg(ctx(), "k1", "o2")
+		if !errors.Is(err, yautherr.ErrNotFound) {
+			t.Fatalf("expected ErrNotFound for wrong org; got %v", err)
+		}
+		// GetAPIKeyByIDAndUser refuses org-scoped row.
+		_, err = r.GetAPIKeyByIDAndUser(ctx(), "k1", "u1")
+		if !errors.Is(err, yautherr.ErrNotFound) {
+			t.Fatalf("user-scoped lookup must not return org-scoped row; got %v", err)
+		}
+	}},
+	{"set_api_key_expiry", func(t *testing.T, r repo.Repository) {
+		mustCreateUser(t, r, "u1", "alice@example.com")
+		_, _ = r.CreateOrganization(ctx(), domain.NewOrganization{
+			ID: "o1", Name: "Acme", Slug: "acme",
+			CreatedAt: nowUTC(), UpdatedAt: nowUTC(),
+		})
+		now := nowUTC()
+		_ = r.CreateAPIKey(ctx(), domain.NewAPIKey{
+			ID: "k1", OrganizationID: strRef("o1"),
+			KeyPrefix: "p1", KeyHash: "h", Name: "n",
+			CreatedAt: now, CreatedByUserID: "u1",
+		})
+		future := now.Add(48 * time.Hour)
+		if err := r.SetAPIKeyExpiry(ctx(), "k1", &future); err != nil {
+			t.Fatalf("SetAPIKeyExpiry: %v", err)
+		}
+		got, _ := r.GetAPIKeyByPrefix(ctx(), "p1")
+		if got == nil || got.ExpiresAt == nil || !got.ExpiresAt.Equal(future) {
+			t.Fatalf("expires_at not set: %+v", got)
+		}
+		// SetAPIKeyExpiry on missing id returns ErrNotFound.
+		if err := r.SetAPIKeyExpiry(ctx(), "nope", &future); !errors.Is(err, yautherr.ErrNotFound) {
+			t.Fatalf("expected ErrNotFound; got %v", err)
+		}
+	}},
+	{"delete_organization_cascades_keys", func(t *testing.T, r repo.Repository) {
+		mustCreateUser(t, r, "u1", "alice@example.com")
+		_, _ = r.CreateOrganization(ctx(), domain.NewOrganization{
+			ID: "o1", Name: "Acme", Slug: "acme",
+			CreatedAt: nowUTC(), UpdatedAt: nowUTC(),
+		})
+		_ = r.CreateAPIKey(ctx(), domain.NewAPIKey{
+			ID: "k1", OrganizationID: strRef("o1"),
+			KeyPrefix: "p1", KeyHash: "h", Name: "n",
+			CreatedAt: nowUTC(), CreatedByUserID: "u1",
+		})
+		if err := r.DeleteOrganization(ctx(), "o1"); err != nil {
+			t.Fatalf("DeleteOrganization: %v", err)
+		}
+		got, err := r.GetAPIKeyByPrefix(ctx(), "p1")
+		if got != nil || !errors.Is(err, yautherr.ErrNotFound) {
+			t.Fatalf("expected key purged after org delete; got %+v err=%v", got, err)
 		}
 	}},
 }

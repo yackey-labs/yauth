@@ -63,6 +63,12 @@ const (
 // defaultInvitationTTL matches the Rust reference (7 days).
 const defaultInvitationTTL = 7 * 24 * time.Hour
 
+// defaultAPIKeyPrefix matches the apikey plugin's default. Service-
+// account keys minted via the org plugin use the same wire format
+// as user-scoped keys ("<prefix>_<8hex>_<32hex>") so the bearer
+// resolver can authenticate them without a separate code path.
+const defaultAPIKeyPrefix = "yak"
+
 // Config tunes the organizations plugin. Zero value yields safe
 // defaults that match the Rust reference implementation.
 type Config struct {
@@ -80,6 +86,12 @@ type Config struct {
 	// auth.DefaultDomainTXTResolver, which uses the OS resolver.
 	// Inject a fake for tests or a custom *net.Resolver for tuning.
 	DomainTXTResolver auth.DomainTXTResolver
+
+	// APIKeyPrefix is the prefix-tag used when minting org-scoped
+	// API keys (yauth #91 / yauth-go #19). Must match the apikey
+	// plugin's Config.Prefix so a single resolver path validates
+	// both user- and org-scoped credentials. Defaults to "yak".
+	APIKeyPrefix string
 }
 
 func applyDefaults(c Config) Config {
@@ -88,6 +100,9 @@ func applyDefaults(c Config) Config {
 	}
 	if c.DefaultInviteRole == "" {
 		c.DefaultInviteRole = RoleMember
+	}
+	if c.APIKeyPrefix == "" {
+		c.APIKeyPrefix = defaultAPIKeyPrefix
 	}
 	return c
 }
@@ -147,4 +162,17 @@ func (p *orgsPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux, prefix s
 	mux.Handle("POST "+prefix+"/organizations/{id}/domains/{did}/verify", mw.RequireAuth(http.HandlerFunc(p.handleVerifyOrgDomain(host))))
 	mux.Handle("DELETE "+prefix+"/organizations/{id}/domains/{did}", mw.RequireAuth(http.HandlerFunc(p.handleDeleteOrgDomain(host))))
 	mux.Handle("PATCH "+prefix+"/organizations/{id}/domains/{did}", mw.RequireAuth(http.HandlerFunc(p.handlePatchOrgDomain(host))))
+
+	// Org-scoped API key (service account) routes — yauth #91 /
+	// yauth-go #19. Admin-gated. Only mounted when the
+	// organizations plugin is registered; single-user / anonymous
+	// deployments never see them. The credential format is shared
+	// with the apikey plugin's user-scoped keys so the same
+	// X-Api-Key resolver authenticates both — the orgs plugin only
+	// adds management routes, not a second resolver.
+	mux.Handle("POST "+prefix+"/organizations/{id}/api-keys", mw.RequireAuth(http.HandlerFunc(p.handleCreateOrgAPIKey(host, p.cfg.APIKeyPrefix))))
+	mux.Handle("GET "+prefix+"/organizations/{id}/api-keys", mw.RequireAuth(http.HandlerFunc(p.handleListOrgAPIKeys(host))))
+	mux.Handle("DELETE "+prefix+"/organizations/{id}/api-keys/{key_id}", mw.RequireAuth(http.HandlerFunc(p.handleDeleteOrgAPIKey(host))))
+	mux.Handle("POST "+prefix+"/organizations/{id}/api-keys/{key_id}/rotate", mw.RequireAuth(http.HandlerFunc(p.handleRotateOrgAPIKey(host, p.cfg.APIKeyPrefix))))
+	mux.Handle("GET "+prefix+"/organizations/{id}/api-keys/{key_id}/usage", mw.RequireAuth(http.HandlerFunc(p.handleOrgAPIKeyUsage(host))))
 }

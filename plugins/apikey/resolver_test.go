@@ -41,7 +41,7 @@ func seededFixture(t *testing.T) (*fakeRepo, *fakeHost, domain.User, GeneratedKe
 	keyID := uuid.NewString()
 	r.putKey(domain.APIKey{
 		ID:        keyID,
-		UserID:    user.ID,
+		UserID:    &user.ID,
 		KeyPrefix: gen.Prefix,
 		KeyHash:   gen.Hash,
 		Name:      "test",
@@ -167,7 +167,7 @@ func TestResolver_ExpiredKey_RecognizedExpired(t *testing.T) {
 	gen2 := mustGenerateKey(t)
 	r.putKey(domain.APIKey{
 		ID:        uuid.NewString(),
-		UserID:    user.ID,
+		UserID:    &user.ID,
 		KeyPrefix: gen2.Prefix,
 		KeyHash:   gen2.Hash,
 		Name:      "expired",
@@ -205,5 +205,94 @@ func TestResolver_BannedUser_RecognizedBanned(t *testing.T) {
 	}
 	if !errors.Is(err, yautherr.ErrUserBanned) {
 		t.Errorf("want ErrUserBanned, got %v", err)
+	}
+}
+
+// TestResolver_OrgScopedKey verifies the yauth #91 / yauth-go #19
+// service-account path: the resolver tags Method = service-account,
+// surfaces the org id on ActiveOrgID, and emits a ServiceAccount
+// Principal with KeyID + CreatedBy populated for downstream audit.
+func TestResolver_OrgScopedKey(t *testing.T) {
+	r := newFakeRepo()
+	h := newFakeHost(r)
+	creator := domain.User{
+		ID:        uuid.NewString(),
+		Email:     "admin@example.com",
+		Role:      "user",
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}
+	r.putUser(creator)
+	gen := mustGenerateKey(t)
+	orgID := uuid.NewString()
+	role := "admin"
+	keyID := uuid.NewString()
+	r.putKey(domain.APIKey{
+		ID:              keyID,
+		OrganizationID:  &orgID,
+		KeyPrefix:       gen.Prefix,
+		KeyHash:         gen.Hash,
+		Name:            "ci-runner",
+		Scopes:          []byte("[]"),
+		Role:            &role,
+		CreatedAt:       time.Now().UTC(),
+		CreatedByUserID: creator.ID,
+	})
+
+	res := newResolver(h, "yak")
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set(headerName, gen.Plaintext)
+	au, recognized, err := res.Resolve(req)
+	if err != nil || !recognized || au == nil {
+		t.Fatalf("expected service-account auth; got au=%v recognized=%v err=%v", au, recognized, err)
+	}
+	if au.Method != domain.AuthMethodServiceAccount {
+		t.Errorf("want Method=%q got %q", domain.AuthMethodServiceAccount, au.Method)
+	}
+	if au.ActiveOrgID == nil || *au.ActiveOrgID != orgID {
+		t.Errorf("want ActiveOrgID=%q got %+v", orgID, au.ActiveOrgID)
+	}
+	if au.OrgRole == nil || *au.OrgRole != "admin" {
+		t.Errorf("want OrgRole=admin got %+v", au.OrgRole)
+	}
+	if !au.Principal.IsServiceAccount() {
+		t.Errorf("want ServiceAccount principal; got %+v", au.Principal)
+	}
+	if au.Principal.KeyID == nil || *au.Principal.KeyID != keyID {
+		t.Errorf("KeyID not surfaced: %+v", au.Principal.KeyID)
+	}
+	if au.Principal.CreatedBy == nil || *au.Principal.CreatedBy != creator.ID {
+		t.Errorf("CreatedBy not surfaced: %+v", au.Principal.CreatedBy)
+	}
+}
+
+// TestResolver_OrgScopedKey_CreatorDeleted asserts that a key whose
+// human creator has been deleted returns 401 cleanly rather than
+// crashing.
+func TestResolver_OrgScopedKey_CreatorDeleted(t *testing.T) {
+	r := newFakeRepo()
+	h := newFakeHost(r)
+	// Do NOT seed creator; key references a missing user.
+	gen := mustGenerateKey(t)
+	orgID := uuid.NewString()
+	r.putKey(domain.APIKey{
+		ID:              uuid.NewString(),
+		OrganizationID:  &orgID,
+		KeyPrefix:       gen.Prefix,
+		KeyHash:         gen.Hash,
+		Name:            "orphan",
+		Scopes:          []byte("[]"),
+		CreatedAt:       time.Now().UTC(),
+		CreatedByUserID: "deleted-user-id",
+	})
+	res := newResolver(h, "yak")
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set(headerName, gen.Plaintext)
+	au, recognized, err := res.Resolve(req)
+	if au != nil || !recognized {
+		t.Fatalf("want (nil, true), got (%v, %v)", au, recognized)
+	}
+	if !errors.Is(err, yautherr.ErrUnauthorized) {
+		t.Errorf("want ErrUnauthorized, got %v", err)
 	}
 }

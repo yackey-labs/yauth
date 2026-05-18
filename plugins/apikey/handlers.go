@@ -245,15 +245,17 @@ func (p *apiKeyPlugin) handleCreate(host plugin.PluginHost) http.HandlerFunc {
 		scopesJSON := encodeScopes(req.Scopes)
 
 		now := time.Now().UTC()
+		uid := au.User.ID
 		input := domain.NewAPIKey{
-			ID:        uuid.NewString(),
-			UserID:    au.User.ID,
-			KeyPrefix: gen.Prefix,
-			KeyHash:   gen.Hash,
-			Name:      req.Name,
-			Scopes:    scopesJSON,
-			ExpiresAt: expiresAt,
-			CreatedAt: now,
+			ID:              uuid.NewString(),
+			UserID:          &uid,
+			KeyPrefix:       gen.Prefix,
+			KeyHash:         gen.Hash,
+			Name:            req.Name,
+			Scopes:          scopesJSON,
+			ExpiresAt:       expiresAt,
+			CreatedAt:       now,
+			CreatedByUserID: au.User.ID,
 		}
 		if err := repo.CreateAPIKey(r.Context(), input); err != nil {
 			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to store api key")

@@ -407,6 +407,18 @@ func cloneAPIKey(k *domain.APIKey) *domain.APIKey {
 		return nil
 	}
 	c := *k
+	if k.UserID != nil {
+		v := *k.UserID
+		c.UserID = &v
+	}
+	if k.OrganizationID != nil {
+		v := *k.OrganizationID
+		c.OrganizationID = &v
+	}
+	if k.Role != nil {
+		v := *k.Role
+		c.Role = &v
+	}
 	if k.ExpiresAt != nil {
 		t := *k.ExpiresAt
 		c.ExpiresAt = &t

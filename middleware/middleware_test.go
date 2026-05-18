@@ -337,10 +337,19 @@ func (f *fakeRepo) GetAPIKeyByPrefix(_ context.Context, _ string) (*domain.APIKe
 func (f *fakeRepo) GetAPIKeyByIDAndUser(_ context.Context, _, _ string) (*domain.APIKey, error) {
 	return nil, yautherr.ErrNotFound
 }
+func (f *fakeRepo) GetAPIKeyByIDAndOrg(_ context.Context, _, _ string) (*domain.APIKey, error) {
+	return nil, yautherr.ErrNotFound
+}
 func (f *fakeRepo) ListAPIKeysByUserID(_ context.Context, _ string) ([]*domain.APIKey, error) {
 	return nil, nil
 }
+func (f *fakeRepo) ListAPIKeysByOrgID(_ context.Context, _ string) ([]*domain.APIKey, error) {
+	return nil, nil
+}
 func (f *fakeRepo) UpdateAPIKeyLastUsed(_ context.Context, _ string, _ time.Time) error {
+	return yautherr.ErrNotFound
+}
+func (f *fakeRepo) SetAPIKeyExpiry(_ context.Context, _ string, _ *time.Time) error {
 	return yautherr.ErrNotFound
 }
 func (f *fakeRepo) DeleteAPIKey(_ context.Context, _ string) error { return yautherr.ErrNotFound }

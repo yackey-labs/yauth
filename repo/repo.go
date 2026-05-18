@@ -359,6 +359,55 @@ type InvitationRepository interface {
 	ListPendingInvitationsForOrg(ctx context.Context, organizationID string) ([]*domain.Invitation, error)
 }
 
+// OrganizationDomainRepository covers OrganizationDomain CRUD plus the
+// atomic verification-state transition. Port of yauth Rust #90.
+//
+// Invariants every backend MUST honor:
+//
+//   - CreateOrganizationDomain MUST reject a duplicate Domain (a row
+//     whose canonicalized domain string already exists, regardless of
+//     organization_id) with yautherr.ErrConflict. This is the
+//     app-wide UNIQUE(domain) anti-abuse gate.
+//   - GetOrganizationDomainByDomain is case-insensitive and MUST match
+//     against the canonical lowercase form.
+//   - SetOrganizationDomainVerification atomically updates
+//     (status, verified_at, last_checked_at, updated_at).
+//   - DeleteOrganizationDomain is idempotent — a non-existent id
+//     returns nil.
+//   - Deleting an Organization cascades to its domain rows (FK ON
+//     DELETE CASCADE / explicit in memrepo).
+type OrganizationDomainRepository interface {
+	// CreateOrganizationDomain returns yautherr.ErrConflict on
+	// duplicate Domain (app-wide uniqueness, case-insensitive).
+	CreateOrganizationDomain(ctx context.Context, input domain.NewOrganizationDomain) (domain.OrganizationDomain, error)
+	GetOrganizationDomainByID(ctx context.Context, id string) (*domain.OrganizationDomain, error)
+	// GetOrganizationDomainByDomain is case-insensitive on the
+	// domain key. Returns (nil, yautherr.ErrNotFound) when no row
+	// matches.
+	GetOrganizationDomainByDomain(ctx context.Context, domainStr string) (*domain.OrganizationDomain, error)
+	// ListOrganizationDomainsByOrg returns every domain row for orgID
+	// in deterministic order (created_at ascending, id ascending).
+	ListOrganizationDomainsByOrg(ctx context.Context, organizationID string) ([]*domain.OrganizationDomain, error)
+	// ListVerifiedAutoJoinOrganizationDomains returns every verified
+	// row whose Domain matches domainStr (case-insensitive) AND has
+	// AutoJoinOnSignup = true. Order is created_at ascending. With
+	// the app-wide UNIQUE(domain) invariant this returns 0 or 1 row,
+	// but the slice shape leaves room for relaxing the constraint
+	// later without churning callers.
+	ListVerifiedAutoJoinOrganizationDomains(ctx context.Context, domainStr string) ([]*domain.OrganizationDomain, error)
+	// UpdateOrganizationDomain applies a partial update. Returns
+	// yautherr.ErrNotFound when no row matches id.
+	UpdateOrganizationDomain(ctx context.Context, id string, changes domain.UpdateOrganizationDomain) (domain.OrganizationDomain, error)
+	// SetOrganizationDomainVerification atomically updates the
+	// verification triple (status, verified_at, last_checked_at) and
+	// bumps updated_at to now. Pass verifiedAt = nil to express "did
+	// not verify"; pass non-nil only for status == verified. Returns
+	// yautherr.ErrNotFound when no row matches id.
+	SetOrganizationDomainVerification(ctx context.Context, id string, status domain.DomainStatus, verifiedAt *time.Time, lastCheckedAt time.Time) (domain.OrganizationDomain, error)
+	// DeleteOrganizationDomain is idempotent.
+	DeleteOrganizationDomain(ctx context.Context, id string) error
+}
+
 // WebhookRetryRepository covers persisted webhook retries — the
 // crash-safe queue that survives process restarts. ClaimDueRetries is
 // the linchpin: it MUST atomically remove each returned row from the
@@ -409,4 +458,5 @@ type Repository interface {
 	OrganizationRepository
 	MembershipRepository
 	InvitationRepository
+	OrganizationDomainRepository
 }

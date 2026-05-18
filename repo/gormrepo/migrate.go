@@ -46,5 +46,6 @@ func Migrate(ctx context.Context, db *gorm.DB) error {
 		&Organization{},
 		&Membership{},
 		&Invitation{},
+		&OrganizationDomain{},
 	)
 }

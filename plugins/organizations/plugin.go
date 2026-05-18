@@ -45,6 +45,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/yackey-labs/yauth-go/auth"
 	"github.com/yackey-labs/yauth-go/plugin"
 )
 
@@ -73,6 +74,12 @@ type Config struct {
 	// caller omits "role" in the create-invitation request. Defaults
 	// to "member".
 	DefaultInviteRole string
+
+	// DomainTXTResolver is the DNS resolver used by the verified-
+	// domain /verify endpoint (yauth #90 port). Defaults to
+	// auth.DefaultDomainTXTResolver, which uses the OS resolver.
+	// Inject a fake for tests or a custom *net.Resolver for tuning.
+	DomainTXTResolver auth.DomainTXTResolver
 }
 
 func applyDefaults(c Config) Config {
@@ -88,11 +95,16 @@ func applyDefaults(c Config) Config {
 // orgsPlugin is an unexported implementation of plugin.Plugin.
 type orgsPlugin struct {
 	cfg Config
+	// domainResolver is the DNS lookup seam used by the verified-
+	// domain /verify endpoint. Copied off cfg at construction time
+	// so tests that pass nil still get the package default.
+	domainResolver auth.DomainTXTResolver
 }
 
 // New constructs the organizations plugin.
 func New(cfg Config) plugin.Plugin {
-	return &orgsPlugin{cfg: applyDefaults(cfg)}
+	c := applyDefaults(cfg)
+	return &orgsPlugin{cfg: c, domainResolver: c.DomainTXTResolver}
 }
 
 // Name implements plugin.Plugin.
@@ -125,4 +137,13 @@ func (p *orgsPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux, prefix s
 	mux.Handle("GET "+prefix+"/sessions/active-org", mw.RequireAuth(http.HandlerFunc(p.handleGetActiveOrg(host))))
 	mux.Handle("POST "+prefix+"/sessions/active-org", mw.RequireAuth(http.HandlerFunc(p.handleSetActiveOrg(host))))
 	mux.Handle("DELETE "+prefix+"/sessions/active-org", mw.RequireAuth(http.HandlerFunc(p.handleClearActiveOrg(host))))
+
+	// Verified-domain routes (yauth #90 / Go #17). Admin-gated;
+	// only mounted when the organizations plugin is registered.
+	// Single-user / anonymous deployments never see them.
+	mux.Handle("POST "+prefix+"/organizations/{id}/domains", mw.RequireAuth(http.HandlerFunc(p.handleCreateOrgDomain(host))))
+	mux.Handle("GET "+prefix+"/organizations/{id}/domains", mw.RequireAuth(http.HandlerFunc(p.handleListOrgDomains(host))))
+	mux.Handle("POST "+prefix+"/organizations/{id}/domains/{did}/verify", mw.RequireAuth(http.HandlerFunc(p.handleVerifyOrgDomain(host))))
+	mux.Handle("DELETE "+prefix+"/organizations/{id}/domains/{did}", mw.RequireAuth(http.HandlerFunc(p.handleDeleteOrgDomain(host))))
+	mux.Handle("PATCH "+prefix+"/organizations/{id}/domains/{did}", mw.RequireAuth(http.HandlerFunc(p.handlePatchOrgDomain(host))))
 }

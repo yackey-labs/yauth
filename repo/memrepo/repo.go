@@ -137,6 +137,14 @@ type Repo struct {
 	// invitation ID.
 	invitations        map[string]*domain.Invitation
 	invitationTokenIdx map[string]string
+
+	// OrganizationDomains keyed by ID; orgDomainNameIdx maps the
+	// lowercased canonical domain string to the row id. This is the
+	// app-wide UNIQUE(domain) index from yauth #90 — duplicate-domain
+	// inserts surface as ErrConflict here in the in-memory shape, and
+	// as a unique-violation in gormrepo.
+	orgDomains       map[string]*domain.OrganizationDomain
+	orgDomainNameIdx map[string]string
 }
 
 // rateLimitState is a fixed-window counter row.
@@ -193,6 +201,8 @@ func New() *Repo {
 		membershipOrgUserIdx:  make(map[string]string),
 		invitations:           make(map[string]*domain.Invitation),
 		invitationTokenIdx:    make(map[string]string),
+		orgDomains:            make(map[string]*domain.OrganizationDomain),
+		orgDomainNameIdx:      make(map[string]string),
 	}
 }
 

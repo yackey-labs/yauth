@@ -257,6 +257,8 @@ under the hood).
 | oidc             | `plugins/oidc`               | ✅     |
 | oauth2-server    | `plugins/oauth2server`       | ✅     |
 | organizations    | `plugins/organizations`      | ✅     |
+| scim             | `plugins/scim`               | ✅     |
+| audit-export     | `plugins/auditexport`        | ✅     |
 
 Every plugin in the table maps 1:1 to a Rust feature flag. Each ships
 with one or more runnable examples under [`examples/`](examples/).
@@ -354,6 +356,153 @@ if au.ActiveOrgID != nil {
 Single-user deployments that never register the `organizations` plugin
 pay zero overhead: `ActiveOrgID` stays nil and the JWT/cookie shapes
 are identical to pre-#89 yauth-go.
+
+#### Verified domains + JIT membership
+
+The `organizations` plugin supports domain-verified SSO: register an
+email domain (e.g. `acme.com`), prove ownership via a DNS TXT challenge,
+and any new user that signs up with a matching email is automatically
+invited into the org at the configured default role (Just-In-Time
+provisioning).
+
+Routes:
+
+- `POST   /organizations/{id}/domains` — register a domain + get the DNS challenge
+- `POST   /organizations/{id}/domains/{domain}/verify` — confirm the TXT record
+- `DELETE /organizations/{id}/domains/{domain}` — unregister
+- `GET    /organizations/{id}/domains` — list registered domains + status
+
+#### Per-org auth policy
+
+Each organization carries an `AuthPolicy` that overrides the instance-level
+defaults for members of that org:
+
+| Field | Type | Effect |
+|---|---|---|
+| `RequireMfa` | `bool` | Force TOTP/passkey challenge on login for all org members |
+| `AllowedIdPs` | `[]string` | Restrict SSO connections to a whitelist of provider IDs |
+| `SessionTTL` | `*Duration` | Override global session expiry for the org |
+| `PasswordMinLength` | `int` | Minimum password length for org members |
+
+Update policy:
+
+```go
+POST /organizations/{id}/policy
+{ "require_mfa": true, "session_ttl": "8h", "password_min_length": 16 }
+```
+
+Read policy: `GET /organizations/{id}/policy` (admin+).
+
+#### Org-scoped API keys
+
+The `organizations` plugin issues API keys that carry the org ID and
+the caller's role in their payload, so `X-Api-Key` requests are
+automatically tenant-scoped. Create a key:
+
+```
+POST /organizations/{id}/api-keys
+{ "name": "CI pipeline", "scopes": ["read"], "expires_at": "2026-12-31T00:00:00Z" }
+```
+
+The returned `yak_<prefix>_<secret>` header value works as a drop-in
+`X-Api-Key` — the middleware resolves it to `*domain.AuthUser` with
+`ActiveOrgID` and `OrgRole` populated.
+
+#### SSO connections — OIDC client
+
+Add an OIDC identity provider to an org so members can sign in via
+`/sso/oidc/login` (authorization-code + PKCE). Supported providers
+include Google Workspace, Entra ID, Okta, Auth0, Keycloak, and any
+standards-compliant OIDC issuer.
+
+```go
+POST /organizations/{id}/sso/connections
+{
+  "type": "oidc",
+  "client_id": "...",
+  "client_secret": "...",
+  "issuer_url": "https://accounts.google.com",
+  "default_role": "member"
+}
+```
+
+Routes:
+
+- `GET  /sso/oidc/login?connection_id=<cid>` — redirect to IdP
+- `GET  /sso/oidc/callback` — handle IdP redirect + issue session
+- `GET  /sso/oidc/connections` — list connections (admin)
+
+#### SSO connections — SAML 2.0 SP
+
+SAML Service Provider support for ADFS, Entra ID, Okta, Auth0,
+OneLogin, and Ping Identity. The spec for these routes lives in
+`openapi/saml.go`; the routes are Go-only (see
+[cross-language conformance](#cross-language-conformance)).
+
+```go
+POST /organizations/{id}/sso/connections
+{ "type": "saml", "metadata_url": "https://login.microsoftonline.com/...federationmetadata/...", "default_role": "member" }
+```
+
+Routes:
+
+- `GET  /sso/saml/login?connection_id=<cid>` — SP-initiated redirect
+- `POST /sso/saml/acs` — Assertion Consumer Service (IdP POST)
+- `GET  /sso/saml/metadata/{cid}` — SP metadata XML (give to your IdP)
+- `GET  /sso/saml/logout` — SP-initiated SLO
+- `POST /sso/saml/slo` — IdP-initiated SLO
+
+#### SCIM 2.0 provisioning
+
+The `scim` plugin mounts RFC 7643/7644 Users + Groups endpoints under
+`/api/scim/v2/organizations/{org_id}/`. Configure your IdP (Okta,
+Entra, OneLogin) to push user/group changes here; SCIM operations map
+directly to `Membership` create/update/deactivate events. Requires
+the `organizations` and `api-key` plugins — the IdP authenticates with
+a long-lived `X-Api-Key`.
+
+```go
+WithPlugin(scim.New(scim.Config{}))
+```
+
+Routes (SCIM spec-standard):
+
+- `GET/POST   /api/scim/v2/organizations/{org_id}/Users`
+- `GET/PUT/PATCH/DELETE /api/scim/v2/organizations/{org_id}/Users/{id}`
+- `GET/POST   /api/scim/v2/organizations/{org_id}/Groups`
+- `GET/PUT/PATCH/DELETE /api/scim/v2/organizations/{org_id}/Groups/{id}`
+- `GET        /api/scim/v2/organizations/{org_id}/ServiceProviderConfig`
+- `GET        /api/scim/v2/organizations/{org_id}/Schemas`
+
+Like the SAML routes, the SCIM surface is Go-only in `openapi/scim.go`
+and categorised as `GO-EXTRA` in the conformance report.
+
+#### Audit export / SIEM
+
+The `audit-export` plugin delivers a copy of every `yauth_audit_log`
+row to one or more external destinations with at-least-once delivery
+semantics. Requires the `webhooks` and `admin` plugins.
+
+```go
+WithPlugin(auditexport.New(auditexport.Config{}))
+```
+
+Configure destinations via `POST /audit/export/destinations`:
+
+| `type` | Notes |
+|---|---|
+| `webhook` | HMAC-SHA256 signed HTTP POST, same wire format as the webhooks plugin |
+| `syslog` | RFC 5424 over TLS (port 6514); works with Splunk, syslog-ng, rsyslog |
+| `s3` | S3-compatible (AWS, Cloudflare R2, MinIO); newline-delimited JSON |
+| `splunk` | Splunk HEC (`/services/collector/event`) |
+| `datadog` | Datadog Logs API (`/api/v2/logs`) |
+
+Routes:
+
+- `GET/POST   /audit/export/destinations` — list / add
+- `GET/DELETE /audit/export/destinations/{id}` — inspect / remove
+- `POST       /audit/export/destinations/{id}/test` — send a synthetic event
+- `GET        /audit/export/queue` — delivery queue depth (admin diagnostics)
 
 ### Webhooks lifecycle
 
@@ -591,6 +740,16 @@ const { user } = useSession()
 | OpenAPI                | ✅           | Huma-driven; equivalent to utoipa                                                        |
 | Forgot/reset password  | ✅           | `/forgot-password` + `/reset-password` wired in email-password plugin                   |
 | Email verification     | ✅           | `/verify-email` + `/resend-verification` wired in email-password plugin                  |
+| organizations          | ✅           | Org + Membership + Invitation + RBAC; verified domains + JIT; active-org claim; per-org auth policy |
+| org-scoped RBAC        | ✅           | Built-in roles (owner/admin/billing-admin/member/viewer); `RequireOrgRole` / `RequireOrgPermission` |
+| active-org switcher    | ✅           | Cookie + JWT paths; auto-picks on login; `GET/POST/DELETE /sessions/active-org`         |
+| verified domains + JIT | ✅           | DNS TXT challenge; JIT membership at configurable default role                          |
+| per-org auth policy    | ✅           | `require_mfa`, `allowed_idps`, `session_ttl`, `password_min_length` per org             |
+| org-scoped API keys    | ✅           | `yak_` keys carry `active_org_id` + `org_role`; `POST /organizations/{id}/api-keys`    |
+| SSO — OIDC client      | ✅           | Auth code + PKCE; Google/Entra/Okta/Auth0/Keycloak; JIT + role mapping                 |
+| SSO — SAML 2.0 SP      | ✅           | SP-initiated + IdP-initiated; metadata XML; Entra/Okta/ADFS/Auth0/OneLogin/Ping        |
+| SCIM 2.0               | ✅           | RFC 7643/7644 Users + Groups push sync; Okta/Entra/OneLogin; Go-only routes            |
+| audit-export / SIEM    | ✅           | Webhook, syslog TLS, S3, Splunk HEC, Datadog; at-least-once; Go-only routes            |
 | 14 DB backends         | ⚙️ 3 of 14   | GORM PG + SQLite + MySQL; the `repo.Repository` interface is the extension point        |
 
 `✅ done · ⚙️ partial · ❌ not yet`
@@ -607,7 +766,7 @@ const { user } = useSession()
 - `repo/redisrepo/`    — Redis caching decorator (sessions, rate limits, revocations)
 - `repo/memrepo/`      — in-memory backend (testing + zero-config quickstart)
 - `repo/conformance/`  — portable conformance harness for any `repo.Repository` implementation
-- `plugins/`           — every plugin (one directory per name)
+- `plugins/`           — every plugin (one directory per name; `organizations/`, `scim/`, `auditexport/` are the enterprise additions)
 - `yautherr/`          — sentinel errors as a leaf package (avoids import cycles across sub-packages)
 - `telemetry/`         — OpenTelemetry init + HTTP middleware
 - `openapi/`           — hand-rolled Huma spec + `/docs` + `/openapi.json` handlers
@@ -661,8 +820,8 @@ Cutting a release:
 git checkout main && git pull
 
 # 2. tag and push
-git tag -a v0.1.0 -m "yauth-go v0.1.0"
-git push origin v0.1.0
+git tag -a v0.2.0 -m "yauth-go v0.2.0"
+git push origin v0.2.0
 ```
 
 Dry-run a release locally before tagging:

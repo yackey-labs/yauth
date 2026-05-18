@@ -56,16 +56,14 @@ type ssoTestResponse struct {
 //
 // Admin CRUD (protected, org-admin gated):
 //
-//	GET    /organizations/{id}/sso/connections
-//	POST   /organizations/{id}/sso/connections
+//	GET  /organizations/{id}/sso/connections
+//	POST /organizations/{id}/sso/connections
 //	PATCH  /organizations/{id}/sso/connections/{cid}
 //	DELETE /organizations/{id}/sso/connections/{cid}
 //	POST   /organizations/{id}/sso/connections/{cid}/test
 //
-// Public login flow (no auth required):
-//
-//	GET /sso/login?org=<slug>   – redirect to IdP authorize URL
-//	GET /sso/callback           – OIDC authorization-code callback
+// Note: /sso/login and /sso/callback are app-level redirect handlers,
+// not declared in the shared OpenAPI spec.
 func addSsoOidc(api *huma.OpenAPI) {
 	orgIDParam := pathParam("id", "Organization id (UUID).")
 	cidParam := pathParam("cid", "SSO connection id (UUID).")
@@ -146,41 +144,6 @@ func addSsoOidc(api *huma.OpenAPI) {
 			"401": errorResponse("Not authenticated."),
 			"403": errorResponse("Caller is not an admin of this organization."),
 			"404": errorResponse("SSO connection not found."),
-		},
-	})
-
-	// Public: initiate SSO login
-	api.AddOperation(&huma.Operation{
-		Method: http.MethodGet, Path: "/sso/login",
-		Tags: []string{"organizations"}, OperationID: "ssoLogin",
-		Summary:  "Initiate SSO login — redirects to the IdP authorize URL",
-		Security: secNone(),
-		Parameters: []*huma.Param{
-			queryStringParam("org", "Organization slug or id."),
-			queryStringParam("domain", "Verified email domain for home-realm discovery."),
-			queryStringParam("redirect_to", "Post-login redirect URL (optional)."),
-		},
-		Responses: map[string]*huma.Response{
-			"302": emptyResponse("Redirect to IdP authorize URL."),
-			"400": errorResponse("Missing or ambiguous org/domain parameter."),
-			"404": errorResponse("Organization or SSO connection not found."),
-		},
-	})
-
-	// Public: OIDC callback
-	api.AddOperation(&huma.Operation{
-		Method: http.MethodGet, Path: "/sso/callback",
-		Tags: []string{"organizations"}, OperationID: "ssoCallback",
-		Summary:  "OIDC authorization-code callback — exchanges code, provisions user, sets session cookie",
-		Security: secNone(),
-		Parameters: []*huma.Param{
-			queryStringParam("code", "Authorization code from IdP."),
-			queryStringParam("state", "State token from /sso/login."),
-		},
-		Responses: map[string]*huma.Response{
-			"302": emptyResponse("Redirect to app (post-login URL or /)."),
-			"400": errorResponse("Missing or invalid code/state."),
-			"401": errorResponse("Token exchange or id_token validation failed."),
 		},
 	})
 }

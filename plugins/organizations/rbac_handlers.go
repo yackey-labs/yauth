@@ -27,8 +27,9 @@ type transferOwnershipRequest struct {
 }
 
 type listPermissionsResponse struct {
-	Role        string   `json:"role"`
-	Permissions []string `json:"permissions"`
+	OrganizationID string   `json:"organization_id"`
+	Role           string   `json:"role"`
+	Permissions    []string `json:"permissions"`
 }
 
 // --- POST /organizations/{id}/members/{user_id}/role ---
@@ -226,8 +227,9 @@ func (p *orgsPlugin) handleListPermissions(host plugin.PluginHost) http.HandlerF
 			out = append(out, string(p))
 		}
 		writeJSON(w, http.StatusOK, listPermissionsResponse{
-			Role:        m.Role,
-			Permissions: out,
+			OrganizationID: orgID,
+			Role:           m.Role,
+			Permissions:    out,
 		})
 	}
 }

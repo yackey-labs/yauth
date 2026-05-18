@@ -208,6 +208,9 @@ func declareSchemas(r huma.Registry) {
 		reflect.TypeOf(createInvitationRequest{}),
 		reflect.TypeOf(createInvitationResponse{}),
 		reflect.TypeOf(acceptInvitationRequest{}),
+		reflect.TypeOf(changeRoleRequest{}),
+		reflect.TypeOf(transferOwnershipRequest{}),
+		reflect.TypeOf(listPermissionsResponseJSON{}),
 	} {
 		_ = r.Schema(t, true, t.Name())
 	}

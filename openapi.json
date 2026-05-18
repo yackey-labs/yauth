@@ -685,7 +685,6 @@
       "CreateSsoConnectionRequest": {
         "additionalProperties": false,
         "properties": {
-          "config": {},
           "default_role_on_jit": {
             "type": "string"
           },
@@ -698,26 +697,12 @@
           "name": {
             "type": "string"
           },
-          "status": {
-            "type": "string"
-          }
+          "oidc": {},
+          "saml": {}
         },
         "required": [
           "kind",
-          "name",
-          "config"
-        ],
-        "type": "object"
-      },
-      "CreateSsoConnectionResponse": {
-        "additionalProperties": false,
-        "properties": {
-          "connection": {
-            "$ref": "#/components/schemas/SsoConnectionJSON"
-          }
-        },
-        "required": [
-          "connection"
+          "name"
         ],
         "type": "object"
       },
@@ -2693,9 +2678,11 @@
           "name": {
             "type": "string"
           },
+          "oidc": {},
           "organization_id": {
             "type": "string"
           },
+          "saml": {},
           "status": {
             "type": "string"
           },
@@ -2717,28 +2704,10 @@
         ],
         "type": "object"
       },
-      "SsoConnectionListResponse": {
-        "additionalProperties": false,
-        "properties": {
-          "connections": {
-            "items": {
-              "$ref": "#/components/schemas/SsoConnectionJSON"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "connections"
-        ],
-        "type": "object"
-      },
       "SsoTestResponse": {
         "additionalProperties": false,
         "properties": {
-          "message": {
+          "detail": {
             "type": "string"
           },
           "ok": {
@@ -2747,7 +2716,7 @@
         },
         "required": [
           "ok",
-          "message"
+          "detail"
         ],
         "type": "object"
       },
@@ -2874,7 +2843,6 @@
       "UpdateSsoConnectionRequest": {
         "additionalProperties": false,
         "properties": {
-          "config": {},
           "default_role_on_jit": {
             "type": "string"
           },
@@ -2884,6 +2852,8 @@
           "name": {
             "type": "string"
           },
+          "oidc": {},
+          "saml": {},
           "status": {
             "type": "string"
           }
@@ -9068,7 +9038,10 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SsoConnectionListResponse"
+                  "items": {
+                    "$ref": "#/components/schemas/SsoConnectionJSON"
+                  },
+                  "type": "array"
                 }
               }
             },
@@ -9150,7 +9123,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CreateSsoConnectionResponse"
+                  "$ref": "#/components/schemas/SsoConnectionJSON"
                 }
               }
             },
@@ -9326,7 +9299,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CreateSsoConnectionResponse"
+                  "$ref": "#/components/schemas/SsoConnectionJSON"
                 }
               }
             },

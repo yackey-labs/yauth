@@ -237,11 +237,9 @@ func declareSchemas(r huma.Registry) {
 		reflect.TypeOf(policyResponse{}),
 		reflect.TypeOf(updatePolicyRequest{}),
 
-		// yauth #93 — SSO OIDC federated sign-in
+		// yauth #93/#94 — SSO (OIDC + SAML) federated sign-in
 		reflect.TypeOf(ssoConnectionJSON{}),
-		reflect.TypeOf(ssoConnectionListResponse{}),
 		reflect.TypeOf(createSsoConnectionRequest{}),
-		reflect.TypeOf(createSsoConnectionResponse{}),
 		reflect.TypeOf(updateSsoConnectionRequest{}),
 		reflect.TypeOf(ssoTestResponse{}),
 
@@ -299,6 +297,22 @@ func jsonResponse(description string, typ any) *huma.Response {
 	return &huma.Response{
 		Description: description,
 		Content:     jsonContent(typ),
+	}
+}
+
+// arrayResponse constructs a 200 response whose body is an array of items,
+// each matching typ. Used when Rust returns []T directly (no wrapper object).
+func arrayResponse(description string, itemTyp any) *huma.Response {
+	return &huma.Response{
+		Description: description,
+		Content: map[string]*huma.MediaType{
+			"application/json": {
+				Schema: &huma.Schema{
+					Type:  "array",
+					Items: schemaRef(itemTyp),
+				},
+			},
+		},
 	}
 }
 

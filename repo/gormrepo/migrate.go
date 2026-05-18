@@ -48,5 +48,8 @@ func Migrate(ctx context.Context, db *gorm.DB) error {
 		&Invitation{},
 		&OrganizationDomain{},
 		&OrganizationPolicy{},
+		&SsoConnection{},
+		&ExternalIdentity{},
+		&SsoLoginState{},
 	)
 }

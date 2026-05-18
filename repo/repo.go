@@ -491,6 +491,66 @@ type OrganizationPolicyRepository interface {
 	DeleteOrganizationPolicy(ctx context.Context, organizationID string) error
 }
 
+// SsoConnectionRepository covers SsoConnection CRUD for the OIDC client
+// (and future SAML SP) federated-sign-in path. Port of yauth Rust #93.
+//
+// Invariants every backend MUST honor:
+//
+//   - Each row is owned by exactly one organization_id; the create path
+//     does NOT enforce uniqueness on (org_id, name) — admins may want
+//     two connections (e.g. staging + prod IdPs) per org.
+//   - Deleting an Organization MUST cascade to its SsoConnection rows
+//     (FK ON DELETE CASCADE in SQL backends; explicit in memrepo).
+//   - GetSsoConnectionByID returns (nil, yautherr.ErrNotFound) when no
+//     row matches; backends must not return (nil, nil).
+//   - ListSsoConnectionsByOrg returns rows in deterministic order
+//     (created_at ascending) and includes every status (draft / active /
+//     disabled) — filtering by status is the caller's job.
+//   - UpdateSsoConnection applies a partial update; nil-pointer fields
+//     are left untouched.
+type SsoConnectionRepository interface {
+	CreateSsoConnection(ctx context.Context, input domain.NewSsoConnection) (domain.SsoConnection, error)
+	GetSsoConnectionByID(ctx context.Context, id string) (*domain.SsoConnection, error)
+	ListSsoConnectionsByOrg(ctx context.Context, organizationID string) ([]*domain.SsoConnection, error)
+	UpdateSsoConnection(ctx context.Context, id string, changes domain.UpdateSsoConnection) (domain.SsoConnection, error)
+	// DeleteSsoConnection is idempotent — a non-existent id returns nil.
+	DeleteSsoConnection(ctx context.Context, id string) error
+}
+
+// ExternalIdentityRepository covers the (provider, external_id) →
+// user_id join used by the OIDC client to resolve a federated id_token
+// to a yauth user. Port of yauth Rust #93.
+//
+// Invariants:
+//
+//   - The (provider, external_id) pair is unique across the table.
+//     CreateExternalIdentity returns yautherr.ErrConflict on a
+//     duplicate pair.
+//   - Deleting a User MUST cascade to its ExternalIdentity rows (FK ON
+//     DELETE CASCADE in SQL backends; explicit in memrepo).
+//   - GetExternalIdentityByProviderAndExternalID returns
+//     (nil, yautherr.ErrNotFound) on miss.
+//   - UpdateExternalIdentityLastLogin stamps LastLoginAt without
+//     touching any other column. Used on every successful SSO login.
+type ExternalIdentityRepository interface {
+	CreateExternalIdentity(ctx context.Context, input domain.NewExternalIdentity) (domain.ExternalIdentity, error)
+	GetExternalIdentityByProviderAndExternalID(ctx context.Context, provider, externalID string) (*domain.ExternalIdentity, error)
+	ListExternalIdentitiesByUser(ctx context.Context, userID string) ([]*domain.ExternalIdentity, error)
+	UpdateExternalIdentityLastLogin(ctx context.Context, id string, at time.Time) error
+	DeleteExternalIdentity(ctx context.Context, id string) error
+}
+
+// SsoLoginStateRepository covers the short-lived state row that ties an
+// outbound /sso/login redirect to its eventual /sso/callback. Single-
+// use: ConsumeSsoLoginState atomically looks up the row and deletes it.
+type SsoLoginStateRepository interface {
+	CreateSsoLoginState(ctx context.Context, input domain.NewSsoLoginState) error
+	// ConsumeSsoLoginState atomically looks up the state token and
+	// deletes it. Returns the matched record or nil if not found /
+	// expired / already consumed.
+	ConsumeSsoLoginState(ctx context.Context, state string) (*domain.SsoLoginState, error)
+}
+
 // Repository is the union of all repositories. Backends implement this.
 type Repository interface {
 	UserRepository
@@ -526,4 +586,7 @@ type Repository interface {
 	InvitationRepository
 	OrganizationDomainRepository
 	OrganizationPolicyRepository
+	SsoConnectionRepository
+	ExternalIdentityRepository
+	SsoLoginStateRepository
 }

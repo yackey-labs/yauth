@@ -1041,3 +1041,38 @@ func (f *fakeRepo) UpsertOrganizationPolicy(_ context.Context, _ string, _ domai
 	return domain.OrganizationPolicy{}, yautherr.ErrNotFound
 }
 func (f *fakeRepo) DeleteOrganizationPolicy(_ context.Context, _ string) error { return nil }
+// SSO stubs (yauth #93 / yauth-go #23).
+func (f *fakeRepo) CreateSsoConnection(_ context.Context, _ domain.NewSsoConnection) (domain.SsoConnection, error) {
+	return domain.SsoConnection{}, yautherr.ErrNotFound
+}
+func (f *fakeRepo) GetSsoConnectionByID(_ context.Context, _ string) (*domain.SsoConnection, error) {
+	return nil, yautherr.ErrNotFound
+}
+func (f *fakeRepo) ListSsoConnectionsByOrg(_ context.Context, _ string) ([]*domain.SsoConnection, error) {
+	return nil, nil
+}
+func (f *fakeRepo) UpdateSsoConnection(_ context.Context, _ string, _ domain.UpdateSsoConnection) (domain.SsoConnection, error) {
+	return domain.SsoConnection{}, yautherr.ErrNotFound
+}
+func (f *fakeRepo) DeleteSsoConnection(_ context.Context, _ string) error { return nil }
+
+func (f *fakeRepo) CreateExternalIdentity(_ context.Context, _ domain.NewExternalIdentity) (domain.ExternalIdentity, error) {
+	return domain.ExternalIdentity{}, yautherr.ErrNotFound
+}
+func (f *fakeRepo) GetExternalIdentityByProviderAndExternalID(_ context.Context, _, _ string) (*domain.ExternalIdentity, error) {
+	return nil, yautherr.ErrNotFound
+}
+func (f *fakeRepo) ListExternalIdentitiesByUser(_ context.Context, _ string) ([]*domain.ExternalIdentity, error) {
+	return nil, nil
+}
+func (f *fakeRepo) UpdateExternalIdentityLastLogin(_ context.Context, _ string, _ time.Time) error {
+	return nil
+}
+func (f *fakeRepo) DeleteExternalIdentity(_ context.Context, _ string) error { return nil }
+
+func (f *fakeRepo) CreateSsoLoginState(_ context.Context, _ domain.NewSsoLoginState) error {
+	return nil
+}
+func (f *fakeRepo) ConsumeSsoLoginState(_ context.Context, _ string) (*domain.SsoLoginState, error) {
+	return nil, nil
+}

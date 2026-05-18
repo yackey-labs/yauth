@@ -134,6 +134,14 @@ func (r *Repo) DeleteUser(ctx context.Context, id string) error {
 	}
 	delete(r.emailIdx, u.Email)
 	delete(r.users, id)
+	// Cascade external identities (yauth #93 / yauth-go #23). The
+	// (provider, external_id) -> id index must be kept consistent.
+	for eid, ext := range r.extIdentities {
+		if ext.UserID == id {
+			delete(r.extIdentityProviderIdx, ext.Provider+"|"+ext.ExternalID)
+			delete(r.extIdentities, eid)
+		}
+	}
 	return nil
 }
 

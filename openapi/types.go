@@ -759,6 +759,55 @@ type listPermissionsResponseJSON struct {
 	Permissions    []string `json:"permissions"`
 }
 
+// --- verified domains + JIT membership (yauth #90 port) -------------------
+
+// domainResponse is the wire shape returned by GET /organizations/{id}/domains
+// and PATCH /organizations/{id}/domains/{did}.
+type domainResponse struct {
+	ID                    string  `json:"id"`
+	OrganizationID        string  `json:"organization_id"`
+	Domain                string  `json:"domain"`
+	Status                string  `json:"status"`
+	AutoJoinOnSignup      bool    `json:"auto_join_on_signup"`
+	DefaultRoleOnAutoJoin string  `json:"default_role_on_auto_join"`
+	RequireEmailVerified  bool    `json:"require_email_verified"`
+	VerifiedAt            *string `json:"verified_at,omitempty"`
+	LastCheckedAt         *string `json:"last_checked_at,omitempty"`
+	CreatedAt             string  `json:"created_at"`
+	UpdatedAt             string  `json:"updated_at"`
+}
+
+// createDomainRequest is the body of POST /organizations/{id}/domains.
+type createDomainRequest struct {
+	Domain                string  `json:"domain"`
+	AutoJoinOnSignup      *bool   `json:"auto_join_on_signup,omitempty"`
+	DefaultRoleOnAutoJoin *string `json:"default_role_on_auto_join,omitempty"`
+	RequireEmailVerified  *bool   `json:"require_email_verified,omitempty"`
+}
+
+// createDomainResponse is the body of POST /organizations/{id}/domains —
+// wraps the claim plus the one-time verification token clients must
+// publish as a `_yauth-domain-verify.<domain>` TXT record.
+type createDomainResponse struct {
+	Domain             domainResponse `json:"domain"`
+	VerificationToken  string         `json:"verification_token"`
+	DNSRecordName      string         `json:"dns_record_name"`
+}
+
+// updateDomainRequest is the body of PATCH /organizations/{id}/domains/{did}.
+type updateDomainRequest struct {
+	AutoJoinOnSignup      *bool   `json:"auto_join_on_signup,omitempty"`
+	DefaultRoleOnAutoJoin *string `json:"default_role_on_auto_join,omitempty"`
+	RequireEmailVerified  *bool   `json:"require_email_verified,omitempty"`
+}
+
+// verifyDomainResponse is the body of POST
+// /organizations/{id}/domains/{did}/verify.
+type verifyDomainResponse struct {
+	Domain   domainResponse `json:"domain"`
+	Verified bool           `json:"verified"`
+}
+
 // --- active-org switcher (yauth #89 port) ----------------------------------
 
 // setActiveOrgRequest is the body of POST /sessions/active-org.

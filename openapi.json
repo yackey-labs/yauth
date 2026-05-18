@@ -526,6 +526,47 @@
         ],
         "type": "object"
       },
+      "CreateDomainRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "auto_join_on_signup": {
+            "type": "boolean"
+          },
+          "default_role_on_auto_join": {
+            "type": "string"
+          },
+          "domain": {
+            "type": "string"
+          },
+          "require_email_verified": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "domain"
+        ],
+        "type": "object"
+      },
+      "CreateDomainResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "dns_record_name": {
+            "type": "string"
+          },
+          "domain": {
+            "$ref": "#/components/schemas/DomainResponse"
+          },
+          "verification_token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "domain",
+          "verification_token",
+          "dns_record_name"
+        ],
+        "type": "object"
+      },
       "CreateInvitationRequest": {
         "additionalProperties": false,
         "properties": {
@@ -573,6 +614,56 @@
         "required": [
           "name",
           "slug"
+        ],
+        "type": "object"
+      },
+      "DomainResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "auto_join_on_signup": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "default_role_on_auto_join": {
+            "type": "string"
+          },
+          "domain": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "last_checked_at": {
+            "type": "string"
+          },
+          "organization_id": {
+            "type": "string"
+          },
+          "require_email_verified": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "verified_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "organization_id",
+          "domain",
+          "status",
+          "auto_join_on_signup",
+          "default_role_on_auto_join",
+          "require_email_verified",
+          "created_at",
+          "updated_at"
         ],
         "type": "object"
       },
@@ -2274,6 +2365,21 @@
         ],
         "type": "object"
       },
+      "UpdateDomainRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "auto_join_on_signup": {
+            "type": "boolean"
+          },
+          "default_role_on_auto_join": {
+            "type": "string"
+          },
+          "require_email_verified": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
       "UpdateOrgRequest": {
         "additionalProperties": false,
         "properties": {
@@ -2316,6 +2422,22 @@
           "email",
           "email_verified",
           "role"
+        ],
+        "type": "object"
+      },
+      "VerifyDomainResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "domain": {
+            "$ref": "#/components/schemas/DomainResponse"
+          },
+          "verified": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "domain",
+          "verified"
         ],
         "type": "object"
       },
@@ -5927,6 +6049,442 @@
           }
         ],
         "summary": "Update an organization (admin-gated)",
+        "tags": [
+          "organizations"
+        ]
+      }
+    },
+    "/organizations/{id}/domains": {
+      "get": {
+        "operationId": "organizationsListDomains",
+        "parameters": [
+          {
+            "description": "Organization id (UUID).",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DomainResponse"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Domain claims for this org."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Caller is not a member of this organization."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Organization not found."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "summary": "List domains claimed by this organization",
+        "tags": [
+          "organizations"
+        ]
+      },
+      "post": {
+        "operationId": "organizationsCreateDomain",
+        "parameters": [
+          {
+            "description": "Organization id (UUID).",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateDomainRequest"
+              }
+            }
+          },
+          "description": "Domain + initial auto-join policy.",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateDomainResponse"
+                }
+              }
+            },
+            "description": "Domain claimed; verification token returned once."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Invalid domain."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Caller is not an admin of this organization."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Organization not found."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Domain already claimed."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "summary": "Claim a domain for this organization (admin-gated)",
+        "tags": [
+          "organizations"
+        ]
+      }
+    },
+    "/organizations/{id}/domains/{did}": {
+      "delete": {
+        "operationId": "organizationsDeleteDomain",
+        "parameters": [
+          {
+            "description": "Organization id (UUID).",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Domain claim id (UUID).",
+            "in": "path",
+            "name": "did",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Domain claim removed."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Caller is not an admin of this organization."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Domain claim not found."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "summary": "Un-claim a domain (admin-gated)",
+        "tags": [
+          "organizations"
+        ]
+      },
+      "patch": {
+        "operationId": "organizationsUpdateDomain",
+        "parameters": [
+          {
+            "description": "Organization id (UUID).",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Domain claim id (UUID).",
+            "in": "path",
+            "name": "did",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateDomainRequest"
+              }
+            }
+          },
+          "description": "Fields to update; omit to leave unchanged.",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainResponse"
+                }
+              }
+            },
+            "description": "Updated domain claim."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Invalid field value."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Caller is not an admin of this organization."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Domain claim not found."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "summary": "Update auto-join policy on a claimed domain (admin-gated)",
+        "tags": [
+          "organizations"
+        ]
+      }
+    },
+    "/organizations/{id}/domains/{did}/verify": {
+      "post": {
+        "operationId": "organizationsVerifyDomain",
+        "parameters": [
+          {
+            "description": "Organization id (UUID).",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Domain claim id (UUID).",
+            "in": "path",
+            "name": "did",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerifyDomainResponse"
+                }
+              }
+            },
+            "description": "Verification result."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Caller is not an admin of this organization."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Domain claim not found."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "summary": "Run DNS / .well-known verification on a claimed domain",
         "tags": [
           "organizations"
         ]

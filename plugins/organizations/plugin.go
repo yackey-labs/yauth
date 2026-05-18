@@ -127,6 +127,7 @@ func (p *orgsPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux, prefix s
 	// plugin already gates membership-bearing routes behind
 	// RequireAuth + membership lookups; the RBAC helpers reuse those.
 	mux.Handle("POST "+prefix+"/organizations/{id}/members/{user_id}/role", mw.RequireAuth(http.HandlerFunc(p.handleChangeMemberRole(host))))
+	mux.Handle("DELETE "+prefix+"/organizations/{id}/members/{user_id}", mw.RequireAuth(http.HandlerFunc(p.handleRemoveMember(host))))
 	mux.Handle("POST "+prefix+"/organizations/{id}/transfer-ownership", mw.RequireAuth(http.HandlerFunc(p.handleTransferOwnership(host))))
 	mux.Handle("GET "+prefix+"/organizations/{id}/permissions", mw.RequireAuth(http.HandlerFunc(p.handleListPermissions(host))))
 

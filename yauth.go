@@ -226,6 +226,14 @@ func (y *YAuth) CookieSecure() bool { return y.cfg.CookieSecure }
 // CookiePath implements plugin.PluginHost.
 func (y *YAuth) CookiePath() string { return y.cfg.CookiePath }
 
+// SessionBinding implements plugin.PluginHost. Returns the deployment-
+// global session-binding flags so plugins (e.g. organizations'
+// per-org policy resolver, yauth #92 / yauth-go #21) can merge them
+// with per-tenant overrides.
+func (y *YAuth) SessionBinding() (bindIP, bindUserAgent bool) {
+	return y.cfg.SessionBinding.BindIP, y.cfg.SessionBinding.BindUA
+}
+
 // CookieSameSite implements plugin.PluginHost. Maps the string form on
 // YAuthConfig onto an http.SameSite value via the same rules used in
 // auth/cookie.go.

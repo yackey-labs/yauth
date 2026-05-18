@@ -458,6 +458,39 @@ type WebhookRetryRepository interface {
 	DeleteScheduledRetry(ctx context.Context, id string) error
 }
 
+// OrganizationPolicyRepository covers per-org auth-policy CRUD. Port of
+// yauth Rust #92.
+//
+// Invariants:
+//
+//   - There is at most one row per organization. CreateOrganizationPolicy
+//     MUST reject a duplicate organization_id with yautherr.ErrConflict.
+//   - GetOrganizationPolicy returns (nil, yautherr.ErrNotFound) when no
+//     row exists. "No row" is a normal state (the org inherits global
+//     defaults wholesale); callers must treat ErrNotFound as such.
+//   - UpsertOrganizationPolicy is the convenience helper used by the
+//     PATCH handler: it creates the row if absent or applies a partial
+//     update if present, returning the post-state.
+//   - Deleting an Organization MUST cascade to its policy row (FK ON
+//     DELETE CASCADE in SQL backends; explicit in memrepo).
+type OrganizationPolicyRepository interface {
+	// GetOrganizationPolicy returns the per-org policy. Returns
+	// (nil, yautherr.ErrNotFound) when no row exists.
+	GetOrganizationPolicy(ctx context.Context, organizationID string) (*domain.OrganizationPolicy, error)
+	// CreateOrganizationPolicy returns yautherr.ErrConflict on a
+	// duplicate organization_id.
+	CreateOrganizationPolicy(ctx context.Context, input domain.NewOrganizationPolicy) (domain.OrganizationPolicy, error)
+	// UpdateOrganizationPolicy applies a partial update. Returns
+	// yautherr.ErrNotFound when no row matches organizationID.
+	UpdateOrganizationPolicy(ctx context.Context, organizationID string, changes domain.UpdateOrganizationPolicy) (domain.OrganizationPolicy, error)
+	// UpsertOrganizationPolicy creates the policy row when missing or
+	// applies the partial update when present. Returns the post-state.
+	UpsertOrganizationPolicy(ctx context.Context, organizationID string, changes domain.UpdateOrganizationPolicy) (domain.OrganizationPolicy, error)
+	// DeleteOrganizationPolicy is idempotent — a non-existent row
+	// returns nil.
+	DeleteOrganizationPolicy(ctx context.Context, organizationID string) error
+}
+
 // Repository is the union of all repositories. Backends implement this.
 type Repository interface {
 	UserRepository
@@ -492,4 +525,5 @@ type Repository interface {
 	MembershipRepository
 	InvitationRepository
 	OrganizationDomainRepository
+	OrganizationPolicyRepository
 }

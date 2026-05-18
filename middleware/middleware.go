@@ -140,6 +140,14 @@ func withAuthUser(ctx context.Context, au *domain.AuthUser) context.Context {
 	return context.WithValue(ctx, authUserKey, au)
 }
 
+// WithAuthUserForTest is the test-only seam used by cross-package
+// tests that need to attach an AuthUser to a request context without
+// going through the full resolver pipeline. Production callers must
+// receive the AuthUser via RequireAuth / OptionalAuth.
+func WithAuthUserForTest(ctx context.Context, au *domain.AuthUser) context.Context {
+	return withAuthUser(ctx, au)
+}
+
 // ResolveAuth tries the session cookie first, then each registered
 // AuthResolver in registration order. The first resolver to return
 // recognized=true wins: a non-error result authenticates the caller, and
@@ -330,10 +338,10 @@ func (m *Middleware) invalidateAndAudit(ctx context.Context, sess *domain.Sessio
 
 func (m *Middleware) auditMismatch(ctx context.Context, sess *domain.Session, eventType, sessionVal, reqVal, kind string) {
 	meta, _ := json.Marshal(map[string]string{
-		"session_id":      sess.ID,
-		"binding":         kind,
-		"session_value":   sessionVal,
-		"request_value":   reqVal,
+		"session_id":    sess.ID,
+		"binding":       kind,
+		"session_value": sessionVal,
+		"request_value": reqVal,
 	})
 	userID := sess.UserID
 	if err := m.repo.LogAuditEvent(ctx, domain.NewAuditLog{

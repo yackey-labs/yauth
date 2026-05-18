@@ -224,6 +224,7 @@ func (h *captureHost) CookieDomain() string                       { return "" }
 func (h *captureHost) CookieSecure() bool                         { return false }
 func (h *captureHost) CookiePath() string                         { return "/" }
 func (h *captureHost) CookieSameSite() http.SameSite              { return http.SameSiteLaxMode }
+func (h *captureHost) SessionBinding() (bool, bool)               { return false, false }
 func (h *captureHost) BaseURL() string                            { return "" }
 func (h *captureHost) AllowSignups() bool                         { return true }
 func (h *captureHost) AutoAdminFirstUser() bool                   { return false }

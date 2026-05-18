@@ -42,6 +42,14 @@ type PluginHost interface {
 	CookiePath() string
 	CookieSameSite() http.SameSite
 
+	// SessionBinding returns the deployment-global session-binding
+	// flags (BindIP, BindUserAgent). Plugins read these as the
+	// inherit-global fallback when resolving an effective per-org
+	// auth policy (yauth #92 / yauth-go #21). The mismatch-action
+	// knobs are intentionally not exposed — they are middleware
+	// implementation detail.
+	SessionBinding() (bindIP, bindUserAgent bool)
+
 	// BaseURL returns the absolute URL the API is reachable at, e.g.
 	// "https://app.example.com". Empty when not configured. Plugins use
 	// it to build outbound links (verification emails, OIDC issuer)

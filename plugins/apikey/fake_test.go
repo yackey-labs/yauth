@@ -505,6 +505,7 @@ func (h *fakeHost) CookieDomain() string                  { return "" }
 func (h *fakeHost) CookieSecure() bool                    { return false }
 func (h *fakeHost) CookiePath() string                    { return "/" }
 func (h *fakeHost) CookieSameSite() http.SameSite         { return http.SameSiteLaxMode }
+func (h *fakeHost) SessionBinding() (bool, bool)          { return false, false }
 func (h *fakeHost) RegisterEventHandler(_ events.Handler) {}
 func (h *fakeHost) RegisterAuthResolver(r plugin.AuthResolver) {
 	h.resolvers = append(h.resolvers, r)
@@ -624,3 +625,18 @@ func (f *fakeRepo) SetOrganizationDomainVerification(_ context.Context, _ string
 	return domain.OrganizationDomain{}, yautherr.ErrNotFound
 }
 func (f *fakeRepo) DeleteOrganizationDomain(_ context.Context, _ string) error { return nil }
+
+// OrganizationPolicy stubs (yauth #92 / yauth-go #21).
+func (f *fakeRepo) GetOrganizationPolicy(_ context.Context, _ string) (*domain.OrganizationPolicy, error) {
+	return nil, yautherr.ErrNotFound
+}
+func (f *fakeRepo) CreateOrganizationPolicy(_ context.Context, _ domain.NewOrganizationPolicy) (domain.OrganizationPolicy, error) {
+	return domain.OrganizationPolicy{}, yautherr.ErrNotFound
+}
+func (f *fakeRepo) UpdateOrganizationPolicy(_ context.Context, _ string, _ domain.UpdateOrganizationPolicy) (domain.OrganizationPolicy, error) {
+	return domain.OrganizationPolicy{}, yautherr.ErrNotFound
+}
+func (f *fakeRepo) UpsertOrganizationPolicy(_ context.Context, _ string, _ domain.UpdateOrganizationPolicy) (domain.OrganizationPolicy, error) {
+	return domain.OrganizationPolicy{}, yautherr.ErrNotFound
+}
+func (f *fakeRepo) DeleteOrganizationPolicy(_ context.Context, _ string) error { return nil }

@@ -175,4 +175,12 @@ func (p *orgsPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux, prefix s
 	mux.Handle("DELETE "+prefix+"/organizations/{id}/api-keys/{key_id}", mw.RequireAuth(http.HandlerFunc(p.handleDeleteOrgAPIKey(host))))
 	mux.Handle("POST "+prefix+"/organizations/{id}/api-keys/{key_id}/rotate", mw.RequireAuth(http.HandlerFunc(p.handleRotateOrgAPIKey(host, p.cfg.APIKeyPrefix))))
 	mux.Handle("GET "+prefix+"/organizations/{id}/api-keys/{key_id}/usage", mw.RequireAuth(http.HandlerFunc(p.handleOrgAPIKeyUsage(host))))
+
+	// Per-org auth policy routes — yauth #92 / yauth-go #21. GET is
+	// member-gated (any active member can read the effective policy
+	// shape so the UI can render warnings about MFA / IP restrictions);
+	// PATCH is admin-gated. Only mounted when the organizations plugin
+	// is registered; single-user / anonymous deployments never see them.
+	mux.Handle("GET "+prefix+"/organizations/{id}/policy", mw.RequireAuth(http.HandlerFunc(p.handleGetOrgPolicy(host))))
+	mux.Handle("PATCH "+prefix+"/organizations/{id}/policy", mw.RequireAuth(http.HandlerFunc(p.handlePatchOrgPolicy(host))))
 }

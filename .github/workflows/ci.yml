@@ -16,7 +16,7 @@ concurrency:
 jobs:
   build:
     name: Build (Go ${{ matrix.go }})
-    runs-on: ubuntu-latest
+    runs-on: local
     strategy:
       fail-fast: false
       matrix:
@@ -32,7 +32,7 @@ jobs:
 
   vet:
     name: go vet
-    runs-on: ubuntu-latest
+    runs-on: local
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -43,7 +43,7 @@ jobs:
 
   lint:
     name: golangci-lint
-    runs-on: ubuntu-latest
+    runs-on: local
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -57,7 +57,7 @@ jobs:
 
   test-sqlite:
     name: Test (sqlite)
-    runs-on: ubuntu-latest
+    runs-on: local
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -69,7 +69,7 @@ jobs:
 
   test-postgres:
     name: Test (postgres)
-    runs-on: ubuntu-latest
+    runs-on: local
     services:
       postgres:
         image: postgres:16
@@ -96,7 +96,7 @@ jobs:
 
   test-mysql:
     name: Test (mysql)
-    runs-on: ubuntu-latest
+    runs-on: local
     # Marked continue-on-error to keep this job advisory while the
     # MySQL backend stabilises in CI. Promote to required once it has
     # ridden green for a release cycle.
@@ -127,7 +127,7 @@ jobs:
 
   build-cli:
     name: Build CLI (bin/yauth)
-    runs-on: ubuntu-latest
+    runs-on: local
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -146,7 +146,7 @@ jobs:
 
   integration:
     name: Integration (curl smoke)
-    runs-on: ubuntu-latest
+    runs-on: local
     needs: build-cli
     steps:
       - uses: actions/checkout@v4
@@ -192,7 +192,7 @@ jobs:
 
   semgrep:
     name: Semgrep static analysis
-    runs-on: ubuntu-latest
+    runs-on: local
     permissions:
       contents: read
       security-events: write
@@ -231,7 +231,7 @@ jobs:
 
   openapi-fresh:
     name: OpenAPI freshness
-    runs-on: ubuntu-latest
+    runs-on: local
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -245,7 +245,7 @@ jobs:
 
   openapi-conformance:
     name: OpenAPI conformance (Rust ↔ Go)
-    runs-on: ubuntu-latest
+    runs-on: local
     # Hard-gated: any BREAKING / MISSING / SHAPE divergence between the
     # Rust spec and Go spec fails the build. Cosmetic parity was closed
     # in Task #39; further drift is a real regression.
@@ -296,7 +296,7 @@ jobs:
 
   bench:
     name: Build benchmark (artifact)
-    runs-on: ubuntu-latest
+    runs-on: local
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

@@ -79,6 +79,7 @@ func Build() *huma.OpenAPI {
 	addDomains(api)
 	addPolicy(api)
 	addSsoOidc(api)
+	addAuditExport(api)
 
 	return api
 }
@@ -240,6 +241,14 @@ func declareSchemas(r huma.Registry) {
 		reflect.TypeOf(createSsoConnectionResponse{}),
 		reflect.TypeOf(updateSsoConnectionRequest{}),
 		reflect.TypeOf(ssoTestResponse{}),
+
+		// yauth #96 — audit-export SIEM/syslog destinations
+		reflect.TypeOf(auditDestinationResponse{}),
+		reflect.TypeOf(createAuditDestinationRequest{}),
+		reflect.TypeOf(updateAuditDestinationRequest{}),
+		reflect.TypeOf(outboxEntryResponse{}),
+		reflect.TypeOf(replayRequest{}),
+		reflect.TypeOf(replayResponse{}),
 	} {
 		_ = r.Schema(t, true, t.Name())
 	}

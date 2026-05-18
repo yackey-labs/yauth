@@ -75,6 +75,7 @@ func Build() *huma.OpenAPI {
 	addOIDC(api)
 	addOAuth2Server(api)
 	addOrganizations(api)
+	addActiveOrg(api)
 
 	return api
 }
@@ -211,6 +212,12 @@ func declareSchemas(r huma.Registry) {
 		reflect.TypeOf(changeRoleRequest{}),
 		reflect.TypeOf(transferOwnershipRequest{}),
 		reflect.TypeOf(listPermissionsResponseJSON{}),
+
+		// yauth #89 — active-org switcher
+		reflect.TypeOf(setActiveOrgRequest{}),
+		reflect.TypeOf(activeOrgEntry{}),
+		reflect.TypeOf(activeOrgResponse{}),
+		reflect.TypeOf(orgMembershipJSON{}),
 	} {
 		_ = r.Schema(t, true, t.Name())
 	}

@@ -13,6 +13,52 @@
         ],
         "type": "object"
       },
+      "ActiveOrgEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "organization_id": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "organization_id",
+          "role"
+        ],
+        "type": "object"
+      },
+      "ActiveOrgResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "active_org_id": {
+            "type": "string"
+          },
+          "bearer_access_token": {
+            "type": "string"
+          },
+          "orgs": {
+            "items": {
+              "$ref": "#/components/schemas/ActiveOrgEntry"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "orgs"
+        ],
+        "type": "object"
+      },
       "AdminAuditEntryJSON": {
         "additionalProperties": false,
         "properties": {
@@ -1899,6 +1945,22 @@
         ],
         "type": "object"
       },
+      "OrgMembershipJSON": {
+        "additionalProperties": false,
+        "properties": {
+          "organization_id": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "organization_id",
+          "role"
+        ],
+        "type": "object"
+      },
       "OrganizationJSON": {
         "additionalProperties": false,
         "properties": {
@@ -2109,6 +2171,18 @@
       "SessionUserJSON": {
         "additionalProperties": false,
         "properties": {
+          "active_org_id": {
+            "type": "string"
+          },
+          "all_orgs": {
+            "items": {
+              "$ref": "#/components/schemas/OrgMembershipJSON"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "auth_method": {
             "type": "string"
           },
@@ -2125,6 +2199,9 @@
             "type": "boolean"
           },
           "id": {
+            "type": "string"
+          },
+          "org_role": {
             "type": "string"
           },
           "role": {
@@ -2148,6 +2225,18 @@
           "banned",
           "auth_method",
           "scopes"
+        ],
+        "type": "object"
+      },
+      "SetActiveOrgRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "organization_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "organization_id"
         ],
         "type": "object"
       },
@@ -6830,6 +6919,159 @@
         "summary": "Return the current authenticated user",
         "tags": [
           "email-password"
+        ]
+      }
+    },
+    "/sessions/active-org": {
+      "delete": {
+        "operationId": "organizationsClearActiveOrg",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActiveOrgResponse"
+                }
+              }
+            },
+            "description": "Active org cleared."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "summary": "Clear the caller's active-org claim",
+        "tags": [
+          "organizations"
+        ]
+      },
+      "get": {
+        "operationId": "organizationsGetActiveOrg",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActiveOrgResponse"
+                }
+              }
+            },
+            "description": "Active org + full membership list."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "summary": "Read the caller's current active organization",
+        "tags": [
+          "organizations"
+        ]
+      },
+      "post": {
+        "operationId": "organizationsSetActiveOrg",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetActiveOrgRequest"
+              }
+            }
+          },
+          "description": "Target organization id (UUID).",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActiveOrgResponse"
+                }
+              }
+            },
+            "description": "Active org updated."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Missing organization_id."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Caller is not a member of the target organization."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "summary": "Switch the caller's active organization",
+        "tags": [
+          "organizations"
         ]
       }
     },

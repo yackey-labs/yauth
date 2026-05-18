@@ -233,3 +233,52 @@ func (p *orgsPlugin) handleListPermissions(host plugin.PluginHost) http.HandlerF
 		})
 	}
 }
+
+// --- DELETE /organizations/{id}/members/{user_id} ---
+//
+// Admin-or-higher only. Removes the target member from the org. The
+// owner can never be removed via this endpoint — transfer-ownership
+// first, then the previous owner may be removed.
+func (p *orgsPlugin) handleRemoveMember(host plugin.PluginHost) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		au, ok := authUser(w, r)
+		if !ok {
+			return
+		}
+		orgID := r.PathValue("id")
+		targetUserID := r.PathValue("user_id")
+		if orgID == "" || targetUserID == "" {
+			writeError(w, http.StatusBadRequest, "BAD_REQUEST", "org id and user id are required")
+			return
+		}
+		if _, ok := requireOrgAdmin(w, r, host, orgID, au.User.ID); !ok {
+			return
+		}
+		target, err := host.Repo().GetMembershipByOrgUser(r.Context(), orgID, targetUserID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "INTERNAL", "membership lookup failed")
+			return
+		}
+		if target == nil {
+			writeError(w, http.StatusNotFound, "NOT_FOUND", "target user is not a member of this organization")
+			return
+		}
+		if target.Role == auth.RoleOwner {
+			writeError(w, http.StatusBadRequest, "BAD_REQUEST", "owner cannot be removed; transfer ownership first")
+			return
+		}
+		if err := host.Repo().DeleteMembership(r.Context(), target.ID); err != nil {
+			if errors.Is(err, yautherr.ErrOwnerProtected) {
+				writeError(w, http.StatusConflict, "OWNER_PROTECTED", "cannot remove the last owner; transfer ownership first")
+				return
+			}
+			if errors.Is(err, yautherr.ErrNotFound) {
+				writeError(w, http.StatusNotFound, "NOT_FOUND", "membership not found")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "INTERNAL", "delete membership failed")
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}
+}

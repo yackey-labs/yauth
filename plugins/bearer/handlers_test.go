@@ -305,6 +305,126 @@ func TestRoutes_PanicsWithoutSecret(t *testing.T) {
 	p.Routes(host, http.NewServeMux(), "")
 }
 
+// --- POST /token with optional org field (yauth #44) -------------------
+
+func mustOrg(t *testing.T, fr *fakeRepo, id, name, slug string) domain.Organization {
+	t.Helper()
+	now := time.Now().UTC().Truncate(time.Second)
+	org := domain.Organization{
+		ID: id, Name: name, Slug: slug,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	fr.organizations[id] = org
+	return org
+}
+
+func mustMembership(t *testing.T, fr *fakeRepo, orgID, userID, role string, status domain.MembershipStatus) domain.Membership {
+	t.Helper()
+	now := time.Now().UTC().Truncate(time.Second)
+	m := domain.Membership{
+		ID: uuid.NewString(), OrganizationID: orgID, UserID: userID,
+		Role: role, Status: status,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	fr.memberships[orgID+"/"+userID] = m
+	return m
+}
+
+// TestToken_OrgScoped_ValidMember verifies that supplying a valid org in the
+// request mints a JWT with that org's id and the caller's role in the "org"
+// and "role" claims.
+func TestToken_OrgScoped_ValidMember(t *testing.T) {
+	h, fr, user := newHarness(t)
+	mustPassword(t, fr, user.ID, "pw")
+	org := mustOrg(t, fr, "org-123", "Acme", "acme")
+	mustMembership(t, fr, org.ID, user.ID, "admin", domain.MembershipActive)
+
+	body := `{"email":"alice@example.com","password":"pw","org":"org-123"}`
+	resp := h.do(t, "POST", "/token", body, nil)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", resp.Code, resp.Body.String())
+	}
+
+	var tr tokenResponse
+	if err := json.Unmarshal(resp.Body.Bytes(), &tr); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	parsed, err := verifyAccessToken(h.cfg.JWTSecret, tr.AccessToken, h.cfg)
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if parsed.Org != "org-123" {
+		t.Fatalf("expected org=org-123, got %q", parsed.Org)
+	}
+	if parsed.Role != "admin" {
+		t.Fatalf("expected role=admin, got %q", parsed.Role)
+	}
+}
+
+// TestToken_OrgScoped_NotMember verifies that supplying an org the user does
+// not belong to returns 403 FORBIDDEN.
+func TestToken_OrgScoped_NotMember(t *testing.T) {
+	h, fr, user := newHarness(t)
+	mustPassword(t, fr, user.ID, "pw")
+	// org exists but user has no membership
+	mustOrg(t, fr, "org-other", "Other", "other")
+
+	body := `{"email":"alice@example.com","password":"pw","org":"org-other"}`
+	resp := h.do(t, "POST", "/token", body, nil)
+	if resp.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d body=%s", resp.Code, resp.Body.String())
+	}
+
+	var eb errorBody
+	if err := json.Unmarshal(resp.Body.Bytes(), &eb); err != nil {
+		t.Fatalf("unmarshal error body: %v", err)
+	}
+	if eb.Error.Code != "FORBIDDEN" {
+		t.Fatalf("expected error code FORBIDDEN, got %q", eb.Error.Code)
+	}
+}
+
+// TestToken_OrgScoped_SuspendedMember verifies that a suspended membership
+// is treated as not-a-member and returns 403.
+func TestToken_OrgScoped_SuspendedMember(t *testing.T) {
+	h, fr, user := newHarness(t)
+	mustPassword(t, fr, user.ID, "pw")
+	org := mustOrg(t, fr, "org-susp", "Susp", "susp")
+	mustMembership(t, fr, org.ID, user.ID, "member", domain.MembershipSuspended)
+
+	body := `{"email":"alice@example.com","password":"pw","org":"org-susp"}`
+	resp := h.do(t, "POST", "/token", body, nil)
+	if resp.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for suspended member, got %d body=%s", resp.Code, resp.Body.String())
+	}
+}
+
+// TestToken_OrgOmitted_PreservesExistingBehaviour verifies that omitting
+// the org field leaves existing auto-select behaviour intact (no regression).
+func TestToken_OrgOmitted_PreservesExistingBehaviour(t *testing.T) {
+	h, fr, user := newHarness(t)
+	mustPassword(t, fr, user.ID, "pw")
+	// No org memberships — token should still issue, just without org claims.
+
+	resp := h.do(t, "POST", "/token", `{"email":"alice@example.com","password":"pw"}`, nil)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", resp.Code, resp.Body.String())
+	}
+	var tr tokenResponse
+	if err := json.Unmarshal(resp.Body.Bytes(), &tr); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	parsed, err := verifyAccessToken(h.cfg.JWTSecret, tr.AccessToken, h.cfg)
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	// No org memberships → empty org claims.
+	if parsed.Org != "" || parsed.Role != "" {
+		t.Fatalf("expected empty org/role for no-membership user, got org=%q role=%q", parsed.Org, parsed.Role)
+	}
+}
+
 // --- yautherr import-keep ----------------------------------------------
 
 var _ = yautherr.ErrNotFound

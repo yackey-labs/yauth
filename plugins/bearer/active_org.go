@@ -40,3 +40,30 @@ func computeActiveOrgClaims(ctx context.Context, host plugin.PluginHost, userID 
 	out.Orgs = orgs
 	return out
 }
+
+// computeActiveOrgClaimsForced builds activeOrgClaims for a caller-
+// specified org. The "org" and "role" claims are set to the supplied
+// values; "orgs" is still populated from the user's full active
+// membership list so downstream middleware that reads AllOrgs does not
+// regress. yauth #44.
+//
+// Errors from the membership list lookup are silently swallowed (best-
+// effort, matching the policy in computeActiveOrgClaims). The returned
+// Org / Role are always the forced values regardless of lookup outcome.
+func computeActiveOrgClaimsForced(ctx context.Context, host plugin.PluginHost, userID, orgID, role string) activeOrgClaims {
+	out := activeOrgClaims{Org: orgID, Role: role}
+	r := host.Repo()
+	if r == nil {
+		return out
+	}
+	_, _, all, err := auth.SelectDefaultActiveOrg(ctx, r, userID)
+	if err != nil || len(all) == 0 {
+		return out
+	}
+	orgs := make([]string, 0, len(all))
+	for _, m := range all {
+		orgs = append(orgs, m.OrganizationID)
+	}
+	out.Orgs = orgs
+	return out
+}

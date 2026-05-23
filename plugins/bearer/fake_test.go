@@ -21,6 +21,9 @@ type fakeRepo struct {
 	passwords     map[string]domain.Password
 	sessions      map[string]domain.Session // keyed by token hash
 	refreshTokens map[string]domain.RefreshToken
+	// memberships is keyed by "orgID/userID" for lookup by org+user.
+	memberships   map[string]domain.Membership
+	organizations map[string]domain.Organization
 }
 
 func newFakeRepo() *fakeRepo {
@@ -29,6 +32,8 @@ func newFakeRepo() *fakeRepo {
 		passwords:     map[string]domain.Password{},
 		sessions:      map[string]domain.Session{},
 		refreshTokens: map[string]domain.RefreshToken{},
+		memberships:   map[string]domain.Membership{},
+		organizations: map[string]domain.Organization{},
 	}
 }
 
@@ -501,8 +506,12 @@ func (h *fakeHost) AutoAdminFirstUser() bool { return false }
 func (f *fakeRepo) CreateOrganization(_ context.Context, _ domain.NewOrganization) (domain.Organization, error) {
 	return domain.Organization{}, yautherr.ErrNotFound
 }
-func (f *fakeRepo) GetOrganizationByID(_ context.Context, _ string) (*domain.Organization, error) {
-	return nil, yautherr.ErrNotFound
+func (f *fakeRepo) GetOrganizationByID(_ context.Context, id string) (*domain.Organization, error) {
+	org, ok := f.organizations[id]
+	if !ok {
+		return nil, yautherr.ErrNotFound
+	}
+	return &org, nil
 }
 func (f *fakeRepo) GetOrganizationBySlug(_ context.Context, _ string) (*domain.Organization, error) {
 	return nil, yautherr.ErrNotFound
@@ -523,8 +532,12 @@ func (f *fakeRepo) CreateMembership(_ context.Context, _ domain.NewMembership) (
 func (f *fakeRepo) GetMembershipByID(_ context.Context, _ string) (*domain.Membership, error) {
 	return nil, yautherr.ErrNotFound
 }
-func (f *fakeRepo) GetMembershipByOrgUser(_ context.Context, _, _ string) (*domain.Membership, error) {
-	return nil, nil
+func (f *fakeRepo) GetMembershipByOrgUser(_ context.Context, orgID, userID string) (*domain.Membership, error) {
+	m, ok := f.memberships[orgID+"/"+userID]
+	if !ok {
+		return nil, nil // not a member — normal state per repo contract
+	}
+	return &m, nil
 }
 func (f *fakeRepo) UpdateMembership(_ context.Context, _ string, _ domain.UpdateMembership) (domain.Membership, error) {
 	return domain.Membership{}, yautherr.ErrNotFound
@@ -533,8 +546,15 @@ func (f *fakeRepo) DeleteMembership(_ context.Context, _ string) error { return 
 func (f *fakeRepo) ListMembershipsByOrg(_ context.Context, _ string) ([]*domain.Membership, error) {
 	return nil, nil
 }
-func (f *fakeRepo) ListMembershipsByUser(_ context.Context, _ string) ([]*domain.Membership, error) {
-	return nil, nil
+func (f *fakeRepo) ListMembershipsByUser(_ context.Context, userID string) ([]*domain.Membership, error) {
+	var out []*domain.Membership
+	for _, m := range f.memberships {
+		m := m
+		if m.UserID == userID {
+			out = append(out, &m)
+		}
+	}
+	return out, nil
 }
 func (f *fakeRepo) CreateInvitation(_ context.Context, _ domain.NewInvitation) (domain.Invitation, error) {
 	return domain.Invitation{}, yautherr.ErrNotFound
@@ -591,6 +611,7 @@ func (f *fakeRepo) UpsertOrganizationPolicy(_ context.Context, _ string, _ domai
 	return domain.OrganizationPolicy{}, yautherr.ErrNotFound
 }
 func (f *fakeRepo) DeleteOrganizationPolicy(_ context.Context, _ string) error { return nil }
+
 // SSO stubs (yauth #93 / yauth-go #23).
 func (f *fakeRepo) CreateSsoConnection(_ context.Context, _ domain.NewSsoConnection) (domain.SsoConnection, error) {
 	return domain.SsoConnection{}, yautherr.ErrNotFound

@@ -62,6 +62,12 @@ type tokenRequest struct {
 	// stores claims only — scope is recorded for parity with the Rust
 	// /token endpoint and surfaces in introspect/userinfo responses.
 	Scope string `json:"scope,omitempty"`
+	// Org is an optional organization ID. When set, the issued JWT is
+	// scoped to that org: the "org" and "role" claims carry the supplied
+	// org id and the caller's role in it. Returns 403 FORBIDDEN when the
+	// user is not an active member of the org. When omitted, the existing
+	// auto-select behaviour (SelectDefaultActiveOrg) is preserved. yauth #44.
+	Org string `json:"org,omitempty"`
 }
 
 func (p *bearerPlugin) handleToken(host plugin.PluginHost) http.HandlerFunc {
@@ -111,7 +117,28 @@ func (p *bearerPlugin) handleToken(host plugin.PluginHost) http.HandlerFunc {
 			return
 		}
 
-		resp, err := p.mintTokens(ctx, host, user.ID, uuid.NewString())
+		// yauth #44: when the caller requests a specific org, verify active
+		// membership and use that org's id + role as JWT claims. Otherwise
+		// fall back to the default auto-select behaviour.
+		var active activeOrgClaims
+		if req.Org != "" {
+			m, err := repo.GetMembershipByOrgUser(ctx, req.Org, user.ID)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to look up membership")
+				return
+			}
+			if m == nil || m.Status != domain.MembershipActive {
+				writeError(w, http.StatusForbidden, "FORBIDDEN", "user is not an active member of the requested org")
+				return
+			}
+			// Populate Orgs with the full membership list so downstream
+			// middleware that depends on AllOrgs doesn't regress.
+			active = computeActiveOrgClaimsForced(ctx, host, user.ID, m.OrganizationID, m.Role)
+		} else {
+			active = computeActiveOrgClaims(ctx, host, user.ID)
+		}
+
+		resp, err := p.mintTokensWithClaims(ctx, host, user.ID, uuid.NewString(), active)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to mint tokens")
 			return
@@ -252,9 +279,15 @@ func (p *bearerPlugin) handleRevoke(host plugin.PluginHost) http.HandlerFunc {
 // MembershipsLookup interface (i.e. the organizations plugin is in
 // use). Single-user / no-orgs deployments emit a bare JWT.
 func (p *bearerPlugin) mintTokens(ctx context.Context, host plugin.PluginHost, userID, familyID string) (tokenResponse, error) {
+	return p.mintTokensWithClaims(ctx, host, userID, familyID, computeActiveOrgClaims(ctx, host, userID))
+}
+
+// mintTokensWithClaims is the low-level minting helper. It accepts a
+// pre-computed activeOrgClaims value so callers (e.g. handleToken with
+// an explicit org) can bypass the default auto-select logic. yauth #44.
+func (p *bearerPlugin) mintTokensWithClaims(ctx context.Context, host plugin.PluginHost, userID, familyID string, active activeOrgClaims) (tokenResponse, error) {
 	now := time.Now().UTC()
 
-	active := computeActiveOrgClaims(ctx, host, userID)
 	access, _, err := signAccessToken(p.cfg.JWTSecret, userID, uuid.NewString(), p.cfg, now, active)
 	if err != nil {
 		return tokenResponse{}, err

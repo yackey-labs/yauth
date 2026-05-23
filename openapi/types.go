@@ -55,14 +55,14 @@ type adminUserJSON struct {
 // sessionUserJSON is the flat user shape returned by /session, /me and
 // the various login endpoints. Mirrors the Rust spec.
 type sessionUserJSON struct {
-	ID            string           `json:"id"`
-	Email         string           `json:"email"`
-	DisplayName   *string          `json:"display_name,omitempty"`
-	EmailVerified bool             `json:"email_verified"`
-	Role          string           `json:"role"`
-	Banned        bool             `json:"banned"`
-	AuthMethod    string           `json:"auth_method"`
-	Scopes        []string         `json:"scopes"`
+	ID            string   `json:"id"`
+	Email         string   `json:"email"`
+	DisplayName   *string  `json:"display_name,omitempty"`
+	EmailVerified bool     `json:"email_verified"`
+	Role          string   `json:"role"`
+	Banned        bool     `json:"banned"`
+	AuthMethod    string   `json:"auth_method"`
+	Scopes        []string `json:"scopes"`
 	// yauth #89: active-org claim surfaced on AuthUser.
 	ActiveOrgID *string             `json:"active_org_id,omitempty"`
 	OrgRole     *string             `json:"org_role,omitempty"`
@@ -190,9 +190,10 @@ type oauth2RegisterResponse struct {
 // --- bearer -----------------------------------------------------------
 
 type bearerTokenRequest struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
-	Scope    string `json:"scope,omitempty"`
+	Email    string  `json:"email"`
+	Password string  `json:"password"`
+	Scope    string  `json:"scope,omitempty"`
+	Org      *string `json:"org,omitempty"`
 }
 type bearerTokenResponse struct {
 	AccessToken  string `json:"access_token"`
@@ -820,9 +821,9 @@ type createDomainRequest struct {
 // wraps the claim plus the one-time verification token clients must
 // publish as a `_yauth-domain-verify.<domain>` TXT record.
 type createDomainResponse struct {
-	Domain             domainResponse `json:"domain"`
-	VerificationToken  string         `json:"verification_token"`
-	DNSRecordName      string         `json:"dns_record_name"`
+	Domain            domainResponse `json:"domain"`
+	VerificationToken string         `json:"verification_token"`
+	DNSRecordName     string         `json:"dns_record_name"`
 }
 
 // updateDomainRequest is the body of PATCH /organizations/{id}/domains/{did}.

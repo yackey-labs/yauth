@@ -507,6 +507,9 @@
           "email": {
             "type": "string"
           },
+          "org": {
+            "type": "string"
+          },
           "password": {
             "type": "string"
           },

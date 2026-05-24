@@ -15,6 +15,7 @@ type discoveryDoc struct {
 	Issuer                           string   `json:"issuer"`
 	AuthorizationEndpoint            string   `json:"authorization_endpoint,omitempty"`
 	TokenEndpoint                    string   `json:"token_endpoint,omitempty"`
+	RegistrationEndpoint             string   `json:"registration_endpoint,omitempty"`
 	UserInfoEndpoint                 string   `json:"userinfo_endpoint"`
 	JWKSURI                          string   `json:"jwks_uri"`
 	ResponseTypesSupported           []string `json:"response_types_supported"`
@@ -54,6 +55,11 @@ func (p *oidcPlugin) handleDiscovery(host plugin.PluginHost) http.HandlerFunc {
 		if hasPlugin(host, "oauth2-server") {
 			doc.AuthorizationEndpoint = base + "/oauth/authorize"
 			doc.TokenEndpoint = base + "/oauth/token"
+			// Always advertise the registration endpoint when the oauth2
+			// server is loaded, matching Rust yauth's behavior. Clients
+			// that want DCR will attempt it; the endpoint itself enforces
+			// the DCREnabled gate.
+			doc.RegistrationEndpoint = base + "/oauth/register"
 		}
 
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")

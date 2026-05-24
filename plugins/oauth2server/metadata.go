@@ -13,18 +13,21 @@ import (
 // that depend on a sibling plugin (e.g. JWKS from asymjwt) are absent
 // when the dependency is not loaded.
 type authServerMetadata struct {
-	Issuer                            string   `json:"issuer"`
-	AuthorizationEndpoint             string   `json:"authorization_endpoint"`
-	TokenEndpoint                     string   `json:"token_endpoint"`
-	JWKSURI                           string   `json:"jwks_uri,omitempty"`
-	RevocationEndpoint                string   `json:"revocation_endpoint"`
-	IntrospectionEndpoint             string   `json:"introspection_endpoint"`
-	DeviceAuthorizationEndpoint       string   `json:"device_authorization_endpoint"`
-	ResponseTypesSupported            []string `json:"response_types_supported"`
-	GrantTypesSupported               []string `json:"grant_types_supported"`
-	TokenEndpointAuthMethodsSupported []string `json:"token_endpoint_auth_methods_supported"`
-	CodeChallengeMethodsSupported     []string `json:"code_challenge_methods_supported"`
-	ScopesSupported                   []string `json:"scopes_supported,omitempty"`
+	Issuer                                     string   `json:"issuer"`
+	AuthorizationEndpoint                      string   `json:"authorization_endpoint"`
+	TokenEndpoint                              string   `json:"token_endpoint"`
+	RegistrationEndpoint                       string   `json:"registration_endpoint,omitempty"`
+	JWKSURI                                    string   `json:"jwks_uri,omitempty"`
+	RevocationEndpoint                         string   `json:"revocation_endpoint"`
+	IntrospectionEndpoint                      string   `json:"introspection_endpoint"`
+	DeviceAuthorizationEndpoint                string   `json:"device_authorization_endpoint"`
+	ResponseTypesSupported                     []string `json:"response_types_supported"`
+	GrantTypesSupported                        []string `json:"grant_types_supported"`
+	TokenEndpointAuthMethodsSupported          []string `json:"token_endpoint_auth_methods_supported"`
+	TokenEndpointAuthSigningAlgValuesSupported []string `json:"token_endpoint_auth_signing_alg_values_supported,omitempty"`
+	IDTokenSigningAlgValuesSupported           []string `json:"id_token_signing_alg_values_supported,omitempty"`
+	CodeChallengeMethodsSupported              []string `json:"code_challenge_methods_supported"`
+	ScopesSupported                            []string `json:"scopes_supported,omitempty"`
 }
 
 // handleAuthServerMetadata returns the RFC 8414 metadata document for
@@ -33,6 +36,19 @@ type authServerMetadata struct {
 func (p *oauth2Plugin) handleAuthServerMetadata(host plugin.PluginHost) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		base := strings.TrimRight(p.cfg.Issuer, "/") + strings.TrimRight(p.cfg.BasePath, "/")
+
+		// token_endpoint_auth_methods_supported: private_key_jwt is only
+		// valid when an asymmetric signer (asymjwt plugin) is loaded.
+		// Matches Rust yauth behavior: default is none + client_secret_post,
+		// private_key_jwt added only when asymmetric-jwt feature is active.
+		authMethods := []string{"none", "client_secret_post", "client_secret_basic"}
+		var signingAlgs []string
+		var idTokenAlgs []string
+		if signer := host.JWTSigner(); signer != nil {
+			authMethods = append(authMethods, "private_key_jwt")
+			signingAlgs = []string{signer.Algo()}
+			idTokenAlgs = []string{signer.Algo()}
+		}
 
 		doc := authServerMetadata{
 			Issuer:                      p.cfg.Issuer,
@@ -48,18 +64,18 @@ func (p *oauth2Plugin) handleAuthServerMetadata(host plugin.PluginHost) http.Han
 				"client_credentials",
 				"urn:ietf:params:oauth:grant-type:device_code",
 			},
-			TokenEndpointAuthMethodsSupported: []string{
-				"client_secret_basic",
-				"client_secret_post",
-				"private_key_jwt",
-				"none",
-			},
-			CodeChallengeMethodsSupported: []string{"S256"},
-			ScopesSupported:               []string{"openid", "email", "profile"},
+			TokenEndpointAuthMethodsSupported:          authMethods,
+			TokenEndpointAuthSigningAlgValuesSupported: signingAlgs,
+			IDTokenSigningAlgValuesSupported:           idTokenAlgs,
+			CodeChallengeMethodsSupported:              []string{"S256"},
+			ScopesSupported:                            []string{"openid", "email", "profile"},
 		}
 
-		if host.JWTSigner() != nil {
+		if signer := host.JWTSigner(); signer != nil {
 			doc.JWKSURI = base + "/.well-known/jwks.json"
+		}
+		if p.cfg.DCREnabled {
+			doc.RegistrationEndpoint = base + "/oauth/register"
 		}
 
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")

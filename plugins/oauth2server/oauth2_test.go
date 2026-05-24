@@ -677,15 +677,19 @@ func TestAuthServerMetadata_RFC8414(t *testing.T) {
 		t.Fatalf("code_challenge_methods_supported: %v", pkce)
 	}
 
+	// Without asymjwt loaded, private_key_jwt must not be advertised.
 	authMethods, _ := doc["token_endpoint_auth_methods_supported"].([]any)
 	wantMethods := map[string]bool{
 		"client_secret_basic": true,
 		"client_secret_post":  true,
-		"private_key_jwt":     true,
 		"none":                true,
 	}
 	for _, m := range authMethods {
-		delete(wantMethods, m.(string))
+		s := m.(string)
+		if s == "private_key_jwt" {
+			t.Fatalf("private_key_jwt must not be advertised without asymjwt signer")
+		}
+		delete(wantMethods, s)
 	}
 	if len(wantMethods) != 0 {
 		t.Fatalf("missing auth methods: %v", wantMethods)

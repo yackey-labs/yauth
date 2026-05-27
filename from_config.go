@@ -11,10 +11,12 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/yackey-labs/yauth-go/auth/passwordpolicy"
+	yauthMigrate "github.com/yackey-labs/yauth-go/migrate"
 	"github.com/yackey-labs/yauth-go/plugins/emailpassword"
 	smtpmailer "github.com/yackey-labs/yauth-go/plugins/mailer/smtp"
 	yauthrepo "github.com/yackey-labs/yauth-go/repo"
 	"github.com/yackey-labs/yauth-go/repo/gormrepo"
+	"github.com/yackey-labs/yauth-go/repo/pgxrepo"
 	"github.com/yackey-labs/yauth-go/repo/redisrepo"
 	"github.com/yackey-labs/yauth-go/telemetry"
 	"github.com/yackey-labs/yauth-go/yauthcfg"
@@ -40,23 +42,39 @@ func NewFromConfig(ctx context.Context, cfg *yauthcfg.Config) (*YAuth, error) {
 		return nil, fmt.Errorf("yauth: invalid config: %w", err)
 	}
 
-	db, err := openDB(cfg.Database)
-	if err != nil {
-		return nil, err
-	}
+	var repo yauthrepo.Repository
 
-	if err := pingDB(ctx, db); err != nil {
-		return nil, fmt.Errorf("yauth: database unreachable: %w", err)
-	}
-
-	if cfg.Database.AutoMigrate {
-		fmt.Fprintln(os.Stderr, "yauth: WARNING database.auto_migrate=true is for DEV/TEST only — use `yauth migrate` in production")
-		if err := gormrepo.Migrate(ctx, db); err != nil {
-			return nil, fmt.Errorf("yauth: auto_migrate failed: %w", err)
+	if cfg.Database.Driver == "pgx" {
+		pool, err := pgxrepo.Open(ctx, cfg.Database.DSN)
+		if err != nil {
+			return nil, err
 		}
+		if err := pool.Ping(ctx); err != nil {
+			return nil, fmt.Errorf("yauth: database unreachable: %w", err)
+		}
+		if cfg.Database.AutoMigrate {
+			fmt.Fprintln(os.Stderr, "yauth: WARNING database.auto_migrate=true is for DEV/TEST only — use `yauth migrate` in production")
+			if err := yauthMigrate.Run(ctx, pgxrepo.StdDB(pool), "pgx"); err != nil {
+				return nil, fmt.Errorf("yauth: auto_migrate failed: %w", err)
+			}
+		}
+		repo = pgxrepo.New(pool)
+	} else {
+		db, err := openDB(cfg.Database)
+		if err != nil {
+			return nil, err
+		}
+		if err := pingDB(ctx, db); err != nil {
+			return nil, fmt.Errorf("yauth: database unreachable: %w", err)
+		}
+		if cfg.Database.AutoMigrate {
+			fmt.Fprintln(os.Stderr, "yauth: WARNING database.auto_migrate=true is for DEV/TEST only — use `yauth migrate` in production")
+			if err := gormrepo.Migrate(ctx, db); err != nil {
+				return nil, fmt.Errorf("yauth: auto_migrate failed: %w", err)
+			}
+		}
+		repo = gormrepo.New(db)
 	}
-
-	var repo yauthrepo.Repository = gormrepo.New(db)
 	if cfg.Cache.Enabled {
 		decorated, err := buildCacheDecorator(repo, cfg.Cache)
 		if err != nil {
@@ -133,15 +151,23 @@ func NewFromConfig(ctx context.Context, cfg *yauthcfg.Config) (*YAuth, error) {
 	return builder.Build()
 }
 
-// Migrate opens the database described by cfg and runs every yauth-go
-// AutoMigrate. Intended for the CLI and for tests; production should
-// run `yauth migrate` as a separate job.
+// Migrate opens the database described by cfg and applies all pending
+// migrations. For driver="pgx" goose migrations are used; all other drivers
+// (sqlite, postgres, mysql) use gormrepo AutoMigrate. Intended for the CLI
+// and for tests; production should run `yauth migrate` as a separate job.
 func Migrate(ctx context.Context, cfg *yauthcfg.Config) error {
 	if cfg == nil {
 		return errors.New("yauth: Migrate requires a non-nil config")
 	}
 	if err := cfg.Validate(); err != nil {
 		return fmt.Errorf("yauth: invalid config: %w", err)
+	}
+	if cfg.Database.Driver == "pgx" {
+		sqlDB, err := openSQLDB(ctx, cfg.Database)
+		if err != nil {
+			return err
+		}
+		return yauthMigrate.Run(ctx, sqlDB, "pgx")
 	}
 	db, err := openDB(cfg.Database)
 	if err != nil {
@@ -161,15 +187,15 @@ func SchemaCheck(ctx context.Context, cfg *yauthcfg.Config) error {
 	if err := cfg.Validate(); err != nil {
 		return fmt.Errorf("yauth: invalid config: %w", err)
 	}
-	db, err := openDB(cfg.Database)
+	sqlDB, err := openSQLDB(ctx, cfg.Database)
 	if err != nil {
 		return err
 	}
-	if err := pingDB(ctx, db); err != nil {
+	if err := sqlDB.PingContext(ctx); err != nil {
 		return fmt.Errorf("yauth: database unreachable: %w", err)
 	}
 
-	have, err := listTables(ctx, db, cfg.Database.Schema)
+	have, err := listTables(ctx, sqlDB, cfg.Database.Driver, cfg.Database.Schema)
 	if err != nil {
 		return fmt.Errorf("yauth: list tables: %w", err)
 	}
@@ -199,7 +225,7 @@ func openDB(d yauthcfg.DatabaseConfig) (*gorm.DB, error) {
 	case "mysql":
 		return gormrepo.OpenMySQL(d.DSN)
 	default:
-		return nil, fmt.Errorf("yauth: unsupported database driver %q", d.Driver)
+		return nil, fmt.Errorf("yauth: unsupported database driver %q (use gormrepo drivers: sqlite | postgres | mysql)", d.Driver)
 	}
 }
 
@@ -211,26 +237,40 @@ func pingDB(ctx context.Context, db *gorm.DB) error {
 	return sqlDB.PingContext(ctx)
 }
 
-func listTables(ctx context.Context, db *gorm.DB, schema string) ([]string, error) {
-	sqlDB, err := db.DB()
+// openSQLDB returns a *sql.DB for any supported driver. Used by Migrate and SchemaCheck.
+func openSQLDB(ctx context.Context, d yauthcfg.DatabaseConfig) (*sql.DB, error) {
+	if d.Driver == "pgx" {
+		pool, err := pgxrepo.Open(ctx, d.DSN)
+		if err != nil {
+			return nil, err
+		}
+		return pgxrepo.StdDB(pool), nil
+	}
+	gdb, err := openDB(d)
 	if err != nil {
 		return nil, err
 	}
-	dialect := db.Dialector.Name()
-	var rows *sql.Rows
-	switch dialect {
+	return gdb.DB()
+}
+
+func listTables(ctx context.Context, db *sql.DB, driver, schema string) ([]string, error) {
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	switch driver {
 	case "sqlite":
-		rows, err = sqlDB.QueryContext(ctx, "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'yauth_%'")
-	case "postgres":
+		rows, err = db.QueryContext(ctx, "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'yauth_%'")
+	case "postgres", "pgx":
 		pgSchema := schema
 		if pgSchema == "" {
 			pgSchema = "public"
 		}
-		rows, err = sqlDB.QueryContext(ctx, "SELECT tablename FROM pg_tables WHERE schemaname=$1 AND tablename LIKE 'yauth_%'", pgSchema)
+		rows, err = db.QueryContext(ctx, "SELECT tablename FROM pg_tables WHERE schemaname=$1 AND tablename LIKE 'yauth_%'", pgSchema)
 	case "mysql":
-		rows, err = sqlDB.QueryContext(ctx, "SELECT TABLE_NAME FROM information_schema.tables WHERE table_schema = DATABASE() AND TABLE_NAME LIKE 'yauth_%'")
+		rows, err = db.QueryContext(ctx, "SELECT TABLE_NAME FROM information_schema.tables WHERE table_schema = DATABASE() AND TABLE_NAME LIKE 'yauth_%'")
 	default:
-		return nil, fmt.Errorf("listTables: unsupported dialect %q", dialect)
+		return nil, fmt.Errorf("listTables: unsupported driver %q", driver)
 	}
 	if err != nil {
 		return nil, err

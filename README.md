@@ -4,9 +4,9 @@ Modular, plugin-based authentication library for Go (`net/http`) with a
 generated TypeScript client, Vue 3 components, and SolidJS components.
 
 - **Plugin system** — register only the auth methods you want
-- **Two database backends** — Postgres + SQLite via GORM (the Rust crate
-  ships 14 backend permutations; Go's GORM reach covers the two that
-  matter cleanly — see "Pick a Backend" for the pluggable contract)
+- **Three database backends** — native pgx/v5 + sqlc for Postgres (`pgxrepo`),
+  plus GORM for Postgres / SQLite / MySQL (`gormrepo`); all backed by
+  goose migrations — see "Pick a Backend" for the pluggable contract
 - **Tri-mode auth** — session cookies, JWT bearer tokens, and `X-Api-Key`
   headers, all simultaneous; resolved into one `*domain.AuthUser`
 - **Full OAuth2 / OIDC provider** — authorization code + PKCE, device
@@ -193,13 +193,14 @@ The first non-Continue decision short-circuits the chain.
 
 ## Pick a Backend
 
-| Backend | Constructor | Database |
-| --- | --- | --- |
-| GORM Postgres | `gormrepo.OpenPostgres(dsn)` | PostgreSQL |
-| GORM SQLite   | `gormrepo.OpenSQLite(dsn)`   | SQLite (incl. `:memory:`) |
-| GORM MySQL    | `gormrepo.OpenMySQL(dsn)`    | MySQL / MariaDB |
-| Redis cache   | `redisrepo.New(inner, client, opts)` | — wraps any backend; caches sessions, rate limits, and revocations in Redis |
-| In-memory     | `memrepo.New()`              | — no persistence; for testing and zero-config quickstart |
+| Backend | Constructor | Database | Migrations |
+| --- | --- | --- | --- |
+| **pgx (recommended for Postgres)** | `pgxrepo.New(pool)` | PostgreSQL (pgx/v5, sqlc-generated) | goose |
+| GORM Postgres | `gormrepo.OpenPostgres(dsn)` | PostgreSQL | goose / GORM AutoMigrate |
+| GORM SQLite   | `gormrepo.OpenSQLite(dsn)`   | SQLite (incl. `:memory:`) | goose / GORM AutoMigrate |
+| GORM MySQL    | `gormrepo.OpenMySQL(dsn)`    | MySQL / MariaDB | goose / GORM AutoMigrate |
+| Redis cache   | `redisrepo.New(inner, client, opts)` | — wraps any backend | — |
+| In-memory     | `memrepo.New()`              | — no persistence | — |
 
 **Zero-config quickstart with `memrepo`** — no database, no migrations,
 no `context` import needed:
@@ -228,15 +229,62 @@ func main() {
 }
 ```
 
-The Rust crate ships 14 ORM/dialect permutations (Diesel, sqlx, SeaORM,
-Toasty across PG/MySQL/SQLite). yauth-go covers PG, SQLite, and MySQL via
-GORM and exposes the `repo.Repository` interface as the extension point.
-New backends plug in by implementing `repo.Repository` + the per-feature
-sub-interfaces under `repo/`. A conformance harness at `repo/conformance/`
-validates any new backend against the full interface contract.
+The Rust crate ships 14 ORM/dialect permutations. yauth-go covers Postgres
+(via native pgx/v5 + sqlc), SQLite, and MySQL (via GORM) and exposes the
+`repo.Repository` interface as the extension point. New backends plug in by
+implementing `repo.Repository` + the per-feature sub-interfaces under
+`repo/`. A conformance harness at `repo/conformance/` validates any new
+backend against the full interface contract.
 
-Migrations run via `gormrepo.Migrate(ctx, db)` (uses GORM `AutoMigrate`
-under the hood).
+**Migrations** are managed by [goose](https://github.com/pressly/goose)
+with embedded SQL files for all three dialects. The `migrate` package is
+the single entry point:
+
+```go
+import (
+    "github.com/yackey-labs/yauth-go/migrate"
+    "github.com/yackey-labs/yauth-go/repo/pgxrepo"
+)
+
+pool, _ := pgxrepo.Open(ctx, dsn)
+migrate.Run(ctx, pgxrepo.StdDB(pool), "pgx")   // "pgx", "postgres", "mysql", or "sqlite"
+```
+
+Or use the CLI: `yauth migrate up` (see Configuration). GORM `AutoMigrate`
+is still available via `gormrepo.Migrate(ctx, db)` for quick local setups.
+
+**Using pgxrepo directly:**
+
+```go
+import (
+    "context"
+
+    yauth "github.com/yackey-labs/yauth-go"
+    "github.com/yackey-labs/yauth-go/migrate"
+    "github.com/yackey-labs/yauth-go/plugins/emailpassword"
+    "github.com/yackey-labs/yauth-go/repo/pgxrepo"
+)
+
+ctx := context.Background()
+pool, err := pgxrepo.Open(ctx, "postgres://user:pass@localhost/mydb?sslmode=disable")
+if err != nil { /* handle */ }
+
+// run goose migrations once (or use `yauth migrate up` as a job)
+if err := migrate.Run(ctx, pgxrepo.StdDB(pool), "pgx"); err != nil { /* handle */ }
+
+ya, err := yauth.New(pgxrepo.New(pool), yauth.NewDefaultConfig()).
+    WithPlugin(emailpassword.New(emailpassword.Config{})).
+    Build()
+```
+
+Or let `NewFromConfig` wire everything when `database.driver = "pgx"` in `yauth.yaml`:
+
+```yaml
+database:
+  driver: pgx
+  dsn: "postgres://user:pass@localhost/mydb?sslmode=disable"
+  auto_migrate: true   # dev only; use `yauth migrate up` in production
+```
 
 ## Pick Your Plugins
 
@@ -563,7 +611,7 @@ The `yauth` CLI (`cmd/yauth`) is the operator-facing companion, mirroring
 go install github.com/yackey-labs/yauth-go/cmd/yauth@latest
 
 yauth init               # scaffold yauth.yaml
-yauth migrate up         # run AutoMigrate against the configured DSN
+yauth migrate up         # run goose migrations (pgx) or GORM AutoMigrate (others)
 yauth check              # validate yauth.yaml + reachability
 yauth gen-secrets        # cryptographically random session/JWT secrets
 yauth gen-keys --type RS256 --out ./keys # asymmetric JWT keypair
@@ -750,7 +798,7 @@ const { user } = useSession()
 | SSO — SAML 2.0 SP      | ✅           | SP-initiated + IdP-initiated; metadata XML; Entra/Okta/ADFS/Auth0/OneLogin/Ping        |
 | SCIM 2.0               | ✅           | RFC 7643/7644 Users + Groups push sync; Okta/Entra/OneLogin; Go-only routes            |
 | audit-export / SIEM    | ✅           | Webhook, syslog TLS, S3, Splunk HEC, Datadog; at-least-once; Go-only routes            |
-| 14 DB backends         | ⚙️ 3 of 14   | GORM PG + SQLite + MySQL; the `repo.Repository` interface is the extension point        |
+| 14 DB backends         | ⚙️ 4 of 14   | pgxrepo (sqlc+pgx, recommended for PG) + GORM PG + SQLite + MySQL; goose migrations for all three dialects |
 
 `✅ done · ⚙️ partial · ❌ not yet`
 
@@ -761,7 +809,9 @@ const { user } = useSession()
 - `events/`            — `AuthEvent`, `Decision`, `Handler`
 - `plugin/`            — `Plugin` and `PluginHost` interfaces
 - `middleware/`        — tri-mode auth resolver + `RequireAuth` / `RequireAdmin` + CORS + rate-limit wrapper
+- `migrate/`           — goose runner with embedded SQL migration files for postgres, mysql, and sqlite
 - `repo/`              — repository interface + sub-interfaces
+- `repo/pgxrepo/`      — native pgx/v5 + sqlc-generated backend (Postgres; recommended)
 - `repo/gormrepo/`     — GORM-backed implementation (Postgres + SQLite + MySQL)
 - `repo/redisrepo/`    — Redis caching decorator (sessions, rate limits, revocations)
 - `repo/memrepo/`      — in-memory backend (testing + zero-config quickstart)

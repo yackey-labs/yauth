@@ -46,4 +46,4 @@ INSERT INTO yauth_sso_login_states (state, connection_id, nonce, pkce_verifier, 
 VALUES ($1, $2, $3, $4, $5, $6, $7);
 
 -- name: ConsumeSsoLoginState :one
-DELETE FROM yauth_sso_login_states WHERE state = $1 RETURNING *;
+DELETE FROM yauth_sso_login_states WHERE state = $1 AND expires_at > NOW() RETURNING *;

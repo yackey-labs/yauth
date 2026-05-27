@@ -1,0 +1,31 @@
+# Config-driven pgxrepo example.
+# Used by examples/pgxrepo if you prefer yauth.NewFromConfig over wiring
+# the pool manually.
+#
+# Run:
+#   export DATABASE_URL="postgres://yauth:yauth@localhost/yauth_example?sslmode=disable"
+#   yauth migrate -c examples/pgxrepo/yauth.yaml   # one-shot migration job
+#   go run ./examples/pgxrepo/config
+#
+# auto_migrate: true is shown here for convenience. In production leave it
+# false and run the migration job before rolling out replicas.
+database:
+  driver: pgx
+  dsn: "${DATABASE_URL}"
+  auto_migrate: true
+
+server:
+  addr: ":3000"
+  prefix: "/api/auth"
+
+session:
+  ttl: 720h
+  cookie_name: yauth_session
+  cookie_secure: false
+  cookie_same_site: lax
+
+plugins:
+  email_password:
+    enabled: true
+    min_password_length: 12
+    require_email_verification: false

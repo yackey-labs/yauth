@@ -12,7 +12,7 @@ import (
 )
 
 const consumeSsoLoginState = `-- name: ConsumeSsoLoginState :one
-DELETE FROM yauth_sso_login_states WHERE state = $1 RETURNING state, connection_id, nonce, pkce_verifier, redirect_url, created_at, expires_at
+DELETE FROM yauth_sso_login_states WHERE state = $1 AND expires_at > NOW() RETURNING state, connection_id, nonce, pkce_verifier, redirect_url, created_at, expires_at
 `
 
 func (q *Queries) ConsumeSsoLoginState(ctx context.Context, state string) (YauthSsoLoginState, error) {

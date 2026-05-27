@@ -258,6 +258,7 @@ is still available via `gormrepo.Migrate(ctx, db)` for quick local setups.
 ```go
 import (
     "context"
+    "time"
 
     yauth "github.com/yackey-labs/yauth-go"
     "github.com/yackey-labs/yauth-go/migrate"
@@ -266,15 +267,38 @@ import (
 )
 
 ctx := context.Background()
-pool, err := pgxrepo.Open(ctx, "postgres://user:pass@localhost/mydb?sslmode=disable")
-if err != nil { /* handle */ }
 
-// run goose migrations once (or use `yauth migrate up` as a job)
+// PoolOption helpers let you tune sizing beyond what the DSN provides.
+// You can also use DSN query params (pool_max_conns=25&pool_min_conns=5)
+// or call pgxpool.NewWithConfig directly for full control.
+pool, err := pgxrepo.Open(ctx, "postgres://user:pass@localhost/mydb?sslmode=disable",
+    pgxrepo.WithMaxConns(25),
+    pgxrepo.WithMinConns(5),
+    pgxrepo.WithMaxConnLifetime(time.Hour),
+)
+if err != nil { /* handle */ }
+defer pool.Close()
+
+// StdDB wraps the pgxpool as a *sql.DB so goose can use it.
+// Run goose migrations (idempotent). In production run this as a
+// one-shot job before starting replicas — never with multiple replicas
+// all migrating simultaneously. Use `yauth migrate -c yauth.yaml` instead.
 if err := migrate.Run(ctx, pgxrepo.StdDB(pool), "pgx"); err != nil { /* handle */ }
 
 ya, err := yauth.New(pgxrepo.New(pool), yauth.NewDefaultConfig()).
     WithPlugin(emailpassword.New(emailpassword.Config{})).
     Build()
+```
+
+A full runnable example lives at [`examples/pgxrepo/main.go`](examples/pgxrepo/main.go):
+
+```bash
+docker run -d --rm -p 5432:5432 \
+  -e POSTGRES_USER=yauth -e POSTGRES_PASSWORD=yauth -e POSTGRES_DB=yauth_example \
+  postgres:16-alpine
+
+DATABASE_URL="postgres://yauth:yauth@localhost/yauth_example?sslmode=disable" \
+  go run ./examples/pgxrepo
 ```
 
 Or let `NewFromConfig` wire everything when `database.driver = "pgx"` in `yauth.yaml`:
@@ -283,8 +307,46 @@ Or let `NewFromConfig` wire everything when `database.driver = "pgx"` in `yauth.
 database:
   driver: pgx
   dsn: "postgres://user:pass@localhost/mydb?sslmode=disable"
-  auto_migrate: true   # dev only; use `yauth migrate up` in production
+  auto_migrate: true   # DEV ONLY — when true, NewFromConfig calls migrate.Run
+                       # at startup; concurrent replicas will race, so never
+                       # use this in production. Default is false.
 ```
+
+> **Production migration:** `yauth migrate -c yauth.yaml` reads `database.dsn`
+> from `yauth.yaml` (default filename; override with `-c path/to/config.yaml`)
+> and runs goose migrations as a one-shot process. Run it as a Kubernetes Job or
+> init-container before rolling out app replicas; keep `auto_migrate: false`
+> (the default) in the app config. Do not call both `migrate.Run` and set
+> `auto_migrate: true` for the same database — they both run the same goose
+> migrations and are idempotent together, but it's redundant and surprising.
+
+**`migrate.Run` vs `migrate.NewProvider` — when to use each:**
+
+| Situation | Use |
+| --- | --- |
+| Running yauth migrations standalone (init-container, startup hook, test setup) | `migrate.Run(ctx, db, driver)` |
+| Your app already uses goose for its own tables | `migrate.NewProvider(db, driver)` — runs in a separate version table (`goose_db_version_yauth`) so yauth and app migrations never collide |
+| You want to embed yauth's SQL into your own goose provider | `migrate.MigrationFS` + `fs.Sub` + `goose.NewProvider` |
+
+**Integrating yauth migrations with your own goose pipeline:**
+
+```go
+import "github.com/yackey-labs/yauth-go/migrate"
+
+// Your app's provider (uses default goose_db_version table)
+appProvider, _ := goose.NewProvider(goose.DialectPostgres, db, appMigrationsFS)
+
+// yauth's provider — separate goose_db_version_yauth table, no collision
+yauthProvider, _ := migrate.NewProvider(db, "pgx")
+
+// Run both in sequence (or wrap in your own error handling)
+if _, err := appProvider.Up(ctx); err != nil { /* handle */ }
+if _, err := yauthProvider.Up(ctx); err != nil { /* handle */ }
+```
+
+The raw SQL files are exported as `migrate.MigrationFS` (`embed.FS` with
+subdirectories `postgres/`, `mysql/`, `sqlite/`) if you need to merge them
+with your own `fs.FS` via standard library tools.
 
 ## Pick Your Plugins
 
@@ -612,6 +674,7 @@ go install github.com/yackey-labs/yauth-go/cmd/yauth@latest
 
 yauth init               # scaffold yauth.yaml
 yauth migrate up         # run goose migrations (pgx) or GORM AutoMigrate (others)
+                         #   reads yauth.yaml by default; override with -c path/to/config.yaml
 yauth check              # validate yauth.yaml + reachability
 yauth gen-secrets        # cryptographically random session/JWT secrets
 yauth gen-keys --type RS256 --out ./keys # asymmetric JWT keypair

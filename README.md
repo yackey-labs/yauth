@@ -290,6 +290,28 @@ ya, err := yauth.New(pgxrepo.New(pool), yauth.NewDefaultConfig()).
     Build()
 ```
 
+**Shared pool vs dedicated pool:** `pgxrepo.New` accepts any `*pgxpool.Pool`
+— you choose whether to share your application's existing pool or give yauth
+its own:
+
+```go
+// Option A — shared pool (fewer total connections, simpler setup)
+// Pass your app's existing pool directly. yauth and app share the budget.
+appPool := getAppPool()  // your existing *pgxpool.Pool
+yauthRepo := pgxrepo.New(appPool)
+
+// Option B — dedicated pool (yauth can't starve the app, or vice versa)
+// Create a separate pool sized for auth workloads.
+yauthPool, _ := pgxrepo.Open(ctx, dsn, pgxrepo.WithMaxConns(10))
+defer yauthPool.Close()
+yauthRepo := pgxrepo.New(yauthPool)
+```
+
+The same applies to gormrepo — `gormrepo.New(db)` accepts any `*gorm.DB`,
+so you can pass your app's existing GORM instance or open a dedicated one.
+Shared is fine for most apps; a dedicated pool is worth it when auth is
+high-traffic or you need separate connection-limit accounting.
+
 A full runnable example lives at [`examples/pgxrepo/main.go`](examples/pgxrepo/main.go):
 
 ```bash

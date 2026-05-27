@@ -108,7 +108,7 @@ func (q *Queries) DeleteOAuthAccount(ctx context.Context, id string) (int64, err
 }
 
 const getAndDeleteOAuthState = `-- name: GetAndDeleteOAuthState :one
-DELETE FROM yauth_oauth_states WHERE state = $1 RETURNING state, provider, redirect_url, expires_at, created_at
+DELETE FROM yauth_oauth_states WHERE state = $1 AND expires_at > NOW() RETURNING state, provider, redirect_url, expires_at, created_at
 `
 
 func (q *Queries) GetAndDeleteOAuthState(ctx context.Context, state string) (YauthOauthState, error) {

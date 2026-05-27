@@ -11,6 +11,19 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const consumeChallenge = `-- name: ConsumeChallenge :one
+DELETE FROM yauth_challenges
+WHERE key = $1 AND expires_at > NOW()
+RETURNING key, value, expires_at
+`
+
+func (q *Queries) ConsumeChallenge(ctx context.Context, key string) (YauthChallenge, error) {
+	row := q.db.QueryRow(ctx, consumeChallenge, key)
+	var i YauthChallenge
+	err := row.Scan(&i.Key, &i.Value, &i.ExpiresAt)
+	return i, err
+}
+
 const deleteChallenge = `-- name: DeleteChallenge :execrows
 DELETE FROM yauth_challenges WHERE key = $1
 `

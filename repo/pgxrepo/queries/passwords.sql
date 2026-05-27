@@ -32,6 +32,11 @@ VALUES ($1, $2, $3, $4, $5);
 -- name: GetEmailVerificationByTokenHash :one
 SELECT * FROM yauth_email_verifications WHERE token_hash = $1 LIMIT 1;
 
+-- name: ConsumeEmailVerification :one
+DELETE FROM yauth_email_verifications
+WHERE token_hash = $1 AND expires_at > NOW()
+RETURNING *;
+
 -- name: DeleteEmailVerification :execrows
 DELETE FROM yauth_email_verifications WHERE id = $1;
 
@@ -44,6 +49,12 @@ VALUES ($1, $2, $3, $4, $5);
 
 -- name: GetPasswordResetByTokenHash :one
 SELECT * FROM yauth_password_resets WHERE token_hash = $1 LIMIT 1;
+
+-- name: ConsumePasswordReset :one
+UPDATE yauth_password_resets
+SET used_at = NOW()
+WHERE token_hash = $1 AND used_at IS NULL AND expires_at > NOW()
+RETURNING *;
 
 -- name: MarkPasswordResetUsed :execrows
 UPDATE yauth_password_resets SET used_at = $2 WHERE id = $1 AND used_at IS NULL;

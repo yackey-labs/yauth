@@ -6,6 +6,11 @@ ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, expires_at = EXCLUDED.ex
 -- name: GetChallenge :one
 SELECT * FROM yauth_challenges WHERE key = $1 LIMIT 1;
 
+-- name: ConsumeChallenge :one
+DELETE FROM yauth_challenges
+WHERE key = $1 AND expires_at > NOW()
+RETURNING *;
+
 -- name: DeleteChallenge :execrows
 DELETE FROM yauth_challenges WHERE key = $1;
 

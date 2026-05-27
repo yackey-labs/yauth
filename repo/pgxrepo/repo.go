@@ -32,9 +32,9 @@ func New(pool *pgxpool.Pool) *Repo {
 	return &Repo{pool: pool, q: pgxgen.New(pool)}
 }
 
-// withTx runs fn inside a serializable transaction, rolling back on error.
+// withTx runs fn inside a read-committed transaction, rolling back on error.
 func (r *Repo) withTx(ctx context.Context, fn func(tx pgx.Tx) error) error {
-	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return err
 	}
@@ -363,36 +363,18 @@ func (r *Repo) CreateEmailVerification(ctx context.Context, input domain.NewEmai
 }
 
 func (r *Repo) ConsumeEmailVerification(ctx context.Context, tokenHash string) (*domain.EmailVerification, error) {
-	var out *domain.EmailVerification
-	err := r.withTx(ctx, func(tx pgx.Tx) error {
-		q := pgxgen.New(tx)
-		row, err := q.GetEmailVerificationByTokenHash(ctx, tokenHash)
-		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return yautherr.ErrNotFound
-			}
-			return err
-		}
-		if !row.ExpiresAt.Time.UTC().After(time.Now().UTC()) {
-			return yautherr.ErrNotFound
-		}
-		if _, err := q.DeleteEmailVerification(ctx, row.ID); err != nil {
-			return err
-		}
-		ev := domain.EmailVerification{
-			ID:        row.ID,
-			UserID:    row.UserID,
-			TokenHash: row.TokenHash,
-			ExpiresAt: fromTS(row.ExpiresAt),
-			CreatedAt: fromTS(row.CreatedAt),
-		}
-		out = &ev
-		return nil
-	})
+	row, err := r.q.ConsumeEmailVerification(ctx, tokenHash)
 	if err != nil {
-		return nil, err
+		return nil, notFound(err)
 	}
-	return out, nil
+	ev := domain.EmailVerification{
+		ID:        row.ID,
+		UserID:    row.UserID,
+		TokenHash: row.TokenHash,
+		ExpiresAt: fromTS(row.ExpiresAt),
+		CreatedAt: fromTS(row.CreatedAt),
+	}
+	return &ev, nil
 }
 
 func (r *Repo) DeleteEmailVerification(ctx context.Context, id string) error {
@@ -423,45 +405,20 @@ func (r *Repo) CreatePasswordReset(ctx context.Context, input domain.NewPassword
 }
 
 func (r *Repo) ConsumePasswordReset(ctx context.Context, tokenHash string) (*domain.PasswordReset, error) {
-	var out *domain.PasswordReset
-	err := r.withTx(ctx, func(tx pgx.Tx) error {
-		q := pgxgen.New(tx)
-		row, err := q.GetPasswordResetByTokenHash(ctx, tokenHash)
-		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return yautherr.ErrNotFound
-			}
-			return err
-		}
-		if row.UsedAt.Valid {
-			return yautherr.ErrNotFound
-		}
-		if !row.ExpiresAt.Time.UTC().After(time.Now().UTC()) {
-			return yautherr.ErrNotFound
-		}
-		now := ts(time.Now().UTC())
-		if _, err := q.MarkPasswordResetUsed(ctx, pgxgen.MarkPasswordResetUsedParams{
-			ID:     row.ID,
-			UsedAt: now,
-		}); err != nil {
-			return err
-		}
-		usedAt := fromTS(now)
-		pr := domain.PasswordReset{
-			ID:        row.ID,
-			UserID:    row.UserID,
-			TokenHash: row.TokenHash,
-			ExpiresAt: fromTS(row.ExpiresAt),
-			UsedAt:    &usedAt,
-			CreatedAt: fromTS(row.CreatedAt),
-		}
-		out = &pr
-		return nil
-	})
+	row, err := r.q.ConsumePasswordReset(ctx, tokenHash)
 	if err != nil {
-		return nil, err
+		return nil, notFound(err)
 	}
-	return out, nil
+	usedAt := fromTS(row.UsedAt)
+	pr := domain.PasswordReset{
+		ID:        row.ID,
+		UserID:    row.UserID,
+		TokenHash: row.TokenHash,
+		ExpiresAt: fromTS(row.ExpiresAt),
+		UsedAt:    &usedAt,
+		CreatedAt: fromTS(row.CreatedAt),
+	}
+	return &pr, nil
 }
 
 func (r *Repo) DeleteUnusedPasswordResetsForUser(ctx context.Context, userID string) (int64, error) {
@@ -551,30 +508,12 @@ func (r *Repo) GetChallenge(ctx context.Context, key string) (*domain.Challenge,
 }
 
 func (r *Repo) ConsumeChallenge(ctx context.Context, key string) (*domain.Challenge, error) {
-	var out *domain.Challenge
-	err := r.withTx(ctx, func(tx pgx.Tx) error {
-		q := pgxgen.New(tx)
-		row, err := q.GetChallenge(ctx, key)
-		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return yautherr.ErrNotFound
-			}
-			return err
-		}
-		if !row.ExpiresAt.Time.UTC().After(time.Now().UTC()) {
-			return yautherr.ErrNotFound
-		}
-		if _, err := q.DeleteChallenge(ctx, key); err != nil {
-			return err
-		}
-		c := domain.Challenge{Key: row.Key, Value: row.Value, ExpiresAt: fromTS(row.ExpiresAt)}
-		out = &c
-		return nil
-	})
+	row, err := r.q.ConsumeChallenge(ctx, key)
 	if err != nil {
-		return nil, err
+		return nil, notFound(err)
 	}
-	return out, nil
+	c := domain.Challenge{Key: row.Key, Value: row.Value, ExpiresAt: fromTS(row.ExpiresAt)}
+	return &c, nil
 }
 
 func (r *Repo) DeleteChallenge(ctx context.Context, key string) error {
@@ -592,7 +531,7 @@ func (r *Repo) CheckRateLimit(ctx context.Context, key string, limit int, window
 		Column3:     windowMicros,
 	})
 	if err != nil {
-		return domain.RateLimitResult{Allowed: true, Remaining: limit}, nil
+		return domain.RateLimitResult{}, err
 	}
 	count := int(row.Count)
 	if count > limit {
@@ -1521,33 +1460,18 @@ func (r *Repo) GetUnlockTokenByHash(ctx context.Context, tokenHash string) (*dom
 }
 
 func (r *Repo) ConsumeUnlockToken(ctx context.Context, tokenHash string) (*domain.UnlockToken, error) {
-	var out *domain.UnlockToken
-	err := r.withTx(ctx, func(tx pgx.Tx) error {
-		q := pgxgen.New(tx)
-		row, err := q.GetUnlockTokenByHash(ctx, tokenHash)
-		if err != nil {
-			return notFound(err)
-		}
-		if _, err := q.DeleteUnlockTokenByHash(ctx, tokenHash); err != nil {
-			return err
-		}
-		if !row.ExpiresAt.Time.UTC().After(time.Now().UTC()) {
-			return yautherr.ErrNotFound
-		}
-		ut := domain.UnlockToken{
-			ID:        row.ID,
-			UserID:    row.UserID,
-			TokenHash: row.TokenHash,
-			ExpiresAt: fromTS(row.ExpiresAt),
-			CreatedAt: fromTS(row.CreatedAt),
-		}
-		out = &ut
-		return nil
-	})
+	row, err := r.q.ConsumeUnlockToken(ctx, tokenHash)
 	if err != nil {
-		return nil, err
+		return nil, notFound(err)
 	}
-	return out, nil
+	ut := domain.UnlockToken{
+		ID:        row.ID,
+		UserID:    row.UserID,
+		TokenHash: row.TokenHash,
+		ExpiresAt: fromTS(row.ExpiresAt),
+		CreatedAt: fromTS(row.CreatedAt),
+	}
+	return &ut, nil
 }
 
 func (r *Repo) DeleteUnlockToken(ctx context.Context, id string) error {

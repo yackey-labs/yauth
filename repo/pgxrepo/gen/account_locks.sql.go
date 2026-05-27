@@ -28,6 +28,25 @@ func (q *Queries) AutoUnlockAccount(ctx context.Context, arg AutoUnlockAccountPa
 	return result.RowsAffected(), nil
 }
 
+const consumeUnlockToken = `-- name: ConsumeUnlockToken :one
+DELETE FROM yauth_unlock_tokens
+WHERE token_hash = $1 AND expires_at > NOW()
+RETURNING id, user_id, token_hash, expires_at, created_at
+`
+
+func (q *Queries) ConsumeUnlockToken(ctx context.Context, tokenHash string) (YauthUnlockToken, error) {
+	row := q.db.QueryRow(ctx, consumeUnlockToken, tokenHash)
+	var i YauthUnlockToken
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.TokenHash,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const createAccountLock = `-- name: CreateAccountLock :one
 INSERT INTO yauth_account_locks (id, user_id, failed_count, locked_until, lock_count, locked_reason, created_at, updated_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)

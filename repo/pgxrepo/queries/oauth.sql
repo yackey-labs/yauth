@@ -3,7 +3,7 @@ INSERT INTO yauth_oauth_states (state, provider, redirect_url, expires_at, creat
 VALUES ($1, $2, $3, $4, $5);
 
 -- name: GetAndDeleteOAuthState :one
-DELETE FROM yauth_oauth_states WHERE state = $1 RETURNING *;
+DELETE FROM yauth_oauth_states WHERE state = $1 AND expires_at > NOW() RETURNING *;
 
 -- name: GetOAuthAccountByProviderAndProviderUserID :one
 SELECT * FROM yauth_oauth_accounts

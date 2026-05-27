@@ -33,6 +33,46 @@ func (q *Queries) AppendPasswordHistory(ctx context.Context, arg AppendPasswordH
 	return err
 }
 
+const consumeEmailVerification = `-- name: ConsumeEmailVerification :one
+DELETE FROM yauth_email_verifications
+WHERE token_hash = $1 AND expires_at > NOW()
+RETURNING id, user_id, token_hash, expires_at, created_at
+`
+
+func (q *Queries) ConsumeEmailVerification(ctx context.Context, tokenHash string) (YauthEmailVerification, error) {
+	row := q.db.QueryRow(ctx, consumeEmailVerification, tokenHash)
+	var i YauthEmailVerification
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.TokenHash,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const consumePasswordReset = `-- name: ConsumePasswordReset :one
+UPDATE yauth_password_resets
+SET used_at = NOW()
+WHERE token_hash = $1 AND used_at IS NULL AND expires_at > NOW()
+RETURNING id, user_id, token_hash, expires_at, used_at, created_at
+`
+
+func (q *Queries) ConsumePasswordReset(ctx context.Context, tokenHash string) (YauthPasswordReset, error) {
+	row := q.db.QueryRow(ctx, consumePasswordReset, tokenHash)
+	var i YauthPasswordReset
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.TokenHash,
+		&i.ExpiresAt,
+		&i.UsedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const createEmailVerification = `-- name: CreateEmailVerification :exec
 INSERT INTO yauth_email_verifications (id, user_id, token_hash, expires_at, created_at)
 VALUES ($1, $2, $3, $4, $5)

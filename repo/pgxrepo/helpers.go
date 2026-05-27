@@ -2,10 +2,10 @@ package pgxrepo
 
 import (
 	"errors"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/yackey-labs/yauth-go/yautherr"
 )
@@ -48,15 +48,9 @@ func notFound(err error) error {
 	return err
 }
 
-// notFoundOr wraps notFound but returns the sentinel when err is ErrNoRows.
 func isUniqueViolation(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	return strings.Contains(msg, "23505") ||
-		strings.Contains(msg, "unique constraint") ||
-		strings.Contains(msg, "duplicate key")
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
 // ptrStr dereferences a *string safely.

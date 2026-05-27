@@ -27,6 +27,11 @@ VALUES ($1, $2, $3, $4, $5);
 -- name: GetUnlockTokenByHash :one
 SELECT * FROM yauth_unlock_tokens WHERE token_hash = $1 LIMIT 1;
 
+-- name: ConsumeUnlockToken :one
+DELETE FROM yauth_unlock_tokens
+WHERE token_hash = $1 AND expires_at > NOW()
+RETURNING *;
+
 -- name: DeleteUnlockTokenByHash :execrows
 DELETE FROM yauth_unlock_tokens WHERE token_hash = $1;
 

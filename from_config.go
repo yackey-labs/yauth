@@ -45,7 +45,11 @@ func NewFromConfig(ctx context.Context, cfg *yauthcfg.Config) (*YAuth, error) {
 	var repo yauthrepo.Repository
 
 	if cfg.Database.Driver == "pgx" {
-		pool, err := pgxrepo.Open(ctx, cfg.Database.DSN)
+		poolOpts := []pgxrepo.PoolOption{}
+		if cfg.Telemetry.Enabled {
+			poolOpts = append(poolOpts, pgxrepo.WithOTelTracing())
+		}
+		pool, err := pgxrepo.Open(ctx, cfg.Database.DSN, poolOpts...)
 		if err != nil {
 			return nil, err
 		}
@@ -66,6 +70,11 @@ func NewFromConfig(ctx context.Context, cfg *yauthcfg.Config) (*YAuth, error) {
 		}
 		if err := pingDB(ctx, db); err != nil {
 			return nil, fmt.Errorf("yauth: database unreachable: %w", err)
+		}
+		if cfg.Telemetry.Enabled {
+			if err := gormrepo.ApplyOTel(db); err != nil {
+				return nil, fmt.Errorf("yauth: gorm otel: %w", err)
+			}
 		}
 		if cfg.Database.AutoMigrate {
 			fmt.Fprintln(os.Stderr, "yauth: WARNING database.auto_migrate=true is for DEV/TEST only — use `yauth migrate` in production")

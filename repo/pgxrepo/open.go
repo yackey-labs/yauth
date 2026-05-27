@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/exaring/otelpgx"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 )
@@ -38,6 +39,16 @@ func WithMaxConnIdleTime(d time.Duration) PoolOption {
 // WithHealthCheckPeriod sets how often idle connections are health-checked.
 func WithHealthCheckPeriod(d time.Duration) PoolOption {
 	return func(c *pgxpool.Config) { c.HealthCheckPeriod = d }
+}
+
+// WithOTelTracing attaches an OpenTelemetry query tracer to the pool using
+// the global tracer provider. Each SQL query becomes a child span of the
+// active context span. This is a no-op when no global tracer provider has
+// been registered (e.g. before telemetry.Init is called).
+func WithOTelTracing() PoolOption {
+	return func(c *pgxpool.Config) {
+		c.ConnConfig.Tracer = otelpgx.NewTracer()
+	}
 }
 
 // Open creates a pgxpool from the given DSN (postgres:// or keyword=value form).

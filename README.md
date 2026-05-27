@@ -683,11 +683,105 @@ yauth dump-schema        # emit the table layout
 yauth version            # version info
 ```
 
+## Running Migrations in CI/CD
+
+**Golden rule: migrations run once before replicas start — never at startup.**
+Multiple replicas racing through DDL will corrupt the schema. Set
+`auto_migrate: false` (the default) and use one of the patterns below.
+
+### `yauth migrate` CLI
+
+```bash
+go install github.com/yackey-labs/yauth-go/cmd/yauth@latest
+yauth migrate -c yauth.yaml   # reads database.dsn from yauth.yaml
+```
+
+`-c` defaults to `yauth.yaml` in the working directory. Override for
+non-default paths: `yauth migrate -c /etc/yauth/prod.yaml`.
+
+### GitHub Actions (run before deploy)
+
+```yaml
+- name: Migrate database
+  run: |
+    go install github.com/yackey-labs/yauth-go/cmd/yauth@latest
+    yauth migrate -c config/yauth.yaml
+  env:
+    DATABASE_URL: ${{ secrets.DATABASE_URL }}
+```
+
+Keep this step in its own job with `needs: [migrate]` on the deploy job
+so the deploy never proceeds if migration fails.
+
+### Kubernetes Job (recommended)
+
+Run a Job to completion before rolling out the Deployment:
+
+```yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: yauth-migrate
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: ghcr.io/yackey-labs/yauth-cli:latest
+          args: ["migrate", "-c", "/etc/yauth/yauth.yaml"]
+          envFrom:
+            - secretRef:
+                name: yauth-secrets   # must contain DATABASE_URL
+          volumeMounts:
+            - name: config
+              mountPath: /etc/yauth
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: yauth-config
+```
+
+```bash
+kubectl apply -f migrate-job.yaml
+kubectl wait --for=condition=complete job/yauth-migrate --timeout=120s
+kubectl apply -f deployment.yaml   # safe to roll out replicas now
+```
+
+> **Note:** Init-containers run once per Pod, not once per rollout — avoid
+> using them for migrations in multi-replica Deployments.
+
+### Go entrypoint (custom binary)
+
+For teams that want full control in Go rather than the CLI:
+
+```go
+pool, _ := pgxrepo.Open(ctx, dsn)
+if err := migrate.Run(ctx, pgxrepo.StdDB(pool), "pgx"); err != nil {
+    log.Fatalf("migrate: %v", err)
+}
+log.Println("migrations complete — starting app")
+// ... build YAuth, start server
+```
+
+`migrate.Run` is idempotent: goose skips already-applied migrations.
+For teams with existing goose pipelines see `migrate.NewProvider` above.
+
 ## Telemetry
 
-`telemetry` wraps OpenTelemetry tracing. Every plugin handler runs inside
-a server span when telemetry is enabled, and outbound HTTP from the
-webhooks dispatcher carries traceparent headers automatically.
+`telemetry` wraps OpenTelemetry tracing. When enabled:
+
+- Every plugin HTTP handler runs inside a server span
+- Outbound HTTP from the webhooks dispatcher carries `traceparent` headers
+- **Database operations are traced automatically** — pgxrepo emits a child span per SQL query ([otelpgx](https://github.com/exaring/otelpgx)); gormrepo emits spans per Create/Query/Update/Delete ([gorm opentelemetry](https://github.com/go-gorm/opentelemetry))
+
+When using `NewFromConfig` with `telemetry.enabled: true`, DB tracing is
+wired automatically for both backends — no extra code needed.
+
+For manual wiring:
 
 ```go
 shutdown, err := telemetry.Init(ctx, telemetry.Config{
@@ -696,6 +790,13 @@ shutdown, err := telemetry.Init(ctx, telemetry.Config{
     Endpoint:    "otlp://otel-collector:4317",
 })
 defer shutdown(context.Background())
+
+// pgxrepo: pass WithOTelTracing() — uses global provider set by telemetry.Init
+pool, _ := pgxrepo.Open(ctx, dsn, pgxrepo.WithOTelTracing())
+
+// gormrepo: call ApplyOTel after opening
+db, _ := gormrepo.OpenPostgres(dsn)
+gormrepo.ApplyOTel(db)
 
 ya, _ := yauth.New(repo, cfg).
     WithTelemetry(telemetry.DefaultConfig()).

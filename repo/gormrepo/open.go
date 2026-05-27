@@ -9,6 +9,7 @@ import (
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
+	"gorm.io/plugin/opentelemetry/tracing"
 )
 
 // OpenPostgres opens a GORM DB backed by Postgres.
@@ -67,6 +68,15 @@ func OpenSQLite(dsn string) (*gorm.DB, error) {
 	return gorm.Open(sqlite.Open(dsn), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 	})
+}
+
+// ApplyOTel registers the GORM OpenTelemetry plugin on db, causing every
+// Create/Query/Update/Delete/Row operation to emit a child span under the
+// active context span. It uses the global tracer provider, so it is a
+// no-op when called before telemetry.Init. Safe to call multiple times —
+// the plugin is idempotent.
+func ApplyOTel(db *gorm.DB) error {
+	return db.Use(tracing.NewPlugin())
 }
 
 // OpenMySQL opens a GORM DB backed by MySQL/MariaDB.

@@ -334,6 +334,19 @@ database:
                        # use this in production. Default is false.
 ```
 
+> **gorm drivers are opt-in.** The root `yauth` package only links the `pgx`
+> backend, so a pgx-only app never pulls `gorm.io/gorm` (or its mysql/sqlite
+> drivers) into its binary. To use `database.driver = sqlite | postgres | mysql`
+> with `NewFromConfig` / `Migrate` / `SchemaCheck`, add a blank import that
+> registers the gorm backend:
+>
+> ```go
+> import _ "github.com/yackey-labs/yauth-go/repo/gormrepo/gormbackend"
+> ```
+>
+> Without it, those drivers fail fast with an actionable "no backend registered"
+> error naming the import to add.
+
 > **Production migration:** `yauth migrate -c yauth.yaml` reads `database.dsn`
 > from `yauth.yaml` (default filename; override with `-c path/to/config.yaml`)
 > and runs goose migrations as a one-shot process. Run it as a Kubernetes Job or

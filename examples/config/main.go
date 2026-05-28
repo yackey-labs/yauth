@@ -18,6 +18,9 @@ import (
 	"net/http"
 
 	yauth "github.com/yackey-labs/yauth-go"
+	// Register the gorm-backed drivers (sqlite, postgres, mysql). pgx-only
+	// apps can drop this import and avoid linking gorm entirely.
+	_ "github.com/yackey-labs/yauth-go/repo/gormrepo/gormbackend"
 	"github.com/yackey-labs/yauth-go/yauthcfg"
 )
 

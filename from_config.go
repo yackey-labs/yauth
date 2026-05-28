@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"strings"
 
@@ -16,12 +15,10 @@ import (
 	"github.com/yackey-labs/yauth-go/plugins/emailpassword"
 	smtpmailer "github.com/yackey-labs/yauth-go/plugins/mailer/smtp"
 	yauthrepo "github.com/yackey-labs/yauth-go/repo"
-	"github.com/yackey-labs/yauth-go/repo/gormrepo"
 	"github.com/yackey-labs/yauth-go/repo/pgxrepo"
 	"github.com/yackey-labs/yauth-go/repo/redisrepo"
 	"github.com/yackey-labs/yauth-go/telemetry"
 	"github.com/yackey-labs/yauth-go/yauthcfg"
-	"gorm.io/gorm"
 )
 
 // NewFromConfig builds a fully-wired *YAuth from a yauthcfg.Config.
@@ -65,25 +62,14 @@ func NewFromConfig(ctx context.Context, cfg *yauthcfg.Config) (*YAuth, error) {
 		}
 		repo = pgxrepo.New(pool)
 	} else {
-		db, err := openDB(cfg.Database)
+		b, err := lookupBackend(cfg.Database.Driver)
 		if err != nil {
 			return nil, err
 		}
-		if err := pingDB(ctx, db); err != nil {
-			return nil, fmt.Errorf("yauth: database unreachable: %w", err)
+		repo, err = b.OpenRepository(ctx, cfg.Database, cfg.Telemetry.Enabled)
+		if err != nil {
+			return nil, err
 		}
-		if cfg.Telemetry.Enabled {
-			if err := gormrepo.ApplyOTel(db, dbNameFromDSN(cfg.Database.Driver, cfg.Database.DSN)); err != nil {
-				return nil, fmt.Errorf("yauth: gorm otel: %w", err)
-			}
-		}
-		if cfg.Database.AutoMigrate {
-			fmt.Fprintln(os.Stderr, "yauth: WARNING database.auto_migrate=true is for DEV/TEST only — use `yauth migrate` in production")
-			if err := gormrepo.Migrate(ctx, db); err != nil {
-				return nil, fmt.Errorf("yauth: auto_migrate failed: %w", err)
-			}
-		}
-		repo = gormrepo.New(db)
 	}
 	if cfg.Cache.Enabled {
 		decorated, err := buildCacheDecorator(repo, cfg.Cache)
@@ -179,11 +165,11 @@ func Migrate(ctx context.Context, cfg *yauthcfg.Config) error {
 		}
 		return yauthMigrate.Run(ctx, sqlDB, "pgx")
 	}
-	db, err := openDB(cfg.Database)
+	b, err := lookupBackend(cfg.Database.Driver)
 	if err != nil {
 		return err
 	}
-	return gormrepo.Migrate(ctx, db)
+	return b.Migrate(ctx, cfg.Database)
 }
 
 // SchemaCheck connects to the database and verifies that the tables
@@ -226,28 +212,9 @@ func SchemaCheck(ctx context.Context, cfg *yauthcfg.Config) error {
 	return nil
 }
 
-func openDB(d yauthcfg.DatabaseConfig) (*gorm.DB, error) {
-	switch d.Driver {
-	case "sqlite":
-		return gormrepo.OpenSQLite(d.DSN)
-	case "postgres":
-		return gormrepo.OpenPostgresSchema(d.DSN, d.Schema)
-	case "mysql":
-		return gormrepo.OpenMySQL(d.DSN)
-	default:
-		return nil, fmt.Errorf("yauth: unsupported database driver %q (use gormrepo drivers: sqlite | postgres | mysql)", d.Driver)
-	}
-}
-
-func pingDB(ctx context.Context, db *gorm.DB) error {
-	sqlDB, err := db.DB()
-	if err != nil {
-		return err
-	}
-	return sqlDB.PingContext(ctx)
-}
-
-// openSQLDB returns a *sql.DB for any supported driver. Used by Migrate and SchemaCheck.
+// openSQLDB returns a *sql.DB for any supported driver. Used by Migrate and
+// SchemaCheck. pgx is handled inline; other drivers are delegated to their
+// registered Backend (see RegisterBackend).
 func openSQLDB(ctx context.Context, d yauthcfg.DatabaseConfig) (*sql.DB, error) {
 	if d.Driver == "pgx" {
 		pool, err := pgxrepo.Open(ctx, d.DSN)
@@ -256,11 +223,11 @@ func openSQLDB(ctx context.Context, d yauthcfg.DatabaseConfig) (*sql.DB, error) 
 		}
 		return pgxrepo.StdDB(pool), nil
 	}
-	gdb, err := openDB(d)
+	b, err := lookupBackend(d.Driver)
 	if err != nil {
 		return nil, err
 	}
-	return gdb.DB()
+	return b.OpenSQLDB(ctx, d)
 }
 
 func listTables(ctx context.Context, db *sql.DB, driver, schema string) ([]string, error) {
@@ -411,34 +378,4 @@ func buildCacheDecorator(inner yauthrepo.Repository, cfg yauthcfg.CacheConfig) (
 	default:
 		return nil, fmt.Errorf("yauth: unsupported cache.provider %q", cfg.Provider)
 	}
-}
-
-// dbNameFromDSN extracts the database name from a driver DSN for use as the
-// db.namespace OTel attribute. Returns "" when the name cannot be determined.
-func dbNameFromDSN(driver, dsn string) string {
-	switch driver {
-	case "pgx", "postgres":
-		if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
-			u, err := url.Parse(dsn)
-			if err != nil {
-				return ""
-			}
-			return strings.TrimPrefix(u.Path, "/")
-		}
-		for _, part := range strings.Fields(dsn) {
-			if strings.HasPrefix(part, "dbname=") {
-				return strings.Trim(strings.TrimPrefix(part, "dbname="), "'\"")
-			}
-		}
-	case "mysql":
-		// user:pass@tcp(host:port)/dbname?params
-		if idx := strings.Index(dsn, ")/"); idx >= 0 {
-			rest := dsn[idx+2:]
-			if q := strings.IndexByte(rest, '?'); q >= 0 {
-				return rest[:q]
-			}
-			return rest
-		}
-	}
-	return ""
 }

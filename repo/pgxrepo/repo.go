@@ -697,10 +697,7 @@ func (r *Repo) DeletePasskey(ctx context.Context, id string) error {
 // ─── TOTP ────────────────────────────────────────────────────────────────────
 
 func (r *Repo) GetTOTPByUserID(ctx context.Context, userID string, verifiedOnly *bool) (*domain.TOTPSecret, error) {
-	filterVerified := false
-	if verifiedOnly != nil && *verifiedOnly {
-		filterVerified = true
-	}
+	filterVerified := verifiedOnly != nil && *verifiedOnly
 	row, err := r.q.GetTOTPByUserID(ctx, pgxgen.GetTOTPByUserIDParams{
 		UserID: userID,
 		Column2: filterVerified,
@@ -740,10 +737,7 @@ func (r *Repo) MarkTOTPVerified(ctx context.Context, id string) error {
 }
 
 func (r *Repo) DeleteTOTPForUser(ctx context.Context, userID string, verifiedOnly *bool) (int64, error) {
-	filterVerified := false
-	if verifiedOnly != nil && *verifiedOnly {
-		filterVerified = true
-	}
+	filterVerified := verifiedOnly != nil && *verifiedOnly
 	return r.q.DeleteTOTPForUser(ctx, pgxgen.DeleteTOTPForUserParams{
 		UserID:  userID,
 		Column2: filterVerified,

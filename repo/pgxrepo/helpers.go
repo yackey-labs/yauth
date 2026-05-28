@@ -53,14 +53,3 @@ func isUniqueViolation(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
-// ptrStr dereferences a *string safely.
-func ptrStr(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
-}
-
-func strPtr(s string) *string { return &s }
-
-func boolPtr(b bool) *bool { return &b }

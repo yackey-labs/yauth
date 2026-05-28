@@ -4,6 +4,7 @@ import (
 	"net/url"
 	"strings"
 
+	"go.opentelemetry.io/otel/attribute"
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
 	"gorm.io/driver/sqlite"
@@ -75,8 +76,15 @@ func OpenSQLite(dsn string) (*gorm.DB, error) {
 // active context span. It uses the global tracer provider, so it is a
 // no-op when called before telemetry.Init. Safe to call multiple times —
 // the plugin is idempotent.
-func ApplyOTel(db *gorm.DB) error {
-	return db.Use(tracing.NewPlugin())
+//
+// dbName is the database name to attach as the db.namespace attribute on
+// every span (OTel semconv conditionally required). Pass "" to omit it.
+func ApplyOTel(db *gorm.DB, dbName string) error {
+	opts := []tracing.Option{}
+	if dbName != "" {
+		opts = append(opts, tracing.WithAttributes(attribute.String("db.namespace", dbName)))
+	}
+	return db.Use(tracing.NewPlugin(opts...))
 }
 
 // OpenMySQL opens a GORM DB backed by MySQL/MariaDB.

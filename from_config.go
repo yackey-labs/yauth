@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 
@@ -72,7 +73,7 @@ func NewFromConfig(ctx context.Context, cfg *yauthcfg.Config) (*YAuth, error) {
 			return nil, fmt.Errorf("yauth: database unreachable: %w", err)
 		}
 		if cfg.Telemetry.Enabled {
-			if err := gormrepo.ApplyOTel(db); err != nil {
+			if err := gormrepo.ApplyOTel(db, dbNameFromDSN(cfg.Database.Driver, cfg.Database.DSN)); err != nil {
 				return nil, fmt.Errorf("yauth: gorm otel: %w", err)
 			}
 		}
@@ -410,4 +411,34 @@ func buildCacheDecorator(inner yauthrepo.Repository, cfg yauthcfg.CacheConfig) (
 	default:
 		return nil, fmt.Errorf("yauth: unsupported cache.provider %q", cfg.Provider)
 	}
+}
+
+// dbNameFromDSN extracts the database name from a driver DSN for use as the
+// db.namespace OTel attribute. Returns "" when the name cannot be determined.
+func dbNameFromDSN(driver, dsn string) string {
+	switch driver {
+	case "pgx", "postgres":
+		if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
+			u, err := url.Parse(dsn)
+			if err != nil {
+				return ""
+			}
+			return strings.TrimPrefix(u.Path, "/")
+		}
+		for _, part := range strings.Fields(dsn) {
+			if strings.HasPrefix(part, "dbname=") {
+				return strings.Trim(strings.TrimPrefix(part, "dbname="), "'\"")
+			}
+		}
+	case "mysql":
+		// user:pass@tcp(host:port)/dbname?params
+		if idx := strings.Index(dsn, ")/"); idx >= 0 {
+			rest := dsn[idx+2:]
+			if q := strings.IndexByte(rest, '?'); q >= 0 {
+				return rest[:q]
+			}
+			return rest
+		}
+	}
+	return ""
 }

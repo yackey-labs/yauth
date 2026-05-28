@@ -28,6 +28,10 @@ jobs:
           go-version: ${{ matrix.go }}
           cache: true
       - name: Build
+        # go.mod requires go >= 1.25.7; setup-go@v6 defaults GOTOOLCHAIN=local,
+        # so allow the matrix's older go to bootstrap the toolchain from go.mod.
+        env:
+          GOTOOLCHAIN: auto
         run: go build ./...
 
   vet:
@@ -39,7 +43,9 @@ jobs:
         with:
           go-version: '1.23'
           cache: true
-      - run: go vet ./...
+      - env:
+          GOTOOLCHAIN: auto
+        run: go vet ./...
 
   lint:
     name: golangci-lint
@@ -65,6 +71,8 @@ jobs:
           go-version: '1.23'
           cache: true
       - name: Run tests
+        env:
+          GOTOOLCHAIN: auto
         run: go test ./...
 
   test-postgres:
@@ -92,6 +100,8 @@ jobs:
           go-version: '1.23'
           cache: true
       - name: Run gormrepo tests with PG
+        env:
+          GOTOOLCHAIN: auto
         run: go test ./repo/gormrepo/... ./...
 
   test-mysql:
@@ -123,6 +133,8 @@ jobs:
           go-version: '1.23'
           cache: true
       - name: Run gormrepo + conformance tests with MySQL
+        env:
+          GOTOOLCHAIN: auto
         run: go test ./repo/gormrepo/... ./repo/conformance/...
 
   build-cli:
@@ -135,6 +147,8 @@ jobs:
           go-version: '1.23'
           cache: true
       - name: Build yauth CLI
+        env:
+          GOTOOLCHAIN: auto
         run: go build -o bin/yauth ./cmd/yauth
       - name: Smoke run --help
         run: ./bin/yauth --help || true
@@ -155,6 +169,8 @@ jobs:
           go-version: '1.23'
           cache: true
       - name: Build CLI
+        env:
+          GOTOOLCHAIN: auto
         run: go build -o bin/yauth ./cmd/yauth
       - name: yauth init
         run: ./bin/yauth init --out yauth.yaml
@@ -166,6 +182,8 @@ jobs:
           sed -i 's|driver:.*|driver: sqlite|' yauth.yaml
           ./bin/yauth migrate -c yauth.yaml
       - name: Build sqlite example
+        env:
+          GOTOOLCHAIN: auto
         run: go build -o bin/example-sqlite ./examples/sqlite
       - name: Run sqlite example + smoke curl
         run: |
@@ -306,6 +324,8 @@ jobs:
       - name: Install GNU time (for -v on linux)
         run: sudo apt-get update && sudo apt-get install -y time
       - name: Run scripts/bench.sh
+        env:
+          GOTOOLCHAIN: auto
         run: bash scripts/bench.sh /tmp/yauth-go-bench.txt
       - uses: actions/upload-artifact@v7
         with:

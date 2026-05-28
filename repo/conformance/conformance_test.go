@@ -64,9 +64,16 @@ func TestConformance(t *testing.T) {
 	if dsn := os.Getenv("DATABASE_URL"); dsn != "" {
 		// Open and migrate once; each case truncates the yauth_* tables
 		// before running so per-test isolation matches the in-memory backends.
-		db, err := gormrepo.OpenPostgres(dsn)
+		//
+		// Pin to the "gorm_conformance" schema so goose-run migrations in
+		// the public schema (from migrate_test.go) don't collide with GORM's
+		// auto-generated constraint names.
+		db, err := gormrepo.OpenPostgresSchema(dsn, "gorm_conformance")
 		if err != nil {
 			t.Fatalf("open postgres: %v", err)
+		}
+		if err := db.Exec("CREATE SCHEMA IF NOT EXISTS gorm_conformance").Error; err != nil {
+			t.Fatalf("create schema: %v", err)
 		}
 		if err := gormrepo.Migrate(context.Background(), db); err != nil {
 			t.Fatalf("migrate postgres: %v", err)

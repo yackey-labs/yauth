@@ -90,6 +90,15 @@ type Config struct {
 	// explicitly setting this to a pointer to false. Documented as a
 	// pointer because the secure default differs from Go's zero value.
 	DCRRequireInitialAccessToken *bool
+	// DCRAllowConfidentialClients controls whether POST /oauth/register may
+	// create confidential clients (those with a secret / private_key_jwt).
+	// Default: false — self-registered clients are public (PKCE,
+	// token_endpoint_auth_method=none) only. This blocks the escalation where
+	// an anonymous registrant obtains a confidential client and uses
+	// client_credentials to mint a no-user token. Provision confidential/M2M
+	// clients via the authenticated admin endpoint instead. Set true only if
+	// you trust the DCR path (e.g. gated registration).
+	DCRAllowConfidentialClients bool
 }
 
 // dcrRequireInitialAccessToken resolves the effective value of the
@@ -192,6 +201,10 @@ func (p *oauth2Plugin) Routes(host plugin.PluginHost, mux *http.ServeMux, prefix
 
 	// --- RFC 7591 dynamic client registration (opt-in) ---
 	if p.cfg.DCREnabled {
-		mux.Handle("POST "+prefix+"/oauth/register", http.HandlerFunc(p.handleDCRRegister(host, prefix)))
+		// Open registration is unauthenticated; rate-limit per IP so it can't
+		// be used to flood the client store (RFC 7591 §5). Fail-open / no-op
+		// when no rate-limit repo is configured.
+		registerRL := host.RateLimit("oauth2.register", 20, time.Minute)
+		mux.Handle("POST "+prefix+"/oauth/register", registerRL(http.HandlerFunc(p.handleDCRRegister(host, prefix))))
 	}
 }

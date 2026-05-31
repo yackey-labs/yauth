@@ -649,6 +649,25 @@ Routes:
 - `POST       /audit/export/destinations/{id}/test` — send a synthetic event
 - `GET        /audit/export/queue` — delivery queue depth (admin diagnostics)
 
+#### MCP server (OAuth for AI tool endpoints)
+
+Putting an MCP endpoint in front of an AI client (Claude Code, Claude Desktop)
+means speaking the MCP OAuth 2.1 flow. yauth's `oauth2-server` plugin is the
+authorization server, but the discovery documents MCP clients need
+(`/.well-known/oauth-protected-resource`, root `/.well-known/oauth-authorization-server`)
+must live at the resource-server **root** — which a yauth plugin can't reach.
+The [`mcpauth`](mcpauth) helper mounts them in one call, and the SPA
+`ConsentScreen` / `OAuthConsentPage` components render the browser consent step.
+
+```go
+mcpauth.Mount(mux, ya, mcpauth.Config{AuthBasePath: "/api/auth", ConsentPath: "/authorize"})
+mux.Handle("/mcp", mcpauth.Guard(ya, mcpHandler))
+mux.Handle("/mcp/", mcpauth.Guard(ya, mcpHandler))
+```
+
+See [docs/mcp](docs/mcp/README.md) for the full walkthrough, the footgun
+checklist, scope catalogs, and the SPA + HTML consent options.
+
 ### Webhooks lifecycle
 
 The webhooks plugin starts a background worker pool when `Build()` runs.

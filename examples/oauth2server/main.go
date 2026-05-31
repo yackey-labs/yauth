@@ -87,7 +87,7 @@ func main() {
 	log.Printf("       -d '{\"email\":\"alice@example.com\",\"password\":\"correct horse battery staple\"}'")
 	log.Printf("")
 	log.Printf("  2) GET /authorize  (returns either {redirect_url} or {client, scopes, csrf_token, request_id}):")
-	log.Printf("     curl -s -b jar.txt 'http://localhost%s/api/auth/oauth2/authorize?response_type=code&client_id=%s&redirect_uri=http://localhost:3000/callback&scope=openid+read&state=xyz&code_challenge=%s&code_challenge_method=S256'", addr, clientID, challenge)
+	log.Printf("     curl -s -b jar.txt 'http://localhost%s/api/auth/oauth/authorize?response_type=code&client_id=%s&redirect_uri=http://localhost:3000/callback&scope=openid+read&state=xyz&code_challenge=%s&code_challenge_method=S256'", addr, clientID, challenge)
 	log.Printf("")
 	log.Printf("  3) POST /consent with the request_id+csrf_token from step 2 → {redirect_url}")
 	log.Printf("     curl -s -b jar.txt -X POST http://localhost%s/api/auth/oauth2/consent \\", addr)

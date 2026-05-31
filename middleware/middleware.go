@@ -148,6 +148,17 @@ func WithAuthUserForTest(ctx context.Context, au *domain.AuthUser) context.Conte
 	return withAuthUser(ctx, au)
 }
 
+// WithAuthUser attaches au to ctx under the same key RequireAuth uses, so
+// downstream handlers can recover it via AuthUserFromContext. It exists for
+// callers that resolve the credential themselves with ResolveAuth — e.g. an
+// MCP/REST guard that must control the 401 body and WWW-Authenticate header
+// (see the mcpauth package) — and then need the resolved user visible to the
+// rest of the chain. Prefer RequireAuth/OptionalAuth when you don't need that
+// control.
+func WithAuthUser(ctx context.Context, au *domain.AuthUser) context.Context {
+	return withAuthUser(ctx, au)
+}
+
 // ResolveAuth tries the session cookie first, then each registered
 // AuthResolver in registration order. The first resolver to return
 // recognized=true wins: a non-error result authenticates the caller, and

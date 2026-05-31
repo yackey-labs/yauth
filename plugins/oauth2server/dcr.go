@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -103,6 +104,10 @@ func (p *oauth2Plugin) handleDCRRegister(host plugin.PluginHost, prefix string) 
 				writeDCRError(w, http.StatusBadRequest, "invalid_redirect_uri", "redirect_uris must be non-empty URIs without whitespace")
 				return
 			}
+			if reason := redirectURISchemeReason(u); reason != "" {
+				writeDCRError(w, http.StatusBadRequest, "invalid_redirect_uri", reason)
+				return
+			}
 		}
 
 		grantTypes := req.GrantTypes
@@ -113,12 +118,24 @@ func (p *oauth2Plugin) handleDCRRegister(host plugin.PluginHost, prefix string) 
 		if len(responseTypes) == 0 {
 			responseTypes = []string{"code"}
 		}
-		authMethod := "client_secret_basic"
+		// Secure default: self-registered clients are public unless the
+		// operator explicitly allows confidential DCR.
+		authMethod := "none"
+		if p.cfg.DCRAllowConfidentialClients {
+			authMethod = "client_secret_basic"
+		}
 		if req.TokenEndpointAuthMethod != nil && *req.TokenEndpointAuthMethod != "" {
 			authMethod = *req.TokenEndpointAuthMethod
 		}
 		if !dcrAuthMethodSupported(authMethod) {
 			writeDCRError(w, http.StatusBadRequest, "invalid_client_metadata", "unsupported token_endpoint_auth_method: "+authMethod)
+			return
+		}
+		// Public-only by default: a self-registered confidential client could use
+		// client_credentials to mint a no-user token. Confidential/M2M clients
+		// must be provisioned via the admin endpoint unless explicitly allowed.
+		if !p.cfg.DCRAllowConfidentialClients && authMethod != "none" {
+			writeDCRError(w, http.StatusBadRequest, "invalid_client_metadata", `dynamic registration is restricted to public clients; token_endpoint_auth_method must be "none"`)
 			return
 		}
 		var scopes []string
@@ -199,6 +216,43 @@ func dcrAuthMethodSupported(m string) bool {
 		return true
 	}
 	return false
+}
+
+// dangerousRedirectSchemes are URI schemes that must never be registered as a
+// redirect target: a consent UI follows the redirect via the equivalent of
+// `window.location = redirect_uri`, so a `javascript:`/`data:` URI would run in
+// the resource's own origin (open-redirect → XSS sink). See OAuth 2.1 BCP §9.
+var dangerousRedirectSchemes = map[string]bool{
+	"javascript": true, "data": true, "vbscript": true,
+	"file": true, "blob": true, "about": true,
+}
+
+// redirectURISchemeReason validates a redirect_uri's scheme per OAuth 2.1 BCP
+// and returns "" when acceptable, or a human-readable rejection reason. It
+// requires an absolute URI, forbids the dangerous pseudo-schemes above, and
+// (per the BCP) permits plain http only for loopback hosts — https and custom
+// app schemes (native-app deep links) are allowed.
+func redirectURISchemeReason(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "redirect_uris must be valid absolute URIs"
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if scheme == "" {
+		return "redirect_uris must be absolute URIs with a scheme"
+	}
+	if dangerousRedirectSchemes[scheme] {
+		return "redirect_uri scheme " + scheme + ": is not allowed"
+	}
+	if scheme == "http" && !isLoopbackHost(u.Hostname()) {
+		return "plaintext http redirect_uris are only allowed for loopback hosts; use https"
+	}
+	return ""
+}
+
+// isLoopbackHost reports whether host is a loopback address per RFC 8252 §7.3.
+func isLoopbackHost(host string) bool {
+	return host == "localhost" || host == "127.0.0.1" || host == "::1"
 }
 
 // extractDCRBearer pulls an "Authorization: Bearer <jwt>" credential.

@@ -34,6 +34,10 @@ type dcrHarness struct {
 // default (Bearer required). requireToken pointing at false enables
 // completely-open registration.
 func newDCRHarness(t *testing.T, dcrEnabled bool, requireToken *bool) *dcrHarness {
+	return newDCRHarnessFull(t, dcrEnabled, requireToken, false)
+}
+
+func newDCRHarnessFull(t *testing.T, dcrEnabled bool, requireToken *bool, allowConfidential bool) *dcrHarness {
 	t.Helper()
 	dsn := "file:" + uuid.NewString() + "?mode=memory&cache=shared&_pragma=foreign_keys(1)"
 	db, err := gormrepo.OpenSQLite(dsn)
@@ -53,6 +57,7 @@ func newDCRHarness(t *testing.T, dcrEnabled bool, requireToken *bool) *dcrHarnes
 		AuthCodeTTL:                  1 * time.Minute,
 		DCREnabled:                   dcrEnabled,
 		DCRRequireInitialAccessToken: requireToken,
+		DCRAllowConfidentialClients:  allowConfidential,
 	}
 
 	ya, err := yauth.New(r, yauth.NewDefaultConfig()).
@@ -296,7 +301,8 @@ func TestDCR_RegisterPublicClient_Then_AuthCodePKCE_EndToEnd(t *testing.T) {
 }
 
 func TestDCR_RegisterConfidentialClient_BasicAuth_TokenEndpoint(t *testing.T) {
-	h := newDCRHarness(t, true, nil)
+	// Confidential DCR is opt-in (public-only by default).
+	h := newDCRHarnessFull(t, true, nil, true)
 
 	regBody := `{
 		"redirect_uris":["https://app.example/cb"],
@@ -349,6 +355,50 @@ func TestDCR_OpenRegistration_Allowed_When_RequireInitialAccessToken_False(t *te
 	}
 }
 
+func TestDCR_DangerousRedirectScheme_Rejected(t *testing.T) {
+	h := newDCRHarness(t, true, nil)
+	for _, uri := range []string{
+		"javascript:alert(1)",
+		"data:text/html,<script>alert(1)</script>",
+		"http://evil.example/cb", // non-loopback plaintext http
+	} {
+		regBody := `{"redirect_uris":["` + uri + `"],"token_endpoint_auth_method":"none"}`
+		status, b := h.register(t, regBody, h.signInitialAccessToken(t))
+		if status != http.StatusBadRequest {
+			t.Fatalf("uri %q: expected 400, got %d body=%v", uri, status, b)
+		}
+		if b["error"] != "invalid_redirect_uri" {
+			t.Fatalf("uri %q: expected invalid_redirect_uri, got %v", uri, b["error"])
+		}
+	}
+}
+
+func TestDCR_LoopbackHTTPRedirect_Allowed(t *testing.T) {
+	h := newDCRHarness(t, true, nil)
+	// http is permitted for loopback (RFC 8252) — MCP clients use it.
+	regBody := `{"redirect_uris":["http://127.0.0.1:9999/cb","http://localhost:8080/cb"],"token_endpoint_auth_method":"none"}`
+	status, b := h.register(t, regBody, h.signInitialAccessToken(t))
+	if status != http.StatusCreated {
+		t.Fatalf("expected 201 for loopback http, got %d body=%v", status, b)
+	}
+}
+
+func TestDCR_ConfidentialClient_RejectedByDefault(t *testing.T) {
+	h := newDCRHarness(t, true, nil) // public-only by default
+	for _, m := range []string{"client_secret_basic", "client_secret_post"} {
+		regBody := `{"redirect_uris":["https://app.example/cb"],"token_endpoint_auth_method":"` + m + `"}`
+		status, b := h.register(t, regBody, h.signInitialAccessToken(t))
+		if status != http.StatusBadRequest {
+			t.Fatalf("method %q: expected 400 (public-only), got %d %v", m, status, b)
+		}
+	}
+	// A public client (none) is accepted.
+	status, b := h.register(t, `{"redirect_uris":["https://app.example/cb"],"token_endpoint_auth_method":"none"}`, h.signInitialAccessToken(t))
+	if status != http.StatusCreated {
+		t.Fatalf("public client should be accepted, got %d %v", status, b)
+	}
+}
+
 func TestDCR_MissingRedirectURIs_400(t *testing.T) {
 	h := newDCRHarness(t, true, nil)
 	regBody := `{"client_name":"no-uris"}`
@@ -363,8 +413,9 @@ func TestDCR_MissingRedirectURIs_400(t *testing.T) {
 
 func TestDCR_DefaultsApplied(t *testing.T) {
 	h := newDCRHarness(t, true, nil)
-	// No grant_types / response_types / auth method supplied — should
-	// default per RFC 7591 §2.
+	// No grant_types / response_types / auth method supplied. grant/response
+	// types default per RFC 7591 §2; token_endpoint_auth_method defaults to the
+	// secure "none" (public client) rather than RFC 7591's client_secret_basic.
 	regBody := `{"redirect_uris":["https://app.example/cb"]}`
 	status, b := h.register(t, regBody, h.signInitialAccessToken(t))
 	if status != http.StatusCreated {
@@ -378,7 +429,7 @@ func TestDCR_DefaultsApplied(t *testing.T) {
 	if len(rts) != 1 || rts[0] != "code" {
 		t.Fatalf("response_types default: %v", rts)
 	}
-	if m, _ := b["token_endpoint_auth_method"].(string); m != "client_secret_basic" {
-		t.Fatalf("token_endpoint_auth_method default: %q", m)
+	if m, _ := b["token_endpoint_auth_method"].(string); m != "none" {
+		t.Fatalf("token_endpoint_auth_method default: %q (want secure default none)", m)
 	}
 }

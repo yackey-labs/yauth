@@ -18,6 +18,7 @@ import (
 	"github.com/yackey-labs/yauth-go/auth"
 	"github.com/yackey-labs/yauth-go/domain"
 	"github.com/yackey-labs/yauth-go/events"
+	"github.com/yackey-labs/yauth-go/middleware"
 	"github.com/yackey-labs/yauth-go/plugin"
 	"github.com/yackey-labs/yauth-go/yautherr"
 )
@@ -78,27 +79,6 @@ func cookieOptionsFromHost(host plugin.PluginHost, r *http.Request, maxAge int) 
 		SameSite: sameSite,
 		MaxAge:   maxAge,
 	}
-}
-
-func requestIP(r *http.Request) *string {
-	if v := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); v != "" {
-		first := strings.SplitN(v, ",", 2)[0]
-		first = strings.TrimSpace(first)
-		if first != "" {
-			return &first
-		}
-	}
-	if v := strings.TrimSpace(r.Header.Get("X-Real-IP")); v != "" {
-		return &v
-	}
-	if r.RemoteAddr != "" {
-		ip := r.RemoteAddr
-		if i := strings.LastIndex(ip, ":"); i > 0 {
-			ip = ip[:i]
-		}
-		return &ip
-	}
-	return nil
 }
 
 func requestUA(r *http.Request) *string {
@@ -254,7 +234,7 @@ func (p *magicLinkPlugin) handleVerify(host plugin.PluginHost) http.HandlerFunc 
 
 		ctx := r.Context()
 		repo := host.Repo()
-		ip := requestIP(r)
+		ip := middleware.RequestIP(r)
 		method := "magic-link"
 
 		sum := sha256.Sum256([]byte(raw))

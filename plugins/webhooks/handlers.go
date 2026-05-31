@@ -193,21 +193,30 @@ func (p *webhooksPlugin) handleCreate(host plugin.PluginHost) http.HandlerFunc {
 			return
 		}
 
-		secret := req.Secret
-		if secret == "" {
+		rawSecret := req.Secret
+		if rawSecret == "" {
 			s, err := generateSecret()
 			if err != nil {
 				writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to generate secret")
 				return
 			}
-			secret = s
+			rawSecret = s
+		}
+
+		// Encrypt the secret at rest; decrypt key is derived from the JWT
+		// secret so it rotates with the application key.
+		webhookKey := deriveWebhookKey(host.JWTSecret())
+		storedSecret, err := encryptSecret(webhookKey, rawSecret)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to encrypt secret")
+			return
 		}
 
 		now := time.Now().UTC()
 		input := domain.NewWebhook{
 			ID:        uuid.NewString(),
 			URL:       req.URL,
-			Secret:    secret,
+			Secret:    storedSecret,
 			Events:    eventsRaw,
 			Active:    true,
 			CreatedAt: now,
@@ -218,19 +227,18 @@ func (p *webhooksPlugin) handleCreate(host plugin.PluginHost) http.HandlerFunc {
 			return
 		}
 
-		// Return the freshly-created row WITH the secret. This is the
-		// only response that ever exposes the secret in plaintext —
-		// subsequent GETs omit it.
+		// Return the row with the plaintext secret exposed exactly once.
+		// Subsequent GETs omit it; the DB stores only the encrypted form.
 		created := domain.Webhook{
 			ID:        input.ID,
 			URL:       input.URL,
-			Secret:    input.Secret,
+			Secret:    rawSecret, // plaintext — returned to caller once
 			Events:    input.Events,
 			Active:    input.Active,
 			CreatedAt: input.CreatedAt,
 			UpdatedAt: input.UpdatedAt,
 		}
-		writeJSON(w, http.StatusCreated, toWebhookJSON(created, false))
+		writeJSON(w, http.StatusCreated, toWebhookJSON(created, true))
 	}
 }
 
@@ -300,9 +308,16 @@ func (p *webhooksPlugin) handleUpdate(host plugin.PluginHost) http.HandlerFunc {
 		if req.Active != nil {
 			changes.Active = req.Active
 		}
+		var newRawSecret string
 		if req.Secret != nil && *req.Secret != "" {
-			s := *req.Secret
-			changes.Secret = &s
+			newRawSecret = *req.Secret
+			webhookKey := deriveWebhookKey(host.JWTSecret())
+			enc, err := encryptSecret(webhookKey, newRawSecret)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to encrypt secret")
+				return
+			}
+			changes.Secret = &enc
 		}
 
 		updated, err := host.Repo().UpdateWebhook(r.Context(), id, changes)
@@ -314,7 +329,11 @@ func (p *webhooksPlugin) handleUpdate(host plugin.PluginHost) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to update webhook")
 			return
 		}
-		writeJSON(w, http.StatusOK, toWebhookJSON(updated, false))
+		// Expose the new plaintext secret exactly once when it was just rotated.
+		if newRawSecret != "" {
+			updated.Secret = newRawSecret
+		}
+		writeJSON(w, http.StatusOK, toWebhookJSON(updated, newRawSecret != ""))
 	}
 }
 

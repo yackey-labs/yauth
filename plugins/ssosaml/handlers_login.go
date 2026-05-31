@@ -61,20 +61,6 @@ func generateRandom(n int) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(buf), nil
 }
 
-func requestIP(r *http.Request) *string {
-	host := r.RemoteAddr
-	if h := r.Header.Get("X-Forwarded-For"); h != "" {
-		if idx := strings.Index(h, ","); idx > 0 {
-			h = h[:idx]
-		}
-		host = strings.TrimSpace(h)
-	}
-	if host == "" {
-		return nil
-	}
-	return &host
-}
-
 func requestUA(r *http.Request) *string {
 	ua := r.UserAgent()
 	if ua == "" {
@@ -479,7 +465,7 @@ func (p *ssoSAMLPlugin) handleSamlACS(host plugin.PluginHost) http.HandlerFunc {
 			return
 		}
 
-		raw, sess, err := auth.IssueSession(ctx, host.Repo(), userID, requestIP(r), requestUA(r), host.SessionTTL())
+		raw, sess, err := auth.IssueSession(ctx, host.Repo(), userID, middleware.RequestIP(r), requestUA(r), host.SessionTTL())
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "INTERNAL", "issue session failed")
 			return
@@ -497,12 +483,12 @@ func (p *ssoSAMLPlugin) handleSamlACS(host plugin.PluginHost) http.HandlerFunc {
 		if isNew {
 			_, _ = host.Emit(ctx, events.AuthEvent{
 				Type: events.EventUserRegistered, UserID: &uid, Email: &em,
-				IPAddress: requestIP(r), Method: &method,
+				IPAddress: middleware.RequestIP(r), Method: &method,
 			})
 		}
 		_, _ = host.Emit(ctx, events.AuthEvent{
 			Type: events.EventLoginSucceeded, UserID: &uid, Email: &em,
-			IPAddress: requestIP(r), Method: &method,
+			IPAddress: middleware.RequestIP(r), Method: &method,
 		})
 
 		// Redirect honors the per-state RedirectURL when present

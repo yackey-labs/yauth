@@ -405,7 +405,7 @@ func (p *mfaPlugin) handleVerify(host plugin.PluginHost) http.HandlerFunc {
 			return
 		}
 
-		raw, _, err := auth.IssueSession(ctx, repoRef, userID, requestIP(r), requestUA(r), host.SessionTTL())
+		raw, _, err := auth.IssueSession(ctx, repoRef, userID, middleware.RequestIP(r), requestUA(r), host.SessionTTL())
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to issue session")
 			return
@@ -459,29 +459,6 @@ func (p *mfaPlugin) verifyCode(ctx context.Context, repoRef repo.Repository, use
 		}
 	}
 	return false, nil
-}
-
-// --- helpers -------------------------------------------------------------
-
-func requestIP(r *http.Request) *string {
-	if v := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); v != "" {
-		first := strings.SplitN(v, ",", 2)[0]
-		first = strings.TrimSpace(first)
-		if first != "" {
-			return &first
-		}
-	}
-	if v := strings.TrimSpace(r.Header.Get("X-Real-IP")); v != "" {
-		return &v
-	}
-	if r.RemoteAddr != "" {
-		ip := r.RemoteAddr
-		if i := strings.LastIndex(ip, ":"); i > 0 {
-			ip = ip[:i]
-		}
-		return &ip
-	}
-	return nil
 }
 
 func requestUA(r *http.Request) *string {

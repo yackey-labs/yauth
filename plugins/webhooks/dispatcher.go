@@ -89,6 +89,7 @@ type Dispatcher struct {
 	httpClient *http.Client
 	workers    int
 	retry      RetryConfig
+	secretKey  []byte // AES-256 key for decrypting at-rest webhook secrets; nil → plaintext pass-through
 
 	jobs chan *deliveryJob
 	wg   sync.WaitGroup
@@ -115,7 +116,7 @@ type Dispatcher struct {
 // NewDispatcher constructs a dispatcher with a buffered job channel
 // sized to 8x the worker count, a small headroom that lets bursty
 // emit() callers return without blocking on slow receivers.
-func NewDispatcher(r repo.Repository, client *http.Client, workers int, retry RetryConfig) *Dispatcher {
+func NewDispatcher(r repo.Repository, client *http.Client, workers int, retry RetryConfig, secretKey []byte) *Dispatcher {
 	if workers <= 0 {
 		workers = defaultWorkerCount
 	}
@@ -142,6 +143,7 @@ func NewDispatcher(r repo.Repository, client *http.Client, workers int, retry Re
 		httpClient:  client,
 		workers:     workers,
 		retry:       retry,
+		secretKey:   secretKey,
 		jobs:        make(chan *deliveryJob, workers*8),
 		claimerStop: make(chan struct{}),
 		claimerDone: make(chan struct{}),
@@ -346,7 +348,12 @@ func (d *Dispatcher) deliver(ctx context.Context, job *deliveryJob) deliveryOutc
 	}
 
 	deliveryID := uuid.NewString()
-	signature := signPayload(job.webhook.Secret, body)
+	rawSecret, err := decryptSecret(d.secretKey, job.webhook.Secret)
+	if err != nil {
+		d.recordDelivery(ctx, job, body, nil, fmt.Sprintf("decrypt secret: %v", err), false)
+		return deliveryOutcome{success: false, retryable: false}
+	}
+	signature := signPayload(rawSecret, body)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, job.webhook.URL, bytes.NewReader(body))
 	if err != nil {

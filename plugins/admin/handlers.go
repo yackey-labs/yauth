@@ -113,27 +113,6 @@ func parseLimitOffset(r *http.Request) (limit, offset int) {
 	return limit, offset
 }
 
-func requestIP(r *http.Request) *string {
-	if v := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); v != "" {
-		first := strings.SplitN(v, ",", 2)[0]
-		first = strings.TrimSpace(first)
-		if first != "" {
-			return &first
-		}
-	}
-	if v := strings.TrimSpace(r.Header.Get("X-Real-IP")); v != "" {
-		return &v
-	}
-	if r.RemoteAddr != "" {
-		ip := r.RemoteAddr
-		if i := strings.LastIndex(ip, ":"); i > 0 {
-			ip = ip[:i]
-		}
-		return &ip
-	}
-	return nil
-}
-
 // cookieOptionsFromHost mirrors host config onto auth.CookieOptions. It
 // duplicates the helper found in plugins/emailpassword to keep the admin
 // plugin free of cross-plugin imports.
@@ -321,7 +300,7 @@ func (p *adminPlugin) handleBanUser(host plugin.PluginHost) http.HandlerFunc {
 			UserID:    &u.ID,
 			EventType: "admin.ban",
 			Metadata:  meta,
-			IPAddress: requestIP(r),
+			IPAddress: middleware.RequestIP(r),
 			CreatedAt: now,
 		})
 
@@ -365,7 +344,7 @@ func (p *adminPlugin) handleUnbanUser(host plugin.PluginHost) http.HandlerFunc {
 			UserID:    &u.ID,
 			EventType: "admin.unban",
 			Metadata:  meta,
-			IPAddress: requestIP(r),
+			IPAddress: middleware.RequestIP(r),
 			CreatedAt: now,
 		})
 
@@ -390,7 +369,7 @@ func (p *adminPlugin) handleImpersonate(host plugin.PluginHost) http.HandlerFunc
 			return
 		}
 
-		raw, _, err := auth.IssueSession(ctx, host.Repo(), target.ID, requestIP(r), nil, host.SessionTTL())
+		raw, _, err := auth.IssueSession(ctx, host.Repo(), target.ID, middleware.RequestIP(r), nil, host.SessionTTL())
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to issue session")
 			return
@@ -403,7 +382,7 @@ func (p *adminPlugin) handleImpersonate(host plugin.PluginHost) http.HandlerFunc
 			UserID:    &target.ID,
 			EventType: "admin.impersonation",
 			Metadata:  meta,
-			IPAddress: requestIP(r),
+			IPAddress: middleware.RequestIP(r),
 			CreatedAt: time.Now().UTC(),
 		})
 
@@ -489,7 +468,7 @@ func (p *adminPlugin) handleDeleteUser(host plugin.PluginHost) http.HandlerFunc 
 			ID:        newID(),
 			EventType: "admin.user.deleted",
 			Metadata:  meta,
-			IPAddress: requestIP(r),
+			IPAddress: middleware.RequestIP(r),
 			CreatedAt: now,
 		})
 
@@ -587,7 +566,7 @@ func (p *adminPlugin) handleDeleteSession(host plugin.PluginHost) http.HandlerFu
 			UserID:    targetUser,
 			EventType: "admin.session.terminated",
 			Metadata:  meta,
-			IPAddress: requestIP(r),
+			IPAddress: middleware.RequestIP(r),
 			CreatedAt: time.Now().UTC(),
 		})
 

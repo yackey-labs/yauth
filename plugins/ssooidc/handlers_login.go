@@ -36,6 +36,7 @@ import (
 	"github.com/yackey-labs/yauth-go/auth"
 	"github.com/yackey-labs/yauth-go/domain"
 	"github.com/yackey-labs/yauth-go/events"
+	"github.com/yackey-labs/yauth-go/middleware"
 	"github.com/yackey-labs/yauth-go/plugin"
 	"github.com/yackey-labs/yauth-go/yautherr"
 )
@@ -54,21 +55,6 @@ func generateRandom(n int) (string, error) {
 func pkceChallenge(verifier string) string {
 	sum := sha256.Sum256([]byte(verifier))
 	return base64.RawURLEncoding.EncodeToString(sum[:])
-}
-
-func requestIP(r *http.Request) *string {
-	host := r.RemoteAddr
-	if h := r.Header.Get("X-Forwarded-For"); h != "" {
-		// take the leftmost (client-most) entry
-		if idx := strings.Index(h, ","); idx > 0 {
-			h = h[:idx]
-		}
-		host = strings.TrimSpace(h)
-	}
-	if host == "" {
-		return nil
-	}
-	return &host
 }
 
 func requestUA(r *http.Request) *string {
@@ -418,7 +404,7 @@ func (p *ssoOIDCPlugin) handleSsoCallback(host plugin.PluginHost) http.HandlerFu
 		}
 
 		// Issue session and set the cookie.
-		raw, sess, err := auth.IssueSession(ctx, host.Repo(), userID, requestIP(r), requestUA(r), host.SessionTTL())
+		raw, sess, err := auth.IssueSession(ctx, host.Repo(), userID, middleware.RequestIP(r), requestUA(r), host.SessionTTL())
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "INTERNAL", "issue session failed")
 			return
@@ -439,12 +425,12 @@ func (p *ssoOIDCPlugin) handleSsoCallback(host plugin.PluginHost) http.HandlerFu
 		if isNew {
 			_, _ = host.Emit(ctx, events.AuthEvent{
 				Type: events.EventUserRegistered, UserID: &uid, Email: &em,
-				IPAddress: requestIP(r), Method: &method,
+				IPAddress: middleware.RequestIP(r), Method: &method,
 			})
 		}
 		_, _ = host.Emit(ctx, events.AuthEvent{
 			Type: events.EventLoginSucceeded, UserID: &uid, Email: &em,
-			IPAddress: requestIP(r), Method: &method,
+			IPAddress: middleware.RequestIP(r), Method: &method,
 		})
 
 		if st.RedirectURL != "" {

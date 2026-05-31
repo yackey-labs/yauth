@@ -80,16 +80,10 @@ type Config struct {
 	// or for clients with sensitive scopes.
 	ConsentRequired bool
 	// DCREnabled enables the RFC 7591 dynamic client registration
-	// endpoint at POST /oauth/register. Default: false. Open public
-	// DCR is a footgun without an issuer policy; opt in explicitly.
+	// endpoint at POST /oauth/register. Default: false. The endpoint is
+	// gated behind RequireAdmin — only authenticated administrators may
+	// register clients dynamically.
 	DCREnabled bool
-	// DCRRequireInitialAccessToken, when non-nil, controls whether POST
-	// /oauth/register requires an admin-issued Bearer token in the
-	// Authorization header. When nil (the default), the value is treated
-	// as true: open registration is opt-in only and must be enabled by
-	// explicitly setting this to a pointer to false. Documented as a
-	// pointer because the secure default differs from Go's zero value.
-	DCRRequireInitialAccessToken *bool
 	// DCRAllowConfidentialClients controls whether POST /oauth/register may
 	// create confidential clients (those with a secret / private_key_jwt).
 	// Default: false — self-registered clients are public (PKCE,
@@ -99,16 +93,11 @@ type Config struct {
 	// clients via the authenticated admin endpoint instead. Set true only if
 	// you trust the DCR path (e.g. gated registration).
 	DCRAllowConfidentialClients bool
-}
-
-// dcrRequireInitialAccessToken resolves the effective value of the
-// DCRRequireInitialAccessToken pointer field, defaulting to true when
-// the operator did not set it.
-func (c Config) dcrRequireInitialAccessToken() bool {
-	if c.DCRRequireInitialAccessToken == nil {
-		return true
-	}
-	return *c.DCRRequireInitialAccessToken
+	// AllowPrivateNetworkJWKSURI permits private_key_jwt clients to supply a
+	// jwks_uri pointing at a loopback or RFC 1918 address. Default: false
+	// (SSRF protection). Set true only in development/test environments where
+	// local JWKS endpoints are needed.
+	AllowPrivateNetworkJWKSURI bool
 }
 
 // oauth2Plugin is the unexported plugin.Plugin implementation.
@@ -199,12 +188,11 @@ func (p *oauth2Plugin) Routes(host plugin.PluginHost, mux *http.ServeMux, prefix
 	mux.Handle("POST "+prefix+"/oauth/device", mw.RequireAuth(http.HandlerFunc(p.handleDeviceVerify(host))))
 	mux.Handle("GET "+prefix+"/oauth/device", mw.RequireAuth(http.HandlerFunc(p.handleDeviceVerify(host))))
 
-	// --- RFC 7591 dynamic client registration (opt-in) ---
+	// --- RFC 7591 dynamic client registration (opt-in, admin-gated) ---
+	// RequireAdmin ensures only an authenticated administrator can register
+	// clients dynamically. This replaces the old initial-access-token gate,
+	// which accepted any valid bearer JWT regardless of scope or audience.
 	if p.cfg.DCREnabled {
-		// Open registration is unauthenticated; rate-limit per IP so it can't
-		// be used to flood the client store (RFC 7591 §5). Fail-open / no-op
-		// when no rate-limit repo is configured.
-		registerRL := host.RateLimit("oauth2.register", 20, time.Minute)
-		mux.Handle("POST "+prefix+"/oauth/register", registerRL(http.HandlerFunc(p.handleDCRRegister(host, prefix))))
+		mux.Handle("POST "+prefix+"/oauth/register", mw.RequireAdmin(http.HandlerFunc(p.handleDCRRegister(host, prefix))))
 	}
 }

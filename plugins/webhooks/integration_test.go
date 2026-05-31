@@ -606,7 +606,7 @@ func TestWebhookRetry_PersistsAcrossRestart(t *testing.T) {
 
 	// --- First dispatcher: fire attempt 1, watch it fail, observe the
 	// scheduled retry row land in the DB, then shut down.
-	d1 := webhooks.NewDispatcher(r, httpClient, 2, retryCfg)
+	d1 := webhooks.NewDispatcher(r, httpClient, 2, retryCfg, nil)
 	d1.Start()
 
 	hook, err := r.GetWebhookByID(context.Background(), whID)
@@ -695,7 +695,7 @@ func TestWebhookRetry_PersistsAcrossRestart(t *testing.T) {
 	// programmed receiver answers with 200.
 	retryCfg2 := retryCfg
 	retryCfg2.ClaimerInterval = 50 * time.Millisecond
-	d2 := webhooks.NewDispatcher(r, httpClient, 2, retryCfg2)
+	d2 := webhooks.NewDispatcher(r, httpClient, 2, retryCfg2, nil)
 	d2.Start()
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

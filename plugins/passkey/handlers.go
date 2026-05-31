@@ -438,7 +438,7 @@ func (p *passkeyPlugin) handleLoginFinish(host plugin.PluginHost) http.HandlerFu
 			return
 		}
 
-		ip := requestIP(r)
+		ip := middleware.RequestIP(r)
 		raw, _, err := auth.IssueSession(ctx, repoRef, matchedUser.ID, ip, requestUA(r), host.SessionTTL())
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to issue session")
@@ -636,27 +636,6 @@ func uuidFromBytes(b []byte) string {
 		return uuid.UUID(u).String()
 	}
 	return fmt.Sprintf("%x", b)
-}
-
-func requestIP(r *http.Request) *string {
-	if v := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); v != "" {
-		first := strings.SplitN(v, ",", 2)[0]
-		first = strings.TrimSpace(first)
-		if first != "" {
-			return &first
-		}
-	}
-	if v := strings.TrimSpace(r.Header.Get("X-Real-IP")); v != "" {
-		return &v
-	}
-	if r.RemoteAddr != "" {
-		ip := r.RemoteAddr
-		if i := strings.LastIndex(ip, ":"); i > 0 {
-			ip = ip[:i]
-		}
-		return &ip
-	}
-	return nil
 }
 
 func requestUA(r *http.Request) *string {

@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
 	yauth "github.com/yackey-labs/yauth-go"
@@ -29,15 +28,14 @@ type dcrHarness struct {
 	jwtSecret []byte
 }
 
-// newDCRHarness builds a yauth + oauth2server stack with DCR enabled
-// according to the supplied opts. requireToken=nil keeps the secure
-// default (Bearer required). requireToken pointing at false enables
-// completely-open registration.
-func newDCRHarness(t *testing.T, dcrEnabled bool, requireToken *bool) *dcrHarness {
-	return newDCRHarnessFull(t, dcrEnabled, requireToken, false)
+// newDCRHarness builds a yauth + oauth2server stack with DCR enabled.
+// The DCR endpoint is gated behind RequireAdmin — use adminCookie() to
+// obtain an admin session for registration calls.
+func newDCRHarness(t *testing.T, dcrEnabled bool) *dcrHarness {
+	return newDCRHarnessFull(t, dcrEnabled, false)
 }
 
-func newDCRHarnessFull(t *testing.T, dcrEnabled bool, requireToken *bool, allowConfidential bool) *dcrHarness {
+func newDCRHarnessFull(t *testing.T, dcrEnabled bool, allowConfidential bool) *dcrHarness {
 	t.Helper()
 	dsn := "file:" + uuid.NewString() + "?mode=memory&cache=shared&_pragma=foreign_keys(1)"
 	db, err := gormrepo.OpenSQLite(dsn)
@@ -51,13 +49,12 @@ func newDCRHarnessFull(t *testing.T, dcrEnabled bool, requireToken *bool, allowC
 
 	jwtSecret := []byte("test-only-jwt-secret-please-change-32b")
 	cfg := oauth2server.Config{
-		Issuer:                       "http://idp.test",
-		BasePath:                     "/api/auth",
-		AccessTTL:                    5 * time.Minute,
-		AuthCodeTTL:                  1 * time.Minute,
-		DCREnabled:                   dcrEnabled,
-		DCRRequireInitialAccessToken: requireToken,
-		DCRAllowConfidentialClients:  allowConfidential,
+		Issuer:                      "http://idp.test",
+		BasePath:                    "/api/auth",
+		AccessTTL:                   5 * time.Minute,
+		AuthCodeTTL:                 1 * time.Minute,
+		DCREnabled:                  dcrEnabled,
+		DCRAllowConfidentialClients: allowConfidential,
 	}
 
 	ya, err := yauth.New(r, yauth.NewDefaultConfig()).
@@ -102,34 +99,22 @@ func (h *dcrHarness) seedUser(t *testing.T, email, role string) (id, cookie stri
 	return u.ID, raw
 }
 
-// signInitialAccessToken returns a Bearer JWT signed with the host
-// HS256 secret, suitable as an initial access token for POST
-// /oauth2/register when DCRRequireInitialAccessToken is true.
-func (h *dcrHarness) signInitialAccessToken(t *testing.T) string {
+// adminCookie seeds an admin user and returns their raw session cookie.
+func (h *dcrHarness) adminCookie(t *testing.T) string {
 	t.Helper()
-	now := time.Now().UTC()
-	claims := jwt.MapClaims{
-		"sub": "admin",
-		"iat": now.Unix(),
-		"exp": now.Add(5 * time.Minute).Unix(),
-	}
-	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	signed, err := tok.SignedString(h.jwtSecret)
-	if err != nil {
-		t.Fatalf("sign initial access token: %v", err)
-	}
-	return signed
+	_, cookie := h.seedUser(t, "dcr-admin-"+uuid.NewString()[:8]+"@idp.test", "admin")
+	return cookie
 }
 
-// register performs POST /oauth2/register and returns the raw response
-// status + decoded JSON body. bearer is the Authorization: Bearer
-// credential to send (empty → omit the header).
-func (h *dcrHarness) register(t *testing.T, body string, bearer string) (int, map[string]any) {
+// register performs POST /oauth/register and returns the raw response
+// status + decoded JSON body. adminCookie is the session cookie of an
+// admin user (empty → send no credentials, expect 401).
+func (h *dcrHarness) register(t *testing.T, body string, adminCookie string) (int, map[string]any) {
 	t.Helper()
 	req, _ := http.NewRequest(http.MethodPost, h.srv.URL+"/api/auth/oauth/register", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	if bearer != "" {
-		req.Header.Set("Authorization", "Bearer "+bearer)
+	if adminCookie != "" {
+		req.AddCookie(&http.Cookie{Name: "yauth_session", Value: adminCookie})
 	}
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -226,7 +211,7 @@ func (h *dcrHarness) postForm(t *testing.T, path string, form url.Values, basicI
 // --- tests -------------------------------------------------------------
 
 func TestDCR_Disabled_Returns404(t *testing.T) {
-	h := newDCRHarness(t, false, nil)
+	h := newDCRHarness(t, false)
 	body := `{"redirect_uris":["https://app.example/callback"]}`
 	status, _ := h.register(t, body, "")
 	if status != http.StatusNotFound {
@@ -234,20 +219,27 @@ func TestDCR_Disabled_Returns404(t *testing.T) {
 	}
 }
 
-func TestDCR_RequireInitialAccessToken_NoBearer_401(t *testing.T) {
-	h := newDCRHarness(t, true, nil) // default: require token
+func TestDCR_RequiresAdminSession_NoAuth_Returns401(t *testing.T) {
+	h := newDCRHarness(t, true)
 	body := `{"redirect_uris":["https://app.example/callback"]}`
 	status, b := h.register(t, body, "")
 	if status != http.StatusUnauthorized {
-		t.Fatalf("expected 401 when no Bearer present, got %d body=%v", status, b)
+		t.Fatalf("expected 401 when no session present, got %d body=%v", status, b)
 	}
-	if b["error"] != "invalid_token" {
-		t.Fatalf("expected invalid_token, got %v", b["error"])
+}
+
+func TestDCR_RequiresAdminRole_UserGets403(t *testing.T) {
+	h := newDCRHarness(t, true)
+	_, userCookie := h.seedUser(t, "regular@idp.test", "user")
+	body := `{"redirect_uris":["https://app.example/callback"]}`
+	status, b := h.register(t, body, userCookie)
+	if status != http.StatusForbidden {
+		t.Fatalf("expected 403 for non-admin user, got %d body=%v", status, b)
 	}
 }
 
 func TestDCR_RegisterPublicClient_Then_AuthCodePKCE_EndToEnd(t *testing.T) {
-	h := newDCRHarness(t, true, nil) // default: initial access token required
+	h := newDCRHarness(t, true)
 	_, userCookie := h.seedUser(t, "alice@idp.test", "user")
 
 	// Register a public client (token_endpoint_auth_method=none).
@@ -259,7 +251,7 @@ func TestDCR_RegisterPublicClient_Then_AuthCodePKCE_EndToEnd(t *testing.T) {
 		"token_endpoint_auth_method":"none",
 		"scope":"read"
 	}`
-	status, b := h.register(t, regBody, h.signInitialAccessToken(t))
+	status, b := h.register(t, regBody, h.adminCookie(t))
 	if status != http.StatusCreated {
 		t.Fatalf("register: %d %v", status, b)
 	}
@@ -302,7 +294,7 @@ func TestDCR_RegisterPublicClient_Then_AuthCodePKCE_EndToEnd(t *testing.T) {
 
 func TestDCR_RegisterConfidentialClient_BasicAuth_TokenEndpoint(t *testing.T) {
 	// Confidential DCR is opt-in (public-only by default).
-	h := newDCRHarnessFull(t, true, nil, true)
+	h := newDCRHarnessFull(t, true, true)
 
 	regBody := `{
 		"redirect_uris":["https://app.example/cb"],
@@ -311,7 +303,7 @@ func TestDCR_RegisterConfidentialClient_BasicAuth_TokenEndpoint(t *testing.T) {
 		"scope":"read",
 		"token_endpoint_auth_method":"client_secret_basic"
 	}`
-	status, b := h.register(t, regBody, h.signInitialAccessToken(t))
+	status, b := h.register(t, regBody, h.adminCookie(t))
 	if status != http.StatusCreated {
 		t.Fatalf("register: %d %v", status, b)
 	}
@@ -341,29 +333,16 @@ func TestDCR_RegisterConfidentialClient_BasicAuth_TokenEndpoint(t *testing.T) {
 	}
 }
 
-func TestDCR_OpenRegistration_Allowed_When_RequireInitialAccessToken_False(t *testing.T) {
-	open := false
-	h := newDCRHarness(t, true, &open)
-
-	regBody := `{"redirect_uris":["https://app.example/cb"],"token_endpoint_auth_method":"none"}`
-	status, b := h.register(t, regBody, "") // no Bearer
-	if status != http.StatusCreated {
-		t.Fatalf("expected 201 in open mode, got %d body=%v", status, b)
-	}
-	if _, ok := b["client_id"].(string); !ok {
-		t.Fatalf("missing client_id: %v", b)
-	}
-}
-
 func TestDCR_DangerousRedirectScheme_Rejected(t *testing.T) {
-	h := newDCRHarness(t, true, nil)
+	h := newDCRHarness(t, true)
+	ac := h.adminCookie(t)
 	for _, uri := range []string{
 		"javascript:alert(1)",
 		"data:text/html,<script>alert(1)</script>",
 		"http://evil.example/cb", // non-loopback plaintext http
 	} {
 		regBody := `{"redirect_uris":["` + uri + `"],"token_endpoint_auth_method":"none"}`
-		status, b := h.register(t, regBody, h.signInitialAccessToken(t))
+		status, b := h.register(t, regBody, ac)
 		if status != http.StatusBadRequest {
 			t.Fatalf("uri %q: expected 400, got %d body=%v", uri, status, b)
 		}
@@ -374,35 +353,36 @@ func TestDCR_DangerousRedirectScheme_Rejected(t *testing.T) {
 }
 
 func TestDCR_LoopbackHTTPRedirect_Allowed(t *testing.T) {
-	h := newDCRHarness(t, true, nil)
+	h := newDCRHarness(t, true)
 	// http is permitted for loopback (RFC 8252) — MCP clients use it.
 	regBody := `{"redirect_uris":["http://127.0.0.1:9999/cb","http://localhost:8080/cb"],"token_endpoint_auth_method":"none"}`
-	status, b := h.register(t, regBody, h.signInitialAccessToken(t))
+	status, b := h.register(t, regBody, h.adminCookie(t))
 	if status != http.StatusCreated {
 		t.Fatalf("expected 201 for loopback http, got %d body=%v", status, b)
 	}
 }
 
 func TestDCR_ConfidentialClient_RejectedByDefault(t *testing.T) {
-	h := newDCRHarness(t, true, nil) // public-only by default
+	h := newDCRHarness(t, true) // public-only by default
+	ac := h.adminCookie(t)
 	for _, m := range []string{"client_secret_basic", "client_secret_post"} {
 		regBody := `{"redirect_uris":["https://app.example/cb"],"token_endpoint_auth_method":"` + m + `"}`
-		status, b := h.register(t, regBody, h.signInitialAccessToken(t))
+		status, b := h.register(t, regBody, ac)
 		if status != http.StatusBadRequest {
 			t.Fatalf("method %q: expected 400 (public-only), got %d %v", m, status, b)
 		}
 	}
 	// A public client (none) is accepted.
-	status, b := h.register(t, `{"redirect_uris":["https://app.example/cb"],"token_endpoint_auth_method":"none"}`, h.signInitialAccessToken(t))
+	status, b := h.register(t, `{"redirect_uris":["https://app.example/cb"],"token_endpoint_auth_method":"none"}`, ac)
 	if status != http.StatusCreated {
 		t.Fatalf("public client should be accepted, got %d %v", status, b)
 	}
 }
 
 func TestDCR_MissingRedirectURIs_400(t *testing.T) {
-	h := newDCRHarness(t, true, nil)
+	h := newDCRHarness(t, true)
 	regBody := `{"client_name":"no-uris"}`
-	status, b := h.register(t, regBody, h.signInitialAccessToken(t))
+	status, b := h.register(t, regBody, h.adminCookie(t))
 	if status != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d body=%v", status, b)
 	}
@@ -412,12 +392,12 @@ func TestDCR_MissingRedirectURIs_400(t *testing.T) {
 }
 
 func TestDCR_DefaultsApplied(t *testing.T) {
-	h := newDCRHarness(t, true, nil)
+	h := newDCRHarness(t, true)
 	// No grant_types / response_types / auth method supplied. grant/response
 	// types default per RFC 7591 §2; token_endpoint_auth_method defaults to the
 	// secure "none" (public client) rather than RFC 7591's client_secret_basic.
 	regBody := `{"redirect_uris":["https://app.example/cb"]}`
-	status, b := h.register(t, regBody, h.signInitialAccessToken(t))
+	status, b := h.register(t, regBody, h.adminCookie(t))
 	if status != http.StatusCreated {
 		t.Fatalf("register: %d %v", status, b)
 	}

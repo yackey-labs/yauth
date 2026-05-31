@@ -75,17 +75,8 @@ func writeDCRError(w http.ResponseWriter, status int, code, desc string) {
 // build registration_client_uri.
 func (p *oauth2Plugin) handleDCRRegister(host plugin.PluginHost, prefix string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if p.cfg.dcrRequireInitialAccessToken() {
-			tok := extractDCRBearer(r)
-			if tok == "" {
-				writeDCRError(w, http.StatusUnauthorized, "invalid_token", "initial access token required")
-				return
-			}
-			if _, err := verifyAccessJWT(host, tok); err != nil {
-				writeDCRError(w, http.StatusUnauthorized, "invalid_token", "initial access token is not valid")
-				return
-			}
-		}
+		// Authentication is enforced by the RequireAdmin middleware wrapping
+		// this handler in Routes(). No additional token check is needed here.
 
 		var req dcrRegisterRequest
 		r.Body = http.MaxBytesReader(nil, r.Body, 1<<20)
@@ -253,20 +244,6 @@ func redirectURISchemeReason(raw string) string {
 // isLoopbackHost reports whether host is a loopback address per RFC 8252 §7.3.
 func isLoopbackHost(host string) bool {
 	return host == "localhost" || host == "127.0.0.1" || host == "::1"
-}
-
-// extractDCRBearer pulls an "Authorization: Bearer <jwt>" credential.
-// Returns "" when absent or malformed.
-func extractDCRBearer(r *http.Request) string {
-	h := r.Header.Get("Authorization")
-	if h == "" {
-		return ""
-	}
-	const prefix = "Bearer "
-	if !strings.HasPrefix(h, prefix) {
-		return ""
-	}
-	return strings.TrimSpace(h[len(prefix):])
 }
 
 // signRegistrationAccessToken mints a short-lived JWT scoped to

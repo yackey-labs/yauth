@@ -264,7 +264,7 @@ func (p *emailPasswordPlugin) handleRegister(host plugin.PluginHost) http.Handle
 			}
 		}
 
-		raw, _, err := auth.IssueSession(ctx, repo, user.ID, requestIP(r), requestUA(r), host.SessionTTL())
+		raw, _, err := auth.IssueSession(ctx, repo, user.ID, middleware.RequestIP(r), requestUA(r), host.SessionTTL())
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to issue session")
 			return
@@ -278,7 +278,7 @@ func (p *emailPasswordPlugin) handleRegister(host plugin.PluginHost) http.Handle
 			Type:      events.EventUserRegistered,
 			UserID:    &uid,
 			Email:     &emailCopy,
-			IPAddress: requestIP(r),
+			IPAddress: middleware.RequestIP(r),
 			Method:    &method,
 		})
 
@@ -334,7 +334,7 @@ func (p *emailPasswordPlugin) handleLogin(host plugin.PluginHost) http.HandlerFu
 
 		ctx := r.Context()
 		repo := host.Repo()
-		ip := requestIP(r)
+		ip := middleware.RequestIP(r)
 		method := "email-password"
 
 		// Pre-verification hook: rate-limit / IP block / etc.
@@ -501,7 +501,7 @@ func (p *emailPasswordPlugin) handleLogout(host plugin.PluginHost) http.HandlerF
 			Type:      events.EventLogout,
 			UserID:    userID,
 			SessionID: sessionID,
-			IPAddress: requestIP(r),
+			IPAddress: middleware.RequestIP(r),
 		})
 
 		http.SetCookie(w, auth.ClearSessionCookie(cookieOptionsFromHost(host, r, -1)))
@@ -650,7 +650,7 @@ func (p *emailPasswordPlugin) handleChangePassword(host plugin.PluginHost) http.
 			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to revoke sessions")
 			return
 		}
-		raw, _, err := auth.IssueSession(ctx, repoRef, au.User.ID, requestIP(r), requestUA(r), host.SessionTTL())
+		raw, _, err := auth.IssueSession(ctx, repoRef, au.User.ID, middleware.RequestIP(r), requestUA(r), host.SessionTTL())
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to re-issue session")
 			return
@@ -666,7 +666,7 @@ func (p *emailPasswordPlugin) handleChangePassword(host plugin.PluginHost) http.
 			Type:      events.EventPasswordChanged,
 			UserID:    &uid,
 			Email:     &em,
-			IPAddress: requestIP(r),
+			IPAddress: middleware.RequestIP(r),
 		})
 
 		writeJSON(w, http.StatusOK, changePasswordResponse{Message: "Password changed."})
@@ -730,31 +730,6 @@ func decodeJSON(r *http.Request, v any) error {
 	return nil
 }
 
-// requestIP extracts the best-effort client IP from common proxy headers,
-// falling back to the request's RemoteAddr. The result is returned by
-// pointer because domain.NewSession takes *string.
-func requestIP(r *http.Request) *string {
-	if v := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); v != "" {
-		first := strings.SplitN(v, ",", 2)[0]
-		first = strings.TrimSpace(first)
-		if first != "" {
-			return &first
-		}
-	}
-	if v := strings.TrimSpace(r.Header.Get("X-Real-IP")); v != "" {
-		return &v
-	}
-	if r.RemoteAddr != "" {
-		ip := r.RemoteAddr
-		// Strip ":port" if present.
-		if i := strings.LastIndex(ip, ":"); i > 0 {
-			ip = ip[:i]
-		}
-		return &ip
-	}
-	return nil
-}
-
 func requestUA(r *http.Request) *string {
 	ua := r.UserAgent()
 	if ua == "" {
@@ -810,7 +785,7 @@ func (p *emailPasswordPlugin) handleVerifyEmail(host plugin.PluginHost) http.Han
 		_, _ = host.Emit(ctx, events.AuthEvent{
 			Type:      events.EventEmailVerified,
 			UserID:    &uid,
-			IPAddress: requestIP(r),
+			IPAddress: middleware.RequestIP(r),
 		})
 
 		// JIT-membership auto-join (yauth #90). The verify-email
@@ -1040,7 +1015,7 @@ func (p *emailPasswordPlugin) handleResetPassword(host plugin.PluginHost) http.H
 		_, _ = host.Emit(ctx, events.AuthEvent{
 			Type:      events.EventPasswordReset,
 			UserID:    &uid,
-			IPAddress: requestIP(r),
+			IPAddress: middleware.RequestIP(r),
 		})
 
 		writeJSON(w, http.StatusOK, resetPasswordResponse{Message: "Password reset."})

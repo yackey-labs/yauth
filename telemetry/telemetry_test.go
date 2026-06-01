@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -39,6 +40,62 @@ func TestInitNoop_HelpersDoNotPanic(t *testing.T) {
 	telemetry.AddEventOnCx(c, "evt")
 	telemetry.RecordErrorOnCx(c, "evt", errors.New("x"))
 	span.End()
+}
+
+// TestInit_BuildsProvider exercises the real Init path — in particular the
+// resource.Merge of resource.Default() with our explicit semconv.SchemaURL,
+// which errors at runtime if the two schema URLs conflict. The OTLP gRPC
+// dialer is lazy, so no collector is required for the merge to be checked.
+func TestInit_BuildsProvider(t *testing.T) {
+	prev := otel.GetTracerProvider()
+	prevProp := otel.GetTextMapPropagator()
+	t.Cleanup(func() {
+		otel.SetTracerProvider(prev)
+		otel.SetTextMapPropagator(prevProp)
+	})
+
+	shutdown, err := telemetry.Init(context.Background(), telemetry.Config{Enabled: true})
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if shutdown == nil {
+		t.Fatal("Init returned nil shutdown")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := shutdown(ctx); err != nil {
+		t.Errorf("shutdown: %v", err)
+	}
+}
+
+// TestInit_HTTPProtocol_BuildsProvider exercises the OTLP/HTTP exporter path
+// (Config.Protocol = "http"), the case a consumer hits when their collector
+// only exposes the OTLP/HTTP receiver. Like the gRPC path the HTTP dialer is
+// lazy, so the provider build and schema merge are checked without a
+// reachable collector.
+func TestInit_HTTPProtocol_BuildsProvider(t *testing.T) {
+	prev := otel.GetTracerProvider()
+	prevProp := otel.GetTextMapPropagator()
+	t.Cleanup(func() {
+		otel.SetTracerProvider(prev)
+		otel.SetTextMapPropagator(prevProp)
+	})
+
+	shutdown, err := telemetry.Init(context.Background(), telemetry.Config{
+		Enabled:  true,
+		Protocol: "http",
+	})
+	if err != nil {
+		t.Fatalf("Init(http): %v", err)
+	}
+	if shutdown == nil {
+		t.Fatal("Init returned nil shutdown")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := shutdown(ctx); err != nil {
+		t.Errorf("shutdown: %v", err)
+	}
 }
 
 // installRecorder installs a recording exporter as the global tracer
@@ -104,6 +161,35 @@ func TestTraceMiddleware_Records200(t *testing.T) {
 	}
 	if !gotStatus {
 		t.Errorf("missing http.response.status_code attribute")
+	}
+}
+
+func TestSetUserID_RecordsUserIDAttribute(t *testing.T) {
+	rec, cleanup := installRecorder(t)
+	defer cleanup()
+
+	ctx, span := telemetry.StartSpan(context.Background(), "op", trace.SpanKindServer)
+	telemetry.SetUserID(ctx, "user-123")
+	telemetry.SetUserID(ctx, "") // empty id must be ignored
+	span.End()
+
+	spans := rec.Ended()
+	if len(spans) != 1 {
+		t.Fatalf("expected 1 span, got %d", len(spans))
+	}
+	var got string
+	var found int
+	for _, kv := range spans[0].Attributes() {
+		if string(kv.Key) == "user.id" {
+			found++
+			got = kv.Value.AsString()
+		}
+	}
+	if found != 1 {
+		t.Fatalf("expected exactly 1 user.id attribute, got %d", found)
+	}
+	if got != "user-123" {
+		t.Errorf("user.id = %q, want %q", got, "user-123")
 	}
 }
 

@@ -2,10 +2,23 @@
 // for yauth-go. It is the Go counterpart to the Rust telemetry feature in
 // crates/yauth/src/telemetry.
 //
-// Two init paths are exposed:
+// The helpers in otel.go always record against the global TracerProvider
+// (go.opentelemetry.io/otel), per OpenTelemetry's guidance that a library
+// must use the global provider and never configure the SDK itself. So if your
+// application already sets up OpenTelemetry, you do NOT need anything here:
+// yauth's spans, the user.id tag, and DB spans attach to your existing
+// pipeline automatically. Init is an optional convenience for standalone
+// deployments that want yauth to own telemetry setup.
 //
-//   - Init: build a real OTLP gRPC tracer provider, register the W3C
-//     TraceContext propagator, and return a shutdown func that flushes spans.
+// Two init paths are exposed (both intended to be called once, by the
+// application — not by library code, which must not clobber the global):
+//
+//   - Init: build a real OTLP tracer provider over gRPC or HTTP (selectable
+//     via Config.Protocol / OTEL_EXPORTER_OTLP_PROTOCOL), register the W3C
+//     TraceContext propagator, set it as the global provider, and return a
+//     shutdown func that flushes spans. Call this only when yauth owns
+//     telemetry setup; if your app already configured OpenTelemetry, skip
+//     Init so you don't replace its provider with a second export stream.
 //   - InitNoop: install a no-op tracer provider so callers (and tests) can
 //     invoke the helpers in this package without configuring an exporter.
 //
@@ -17,13 +30,15 @@ package telemetry
 import (
 	"context"
 	"os"
+	"strings"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.41.0"
 	noopt "go.opentelemetry.io/otel/trace/noop"
 )
 
@@ -38,10 +53,18 @@ type Config struct {
 	// give Go callers the equivalent of the Rust feature flag.
 	Enabled bool
 
-	// Endpoint overrides OTEL_EXPORTER_OTLP_ENDPOINT. If empty, the env
-	// variable is read; if that is also empty, http://localhost:4317 is
-	// used.
+	// Endpoint overrides OTEL_EXPORTER_OTLP_TRACES_ENDPOINT /
+	// OTEL_EXPORTER_OTLP_ENDPOINT. If empty, those env vars are read; if all
+	// are empty, the protocol's conventional local endpoint is used
+	// (http://localhost:4317 for grpc, http://localhost:4318 for http).
 	Endpoint string
+
+	// Protocol selects the OTLP transport: "grpc" (default) or "http" (the
+	// OTLP/HTTP receiver, conventionally on port 4318; "http/protobuf" is
+	// accepted as an alias). If empty, OTEL_EXPORTER_OTLP_PROTOCOL is read;
+	// if that is also empty, "grpc" is used. Set this to "http" when your
+	// collector only exposes the OTLP/HTTP receiver.
+	Protocol string
 
 	// ServiceName overrides OTEL_SERVICE_NAME. If empty, the env variable
 	// is read; if that is also empty, "yauth" is used.
@@ -63,12 +86,17 @@ func Init(ctx context.Context, cfg Config) (func(context.Context) error, error) 
 		return func(context.Context) error { return nil }, nil
 	}
 
+	protocol := resolveProtocol(cfg.Protocol)
+
 	endpoint := cfg.Endpoint
+	if endpoint == "" {
+		endpoint = os.Getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
+	}
 	if endpoint == "" {
 		endpoint = os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
 	}
 	if endpoint == "" {
-		endpoint = "http://localhost:4317"
+		endpoint = defaultEndpoint(protocol)
 	}
 
 	serviceName := cfg.ServiceName
@@ -79,9 +107,7 @@ func Init(ctx context.Context, cfg Config) (func(context.Context) error, error) 
 		serviceName = "yauth"
 	}
 
-	exporter, err := otlptracegrpc.New(ctx,
-		otlptracegrpc.WithEndpointURL(endpoint),
-	)
+	exporter, err := newExporter(ctx, protocol, endpoint)
 	if err != nil {
 		return nil, err
 	}
@@ -106,6 +132,40 @@ func Init(ctx context.Context, cfg Config) (func(context.Context) error, error) 
 	otel.SetTextMapPropagator(propagation.TraceContext{})
 
 	return tp.Shutdown, nil
+}
+
+// resolveProtocol normalizes the configured/env OTLP protocol to "http" or
+// "grpc". Empty falls back to OTEL_EXPORTER_OTLP_PROTOCOL, then "grpc". The
+// OTel-standard "http/protobuf" (and "http/json") are treated as "http".
+func resolveProtocol(p string) string {
+	if p == "" {
+		p = os.Getenv("OTEL_EXPORTER_OTLP_PROTOCOL")
+	}
+	switch strings.ToLower(strings.TrimSpace(p)) {
+	case "http", "http/protobuf", "http/json":
+		return "http"
+	default:
+		return "grpc"
+	}
+}
+
+// defaultEndpoint returns the conventional local OTLP endpoint for the
+// protocol: 4317 for grpc, 4318 for http.
+func defaultEndpoint(protocol string) string {
+	if protocol == "http" {
+		return "http://localhost:4318"
+	}
+	return "http://localhost:4317"
+}
+
+// newExporter builds an OTLP span exporter for the resolved protocol. The
+// gRPC and HTTP dialers are lazy, so this does not require a reachable
+// collector at construction time.
+func newExporter(ctx context.Context, protocol, endpoint string) (sdktrace.SpanExporter, error) {
+	if protocol == "http" {
+		return otlptracehttp.New(ctx, otlptracehttp.WithEndpointURL(endpoint))
+	}
+	return otlptracegrpc.New(ctx, otlptracegrpc.WithEndpointURL(endpoint))
 }
 
 // InitNoop installs a no-op tracer provider as the global. Callers can still

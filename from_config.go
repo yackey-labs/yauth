@@ -89,17 +89,28 @@ func NewFromConfig(ctx context.Context, cfg *yauthcfg.Config) (*YAuth, error) {
 	}
 
 	if cfg.Telemetry.Enabled {
-		shutdown, err := telemetry.Init(ctx, telemetry.Config{
-			Enabled:     true,
-			Endpoint:    cfg.Telemetry.OTLPEndpoint,
-			ServiceName: cfg.Telemetry.ServiceName,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("yauth: telemetry init: %w", err)
+		builder = builder.WithTelemetry(telemetry.Config{Enabled: true})
+
+		// Manage the provider ourselves by default; in attach mode the host
+		// app already configured OpenTelemetry, so we record into its
+		// existing TracerProvider rather than opening a second export stream.
+		manageProvider := cfg.Telemetry.ManageProvider == nil || *cfg.Telemetry.ManageProvider
+		if manageProvider {
+			shutdown, err := telemetry.Init(ctx, telemetry.Config{
+				Enabled:     true,
+				Endpoint:    cfg.Telemetry.OTLPEndpoint,
+				Protocol:    cfg.Telemetry.OTLPProtocol,
+				ServiceName: cfg.Telemetry.ServiceName,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("yauth: telemetry init: %w", err)
+			}
+			builder = builder.WithTelemetryShutdown(shutdown)
 		}
-		builder = builder.
-			WithTelemetry(telemetry.Config{Enabled: true}).
-			WithTelemetryShutdown(shutdown)
+
+		if cfg.Telemetry.HTTPMiddleware != nil {
+			builder = builder.WithTraceMiddleware(*cfg.Telemetry.HTTPMiddleware)
+		}
 	}
 
 	if cfg.Plugins.EmailPassword.Enabled {

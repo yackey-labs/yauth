@@ -829,11 +829,66 @@ For teams with existing goose pipelines see `migrate.NewProvider` above.
 `telemetry` wraps OpenTelemetry tracing. When enabled:
 
 - Every plugin HTTP handler runs inside a server span
+- Authenticated requests tag the active span with the resolved identity: `user.id` (OTel semantic convention) plus, when the relevant plugins are loaded, `yauth.active_org.id` and `yauth.org.role` (organizations), `yauth.auth.method` (`cookie`/`bearer`/`api_key`), and `yauth.principal.kind` (`user`/`service_account`). Absent context is skipped — a single-user deployment emits only `user.id`. These tags land on whichever span is active, so they enrich a consumer's `otelhttp` span too.
 - Outbound HTTP from the webhooks dispatcher carries `traceparent` headers
 - **Database operations are traced automatically** — pgxrepo emits a child span per SQL query ([otelpgx](https://github.com/exaring/otelpgx)); gormrepo emits spans per Create/Query/Update/Delete ([gorm opentelemetry](https://github.com/go-gorm/opentelemetry))
 
 When using `NewFromConfig` with `telemetry.enabled: true`, DB tracing is
 wired automatically for both backends — no extra code needed.
+
+### Bring your own OpenTelemetry SDK
+
+If your application already runs an OpenTelemetry SDK (a global `TracerProvider`
+plus an HTTP instrumentation such as `otelhttp`), let yauth join your pipeline
+instead of standing up its own:
+
+- Call `WithTelemetry(telemetry.Config{Enabled: true})` but **do not** call
+  `telemetry.Init`. yauth's internal instrumentation — DB spans, internal
+  spans, and the `user.id` tag — records against your already-installed global
+  provider; yauth never calls `otel.SetTracerProvider` on this path.
+- If you already wrap your handler tree in `otelhttp` (or equivalent), disable
+  yauth's own HTTP server span with `WithTraceMiddleware(false)` so requests
+  aren't traced twice. yauth then enriches *your* server span (including
+  `user.id`) rather than nesting a redundant one.
+
+```go
+// app owns the OTel SDK + exporter and wraps everything in otelhttp
+ya, _ := yauth.New(repo, cfg).
+    WithPlugin(emailpassword.New(emailpassword.Config{})).
+    WithTelemetry(telemetry.Config{Enabled: true}). // join the global provider
+    WithTraceMiddleware(false).                      // otelhttp already opens the server span
+    Build()
+
+mux := http.NewServeMux()
+mux.Handle("/api/auth/", http.StripPrefix("/api/auth", ya.Router()))
+http.ListenAndServe(addr, otelhttp.NewHandler(mux, "api")) // your span layer
+```
+
+From config, the same opt-out is `telemetry.http_middleware: false` (defaults
+to true). By default `NewFromConfig` with `telemetry.enabled: true` calls
+`telemetry.Init` and owns the SDK; set `telemetry.manage_provider: false` to
+attach to a provider your application installed itself instead of opening a
+second export stream (`otlp_endpoint`/`otlp_protocol` are then ignored).
+
+### Choosing the OTLP transport (gRPC or HTTP)
+
+When yauth manages the exporter, `Init` speaks **gRPC** by default (port 4317).
+Set `Protocol: "http"` (or `telemetry.otlp_protocol: http`) to use the OTLP/HTTP
+receiver instead — the common case when your collector only exposes HTTP (port
+4318):
+
+```go
+shutdown, _ := telemetry.Init(ctx, telemetry.Config{
+    Enabled:  true,
+    Protocol: "http",                          // OTLP/HTTP
+    Endpoint: "http://otel-collector:4318",    // omit to default to :4318
+})
+```
+
+`Config.Protocol` and `Config.Endpoint` fall back to the standard
+`OTEL_EXPORTER_OTLP_PROTOCOL` (`grpc` / `http/protobuf`) and
+`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` / `OTEL_EXPORTER_OTLP_ENDPOINT` env vars
+when empty.
 
 For manual wiring:
 
@@ -841,7 +896,8 @@ For manual wiring:
 shutdown, err := telemetry.Init(ctx, telemetry.Config{
     Enabled:     true,
     ServiceName: "my-app",
-    Endpoint:    "otlp://otel-collector:4317",
+    Protocol:    "grpc",                       // or "http"
+    Endpoint:    "http://otel-collector:4317",
 })
 defer shutdown(context.Background())
 

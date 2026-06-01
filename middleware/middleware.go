@@ -20,10 +20,13 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/yackey-labs/yauth-go/auth"
 	"github.com/yackey-labs/yauth-go/domain"
 	"github.com/yackey-labs/yauth-go/repo"
+	"github.com/yackey-labs/yauth-go/telemetry"
 	"github.com/yackey-labs/yauth-go/yautherr"
 )
 
@@ -135,9 +138,42 @@ func AuthUserFromContext(ctx context.Context) (*domain.AuthUser, bool) {
 	return au, true
 }
 
-// withAuthUser returns a copy of ctx carrying the supplied AuthUser.
+// withAuthUser returns a copy of ctx carrying the supplied AuthUser. It also
+// tags the active span with the resolved identity so every authenticated
+// request is attributable in traces — whether the span is yauth's own
+// TraceMiddleware span or a consumer's HTTP instrumentation.
 func withAuthUser(ctx context.Context, au *domain.AuthUser) context.Context {
+	if au != nil {
+		tagAuthSpan(ctx, au)
+	}
 	return context.WithValue(ctx, authUserKey, au)
+}
+
+// tagAuthSpan records the resolved principal on the active span: `user.id`
+// using the OpenTelemetry semantic convention, plus yauth-namespaced
+// attributes for the org/auth context that the organizations, bearer, and
+// api-key plugins hydrate onto the AuthUser. Absent fields are skipped, so a
+// single-user deployment without those plugins emits only `user.id`. Safe
+// no-op when no recording span is present.
+func tagAuthSpan(ctx context.Context, au *domain.AuthUser) {
+	telemetry.SetUserID(ctx, au.User.ID)
+
+	attrs := make([]attribute.KeyValue, 0, 4)
+	if au.ActiveOrgID != nil && *au.ActiveOrgID != "" {
+		attrs = append(attrs, attribute.String("yauth.active_org.id", *au.ActiveOrgID))
+	}
+	if au.OrgRole != nil && *au.OrgRole != "" {
+		attrs = append(attrs, attribute.String("yauth.org.role", *au.OrgRole))
+	}
+	if au.Method != "" {
+		attrs = append(attrs, attribute.String("yauth.auth.method", au.Method))
+	}
+	if au.Principal.Kind != "" {
+		attrs = append(attrs, attribute.String("yauth.principal.kind", string(au.Principal.Kind)))
+	}
+	if len(attrs) > 0 {
+		trace.SpanFromContext(ctx).SetAttributes(attrs...)
+	}
 }
 
 // WithAuthUserForTest is the test-only seam used by cross-package

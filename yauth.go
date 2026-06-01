@@ -33,6 +33,7 @@ type YAuth struct {
 	mux              *http.ServeMux
 	mw               *middleware.Middleware
 	telemetryEnabled bool
+	traceMiddleware  bool
 	telemetryShut    func(context.Context) error
 
 	eventHandlers []events.Handler
@@ -43,12 +44,13 @@ type YAuth struct {
 
 // YAuthBuilder accumulates plugins before producing a YAuth via Build.
 type YAuthBuilder struct {
-	cfg           YAuthConfig
-	repo          repo.Repository
-	plugins       []plugin.Plugin
-	telemetryCfg  *telemetry.Config
-	telemetryShut func(context.Context) error
-	jwtSecret     []byte
+	cfg             YAuthConfig
+	repo            repo.Repository
+	plugins         []plugin.Plugin
+	telemetryCfg    *telemetry.Config
+	traceMiddleware *bool
+	telemetryShut   func(context.Context) error
+	jwtSecret       []byte
 }
 
 // New starts a new builder bound to the supplied repository and config.
@@ -63,13 +65,34 @@ func (b *YAuthBuilder) WithPlugin(p plugin.Plugin) *YAuthBuilder {
 	return b
 }
 
-// WithTelemetry enables OpenTelemetry tracing on the built YAuth. Build
-// will wrap the returned router with middleware.TraceMiddleware so every
-// request opens a server span. Pass telemetry.DefaultConfig() for the
-// common case, or telemetry.Config{Enabled: false} to register the no-op
-// provider (useful in tests).
+// WithTelemetry enables OpenTelemetry tracing on the built YAuth. yauth's
+// internal instrumentation (StartSpan/WithSpan/RecordError/SetAttribute and
+// the `user.id` tag on authenticated requests) records against the global
+// tracer provider — yauth never calls otel.SetTracerProvider on this path, so
+// a consumer's already-installed SDK is respected. By default Build also wraps
+// the returned router with middleware.TraceMiddleware so every request opens a
+// server span; consumers who already run their own HTTP instrumentation (e.g.
+// otelhttp) can drop that with WithTraceMiddleware(false) to avoid
+// double-tracing. Pass telemetry.DefaultConfig() for the common case, or
+// telemetry.Config{Enabled: false} to register the no-op provider (useful in
+// tests).
 func (b *YAuthBuilder) WithTelemetry(cfg telemetry.Config) *YAuthBuilder {
 	b.telemetryCfg = &cfg
+	return b
+}
+
+// WithTraceMiddleware controls whether Build wraps the router in yauth's own
+// HTTP server-span middleware (middleware.TraceMiddleware). It only has an
+// effect when telemetry is enabled via WithTelemetry; the default is true for
+// backwards compatibility.
+//
+// Set it to false when the consuming application already wraps its handler
+// tree in an HTTP instrumentation (otelhttp or equivalent): yauth then
+// participates in the consumer's traces — DB spans, internal spans, and the
+// `user.id` attribute all attach to the consumer's server span — without
+// emitting a second, redundant server span per request.
+func (b *YAuthBuilder) WithTraceMiddleware(enabled bool) *YAuthBuilder {
+	b.traceMiddleware = &enabled
 	return b
 }
 
@@ -117,6 +140,11 @@ func (b *YAuthBuilder) Build() (*YAuth, error) {
 	})
 	mux := http.NewServeMux()
 
+	// The HTTP server-span middleware defaults to on when telemetry is
+	// enabled, but consumers running their own HTTP instrumentation can
+	// opt out via WithTraceMiddleware(false) to avoid double-tracing.
+	traceMiddleware := b.traceMiddleware == nil || *b.traceMiddleware
+
 	ya := &YAuth{
 		cfg:              b.cfg,
 		repo:             b.repo,
@@ -124,6 +152,7 @@ func (b *YAuthBuilder) Build() (*YAuth, error) {
 		mux:              mux,
 		mw:               mw,
 		telemetryEnabled: b.telemetryCfg != nil && b.telemetryCfg.Enabled,
+		traceMiddleware:  traceMiddleware,
 		telemetryShut:    b.telemetryShut,
 		jwtSecret:        b.jwtSecret,
 	}
@@ -137,8 +166,9 @@ func (b *YAuthBuilder) Build() (*YAuth, error) {
 
 // Router returns the configured ServeMux, optionally wrapped with the
 // OpenTelemetry trace middleware when WithTelemetry was called on the
-// builder, and with the CORS middleware when CORS.AllowedOrigins is
-// non-empty. Mount it under any prefix:
+// builder (unless suppressed via WithTraceMiddleware(false)), and with the
+// CORS middleware when CORS.AllowedOrigins is non-empty. Mount it under any
+// prefix:
 //
 //	http.Handle("/api/auth/", http.StripPrefix("/api/auth", ya.Router()))
 func (y *YAuth) Router() http.Handler {
@@ -152,7 +182,7 @@ func (y *YAuth) Router() http.Handler {
 			MaxAge:           y.cfg.CORS.MaxAge,
 		})(h)
 	}
-	if y.telemetryEnabled {
+	if y.telemetryEnabled && y.traceMiddleware {
 		h = middleware.TraceMiddleware(h)
 	}
 	return h

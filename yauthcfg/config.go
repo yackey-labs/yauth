@@ -185,6 +185,25 @@ type TelemetryConfig struct {
 	Enabled      bool   `yaml:"enabled" toml:"enabled"`
 	ServiceName  string `yaml:"service_name" toml:"service_name"`
 	OTLPEndpoint string `yaml:"otlp_endpoint" toml:"otlp_endpoint"`
+	// OTLPProtocol selects the OTLP transport when yauth manages the
+	// exporter: "grpc" (default) or "http" (the OTLP/HTTP receiver, usually
+	// port 4318). Empty falls back to OTEL_EXPORTER_OTLP_PROTOCOL. Set "http"
+	// when your collector only exposes the OTLP/HTTP receiver.
+	OTLPProtocol string `yaml:"otlp_protocol" toml:"otlp_protocol"`
+	// HTTPMiddleware toggles yauth's own HTTP server-span middleware. It
+	// defaults to true; set it to false when the application already wraps
+	// its handler tree in an HTTP instrumentation (otelhttp or equivalent)
+	// to avoid emitting a second server span per request.
+	HTTPMiddleware *bool `yaml:"http_middleware" toml:"http_middleware"`
+	// ManageProvider controls whether yauth stands up its own OTLP exporter
+	// and registers the global TracerProvider (true, the default), or simply
+	// records into the TracerProvider the host application has already
+	// configured (false). Set it false when your app owns OpenTelemetry
+	// setup — yauth then participates in your existing pipeline instead of
+	// opening a second export stream, per OTel's guidance that only the
+	// application configures the SDK. OTLPEndpoint/OTLPProtocol are ignored
+	// in attach mode.
+	ManageProvider *bool `yaml:"manage_provider" toml:"manage_provider"`
 }
 
 // PluginsConfig is the discriminated set of plugin sections. Each

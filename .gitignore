@@ -2,6 +2,13 @@
 bin/
 *.test
 *.out
+# Stray compiled binary from `go build` in the repo root (the package lives
+# at repo/pgxrepo/). Root-anchored so it never matches the package dir.
+/pgxrepo
+
+# Python caches (e.g. under scripts/)
+__pycache__/
+*.pyc
 
 # Go
 vendor/

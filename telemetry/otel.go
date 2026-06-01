@@ -7,6 +7,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	semconv "go.opentelemetry.io/otel/semconv/v1.41.0"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -32,6 +33,19 @@ func RecordError(ctx context.Context, name string, err error) {
 func AddEvent(ctx context.Context, name string, attrs ...attribute.KeyValue) {
 	span := trace.SpanFromContext(ctx)
 	span.AddEvent(name, trace.WithAttributes(attrs...))
+}
+
+// SetUserID records the authenticated user's identifier on the span carried
+// by ctx using the OpenTelemetry `user.id` semantic convention. It is a safe
+// no-op when no recording span is present, so it works whether the request is
+// covered by yauth's own TraceMiddleware or by a consumer's HTTP
+// instrumentation (e.g. otelhttp) — in the latter case it enriches the
+// consumer's server span. Empty ids are ignored.
+func SetUserID(ctx context.Context, id string) {
+	if id == "" {
+		return
+	}
+	trace.SpanFromContext(ctx).SetAttributes(semconv.UserID(id))
 }
 
 // SetAttribute sets a single attribute on the current span. Accepts the

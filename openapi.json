@@ -6825,7 +6825,7 @@
     },
     "/oauth/register": {
       "post": {
-        "description": "Public dynamic client registration endpoint. Disabled by default; opt in via plugin Config.DCREnabled. When DCRRequireInitialAccessToken is true (default), the request must carry an admin-issued Bearer token in the Authorization header.",
+        "description": "Dynamic client registration endpoint. Disabled by default; opt in via plugin Config.DCREnabled. When enabled, a public client (token_endpoint_auth_method=none) whose redirect_uris are all loopback (localhost/127.0.0.1/::1) may register anonymously; any non-loopback redirect or confidential client requires an authenticated administrator. Set Config.DCRRequireAdminForLoopback to require an admin for every registration.",
         "operationId": "oauth2DynamicClientRegister",
         "requestBody": {
           "content": {
@@ -6867,7 +6867,7 @@
                 }
               }
             },
-            "description": "Missing or invalid initial access token."
+            "description": "Authentication required to register this client shape (non-loopback or confidential)."
           },
           "404": {
             "content": {

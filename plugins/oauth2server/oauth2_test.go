@@ -532,6 +532,87 @@ func pkceS256(verifier string) string {
 	return oauth2server.PKCEChallengeForTest(verifier)
 }
 
+// getAuthorize performs GET /authorize and returns (status, body).
+func (h *harness) getAuthorize(t *testing.T, cookie, clientID, challenge string) (int, map[string]any) {
+	t.Helper()
+	q := url.Values{}
+	q.Set("response_type", "code")
+	q.Set("client_id", clientID)
+	q.Set("redirect_uri", "https://app.example/callback")
+	q.Set("scope", "openid read")
+	q.Set("state", "s")
+	q.Set("code_challenge", challenge)
+	q.Set("code_challenge_method", "S256")
+	req, _ := http.NewRequest(http.MethodGet, h.srv.URL+"/api/auth/oauth/authorize?"+q.Encode(), nil)
+	req.AddCookie(&http.Cookie{Name: "yauth_session", Value: cookie})
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("authorize: %v", err)
+	}
+	defer res.Body.Close()
+	var body map[string]any
+	_ = json.NewDecoder(res.Body).Decode(&body)
+	return res.StatusCode, body
+}
+
+// TestAuthorize_GroupAssignmentEnforced is the discriminating test for the
+// application-group-assignment feature: a client with enforcement on rejects a
+// user who is not a member of any assigned group, and admits them once added.
+func TestAuthorize_GroupAssignmentEnforced(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	_, adminCookie := h.seedUser(t, "gadmin@idp.test", "admin")
+	uid, userCookie := h.seedUser(t, "guser@idp.test", "user")
+
+	// Public client with the access gate enabled.
+	clientID, _, _ := h.createClient(t, adminCookie, `{
+		"name":"gated",
+		"redirect_uris":["https://app.example/callback"],
+		"grant_types":["authorization_code"],
+		"scopes":["openid","read"],
+		"is_public":true,
+		"token_endpoint_auth_method":"none",
+		"enforce_group_assignment":true
+	}`)
+
+	// An org + group, with the group assigned to the client.
+	org, err := h.repo.CreateOrganization(ctx, domain.NewOrganization{
+		ID: uuid.NewString(), Name: "Acme", Slug: "acme-" + uuid.NewString()[:8], CreatedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	g, err := h.repo.CreateGroup(ctx, domain.NewGroup{
+		ID: uuid.NewString(), OrganizationID: org.ID, Name: "eng", CreatedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("create group: %v", err)
+	}
+	if err := h.repo.AssignClientGroup(ctx, clientID, g.ID, now); err != nil {
+		t.Fatalf("assign group: %v", err)
+	}
+
+	verifier := "this-is-a-43-character-pkce-verifier-string-x"
+	challenge := pkceS256(verifier)
+
+	// 1) User is NOT in the assigned group → access_denied.
+	status, body := h.getAuthorize(t, userCookie, clientID, challenge)
+	if body["error"] != "access_denied" {
+		t.Fatalf("expected access_denied for unassigned user, got status=%d body=%v", status, body)
+	}
+
+	// 2) Add the user to the assigned group → the flow proceeds and issues a code.
+	if err := h.repo.AddGroupMember(ctx, g.ID, uid, now); err != nil {
+		t.Fatalf("add group member: %v", err)
+	}
+	code := h.authorizeAndConsent(t, userCookie, clientID, "https://app.example/callback", "openid read", challenge, "s", "")
+	if code == "" {
+		t.Fatal("expected an authorization code once the user is in an assigned group")
+	}
+}
+
 // --- Gap 9 + RFC 8414 tests --------------------------------------------
 
 // adminPost sends an admin-authenticated POST with optional JSON body.
@@ -633,12 +714,12 @@ func TestAuthServerMetadata_RFC8414(t *testing.T) {
 	}
 
 	want := map[string]string{
-		"issuer":                         "http://idp.test",
-		"authorization_endpoint":         "http://idp.test/api/auth/oauth/authorize",
-		"token_endpoint":                 "http://idp.test/api/auth/oauth/token",
-		"revocation_endpoint":            "http://idp.test/api/auth/oauth/revoke",
-		"introspection_endpoint":         "http://idp.test/api/auth/oauth/introspect",
-		"device_authorization_endpoint":  "http://idp.test/api/auth/oauth/device/code",
+		"issuer":                        "http://idp.test",
+		"authorization_endpoint":        "http://idp.test/api/auth/oauth/authorize",
+		"token_endpoint":                "http://idp.test/api/auth/oauth/token",
+		"revocation_endpoint":           "http://idp.test/api/auth/oauth/revoke",
+		"introspection_endpoint":        "http://idp.test/api/auth/oauth/introspect",
+		"device_authorization_endpoint": "http://idp.test/api/auth/oauth/device/code",
 	}
 	for k, v := range want {
 		got, _ := doc[k].(string)
@@ -660,10 +741,10 @@ func TestAuthServerMetadata_RFC8414(t *testing.T) {
 
 	gts, _ := doc["grant_types_supported"].([]any)
 	wantGrants := map[string]bool{
-		"authorization_code":                              true,
-		"refresh_token":                                   true,
-		"client_credentials":                              true,
-		"urn:ietf:params:oauth:grant-type:device_code":    true,
+		"authorization_code": true,
+		"refresh_token":      true,
+		"client_credentials": true,
+		"urn:ietf:params:oauth:grant-type:device_code": true,
 	}
 	for _, g := range gts {
 		delete(wantGrants, g.(string))

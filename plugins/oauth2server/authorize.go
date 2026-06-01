@@ -117,6 +117,20 @@ func (p *oauth2Plugin) handleAuthorize(host plugin.PluginHost) http.HandlerFunc 
 			return
 		}
 
+		// Application group assignment gate (Okta-style). When the client
+		// enforces it, only members of an assigned group may proceed.
+		if client.EnforceGroupAssignment {
+			allowed, err := host.Repo().UserInAssignedGroup(r.Context(), clientID, au.User.ID)
+			if err != nil {
+				writeOAuthError(w, "server_error", "group assignment check failed")
+				return
+			}
+			if !allowed {
+				writeOAuthError(w, "access_denied", "user is not assigned to this application")
+				return
+			}
+		}
+
 		// Existing consent? If found and ConsentRequired is false, mint
 		// a code immediately and return the redirect URL.
 		if !p.cfg.ConsentRequired {

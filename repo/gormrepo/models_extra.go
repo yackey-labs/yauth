@@ -151,6 +151,7 @@ type OAuth2Client struct {
 	JWKSURI                 *string    `gorm:"column:jwks_uri"`
 	BannedAt                *time.Time `gorm:"column:banned_at"`
 	BannedReason            *string    `gorm:"column:banned_reason"`
+	EnforceGroupAssignment  bool       `gorm:"column:enforce_group_assignment;not null;default:false"`
 }
 
 func (OAuth2Client) TableName() string { return "yauth_oauth2_clients" }
@@ -171,6 +172,7 @@ func (m *OAuth2Client) toDomain() domain.OAuth2Client {
 		JWKSURI:                 m.JWKSURI,
 		BannedAt:                ptrUTC(m.BannedAt),
 		BannedReason:            m.BannedReason,
+		EnforceGroupAssignment:  m.EnforceGroupAssignment,
 	}
 }
 
@@ -188,6 +190,7 @@ func oauth2ClientFromDomain(in domain.NewOAuth2Client) OAuth2Client {
 		TokenEndpointAuthMethod: in.TokenEndpointAuthMethod,
 		PublicKeyPEM:            in.PublicKeyPEM,
 		JWKSURI:                 in.JWKSURI,
+		EnforceGroupAssignment:  in.EnforceGroupAssignment,
 	}
 }
 

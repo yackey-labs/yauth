@@ -72,6 +72,12 @@ type YauthChallenge struct {
 	ExpiresAt pgtype.Timestamptz
 }
 
+type YauthClientGroupAssignment struct {
+	ClientID  string
+	GroupID   string
+	CreatedAt pgtype.Timestamptz
+}
+
 type YauthConsent struct {
 	ID        string
 	UserID    string
@@ -109,6 +115,22 @@ type YauthExternalIdentity struct {
 	ExternalID  string
 	LinkedAt    pgtype.Timestamptz
 	LastLoginAt pgtype.Timestamptz
+}
+
+type YauthGroup struct {
+	ID             string
+	OrganizationID string
+	Name           string
+	Description    *string
+	ExternalID     *string
+	CreatedAt      pgtype.Timestamptz
+	UpdatedAt      pgtype.Timestamptz
+}
+
+type YauthGroupMember struct {
+	GroupID   string
+	UserID    string
+	CreatedAt pgtype.Timestamptz
 }
 
 type YauthInvitation struct {
@@ -159,6 +181,7 @@ type YauthOauth2Client struct {
 	JwksUri                 *string
 	BannedAt                pgtype.Timestamptz
 	BannedReason            *string
+	EnforceGroupAssignment  bool
 }
 
 type YauthOauthAccount struct {

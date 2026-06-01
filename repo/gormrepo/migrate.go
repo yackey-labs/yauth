@@ -51,5 +51,8 @@ func Migrate(ctx context.Context, db *gorm.DB) error {
 		&SsoConnection{},
 		&ExternalIdentity{},
 		&SsoLoginState{},
+		&Group{},
+		&GroupMember{},
+		&ClientGroupAssignment{},
 	)
 }

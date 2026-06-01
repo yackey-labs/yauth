@@ -373,32 +373,29 @@ func TestDeleteUser_RemovesMembership(t *testing.T) {
 	}
 }
 
-func TestGetGroup_AdminListsOwnerInIt(t *testing.T) {
+func TestCreateGroup_AddMember_List(t *testing.T) {
 	app := newTestApp(t)
-	resp := app.do(t, "GET", groupsPath(app.orgA.orgID)+"/role:owner", app.orgA.apiKey, nil)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status: got %d", resp.StatusCode)
-	}
-	m := decodeJSON(t, resp)
-	members, _ := m["members"].([]any)
-	if len(members) != 1 {
-		t.Fatalf("expected 1 owner member, got %d", len(members))
-	}
-}
-
-func TestPatchGroup_AddMember_PromotesRole(t *testing.T) {
-	app := newTestApp(t)
-	// Create a user (default role MEMBER).
+	// Provision a user (org member by default).
 	create := app.do(t, "POST", usersPath(app.orgA.orgID), app.orgA.apiKey, map[string]any{
 		"schemas":  []string{CoreUserSchema},
-		"userName": "promote@x.com",
-		"emails":   []map[string]any{{"value": "promote@x.com", "primary": true}},
+		"userName": "g1@x.com",
+		"emails":   []map[string]any{{"value": "g1@x.com", "primary": true}},
 	})
-	cm := decodeJSON(t, create)
-	uid := cm["id"].(string)
+	uid := decodeJSON(t, create)["id"].(string)
 
-	// PATCH role:admin to add this user.
-	patch := app.do(t, "PATCH", groupsPath(app.orgA.orgID)+"/role:admin", app.orgA.apiKey, map[string]any{
+	// Create a real, named group.
+	gresp := app.do(t, "POST", groupsPath(app.orgA.orgID), app.orgA.apiKey, map[string]any{
+		"schemas":     []string{CoreGroupSchema},
+		"displayName": "Engineering",
+		"externalId":  "ext-eng",
+	})
+	if gresp.StatusCode != http.StatusCreated {
+		t.Fatalf("create group status: %d", gresp.StatusCode)
+	}
+	gid := decodeJSON(t, gresp)["id"].(string)
+
+	// Add the user via PATCH members.
+	patch := app.do(t, "PATCH", groupsPath(app.orgA.orgID)+"/"+gid, app.orgA.apiKey, map[string]any{
 		"schemas": []string{PatchOpSchema},
 		"Operations": []map[string]any{
 			{"op": "add", "path": "members", "value": []map[string]any{{"value": uid}}},
@@ -407,13 +404,39 @@ func TestPatchGroup_AddMember_PromotesRole(t *testing.T) {
 	if patch.StatusCode != http.StatusOK {
 		t.Fatalf("patch status: %d", patch.StatusCode)
 	}
-	// The membership should now be admin.
+
+	// GET the group → the user is a member.
+	got := app.do(t, "GET", groupsPath(app.orgA.orgID)+"/"+gid, app.orgA.apiKey, nil)
+	members, _ := decodeJSON(t, got)["members"].([]any)
+	if len(members) != 1 {
+		t.Fatalf("expected 1 member, got %d", len(members))
+	}
+
+	// Group membership must NOT change the org role (decoupled).
 	mem, err := app.repo.GetMembershipByOrgUser(context.Background(), app.orgA.orgID, uid)
 	if err != nil || mem == nil {
 		t.Fatal(err)
 	}
-	if mem.Role != auth.RoleAdmin {
-		t.Fatalf("role: got %q want %q", mem.Role, auth.RoleAdmin)
+	if mem.Role != auth.RoleMember {
+		t.Fatalf("group membership must not change org role: got %q", mem.Role)
+	}
+}
+
+func TestDeleteGroup(t *testing.T) {
+	app := newTestApp(t)
+	gresp := app.do(t, "POST", groupsPath(app.orgA.orgID), app.orgA.apiKey, map[string]any{
+		"schemas":     []string{CoreGroupSchema},
+		"displayName": "Temp",
+	})
+	gid := decodeJSON(t, gresp)["id"].(string)
+
+	del := app.do(t, "DELETE", groupsPath(app.orgA.orgID)+"/"+gid, app.orgA.apiKey, nil)
+	if del.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete status: %d", del.StatusCode)
+	}
+	got := app.do(t, "GET", groupsPath(app.orgA.orgID)+"/"+gid, app.orgA.apiKey, nil)
+	if got.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 after delete, got %d", got.StatusCode)
 	}
 }
 
@@ -523,16 +546,6 @@ func TestPickDisplayName_PrefersDisplayName(t *testing.T) {
 	}
 	if u.PickDisplayName() != "Alice Wonderland" {
 		t.Fatalf("got %q", u.PickDisplayName())
-	}
-}
-
-func TestRoleToGroupIDRoundTrip(t *testing.T) {
-	for _, r := range knownRoles() {
-		id := roleToGroupID(r)
-		got, ok := groupIDToRole(id)
-		if !ok || got != r {
-			t.Fatalf("round-trip %q: got %q ok=%v", r, got, ok)
-		}
 	}
 }
 

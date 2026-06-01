@@ -21,6 +21,10 @@ type OAuth2Client struct {
 	JWKSURI                 *string
 	BannedAt                *time.Time
 	BannedReason            *string
+	// EnforceGroupAssignment, when true, restricts this client to users who
+	// are members of at least one assigned group (see ClientGroupAssignment).
+	// Default false: any authenticated user may complete the flow.
+	EnforceGroupAssignment bool
 }
 
 // NewOAuth2Client is the input for registering an OAuth2 client.
@@ -37,6 +41,7 @@ type NewOAuth2Client struct {
 	TokenEndpointAuthMethod *string
 	PublicKeyPEM            *string
 	JWKSURI                 *string
+	EnforceGroupAssignment  bool
 }
 
 // AuthorizationCode is a single-use OAuth2 authorization code (RFC 6749).

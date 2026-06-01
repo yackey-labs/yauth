@@ -35,6 +35,7 @@ func (r *Repo) CreateOAuth2Client(ctx context.Context, input domain.NewOAuth2Cli
 		TokenEndpointAuthMethod: input.TokenEndpointAuthMethod,
 		PublicKeyPEM:            input.PublicKeyPEM,
 		JWKSURI:                 input.JWKSURI,
+		EnforceGroupAssignment:  input.EnforceGroupAssignment,
 	}
 	if len(input.RedirectURIs) > 0 {
 		c.RedirectURIs = append([]byte(nil), input.RedirectURIs...)

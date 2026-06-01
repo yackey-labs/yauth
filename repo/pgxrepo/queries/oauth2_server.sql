@@ -17,6 +17,9 @@ UPDATE yauth_oauth2_clients SET public_key_pem = $2 WHERE client_id = $1;
 -- name: ListBannedOAuth2Clients :many
 SELECT * FROM yauth_oauth2_clients WHERE banned_at IS NOT NULL ORDER BY banned_at DESC;
 
+-- name: SetOAuth2ClientEnforceGroupAssignment :execrows
+UPDATE yauth_oauth2_clients SET enforce_group_assignment = $2 WHERE client_id = $1;
+
 -- name: CreateAuthorizationCode :exec
 INSERT INTO yauth_authorization_codes (id, code_hash, client_id, user_id, scopes, redirect_uri, code_challenge, code_challenge_method, expires_at, used, nonce, created_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12);

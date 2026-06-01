@@ -193,6 +193,11 @@ func (p *oauth2Plugin) Routes(host plugin.PluginHost, mux *http.ServeMux, prefix
 	mux.Handle("POST "+prefix+"/oauth2/clients/{id}/unban", mw.RequireAdmin(http.HandlerFunc(p.handleUnbanClient(host))))
 	mux.Handle("POST "+prefix+"/oauth2/clients/{id}/rotate-public-key", mw.RequireAdmin(http.HandlerFunc(p.handleRotatePublicKey(host))))
 
+	// Application group assignments (which groups may access this client).
+	mux.Handle("GET "+prefix+"/oauth2/clients/{id}/groups", mw.RequireAdmin(http.HandlerFunc(p.handleListClientGroups(host))))
+	mux.Handle("POST "+prefix+"/oauth2/clients/{id}/groups", mw.RequireAdmin(http.HandlerFunc(p.handleAssignClientGroup(host))))
+	mux.Handle("DELETE "+prefix+"/oauth2/clients/{id}/groups/{gid}", mw.RequireAdmin(http.HandlerFunc(p.handleUnassignClientGroup(host))))
+
 	// --- RFC 8414 authorization server metadata ---
 	mux.Handle("GET "+prefix+"/.well-known/oauth-authorization-server", http.HandlerFunc(p.handleAuthServerMetadata(host)))
 

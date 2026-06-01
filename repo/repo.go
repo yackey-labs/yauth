@@ -551,6 +551,39 @@ type SsoLoginStateRepository interface {
 	ConsumeSsoLoginState(ctx context.Context, state string) (*domain.SsoLoginState, error)
 }
 
+// GroupRepository covers organization-scoped groups, their membership, and
+// OAuth2 client (application) group assignments used for access enforcement.
+type GroupRepository interface {
+	CreateGroup(ctx context.Context, input domain.NewGroup) (domain.Group, error)
+	GetGroupByID(ctx context.Context, id string) (*domain.Group, error)
+	GetGroupByOrgAndName(ctx context.Context, orgID, name string) (*domain.Group, error)
+	GetGroupByOrgAndExternalID(ctx context.Context, orgID, externalID string) (*domain.Group, error)
+	ListGroupsByOrg(ctx context.Context, orgID string) ([]*domain.Group, error)
+	UpdateGroup(ctx context.Context, id string, changes domain.UpdateGroup) (domain.Group, error)
+	DeleteGroup(ctx context.Context, id string) error
+
+	// AddGroupMember is idempotent (re-adding an existing member is a no-op).
+	// The caller is responsible for enforcing that the user belongs to the
+	// group's organization.
+	AddGroupMember(ctx context.Context, groupID, userID string, now time.Time) error
+	RemoveGroupMember(ctx context.Context, groupID, userID string) error
+	ListGroupMembers(ctx context.Context, groupID string) ([]*domain.User, error)
+	ListGroupsForUser(ctx context.Context, orgID, userID string) ([]*domain.Group, error)
+	IsGroupMember(ctx context.Context, groupID, userID string) (bool, error)
+
+	// AssignClientGroup is idempotent. UnassignClientGroup is a no-op when the
+	// assignment is absent.
+	AssignClientGroup(ctx context.Context, clientID, groupID string, now time.Time) error
+	UnassignClientGroup(ctx context.Context, clientID, groupID string) error
+	ListClientGroups(ctx context.Context, clientID string) ([]*domain.Group, error)
+	// UserInAssignedGroup reports whether userID is a member of any group
+	// assigned to clientID — the /authorize enforcement check.
+	UserInAssignedGroup(ctx context.Context, clientID, userID string) (bool, error)
+
+	// SetClientEnforceGroupAssignment toggles the per-client access gate.
+	SetClientEnforceGroupAssignment(ctx context.Context, clientID string, enforce bool) error
+}
+
 // Repository is the union of all repositories. Backends implement this.
 type Repository interface {
 	UserRepository
@@ -589,4 +622,5 @@ type Repository interface {
 	SsoConnectionRepository
 	ExternalIdentityRepository
 	SsoLoginStateRepository
+	GroupRepository
 }

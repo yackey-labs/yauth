@@ -146,53 +146,6 @@ func projectUser(baseURL, orgID string, u *domain.User, ext *domain.ExternalIden
 	}
 }
 
-// roleFromGroups picks the most-privileged built-in role from the
-// incoming groups[] block. SCIM POST/PUT can carry a groups[] for IdPs
-// that push role assignment alongside provisioning.
-//
-// Each entry is interpreted as the literal role name (display or
-// value). Unknown role names are ignored. Returns the empty string if
-// no built-in role matched — callers fall back to MEMBER on create.
-func roleFromGroups(groups []ScimGroupRef) string {
-	var best string
-	bestRank := -1
-	pickBest := func(name string) {
-		lc := strings.ToLower(strings.TrimSpace(name))
-		if !auth.IsBuiltinRole(lc) {
-			return
-		}
-		// Rank table — owner is highest.
-		var rank int
-		switch lc {
-		case auth.RoleOwner:
-			rank = 4
-		case auth.RoleAdmin:
-			rank = 3
-		case auth.RoleBillingAdmin:
-			rank = 2
-		case auth.RoleMember:
-			rank = 1
-		case auth.RoleViewer:
-			rank = 0
-		default:
-			rank = -1
-		}
-		if rank > bestRank {
-			best = lc
-			bestRank = rank
-		}
-	}
-	for _, g := range groups {
-		if g.Display != "" {
-			pickBest(g.Display)
-		}
-		if g.Value != "" {
-			pickBest(g.Value)
-		}
-	}
-	return best
-}
-
 // auditScim writes an audit-log row tagged with the SCIM actor and
 // target. Errors are deliberately swallowed: SCIM operations MUST NOT
 // fail when audit logging cannot insert.
@@ -362,10 +315,10 @@ func (p *scimPlugin) handleCreateUser(host plugin.PluginHost) http.HandlerFunc {
 		if payload.Active != nil && !*payload.Active {
 			desiredStatus = domain.MembershipSuspended
 		}
-		role := roleFromGroups(payload.Groups)
-		if role == "" {
-			role = auth.RoleMember
-		}
+		// Role governs org administration and is independent of group
+		// membership (groups are managed via the /Groups resource). New
+		// SCIM-provisioned users default to member; promote via the org API.
+		role := auth.RoleMember
 		existingMembership, err := repo.GetMembershipByOrgUser(ctx, orgID, u.ID)
 		if err != nil {
 			writeScimError(w, repoToScim(err))
@@ -648,11 +601,9 @@ func (p *scimPlugin) handlePutUser(host plugin.PluginHost) http.HandlerFunc {
 		if payload.Active != nil && !*payload.Active {
 			desiredStatus = domain.MembershipSuspended
 		}
-		role := roleFromGroups(payload.Groups)
+		// Group membership no longer drives role (groups are real, managed
+		// via /Groups). Leave role unchanged on user update.
 		var rolePtr *string
-		if role != "" {
-			rolePtr = &role
-		}
 		m, err := repo.GetMembershipByOrgUser(ctx, orgID, user.ID)
 		if err != nil {
 			writeScimError(w, repoToScim(err))

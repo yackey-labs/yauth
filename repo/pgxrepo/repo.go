@@ -699,7 +699,7 @@ func (r *Repo) DeletePasskey(ctx context.Context, id string) error {
 func (r *Repo) GetTOTPByUserID(ctx context.Context, userID string, verifiedOnly *bool) (*domain.TOTPSecret, error) {
 	filterVerified := verifiedOnly != nil && *verifiedOnly
 	row, err := r.q.GetTOTPByUserID(ctx, pgxgen.GetTOTPByUserIDParams{
-		UserID: userID,
+		UserID:  userID,
 		Column2: filterVerified,
 	})
 	if err != nil {
@@ -2583,6 +2583,7 @@ func oauth2ClientToDomain(m pgxgen.YauthOauth2Client) domain.OAuth2Client {
 		JWKSURI:                 m.JwksUri,
 		BannedAt:                fromTSPtr(m.BannedAt),
 		BannedReason:            m.BannedReason,
+		EnforceGroupAssignment:  m.EnforceGroupAssignment,
 	}
 }
 

@@ -31,6 +31,7 @@ type clientJSON struct {
 	HasPublicKey            bool      `json:"has_public_key"`
 	Banned                  bool      `json:"banned"`
 	BannedReason            *string   `json:"banned_reason,omitempty"`
+	EnforceGroupAssignment  bool      `json:"enforce_group_assignment"`
 	CreatedAt               time.Time `json:"created_at"`
 }
 
@@ -44,6 +45,7 @@ type createClientRequest struct {
 	TokenEndpointAuthMethod *string  `json:"token_endpoint_auth_method,omitempty"`
 	PublicKeyPEM            *string  `json:"public_key_pem,omitempty"`
 	JWKSURI                 *string  `json:"jwks_uri,omitempty"`
+	EnforceGroupAssignment  bool     `json:"enforce_group_assignment,omitempty"`
 }
 
 type createClientResponse struct {
@@ -54,9 +56,10 @@ type createClientResponse struct {
 // patchClientRequest is the body for PATCH /oauth2/clients/{id}. Pointer
 // fields are absent when not changing; an explicit Banned=false unbans.
 type patchClientRequest struct {
-	Banned       *bool   `json:"banned,omitempty"`
-	BannedReason *string `json:"banned_reason,omitempty"`
-	PublicKeyPEM *string `json:"public_key_pem,omitempty"`
+	Banned                 *bool   `json:"banned,omitempty"`
+	BannedReason           *string `json:"banned_reason,omitempty"`
+	PublicKeyPEM           *string `json:"public_key_pem,omitempty"`
+	EnforceGroupAssignment *bool   `json:"enforce_group_assignment,omitempty"`
 }
 
 // toClientJSON converts a domain.OAuth2Client to its JSON shape.
@@ -74,6 +77,7 @@ func toClientJSON(c domain.OAuth2Client) clientJSON {
 		HasPublicKey:            c.PublicKeyPEM != nil && *c.PublicKeyPEM != "",
 		Banned:                  c.BannedAt != nil,
 		BannedReason:            c.BannedReason,
+		EnforceGroupAssignment:  c.EnforceGroupAssignment,
 		CreatedAt:               c.CreatedAt,
 	}
 }
@@ -132,6 +136,7 @@ func (p *oauth2Plugin) handleCreateClient(host plugin.PluginHost) http.HandlerFu
 			TokenEndpointAuthMethod: req.TokenEndpointAuthMethod,
 			PublicKeyPEM:            req.PublicKeyPEM,
 			JWKSURI:                 req.JWKSURI,
+			EnforceGroupAssignment:  req.EnforceGroupAssignment,
 		}
 		if err := host.Repo().CreateOAuth2Client(r.Context(), new); err != nil {
 			// writeOAuthError emits a JSON response body per RFC 6749 §5.2, not a SQL string.
@@ -215,6 +220,12 @@ func (p *oauth2Plugin) handlePatchClient(host plugin.PluginHost) http.HandlerFun
 		}
 		if req.PublicKeyPEM != nil {
 			if _, err := host.Repo().RotateOAuth2ClientPublicKey(r.Context(), id, req.PublicKeyPEM); err != nil {
+				writeOAuthError(w, "server_error", err.Error())
+				return
+			}
+		}
+		if req.EnforceGroupAssignment != nil {
+			if err := host.Repo().SetClientEnforceGroupAssignment(r.Context(), id, *req.EnforceGroupAssignment); err != nil {
 				writeOAuthError(w, "server_error", err.Error())
 				return
 			}

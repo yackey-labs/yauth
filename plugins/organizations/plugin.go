@@ -176,6 +176,18 @@ func (p *orgsPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux, prefix s
 	mux.Handle("POST "+prefix+"/organizations/{id}/api-keys/{key_id}/rotate", mw.RequireAuth(http.HandlerFunc(p.handleRotateOrgAPIKey(host, p.cfg.APIKeyPrefix))))
 	mux.Handle("GET "+prefix+"/organizations/{id}/api-keys/{key_id}/usage", mw.RequireAuth(http.HandlerFunc(p.handleOrgAPIKeyUsage(host))))
 
+	// Groups (yauth-go #groups): org-scoped named user collections, the
+	// backing store for SCIM Groups and OAuth2 client access enforcement.
+	// Reads are member-gated; mutations are admin-gated.
+	mux.Handle("GET "+prefix+"/organizations/{id}/groups", mw.RequireAuth(http.HandlerFunc(p.handleListGroups(host))))
+	mux.Handle("POST "+prefix+"/organizations/{id}/groups", mw.RequireAuth(http.HandlerFunc(p.handleCreateGroup(host))))
+	mux.Handle("GET "+prefix+"/organizations/{id}/groups/{gid}", mw.RequireAuth(http.HandlerFunc(p.handleGetGroup(host))))
+	mux.Handle("PATCH "+prefix+"/organizations/{id}/groups/{gid}", mw.RequireAuth(http.HandlerFunc(p.handlePatchGroup(host))))
+	mux.Handle("DELETE "+prefix+"/organizations/{id}/groups/{gid}", mw.RequireAuth(http.HandlerFunc(p.handleDeleteGroup(host))))
+	mux.Handle("GET "+prefix+"/organizations/{id}/groups/{gid}/members", mw.RequireAuth(http.HandlerFunc(p.handleListGroupMembers(host))))
+	mux.Handle("POST "+prefix+"/organizations/{id}/groups/{gid}/members", mw.RequireAuth(http.HandlerFunc(p.handleAddGroupMember(host))))
+	mux.Handle("DELETE "+prefix+"/organizations/{id}/groups/{gid}/members/{user_id}", mw.RequireAuth(http.HandlerFunc(p.handleRemoveGroupMember(host))))
+
 	// Per-org auth policy routes — yauth #92 / yauth-go #21. GET is
 	// member-gated (any active member can read the effective policy
 	// shape so the UI can render warnings about MFA / IP restrictions);

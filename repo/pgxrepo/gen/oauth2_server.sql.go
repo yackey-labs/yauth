@@ -307,7 +307,7 @@ func (q *Queries) GetDeviceCodeByUserCodePending(ctx context.Context, userCode s
 }
 
 const getOAuth2ClientByClientID = `-- name: GetOAuth2ClientByClientID :one
-SELECT id, client_id, client_secret_hash, redirect_uris, client_name, grant_types, scopes, is_public, created_at, token_endpoint_auth_method, public_key_pem, jwks_uri, banned_at, banned_reason FROM yauth_oauth2_clients WHERE client_id = $1 LIMIT 1
+SELECT id, client_id, client_secret_hash, redirect_uris, client_name, grant_types, scopes, is_public, created_at, token_endpoint_auth_method, public_key_pem, jwks_uri, banned_at, banned_reason, enforce_group_assignment FROM yauth_oauth2_clients WHERE client_id = $1 LIMIT 1
 `
 
 func (q *Queries) GetOAuth2ClientByClientID(ctx context.Context, clientID string) (YauthOauth2Client, error) {
@@ -328,6 +328,7 @@ func (q *Queries) GetOAuth2ClientByClientID(ctx context.Context, clientID string
 		&i.JwksUri,
 		&i.BannedAt,
 		&i.BannedReason,
+		&i.EnforceGroupAssignment,
 	)
 	return i, err
 }
@@ -349,7 +350,7 @@ func (q *Queries) GetOIDCNonceByHash(ctx context.Context, nonceHash string) (Yau
 }
 
 const listBannedOAuth2Clients = `-- name: ListBannedOAuth2Clients :many
-SELECT id, client_id, client_secret_hash, redirect_uris, client_name, grant_types, scopes, is_public, created_at, token_endpoint_auth_method, public_key_pem, jwks_uri, banned_at, banned_reason FROM yauth_oauth2_clients WHERE banned_at IS NOT NULL ORDER BY banned_at DESC
+SELECT id, client_id, client_secret_hash, redirect_uris, client_name, grant_types, scopes, is_public, created_at, token_endpoint_auth_method, public_key_pem, jwks_uri, banned_at, banned_reason, enforce_group_assignment FROM yauth_oauth2_clients WHERE banned_at IS NOT NULL ORDER BY banned_at DESC
 `
 
 func (q *Queries) ListBannedOAuth2Clients(ctx context.Context) ([]YauthOauth2Client, error) {
@@ -376,6 +377,7 @@ func (q *Queries) ListBannedOAuth2Clients(ctx context.Context) ([]YauthOauth2Cli
 			&i.JwksUri,
 			&i.BannedAt,
 			&i.BannedReason,
+			&i.EnforceGroupAssignment,
 		); err != nil {
 			return nil, err
 		}
@@ -420,7 +422,7 @@ const setOAuth2ClientBanned = `-- name: SetOAuth2ClientBanned :one
 UPDATE yauth_oauth2_clients
 SET banned_at = $2, banned_reason = $3
 WHERE client_id = $1
-RETURNING id, client_id, client_secret_hash, redirect_uris, client_name, grant_types, scopes, is_public, created_at, token_endpoint_auth_method, public_key_pem, jwks_uri, banned_at, banned_reason
+RETURNING id, client_id, client_secret_hash, redirect_uris, client_name, grant_types, scopes, is_public, created_at, token_endpoint_auth_method, public_key_pem, jwks_uri, banned_at, banned_reason, enforce_group_assignment
 `
 
 type SetOAuth2ClientBannedParams struct {
@@ -447,8 +449,26 @@ func (q *Queries) SetOAuth2ClientBanned(ctx context.Context, arg SetOAuth2Client
 		&i.JwksUri,
 		&i.BannedAt,
 		&i.BannedReason,
+		&i.EnforceGroupAssignment,
 	)
 	return i, err
+}
+
+const setOAuth2ClientEnforceGroupAssignment = `-- name: SetOAuth2ClientEnforceGroupAssignment :execrows
+UPDATE yauth_oauth2_clients SET enforce_group_assignment = $2 WHERE client_id = $1
+`
+
+type SetOAuth2ClientEnforceGroupAssignmentParams struct {
+	ClientID               string
+	EnforceGroupAssignment bool
+}
+
+func (q *Queries) SetOAuth2ClientEnforceGroupAssignment(ctx context.Context, arg SetOAuth2ClientEnforceGroupAssignmentParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setOAuth2ClientEnforceGroupAssignment, arg.ClientID, arg.EnforceGroupAssignment)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const updateConsentScopes = `-- name: UpdateConsentScopes :execrows

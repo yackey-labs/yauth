@@ -1,0 +1,50 @@
+package bearer
+
+// Group repository stubs so *fakeRepo satisfies repo.Repository. This package's
+// tests don't exercise groups; tests that do use repo/memrepo instead.
+
+import (
+	"context"
+	"time"
+
+	"github.com/yackey-labs/yauth-go/domain"
+	"github.com/yackey-labs/yauth-go/yautherr"
+)
+
+func (*fakeRepo) CreateGroup(context.Context, domain.NewGroup) (domain.Group, error) {
+	return domain.Group{}, nil
+}
+func (*fakeRepo) GetGroupByID(context.Context, string) (*domain.Group, error) {
+	return nil, yautherr.ErrNotFound
+}
+func (*fakeRepo) GetGroupByOrgAndName(context.Context, string, string) (*domain.Group, error) {
+	return nil, yautherr.ErrNotFound
+}
+func (*fakeRepo) GetGroupByOrgAndExternalID(context.Context, string, string) (*domain.Group, error) {
+	return nil, yautherr.ErrNotFound
+}
+func (*fakeRepo) ListGroupsByOrg(context.Context, string) ([]*domain.Group, error) { return nil, nil }
+func (*fakeRepo) UpdateGroup(context.Context, string, domain.UpdateGroup) (domain.Group, error) {
+	return domain.Group{}, yautherr.ErrNotFound
+}
+func (*fakeRepo) DeleteGroup(context.Context, string) error                       { return nil }
+func (*fakeRepo) AddGroupMember(context.Context, string, string, time.Time) error { return nil }
+func (*fakeRepo) RemoveGroupMember(context.Context, string, string) error         { return nil }
+func (*fakeRepo) ListGroupMembers(context.Context, string) ([]*domain.User, error) {
+	return nil, nil
+}
+func (*fakeRepo) ListGroupsForUser(context.Context, string, string) ([]*domain.Group, error) {
+	return nil, nil
+}
+func (*fakeRepo) IsGroupMember(context.Context, string, string) (bool, error) { return false, nil }
+func (*fakeRepo) AssignClientGroup(context.Context, string, string, time.Time) error {
+	return nil
+}
+func (*fakeRepo) UnassignClientGroup(context.Context, string, string) error { return nil }
+func (*fakeRepo) ListClientGroups(context.Context, string) ([]*domain.Group, error) {
+	return nil, nil
+}
+func (*fakeRepo) UserInAssignedGroup(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+func (*fakeRepo) SetClientEnforceGroupAssignment(context.Context, string, bool) error { return nil }

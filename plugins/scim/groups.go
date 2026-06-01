@@ -3,70 +3,42 @@ package scim
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/yackey-labs/yauth-go/auth"
+	"github.com/google/uuid"
+
 	"github.com/yackey-labs/yauth-go/domain"
 	"github.com/yackey-labs/yauth-go/plugin"
+	"github.com/yackey-labs/yauth-go/yautherr"
 )
 
-// groups.go — SCIM /Groups endpoints.
-//
-// yauth-go doesn't have a first-class Group entity; org membership is a
-// (user, org, role) triple. We expose SCIM Groups as virtual role
-// buckets — one Group per built-in role per org. A future PR can layer
-// a real Group entity on top if a customer requires it.
-//
-// Group id encoding: `role:<role_name>` (e.g. `role:admin`). Stable
-// across reboots; unique per org because the URL path already scopes by
-// org.
+// groups.go — SCIM /Groups endpoints backed by first-class groups
+// (yauth_groups). A SCIM Group maps 1:1 to a domain.Group: displayName ->
+// Name, externalId -> ExternalID, members -> group membership. Groups are
+// independent of the org role (owner/admin/member): membership here models
+// access, not administration.
 
-const groupIDPrefix = "role:"
-
-func roleToGroupID(role string) string { return groupIDPrefix + role }
-func groupIDToRole(gid string) (string, bool) {
-	r, ok := strings.CutPrefix(gid, groupIDPrefix)
-	return r, ok
-}
-
-// knownRoles returns the canonical role list in priority order.
-func knownRoles() []string {
-	return auth.BuiltinRoles
-}
-
-func groupMeta(baseURL, orgID, groupID string) *ResourceMeta {
+func groupMeta(baseURL, orgID, groupID string, created, updated time.Time) *ResourceMeta {
 	base := strings.TrimRight(baseURL, "/")
-	now := isoUTC(time.Now().UTC())
 	return &ResourceMeta{
 		ResourceType: "Group",
-		Created:      now,
-		LastModified: now,
+		Created:      isoUTC(created),
+		LastModified: isoUTC(updated),
 		Location:     base + "/api/scim/v2/organizations/" + orgID + "/Groups/" + groupID,
 	}
 }
 
-// projectGroup builds a Group response for the named built-in role,
-// listing every active membership in that role as a member.
-func projectGroup(ctx context.Context, host plugin.PluginHost, baseURL, orgID, role string) (ScimGroup, *ScimResponseError) {
-	memberships, err := host.Repo().ListMembershipsByOrg(ctx, orgID)
+func projectGroup(ctx context.Context, host plugin.PluginHost, baseURL, orgID string, g *domain.Group) (ScimGroup, *ScimResponseError) {
+	users, err := host.Repo().ListGroupMembers(ctx, g.ID)
 	if err != nil {
 		return ScimGroup{}, repoToScim(err)
 	}
-	members := make([]ScimGroupMember, 0)
-	for _, m := range memberships {
-		if m == nil {
-			continue
-		}
-		if !strings.EqualFold(m.Role, role) || m.Status != domain.MembershipActive {
-			continue
-		}
-		u, err := host.Repo().GetUserByID(ctx, m.UserID)
-		if err != nil || u == nil {
-			continue
-		}
+	members := make([]ScimGroupMember, 0, len(users))
+	for _, u := range users {
 		display := u.Email
 		if u.DisplayName != nil && *u.DisplayName != "" {
 			display = *u.DisplayName
@@ -78,14 +50,47 @@ func projectGroup(ctx context.Context, host plugin.PluginHost, baseURL, orgID, r
 			Ref:     "/api/scim/v2/organizations/" + orgID + "/Users/" + u.ID,
 		})
 	}
-	id := roleToGroupID(role)
+	ext := ""
+	if g.ExternalID != nil {
+		ext = *g.ExternalID
+	}
 	return ScimGroup{
-		ID:          id,
+		ID:          g.ID,
 		Schemas:     []string{CoreGroupSchema},
-		DisplayName: role,
+		ExternalID:  ext,
+		DisplayName: g.Name,
 		Members:     members,
-		Meta:        groupMeta(baseURL, orgID, id),
+		Meta:        groupMeta(baseURL, orgID, g.ID, g.CreatedAt, g.UpdatedAt),
 	}, nil
+}
+
+// loadOrgGroup fetches a group and verifies it belongs to orgID, returning a
+// SCIM 404 otherwise (so cross-org existence isn't leaked).
+func loadOrgGroup(ctx context.Context, host plugin.PluginHost, orgID, groupID string) (*domain.Group, *ScimResponseError) {
+	g, err := host.Repo().GetGroupByID(ctx, groupID)
+	if err != nil {
+		if errors.Is(err, yautherr.ErrNotFound) {
+			return nil, NotFound("group does not exist")
+		}
+		return nil, repoToScim(err)
+	}
+	if g.OrganizationID != orgID {
+		return nil, NotFound("group does not exist")
+	}
+	return g, nil
+}
+
+// addMemberIfOrgMember adds userID to the group only when the user belongs to
+// the org (group membership ⊆ org membership). Non-members are skipped.
+func addMemberIfOrgMember(ctx context.Context, host plugin.PluginHost, orgID, groupID, userID string, now time.Time) {
+	if strings.TrimSpace(userID) == "" {
+		return
+	}
+	m, err := host.Repo().GetMembershipByOrgUser(ctx, orgID, userID)
+	if err != nil || m == nil {
+		return
+	}
+	_ = host.Repo().AddGroupMember(ctx, groupID, userID, now)
 }
 
 // ============================================================================
@@ -108,40 +113,55 @@ func (p *scimPlugin) handleCreateGroup(host plugin.PluginHost) http.HandlerFunc 
 			writeScimError(w, &ScimResponseError{Status: http.StatusBadRequest, Body: *eb})
 			return
 		}
-		if strings.TrimSpace(payload.DisplayName) == "" {
+		name := strings.TrimSpace(payload.DisplayName)
+		if name == "" {
 			writeScimError(w, BadRequest("displayName required"))
 			return
 		}
-		name := strings.ToLower(strings.TrimSpace(payload.DisplayName))
-		if !auth.IsBuiltinRole(name) {
-			writeScimError(w, BadRequest("yauth supports only built-in role names as groups; got "+name))
+		now := time.Now().UTC()
+
+		// Idempotency: a group with this externalId already exists → return it.
+		if payload.ExternalID != "" {
+			if existing, err := host.Repo().GetGroupByOrgAndExternalID(r.Context(), orgID, payload.ExternalID); err == nil {
+				out, scimErr := projectGroup(r.Context(), host, host.BaseURL(), orgID, existing)
+				if scimErr != nil {
+					writeScimError(w, scimErr)
+					return
+				}
+				writeScimJSON(w, http.StatusOK, out)
+				return
+			}
+		}
+
+		var ext *string
+		if payload.ExternalID != "" {
+			ext = &payload.ExternalID
+		}
+		g, err := host.Repo().CreateGroup(r.Context(), domain.NewGroup{
+			ID:             uuid.NewString(),
+			OrganizationID: orgID,
+			Name:           name,
+			ExternalID:     ext,
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		})
+		if err != nil {
+			if errors.Is(err, yautherr.ErrConflict) {
+				writeScimError(w, Conflict("a group with that displayName or externalId already exists"))
+				return
+			}
+			writeScimError(w, repoToScim(err))
 			return
 		}
-		// Apply incoming members — flip each membership to this role.
-		now := time.Now().UTC()
 		for _, m := range payload.Members {
-			if m.Value == "" {
-				continue
-			}
-			mem, err := host.Repo().GetMembershipByOrgUser(r.Context(), orgID, m.Value)
-			if err != nil || mem == nil {
-				continue
-			}
-			active := domain.MembershipActive
-			role := name
-			updatedAt := now
-			_, _ = host.Repo().UpdateMembership(r.Context(), mem.ID, domain.UpdateMembership{
-				Role:      &role,
-				Status:    &active,
-				UpdatedAt: &updatedAt,
-			})
+			addMemberIfOrgMember(r.Context(), host, orgID, g.ID, m.Value, now)
 		}
-		out, scimErr := projectGroup(r.Context(), host, host.BaseURL(), orgID, name)
+		out, scimErr := projectGroup(r.Context(), host, host.BaseURL(), orgID, &g)
 		if scimErr != nil {
 			writeScimError(w, scimErr)
 			return
 		}
-		writeScimJSON(w, http.StatusOK, out)
+		writeScimJSON(w, http.StatusCreated, out)
 	}
 }
 
@@ -179,9 +199,14 @@ func (p *scimPlugin) handleListGroups(host plugin.PluginHost) http.HandlerFunc {
 		}
 		start, count := clampPagination(startPtr, countPtr)
 
-		groups := make([]ScimGroup, 0, len(knownRoles()))
-		for _, role := range knownRoles() {
-			g, scimErr := projectGroup(r.Context(), host, host.BaseURL(), orgID, role)
+		all, err := host.Repo().ListGroupsByOrg(r.Context(), orgID)
+		if err != nil {
+			writeScimError(w, repoToScim(err))
+			return
+		}
+		groups := make([]ScimGroup, 0, len(all))
+		for _, g := range all {
+			sg, scimErr := projectGroup(r.Context(), host, host.BaseURL(), orgID, g)
 			if scimErr != nil {
 				writeScimError(w, scimErr)
 				return
@@ -190,9 +215,11 @@ func (p *scimPlugin) handleListGroups(host plugin.PluginHost) http.HandlerFunc {
 				matched := parsed.Matches(func(a FilterAtom) bool {
 					switch strings.ToLower(a.Attr) {
 					case "displayname":
-						return a.Value.MatchesString(a.Op, g.DisplayName)
+						return a.Value.MatchesString(a.Op, sg.DisplayName)
+					case "externalid":
+						return a.Value.MatchesString(a.Op, sg.ExternalID)
 					case "id":
-						return a.Value.MatchesString(a.Op, g.ID)
+						return a.Value.MatchesString(a.Op, sg.ID)
 					}
 					return false
 				})
@@ -200,7 +227,7 @@ func (p *scimPlugin) handleListGroups(host plugin.PluginHost) http.HandlerFunc {
 					continue
 				}
 			}
-			groups = append(groups, g)
+			groups = append(groups, sg)
 		}
 		total := len(groups)
 		skip := start - 1
@@ -228,16 +255,12 @@ func (p *scimPlugin) handleGetGroup(host plugin.PluginHost) http.HandlerFunc {
 			writeScimError(w, scimErr)
 			return
 		}
-		role, ok := groupIDToRole(gid)
-		if !ok {
-			writeScimError(w, NotFound("group id must have form role:<name>"))
+		g, scimErr := loadOrgGroup(r.Context(), host, orgID, gid)
+		if scimErr != nil {
+			writeScimError(w, scimErr)
 			return
 		}
-		if !auth.IsBuiltinRole(strings.ToLower(role)) {
-			writeScimError(w, NotFound("group does not exist"))
-			return
-		}
-		out, scimErr := projectGroup(r.Context(), host, host.BaseURL(), orgID, role)
+		out, scimErr := projectGroup(r.Context(), host, host.BaseURL(), orgID, g)
 		if scimErr != nil {
 			writeScimError(w, scimErr)
 			return
@@ -247,7 +270,7 @@ func (p *scimPlugin) handleGetGroup(host plugin.PluginHost) http.HandlerFunc {
 }
 
 // ============================================================================
-// PUT /Groups/{group_id}
+// PUT /Groups/{group_id} — replace (displayName + full member set)
 // ============================================================================
 
 func (p *scimPlugin) handlePutGroup(host plugin.PluginHost) http.HandlerFunc {
@@ -255,6 +278,11 @@ func (p *scimPlugin) handlePutGroup(host plugin.PluginHost) http.HandlerFunc {
 		orgID := r.PathValue("org_id")
 		gid := r.PathValue("group_id")
 		if _, scimErr := authenticate(r.Context(), host, requestAuthHeader(r), orgID, p.cfg.APIKeyPrefix); scimErr != nil {
+			writeScimError(w, scimErr)
+			return
+		}
+		g, scimErr := loadOrgGroup(r.Context(), host, orgID, gid)
+		if scimErr != nil {
 			writeScimError(w, scimErr)
 			return
 		}
@@ -267,54 +295,53 @@ func (p *scimPlugin) handlePutGroup(host plugin.PluginHost) http.HandlerFunc {
 			writeScimError(w, &ScimResponseError{Status: http.StatusBadRequest, Body: *eb})
 			return
 		}
-		role, ok := groupIDToRole(gid)
-		if !ok || !auth.IsBuiltinRole(strings.ToLower(role)) {
-			writeScimError(w, NotFound("group does not exist"))
-			return
-		}
 		now := time.Now().UTC()
-		memberships, err := host.Repo().ListMembershipsByOrg(r.Context(), orgID)
+
+		// Update displayName / externalId.
+		changes := domain.UpdateGroup{}
+		if name := strings.TrimSpace(payload.DisplayName); name != "" {
+			changes.Name = &name
+		}
+		if payload.ExternalID != "" {
+			changes.ExternalID = &payload.ExternalID
+		}
+		if changes.Name != nil || changes.ExternalID != nil {
+			if updated, err := host.Repo().UpdateGroup(r.Context(), g.ID, changes); err == nil {
+				g = &updated
+			} else if errors.Is(err, yautherr.ErrConflict) {
+				writeScimError(w, Conflict("a group with that displayName or externalId already exists"))
+				return
+			} else {
+				writeScimError(w, repoToScim(err))
+				return
+			}
+		}
+
+		// Replace the member set: add target∖current, remove current∖target.
+		target := make(map[string]struct{}, len(payload.Members))
+		for _, m := range payload.Members {
+			if m.Value != "" {
+				target[m.Value] = struct{}{}
+			}
+		}
+		current, err := host.Repo().ListGroupMembers(r.Context(), g.ID)
 		if err != nil {
 			writeScimError(w, repoToScim(err))
 			return
 		}
-		// Target set of user ids the payload says should be members of
-		// this group.
-		target := make(map[string]struct{}, len(payload.Members))
-		for _, m := range payload.Members {
-			if m.Value == "" {
-				continue
-			}
-			target[m.Value] = struct{}{}
-		}
-		// Walk memberships: those in target get promoted to `role`;
-		// those currently in `role` but not in target get demoted to
-		// MEMBER (yauth has no "ungrouped" state — demote is the
-		// safest interpretation).
-		for _, m := range memberships {
-			if m == nil {
-				continue
-			}
-			_, inTarget := target[m.UserID]
-			updatedAt := now
-			switch {
-			case inTarget && !strings.EqualFold(m.Role, role):
-				active := domain.MembershipActive
-				roleS := role
-				_, _ = host.Repo().UpdateMembership(r.Context(), m.ID, domain.UpdateMembership{
-					Role:      &roleS,
-					Status:    &active,
-					UpdatedAt: &updatedAt,
-				})
-			case !inTarget && strings.EqualFold(m.Role, role):
-				member := auth.RoleMember
-				_, _ = host.Repo().UpdateMembership(r.Context(), m.ID, domain.UpdateMembership{
-					Role:      &member,
-					UpdatedAt: &updatedAt,
-				})
+		currentSet := make(map[string]struct{}, len(current))
+		for _, u := range current {
+			currentSet[u.ID] = struct{}{}
+			if _, keep := target[u.ID]; !keep {
+				_ = host.Repo().RemoveGroupMember(r.Context(), g.ID, u.ID)
 			}
 		}
-		out, scimErr := projectGroup(r.Context(), host, host.BaseURL(), orgID, role)
+		for uid := range target {
+			if _, exists := currentSet[uid]; !exists {
+				addMemberIfOrgMember(r.Context(), host, orgID, g.ID, uid, now)
+			}
+		}
+		out, scimErr := projectGroup(r.Context(), host, host.BaseURL(), orgID, g)
 		if scimErr != nil {
 			writeScimError(w, scimErr)
 			return
@@ -335,6 +362,11 @@ func (p *scimPlugin) handlePatchGroup(host plugin.PluginHost) http.HandlerFunc {
 			writeScimError(w, scimErr)
 			return
 		}
+		g, scimErr := loadOrgGroup(r.Context(), host, orgID, gid)
+		if scimErr != nil {
+			writeScimError(w, scimErr)
+			return
+		}
 		var payload PatchOp
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			writeScimError(w, BadRequest("invalid JSON body"))
@@ -344,33 +376,31 @@ func (p *scimPlugin) handlePatchGroup(host plugin.PluginHost) http.HandlerFunc {
 			writeScimError(w, &ScimResponseError{Status: http.StatusBadRequest, Body: *eb})
 			return
 		}
-		role, ok := groupIDToRole(gid)
-		if !ok || !auth.IsBuiltinRole(strings.ToLower(role)) {
-			writeScimError(w, NotFound("group does not exist"))
-			return
-		}
 		now := time.Now().UTC()
 		for _, op := range payload.Operations {
 			opLC := strings.ToLower(op.Op)
 			pathLC := strings.ToLower(strings.TrimSpace(op.Path))
 			switch {
-			case opLC == "add" && pathLC == "members":
+			case (opLC == "add" || opLC == "replace") && pathLC == "members":
 				var arr []map[string]json.RawMessage
 				if err := json.Unmarshal(op.Value, &arr); err == nil {
+					if opLC == "replace" {
+						// Replace the whole set: clear current first.
+						if current, err := host.Repo().ListGroupMembers(r.Context(), g.ID); err == nil {
+							for _, u := range current {
+								_ = host.Repo().RemoveGroupMember(r.Context(), g.ID, u.ID)
+							}
+						}
+					}
 					for _, entry := range arr {
 						var val string
 						if v, ok := entry["value"]; ok {
 							_ = json.Unmarshal(v, &val)
 						}
-						if val == "" {
-							continue
-						}
-						promoteMember(r.Context(), host, orgID, val, role, now)
+						addMemberIfOrgMember(r.Context(), host, orgID, g.ID, val, now)
 					}
 				}
 			case opLC == "remove" && strings.HasPrefix(pathLC, "members"):
-				// Two shapes IdPs send: value=[{value:...}] OR path
-				// like `members[value eq "<uuid>"]`.
 				if len(op.Value) > 0 {
 					var arr []map[string]json.RawMessage
 					if err := json.Unmarshal(op.Value, &arr); err == nil {
@@ -379,25 +409,28 @@ func (p *scimPlugin) handlePatchGroup(host plugin.PluginHost) http.HandlerFunc {
 							if v, ok := entry["value"]; ok {
 								_ = json.Unmarshal(v, &val)
 							}
-							if val == "" {
-								continue
+							if val != "" {
+								_ = host.Repo().RemoveGroupMember(r.Context(), g.ID, val)
 							}
-							demoteMember(r.Context(), host, orgID, val, now)
 						}
 					}
 				}
 				if needle := parseMemberFilterEq(op.Path); needle != "" {
-					demoteMember(r.Context(), host, orgID, needle, now)
+					_ = host.Repo().RemoveGroupMember(r.Context(), g.ID, needle)
 				}
 			case opLC == "replace" && pathLC == "displayname":
-				// Renaming a built-in role is rejected — would break
-				// RBAC. Tolerate but ignore (some IdPs send a redundant
-				// PATCH-displayName).
+				var name string
+				if err := json.Unmarshal(op.Value, &name); err == nil && strings.TrimSpace(name) != "" {
+					trimmed := strings.TrimSpace(name)
+					if updated, err := host.Repo().UpdateGroup(r.Context(), g.ID, domain.UpdateGroup{Name: &trimmed}); err == nil {
+						g = &updated
+					}
+				}
 			default:
 				// Unknown ops on Groups are tolerated.
 			}
 		}
-		out, scimErr := projectGroup(r.Context(), host, host.BaseURL(), orgID, role)
+		out, scimErr := projectGroup(r.Context(), host, host.BaseURL(), orgID, g)
 		if scimErr != nil {
 			writeScimError(w, scimErr)
 			return
@@ -406,8 +439,8 @@ func (p *scimPlugin) handlePatchGroup(host plugin.PluginHost) http.HandlerFunc {
 	}
 }
 
-// parseMemberFilterEq extracts the value from
-// `members[value eq "<uuid>"]`. Returns "" if the path does not match.
+// parseMemberFilterEq extracts the value from `members[value eq "<uuid>"]`.
+// Returns "" if the path does not match.
 func parseMemberFilterEq(path string) string {
 	const marker = "value eq \""
 	idx := strings.Index(path, marker)
@@ -422,41 +455,10 @@ func parseMemberFilterEq(path string) string {
 	return rest[:end]
 }
 
-func promoteMember(ctx context.Context, host plugin.PluginHost, orgID, userID, role string, now time.Time) {
-	m, err := host.Repo().GetMembershipByOrgUser(ctx, orgID, userID)
-	if err != nil || m == nil {
-		return
-	}
-	active := domain.MembershipActive
-	roleS := role
-	updatedAt := now
-	_, _ = host.Repo().UpdateMembership(ctx, m.ID, domain.UpdateMembership{
-		Role:      &roleS,
-		Status:    &active,
-		UpdatedAt: &updatedAt,
-	})
-}
-
-func demoteMember(ctx context.Context, host plugin.PluginHost, orgID, userID string, now time.Time) {
-	m, err := host.Repo().GetMembershipByOrgUser(ctx, orgID, userID)
-	if err != nil || m == nil {
-		return
-	}
-	member := auth.RoleMember
-	updatedAt := now
-	_, _ = host.Repo().UpdateMembership(ctx, m.ID, domain.UpdateMembership{
-		Role:      &member,
-		UpdatedAt: &updatedAt,
-	})
-}
-
 // ============================================================================
 // DELETE /Groups/{group_id}
 // ============================================================================
 
-// DELETE on a built-in role is meaningless — the role taxonomy is
-// fixed. We mirror the Rust semantics: treat it as "demote every
-// member of this role to MEMBER" and return 204.
 func (p *scimPlugin) handleDeleteGroup(host plugin.PluginHost) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		orgID := r.PathValue("org_id")
@@ -465,27 +467,14 @@ func (p *scimPlugin) handleDeleteGroup(host plugin.PluginHost) http.HandlerFunc 
 			writeScimError(w, scimErr)
 			return
 		}
-		role, ok := groupIDToRole(gid)
-		if !ok || !auth.IsBuiltinRole(strings.ToLower(role)) {
-			writeScimError(w, NotFound("group does not exist"))
+		g, scimErr := loadOrgGroup(r.Context(), host, orgID, gid)
+		if scimErr != nil {
+			writeScimError(w, scimErr)
 			return
 		}
-		now := time.Now().UTC()
-		memberships, err := host.Repo().ListMembershipsByOrg(r.Context(), orgID)
-		if err != nil {
+		if err := host.Repo().DeleteGroup(r.Context(), g.ID); err != nil {
 			writeScimError(w, repoToScim(err))
 			return
-		}
-		for _, m := range memberships {
-			if m == nil || !strings.EqualFold(m.Role, role) {
-				continue
-			}
-			member := auth.RoleMember
-			updatedAt := now
-			_, _ = host.Repo().UpdateMembership(r.Context(), m.ID, domain.UpdateMembership{
-				Role:      &member,
-				UpdatedAt: &updatedAt,
-			})
 		}
 		writeScimNoContent(w)
 	}

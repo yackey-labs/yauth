@@ -14,6 +14,7 @@ import (
 	"github.com/yackey-labs/yauth-go/auth"
 	"github.com/yackey-labs/yauth-go/domain"
 	"github.com/yackey-labs/yauth-go/plugin"
+	"github.com/yackey-labs/yauth-go/yautherr"
 )
 
 // dcrRegisterRequest is the RFC 7591 §2 client metadata accepted by
@@ -67,17 +68,18 @@ func writeDCRError(w http.ResponseWriter, status int, code, desc string) {
 }
 
 // handleDCRRegister implements RFC 7591 §3.1 dynamic client registration.
-// The endpoint is mounted only when Config.DCREnabled is true; the
-// initial-access-token check is enforced when DCRRequireInitialAccessToken
-// resolves to true.
+// The endpoint is mounted only when Config.DCREnabled is true.
+//
+// Authentication is enforced per-request by this handler (it runs
+// unwrapped, not behind RequireAdmin) so it can apply the split policy
+// after reading the body: a public client with only loopback redirect
+// URIs may register anonymously, while any other shape requires an
+// administrator. See the Config.DCREnabled doc for the rationale.
 //
 // prefix is the path prefix the YAuth router was mounted under, used to
 // build registration_client_uri.
 func (p *oauth2Plugin) handleDCRRegister(host plugin.PluginHost, prefix string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Authentication is enforced by the RequireAdmin middleware wrapping
-		// this handler in Routes(). No additional token check is needed here.
-
 		var req dcrRegisterRequest
 		r.Body = http.MaxBytesReader(nil, r.Body, 1<<20)
 		dec := json.NewDecoder(r.Body)
@@ -90,6 +92,7 @@ func (p *oauth2Plugin) handleDCRRegister(host plugin.PluginHost, prefix string) 
 			writeDCRError(w, http.StatusBadRequest, "invalid_redirect_uri", "redirect_uris is required")
 			return
 		}
+		allLoopback := true
 		for _, u := range req.RedirectURIs {
 			if u == "" || strings.ContainsAny(u, " \t\n\r") {
 				writeDCRError(w, http.StatusBadRequest, "invalid_redirect_uri", "redirect_uris must be non-empty URIs without whitespace")
@@ -98,6 +101,9 @@ func (p *oauth2Plugin) handleDCRRegister(host plugin.PluginHost, prefix string) 
 			if reason := redirectURISchemeReason(u); reason != "" {
 				writeDCRError(w, http.StatusBadRequest, "invalid_redirect_uri", reason)
 				return
+			}
+			if !redirectURIIsLoopback(u) {
+				allLoopback = false
 			}
 		}
 
@@ -135,6 +141,25 @@ func (p *oauth2Plugin) handleDCRRegister(host plugin.PluginHost, prefix string) 
 		}
 
 		isPublic := authMethod == "none"
+
+		// Registration policy (see Config.DCREnabled): a public client whose
+		// redirect_uris are all loopback may self-register anonymously — the
+		// authorization code can only ever be delivered to the caller's own
+		// host, which closes the redirect-phishing vector. Every other shape
+		// (a non-loopback redirect, or a confidential client) is gated behind
+		// an authenticated administrator, as is the loopback case itself when
+		// the operator sets DCRRequireAdminForLoopback.
+		anonymousAllowed := isPublic && allLoopback && !p.cfg.DCRRequireAdminForLoopback
+		if !anonymousAllowed {
+			if _, err := host.Middleware().ResolveAdmin(r); err != nil {
+				if errors.Is(err, yautherr.ErrForbidden) {
+					writeDCRError(w, http.StatusForbidden, "access_denied", "administrator privileges are required to register this client; a public client restricted to loopback redirect_uris may register without authentication")
+					return
+				}
+				writeDCRError(w, http.StatusUnauthorized, "invalid_token", "authentication is required to register this client; a public client restricted to loopback redirect_uris may register without authentication")
+				return
+			}
+		}
 
 		clientID, err := randomHex(16)
 		if err != nil {
@@ -244,6 +269,20 @@ func redirectURISchemeReason(raw string) string {
 // isLoopbackHost reports whether host is a loopback address per RFC 8252 §7.3.
 func isLoopbackHost(host string) bool {
 	return host == "localhost" || host == "127.0.0.1" || host == "::1"
+}
+
+// redirectURIIsLoopback reports whether raw parses to a redirect_uri whose
+// host is loopback (localhost / 127.0.0.1 / ::1). It is deliberately
+// conservative: anything that fails to parse, or whose host is not an exact
+// loopback literal, is treated as non-loopback so it falls to the
+// admin-gated registration path. Scheme validity is handled separately by
+// redirectURISchemeReason.
+func redirectURIIsLoopback(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	return isLoopbackHost(u.Hostname())
 }
 
 // signRegistrationAccessToken mints a short-lived JWT scoped to

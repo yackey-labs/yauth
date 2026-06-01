@@ -29,13 +29,21 @@ type dcrHarness struct {
 }
 
 // newDCRHarness builds a yauth + oauth2server stack with DCR enabled.
-// The DCR endpoint is gated behind RequireAdmin — use adminCookie() to
-// obtain an admin session for registration calls.
+// Under the default policy a public, loopback-only client may register
+// anonymously; other shapes need adminCookie(). Pass dcrEnabled=false to
+// exercise the disabled (404) path.
 func newDCRHarness(t *testing.T, dcrEnabled bool) *dcrHarness {
 	return newDCRHarnessFull(t, dcrEnabled, false)
 }
 
 func newDCRHarnessFull(t *testing.T, dcrEnabled bool, allowConfidential bool) *dcrHarness {
+	return newDCRHarnessCustom(t, dcrEnabled, allowConfidential, false)
+}
+
+// newDCRHarnessCustom additionally sets DCRRequireAdminForLoopback, which
+// disables anonymous loopback registration so every POST /oauth/register
+// requires an admin.
+func newDCRHarnessCustom(t *testing.T, dcrEnabled, allowConfidential, requireAdminForLoopback bool) *dcrHarness {
 	t.Helper()
 	dsn := "file:" + uuid.NewString() + "?mode=memory&cache=shared&_pragma=foreign_keys(1)"
 	db, err := gormrepo.OpenSQLite(dsn)
@@ -55,6 +63,7 @@ func newDCRHarnessFull(t *testing.T, dcrEnabled bool, allowConfidential bool) *d
 		AuthCodeTTL:                 1 * time.Minute,
 		DCREnabled:                  dcrEnabled,
 		DCRAllowConfidentialClients: allowConfidential,
+		DCRRequireAdminForLoopback:  requireAdminForLoopback,
 	}
 
 	ya, err := yauth.New(r, yauth.NewDefaultConfig()).
@@ -359,6 +368,111 @@ func TestDCR_LoopbackHTTPRedirect_Allowed(t *testing.T) {
 	status, b := h.register(t, regBody, h.adminCookie(t))
 	if status != http.StatusCreated {
 		t.Fatalf("expected 201 for loopback http, got %d body=%v", status, b)
+	}
+}
+
+func TestDCR_AnonymousLoopbackPublic_Allowed(t *testing.T) {
+	h := newDCRHarness(t, true)
+	// Public client, loopback-only redirect, NO credentials — the safe
+	// subset that local MCP / native-app clients (e.g. Claude Code) rely on
+	// to self-register with an ephemeral callback port.
+	body := `{"redirect_uris":["http://127.0.0.1:53517/callback"],"token_endpoint_auth_method":"none"}`
+	status, b := h.register(t, body, "")
+	if status != http.StatusCreated {
+		t.Fatalf("expected 201 for anonymous loopback public client, got %d body=%v", status, b)
+	}
+	if _, hasSecret := b["client_secret"]; hasSecret {
+		t.Fatalf("public client must not receive a client_secret: %v", b)
+	}
+}
+
+func TestDCR_AnonymousNonLoopback_Returns401_WithJSONError(t *testing.T) {
+	h := newDCRHarness(t, true)
+	// A non-loopback redirect without credentials must be rejected — and the
+	// body must be a JSON OAuth error (not RequireAdmin's plain text) so MCP
+	// SDKs can parse it as an OAuth error response.
+	body := `{"redirect_uris":["https://app.example/cb"],"token_endpoint_auth_method":"none"}`
+	status, b := h.register(t, body, "")
+	if status != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for anonymous non-loopback, got %d body=%v", status, b)
+	}
+	if b["error"] != "invalid_token" {
+		t.Fatalf("expected JSON error invalid_token, got %v body=%v", b["error"], b)
+	}
+}
+
+func TestDCR_AnonymousMixedLoopbackAndRemote_Returns401(t *testing.T) {
+	h := newDCRHarness(t, true)
+	// One loopback + one non-loopback redirect → not all-loopback → the
+	// conservative path requires an admin.
+	body := `{"redirect_uris":["http://127.0.0.1:9000/cb","https://app.example/cb"],"token_endpoint_auth_method":"none"}`
+	status, b := h.register(t, body, "")
+	if status != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for mixed loopback+remote redirects, got %d body=%v", status, b)
+	}
+}
+
+func TestDCR_AnonymousLoopbackConfidential_RequiresAdmin(t *testing.T) {
+	// Even where confidential DCR is allowed, a confidential client is never
+	// in the anonymous subset: loopback or not, it needs an admin.
+	h := newDCRHarnessFull(t, true, true)
+	body := `{"redirect_uris":["http://127.0.0.1:9000/cb"],"token_endpoint_auth_method":"client_secret_basic"}`
+	status, b := h.register(t, body, "")
+	if status != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for anonymous confidential client, got %d body=%v", status, b)
+	}
+	status, b = h.register(t, body, h.adminCookie(t))
+	if status != http.StatusCreated {
+		t.Fatalf("expected 201 for admin-registered confidential client, got %d body=%v", status, b)
+	}
+}
+
+func TestDCR_RequireAdminForLoopback_RestoresStrictGate(t *testing.T) {
+	h := newDCRHarnessCustom(t, true, false, true) // requireAdminForLoopback=true
+	body := `{"redirect_uris":["http://127.0.0.1:9000/cb"],"token_endpoint_auth_method":"none"}`
+	status, b := h.register(t, body, "")
+	if status != http.StatusUnauthorized {
+		t.Fatalf("expected 401 with DCRRequireAdminForLoopback, got %d body=%v", status, b)
+	}
+	status, b = h.register(t, body, h.adminCookie(t))
+	if status != http.StatusCreated {
+		t.Fatalf("expected 201 for admin loopback register, got %d body=%v", status, b)
+	}
+}
+
+func TestDCR_AnonymousLoopback_Then_AuthCodePKCE_EndToEnd(t *testing.T) {
+	h := newDCRHarness(t, true)
+	_, userCookie := h.seedUser(t, "mcp-user@idp.test", "user")
+	const redirect = "http://127.0.0.1:53517/callback"
+
+	// Register anonymously (no admin) — the Claude-Code-style flow — then
+	// complete authorization-code + PKCE with the resulting public client.
+	regBody := `{"redirect_uris":["` + redirect + `"],"token_endpoint_auth_method":"none","scope":"read"}`
+	status, b := h.register(t, regBody, "")
+	if status != http.StatusCreated {
+		t.Fatalf("anonymous register: %d %v", status, b)
+	}
+	clientID, _ := b["client_id"].(string)
+	if clientID == "" {
+		t.Fatalf("missing client_id: %v", b)
+	}
+
+	verifier := "dcr-anon-loopback-verifier-43-chars-long-ok-yo"
+	challenge := oauth2server.PKCEChallengeForTest(verifier)
+	code := h.authzAndConsent(t, userCookie, clientID, redirect, "read", challenge, "s1")
+
+	form := url.Values{}
+	form.Set("grant_type", "authorization_code")
+	form.Set("code", code)
+	form.Set("redirect_uri", redirect)
+	form.Set("client_id", clientID)
+	form.Set("code_verifier", verifier)
+	st, tb := h.postForm(t, "/api/auth/oauth/token", form, "", "")
+	if st != http.StatusOK {
+		t.Fatalf("token: %d %v", st, tb)
+	}
+	if _, ok := tb["access_token"]; !ok {
+		t.Fatalf("missing access_token: %v", tb)
 	}
 }
 

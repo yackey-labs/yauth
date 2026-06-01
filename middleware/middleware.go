@@ -394,6 +394,35 @@ func (m *Middleware) OptionalAuth(next http.Handler) http.Handler {
 	})
 }
 
+// ResolveAdmin resolves the request identity and verifies it is an
+// administrator, applying the same rules as RequireAdmin but returning
+// the decision instead of writing a response. It returns:
+//
+//   - (au, nil): a valid admin (and, unless AllowAdminMachineCallers, a
+//     cookie-resolved session).
+//   - (nil, yautherr.ErrUnauthorized): no valid identity resolved.
+//   - (nil, yautherr.ErrForbidden): identity resolved but the caller is
+//     not an admin, or is an admin presenting machine credentials while
+//     AllowAdminMachineCallers is false.
+//
+// Handlers that must control their own error body — e.g. the RFC 7591
+// dynamic client registration endpoint, which returns a JSON error per
+// §3.2.2 — call this and render the error themselves rather than wrapping
+// with RequireAdmin.
+func (m *Middleware) ResolveAdmin(r *http.Request) (*domain.AuthUser, error) {
+	au, err := m.ResolveAuth(r)
+	if err != nil || au == nil {
+		return nil, yautherr.ErrUnauthorized
+	}
+	if au.User.Role != "admin" {
+		return nil, yautherr.ErrForbidden
+	}
+	if !m.cfg.AllowAdminMachineCallers && isMachineMethod(au.Method) {
+		return nil, yautherr.ErrForbidden
+	}
+	return au, nil
+}
+
 // RequireAdmin wraps next so requests must carry a valid identity AND
 // the resolved User.Role must equal "admin". 401 on no-auth, 403 on
 // non-admin.
@@ -405,17 +434,13 @@ func (m *Middleware) OptionalAuth(next http.Handler) http.Handler {
 // hand-built principals.
 func (m *Middleware) RequireAdmin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		au, err := m.ResolveAuth(r)
-		if err != nil || au == nil {
+		au, err := m.ResolveAdmin(r)
+		if err != nil {
+			if errors.Is(err, yautherr.ErrForbidden) {
+				http.Error(w, "Forbidden", http.StatusForbidden)
+				return
+			}
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
-		}
-		if au.User.Role != "admin" {
-			http.Error(w, "Forbidden", http.StatusForbidden)
-			return
-		}
-		if !m.cfg.AllowAdminMachineCallers && isMachineMethod(au.Method) {
-			http.Error(w, "Forbidden", http.StatusForbidden)
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(withAuthUser(r.Context(), au)))

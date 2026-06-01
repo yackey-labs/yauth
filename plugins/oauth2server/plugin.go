@@ -80,10 +80,39 @@ type Config struct {
 	// or for clients with sensitive scopes.
 	ConsentRequired bool
 	// DCREnabled enables the RFC 7591 dynamic client registration
-	// endpoint at POST /oauth/register. Default: false. The endpoint is
-	// gated behind RequireAdmin — only authenticated administrators may
-	// register clients dynamically.
+	// endpoint at POST /oauth/register. Default: false.
+	//
+	// When enabled, the registration policy is split by risk:
+	//   - A public client (token_endpoint_auth_method=none) whose
+	//     redirect_uris are ALL loopback (localhost / 127.0.0.1 / ::1) may
+	//     register ANONYMOUSLY. This is the safe subset — a loopback
+	//     redirect can only deliver the authorization code to the caller's
+	//     own machine, so it closes the redirect-phishing vector — and it
+	//     is exactly what local MCP / native-app clients (e.g. Claude Code)
+	//     need to self-register with an ephemeral callback port.
+	//   - Any registration with a non-loopback redirect, or a confidential
+	//     client, requires an authenticated administrator (same rule as
+	//     RequireAdmin: a cookie-resolved admin session unless
+	//     AllowAdminMachineCallers is set).
+	//
+	// SECURITY / BEHAVIOR-CHANGE NOTE: anonymous loopback registration is
+	// the default when DCREnabled is true. The exploitable token-theft
+	// vector is closed by the loopback restriction, but the endpoint then
+	// accepts unauthenticated POSTs that create public client rows — apply
+	// rate limiting at your edge (gateway/CDN) as you would for any other
+	// unauthenticated endpoint (yauth-go does not rate-limit /oauth/token,
+	// /oauth/introspect, or /oauth/device/code either). Operators who want
+	// the prior behaviour — every registration gated behind an admin —
+	// set DCRRequireAdminForLoopback.
 	DCREnabled bool
+	// DCRRequireAdminForLoopback restores the strict pre-loopback-anonymous
+	// behaviour: when true, EVERY POST /oauth/register requires an
+	// authenticated administrator, including public loopback-only clients.
+	// Default: false (loopback-only public clients may self-register
+	// anonymously per DCREnabled). Set true on a multi-tenant or public
+	// deployment where you cannot rate-limit anonymous registration at the
+	// edge and prefer to provision all clients via an admin.
+	DCRRequireAdminForLoopback bool
 	// DCRAllowConfidentialClients controls whether POST /oauth/register may
 	// create confidential clients (those with a secret / private_key_jwt).
 	// Default: false — self-registered clients are public (PKCE,
@@ -188,11 +217,15 @@ func (p *oauth2Plugin) Routes(host plugin.PluginHost, mux *http.ServeMux, prefix
 	mux.Handle("POST "+prefix+"/oauth/device", mw.RequireAuth(http.HandlerFunc(p.handleDeviceVerify(host))))
 	mux.Handle("GET "+prefix+"/oauth/device", mw.RequireAuth(http.HandlerFunc(p.handleDeviceVerify(host))))
 
-	// --- RFC 7591 dynamic client registration (opt-in, admin-gated) ---
-	// RequireAdmin ensures only an authenticated administrator can register
-	// clients dynamically. This replaces the old initial-access-token gate,
-	// which accepted any valid bearer JWT regardless of scope or audience.
+	// --- RFC 7591 dynamic client registration (opt-in) ---
+	// The handler enforces the split policy itself (see DCREnabled doc):
+	// public loopback-only clients may register anonymously; everything
+	// else is admin-gated via Middleware.ResolveAdmin. It must therefore
+	// run unwrapped so it can read the request body before deciding which
+	// rule applies — and so it can return the RFC 7591 §3.2.2 JSON error
+	// body rather than RequireAdmin's plain-text 401 (which MCP SDKs cannot
+	// parse as an OAuth error).
 	if p.cfg.DCREnabled {
-		mux.Handle("POST "+prefix+"/oauth/register", mw.RequireAdmin(http.HandlerFunc(p.handleDCRRegister(host, prefix))))
+		mux.Handle("POST "+prefix+"/oauth/register", http.HandlerFunc(p.handleDCRRegister(host, prefix)))
 	}
 }

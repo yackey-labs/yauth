@@ -44,7 +44,21 @@ func (b *bearerResolver) Resolve(r *http.Request) (*domain.AuthUser, bool, error
 
 	parsed, err := verifyAccessToken(b.cfg.JWTSecret, raw, b.cfg)
 	if err != nil {
-		return nil, true, yautherr.ErrInvalidToken
+		// The bearer plugin issues HS256 tokens, but an IdP that also runs the
+		// oauth2-server plugin mints RS256/ES256 access tokens signed with the
+		// shared asymmetric key. Those are equally first-party Bearer
+		// credentials, so when an asymmetric host signer is registered, fall
+		// back to verifying against it (gated on token_use=access) before
+		// rejecting. Without this, OIDC clients can't call /userinfo (and other
+		// RequireAuth routes) with the access token from the token endpoint.
+		signer := b.host.JWTSigner()
+		if signer == nil {
+			return nil, true, yautherr.ErrInvalidToken
+		}
+		parsed, err = verifyAsymAccessToken(signer, raw)
+		if err != nil {
+			return nil, true, yautherr.ErrInvalidToken
+		}
 	}
 
 	user, err := b.host.Repo().GetUserByID(r.Context(), parsed.UserID)

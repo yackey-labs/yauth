@@ -377,13 +377,20 @@ func (p *oauth2Plugin) mintTokensWithFamily(
 func (p *oauth2Plugin) signAccessToken(host plugin.PluginHost, subject, audience string, scopes []string) (string, error) {
 	now := time.Now().UTC()
 	claims := map[string]any{
-		"iss":   p.cfg.Issuer,
-		"sub":   subject,
-		"aud":   audience,
-		"exp":   now.Add(p.cfg.AccessTTL).Unix(),
-		"iat":   now.Unix(),
-		"jti":   uuid.NewString(),
-		"scope": strings.Join(scopes, " "),
+		"iss": p.cfg.Issuer,
+		"sub": subject,
+		"aud": audience,
+		"exp": now.Add(p.cfg.AccessTTL).Unix(),
+		"iat": now.Unix(),
+		"jti": uuid.NewString(),
+		// token_use marks this JWT as an OAuth2 access token so resolvers can
+		// accept it for API auth while rejecting id_tokens and DCR
+		// registration-access tokens — all three are signed by the same
+		// asymmetric key and would otherwise be indistinguishable. (Cf. the
+		// "token_use" convention; RFC 9068 uses an "at+jwt" typ header for the
+		// same purpose.)
+		"token_use": "access",
+		"scope":     strings.Join(scopes, " "),
 	}
 	if signer := host.JWTSigner(); signer != nil {
 		return signer.Sign(claims)

@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+
+	"github.com/yackey-labs/yauth-go/plugin"
 )
 
 // accessClaims is the JWT body for an issued access token. yauth #89
@@ -104,4 +106,43 @@ func verifyAccessToken(secret []byte, raw string, cfg Config) (parsedToken, erro
 		Role:   claims.Role,
 		Orgs:   claims.Orgs,
 	}, nil
+}
+
+// verifyAsymAccessToken validates raw against an asymmetric host signer
+// (RS256/ES256). It is the path that accepts first-party access tokens minted
+// by the oauth2-server plugin, which signs with the shared asymjwt key rather
+// than the bearer plugin's HS256 secret. Both token families carry the user id
+// in "sub" and the optional yauth #89 active-org claims, so a successful verify
+// resolves to the same parsedToken shape.
+//
+// Only tokens explicitly marked `token_use: "access"` are accepted. That gate
+// is what keeps id_tokens and DCR registration-access tokens — signed by the
+// same key — from being replayed as API credentials.
+func verifyAsymAccessToken(signer plugin.JWTSigner, raw string) (parsedToken, error) {
+	claims, err := signer.Verify(raw)
+	if err != nil {
+		return parsedToken{}, err
+	}
+	if use, _ := claims["token_use"].(string); use != "access" {
+		return parsedToken{}, errors.New("bearer: not an access token")
+	}
+	sub, _ := claims["sub"].(string)
+	if sub == "" {
+		return parsedToken{}, errors.New("bearer: missing sub claim")
+	}
+	pt := parsedToken{UserID: sub}
+	if v, ok := claims["org"].(string); ok {
+		pt.Org = v
+	}
+	if v, ok := claims["role"].(string); ok {
+		pt.Role = v
+	}
+	if list, ok := claims["orgs"].([]any); ok {
+		for _, o := range list {
+			if s, ok := o.(string); ok {
+				pt.Orgs = append(pt.Orgs, s)
+			}
+		}
+	}
+	return pt, nil
 }

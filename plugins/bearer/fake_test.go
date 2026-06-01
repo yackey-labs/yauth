@@ -451,6 +451,7 @@ type fakeHost struct {
 	repo      *fakeRepo
 	mw        *middleware.Middleware
 	jwtSecret []byte
+	signer    plugin.JWTSigner // nil unless a test wires an asymmetric signer
 	resolvers []plugin.AuthResolver
 }
 
@@ -474,7 +475,7 @@ func (h *fakeHost) RegisterAuthResolver(r plugin.AuthResolver) {
 	h.mw.AddResolver(r)
 }
 func (h *fakeHost) PluginNames() []string       { return nil }
-func (h *fakeHost) JWTSigner() plugin.JWTSigner { return nil }
+func (h *fakeHost) JWTSigner() plugin.JWTSigner { return h.signer }
 func (h *fakeHost) JWTSecret() []byte           { return h.jwtSecret }
 func (h *fakeHost) Emit(_ context.Context, _ events.AuthEvent) (events.Decision, error) {
 	return events.Continue(), nil

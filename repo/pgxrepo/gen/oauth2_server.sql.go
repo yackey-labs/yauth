@@ -389,6 +389,46 @@ func (q *Queries) ListBannedOAuth2Clients(ctx context.Context) ([]YauthOauth2Cli
 	return items, nil
 }
 
+const listOAuth2Clients = `-- name: ListOAuth2Clients :many
+SELECT id, client_id, client_secret_hash, redirect_uris, client_name, grant_types, scopes, is_public, created_at, token_endpoint_auth_method, public_key_pem, jwks_uri, banned_at, banned_reason, enforce_group_assignment FROM yauth_oauth2_clients ORDER BY created_at DESC
+`
+
+func (q *Queries) ListOAuth2Clients(ctx context.Context) ([]YauthOauth2Client, error) {
+	rows, err := q.db.Query(ctx, listOAuth2Clients)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []YauthOauth2Client{}
+	for rows.Next() {
+		var i YauthOauth2Client
+		if err := rows.Scan(
+			&i.ID,
+			&i.ClientID,
+			&i.ClientSecretHash,
+			&i.RedirectUris,
+			&i.ClientName,
+			&i.GrantTypes,
+			&i.Scopes,
+			&i.IsPublic,
+			&i.CreatedAt,
+			&i.TokenEndpointAuthMethod,
+			&i.PublicKeyPem,
+			&i.JwksUri,
+			&i.BannedAt,
+			&i.BannedReason,
+			&i.EnforceGroupAssignment,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const markAuthorizationCodeUsed = `-- name: MarkAuthorizationCodeUsed :execrows
 UPDATE yauth_authorization_codes SET used = true WHERE id = $1 AND used = false
 `

@@ -922,6 +922,19 @@ func (r *Repo) ListBannedOAuth2Clients(ctx context.Context) ([]*domain.OAuth2Cli
 	return out, nil
 }
 
+func (r *Repo) ListOAuth2Clients(ctx context.Context) ([]*domain.OAuth2Client, error) {
+	var rows []OAuth2Client
+	if err := r.ctx(ctx).Order("created_at DESC").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]*domain.OAuth2Client, len(rows))
+	for i := range rows {
+		d := rows[i].toDomain()
+		out[i] = &d
+	}
+	return out, nil
+}
+
 // --- AuthorizationCode ---
 
 func (r *Repo) CreateAuthorizationCode(ctx context.Context, input domain.NewAuthorizationCode) error {

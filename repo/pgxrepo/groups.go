@@ -208,6 +208,52 @@ func (r *Repo) UserInAssignedGroup(ctx context.Context, clientID, userID string)
 	})
 }
 
+func clientRoleToDomain(m pgxgen.YauthClientRoleAssignment) domain.ClientRoleAssignment {
+	return domain.ClientRoleAssignment{
+		ID:        m.ID,
+		ClientID:  m.ClientID,
+		Role:      m.Role,
+		GroupID:   m.GroupID,
+		UserID:    m.UserID,
+		CreatedAt: fromTS(m.CreatedAt),
+	}
+}
+
+func (r *Repo) AssignClientRole(ctx context.Context, input domain.NewClientRoleAssignment) error {
+	return r.q.AssignClientRole(ctx, pgxgen.AssignClientRoleParams{
+		ID:        input.ID,
+		ClientID:  input.ClientID,
+		Role:      input.Role,
+		GroupID:   input.GroupID,
+		UserID:    input.UserID,
+		CreatedAt: ts(input.CreatedAt),
+	})
+}
+
+func (r *Repo) UnassignClientRole(ctx context.Context, assignmentID string) error {
+	return r.q.UnassignClientRole(ctx, assignmentID)
+}
+
+func (r *Repo) ListClientRoleAssignments(ctx context.Context, clientID string) ([]*domain.ClientRoleAssignment, error) {
+	rows, err := r.q.ListClientRoleAssignments(ctx, clientID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*domain.ClientRoleAssignment, 0, len(rows))
+	for _, row := range rows {
+		a := clientRoleToDomain(row)
+		out = append(out, &a)
+	}
+	return out, nil
+}
+
+func (r *Repo) ResolveUserRolesForClient(ctx context.Context, clientID, userID string) ([]string, error) {
+	return r.q.ResolveUserRolesForClient(ctx, pgxgen.ResolveUserRolesForClientParams{
+		ClientID: clientID,
+		UserID:   &userID,
+	})
+}
+
 func (r *Repo) SetClientEnforceGroupAssignment(ctx context.Context, clientID string, enforce bool) error {
 	_, err := r.q.SetOAuth2ClientEnforceGroupAssignment(ctx, pgxgen.SetOAuth2ClientEnforceGroupAssignmentParams{
 		ClientID:               clientID,

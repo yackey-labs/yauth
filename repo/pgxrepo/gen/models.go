@@ -78,6 +78,15 @@ type YauthClientGroupAssignment struct {
 	CreatedAt pgtype.Timestamptz
 }
 
+type YauthClientRoleAssignment struct {
+	ID        string
+	ClientID  string
+	Role      string
+	GroupID   *string
+	UserID    *string
+	CreatedAt pgtype.Timestamptz
+}
+
 type YauthConsent struct {
 	ID        string
 	UserID    string

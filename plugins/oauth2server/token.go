@@ -365,7 +365,10 @@ func (p *oauth2Plugin) mintTokensWithFamily(
 		if hasScope(scopes, "groups") {
 			groups, _ = host.Repo().ListGroupNamesForUser(ctx, user.ID)
 		}
-		idToken, err := p.signIDToken(host, client.ClientID, user, nonce, groups)
+		// Per-app roles resolved for THIS client (direct + via groups). The
+		// token's aud is this client, so the roles are inherently app-scoped.
+		roles, _ := host.Repo().ResolveUserRolesForClient(ctx, client.ClientID, user.ID)
+		idToken, err := p.signIDToken(host, client.ClientID, user, nonce, groups, roles)
 		if err != nil {
 			return nil, err
 		}
@@ -411,7 +414,7 @@ func (p *oauth2Plugin) signAccessToken(host plugin.PluginHost, subject, audience
 // is the original raw nonce supplied at /authorize (not its hash) and
 // is included in the id_token claims so relying parties can echo-check
 // it.
-func (p *oauth2Plugin) signIDToken(host plugin.PluginHost, audience string, user *domain.User, nonce *string, groups []string) (string, error) {
+func (p *oauth2Plugin) signIDToken(host plugin.PluginHost, audience string, user *domain.User, nonce *string, groups, roles []string) (string, error) {
 	now := time.Now().UTC()
 	claims := map[string]any{
 		"iss":            p.cfg.Issuer,
@@ -432,6 +435,11 @@ func (p *oauth2Plugin) signIDToken(host plugin.PluginHost, audience string, user
 	// (e.g. yauth-go's ssooidc plugin) can map IdP groups to local roles.
 	if len(groups) > 0 {
 		claims["groups"] = groups
+	}
+	// "roles" claim — this client's resolved app roles for the user. Always
+	// emitted when present; it's app-scoped (the token's aud is this client).
+	if len(roles) > 0 {
+		claims["roles"] = roles
 	}
 	if signer := host.JWTSigner(); signer != nil {
 		return signer.Sign(claims)

@@ -76,3 +76,6 @@ SELECT * FROM yauth_oidc_nonces WHERE nonce_hash = $1 LIMIT 1;
 
 -- name: DeleteOIDCNonce :execrows
 DELETE FROM yauth_oidc_nonces WHERE id = $1;
+
+-- name: ListOAuth2Clients :many
+SELECT * FROM yauth_oauth2_clients ORDER BY created_at DESC;

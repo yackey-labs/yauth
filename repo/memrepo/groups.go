@@ -273,6 +273,78 @@ func (r *Repo) UserInAssignedGroup(ctx context.Context, clientID, userID string)
 	return false, nil
 }
 
+func (r *Repo) AssignClientRole(ctx context.Context, input domain.NewClientRoleAssignment) error {
+	_ = ensureCtx(ctx)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	created := input.CreatedAt
+	if created.IsZero() {
+		created = time.Now().UTC()
+	}
+	r.clientRoles[input.ID] = &domain.ClientRoleAssignment{
+		ID:        input.ID,
+		ClientID:  input.ClientID,
+		Role:      input.Role,
+		GroupID:   input.GroupID,
+		UserID:    input.UserID,
+		CreatedAt: created.UTC(),
+	}
+	return nil
+}
+
+func (r *Repo) UnassignClientRole(ctx context.Context, assignmentID string) error {
+	_ = ensureCtx(ctx)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.clientRoles, assignmentID)
+	return nil
+}
+
+func (r *Repo) ListClientRoleAssignments(ctx context.Context, clientID string) ([]*domain.ClientRoleAssignment, error) {
+	_ = ensureCtx(ctx)
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]*domain.ClientRoleAssignment, 0)
+	for _, a := range r.clientRoles {
+		if a.ClientID == clientID {
+			cp := *a
+			out = append(out, &cp)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Role < out[j].Role })
+	return out, nil
+}
+
+func (r *Repo) ResolveUserRolesForClient(ctx context.Context, clientID, userID string) ([]string, error) {
+	_ = ensureCtx(ctx)
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	seen := make(map[string]struct{})
+	var out []string
+	for _, a := range r.clientRoles {
+		if a.ClientID != clientID {
+			continue
+		}
+		match := false
+		if a.UserID != nil && *a.UserID == userID {
+			match = true
+		}
+		if !match && a.GroupID != nil {
+			if _, ok := r.groupMembers[*a.GroupID][userID]; ok {
+				match = true
+			}
+		}
+		if match {
+			if _, dup := seen[a.Role]; !dup {
+				seen[a.Role] = struct{}{}
+				out = append(out, a.Role)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
 func (r *Repo) SetClientEnforceGroupAssignment(ctx context.Context, clientID string, enforce bool) error {
 	_ = ensureCtx(ctx)
 	r.mu.Lock()

@@ -113,6 +113,18 @@ func (r *Repo) ListBannedOAuth2Clients(ctx context.Context) ([]*domain.OAuth2Cli
 	return out, nil
 }
 
+func (r *Repo) ListOAuth2Clients(ctx context.Context) ([]*domain.OAuth2Client, error) {
+	_ = ensureCtx(ctx)
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]*domain.OAuth2Client, 0, len(r.oauth2Clients))
+	for _, c := range r.oauth2Clients {
+		out = append(out, cloneOAuth2Client(c))
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	return out, nil
+}
+
 // --- AuthorizationCode ---
 
 func (r *Repo) CreateAuthorizationCode(ctx context.Context, input domain.NewAuthorizationCode) error {

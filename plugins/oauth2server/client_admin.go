@@ -100,6 +100,12 @@ func (p *oauth2Plugin) handleCreateClient(host plugin.PluginHost) http.HandlerFu
 		// have zero redirect_uris. Validation is per-grant on the
 		// /authorize and /token paths.
 
+		// Repair copy/paste damage: strip CR/LF that terminals inject when
+		// wrapping long redirect URIs.
+		for i := range req.RedirectURIs {
+			req.RedirectURIs[i] = sanitizeURL(req.RedirectURIs[i])
+		}
+
 		clientID, err := randomHex(16)
 		if err != nil {
 			writeOAuthError(w, "server_error", err.Error())
@@ -174,22 +180,26 @@ func (p *oauth2Plugin) handleGetClient(host plugin.PluginHost) http.HandlerFunc 
 	}
 }
 
-// handleListClients returns the list of banned clients only — the
-// repository interface does not expose a generic "list all" method.
-// This matches the surface area the underlying repo offers and keeps
-// the plugin honest. Callers can still GET an individual client_id.
+// handleListClients returns all registered clients (admin enumeration). Each
+// entry carries its banned status. The legacy "banned" key is kept for
+// backward compatibility with callers that only read banned clients.
 func (p *oauth2Plugin) handleListClients(host plugin.PluginHost) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		banned, err := host.Repo().ListBannedOAuth2Clients(r.Context())
+		clients, err := host.Repo().ListOAuth2Clients(r.Context())
 		if err != nil {
 			writeOAuthError(w, "server_error", err.Error())
 			return
 		}
-		out := make([]clientJSON, 0, len(banned))
-		for _, c := range banned {
-			out = append(out, toClientJSON(*c))
+		items := make([]clientJSON, 0, len(clients))
+		banned := make([]clientJSON, 0)
+		for _, c := range clients {
+			j := toClientJSON(*c)
+			items = append(items, j)
+			if j.Banned {
+				banned = append(banned, j)
+			}
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"banned": out})
+		writeJSON(w, http.StatusOK, map[string]any{"items": items, "total": len(items), "banned": banned})
 	}
 }
 

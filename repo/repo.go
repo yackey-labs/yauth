@@ -235,6 +235,8 @@ type OAuth2ClientRepository interface {
 	// signing key. Returns true if a row was updated.
 	RotateOAuth2ClientPublicKey(ctx context.Context, clientID string, publicKeyPEM *string) (bool, error)
 	ListBannedOAuth2Clients(ctx context.Context) ([]*domain.OAuth2Client, error)
+	// ListOAuth2Clients returns all registered clients (admin enumeration).
+	ListOAuth2Clients(ctx context.Context) ([]*domain.OAuth2Client, error)
 }
 
 // AuthorizationCodeRepository covers single-use OAuth2 authorization codes.
@@ -586,6 +588,15 @@ type GroupRepository interface {
 
 	// SetClientEnforceGroupAssignment toggles the per-client access gate.
 	SetClientEnforceGroupAssignment(ctx context.Context, clientID string, enforce bool) error
+
+	// --- client (per-app) roles ---
+	AssignClientRole(ctx context.Context, input domain.NewClientRoleAssignment) error
+	UnassignClientRole(ctx context.Context, assignmentID string) error
+	ListClientRoleAssignments(ctx context.Context, clientID string) ([]*domain.ClientRoleAssignment, error)
+	// ResolveUserRolesForClient returns the distinct role names granted to the
+	// user on the client, directly and via the user's groups — the per-app
+	// "roles" claim.
+	ResolveUserRolesForClient(ctx context.Context, clientID, userID string) ([]string, error)
 }
 
 // Repository is the union of all repositories. Backends implement this.

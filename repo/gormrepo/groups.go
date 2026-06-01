@@ -56,6 +56,29 @@ type ClientGroupAssignment struct {
 
 func (ClientGroupAssignment) TableName() string { return "yauth_client_group_assignments" }
 
+// ClientRoleAssignment mirrors yauth_client_role_assignments.
+type ClientRoleAssignment struct {
+	ID        string    `gorm:"column:id;primaryKey"`
+	ClientID  string    `gorm:"column:client_id;not null;index"`
+	Role      string    `gorm:"column:role;not null"`
+	GroupID   *string   `gorm:"column:group_id;index"`
+	UserID    *string   `gorm:"column:user_id;index"`
+	CreatedAt time.Time `gorm:"column:created_at;not null"`
+}
+
+func (ClientRoleAssignment) TableName() string { return "yauth_client_role_assignments" }
+
+func (m *ClientRoleAssignment) toDomain() domain.ClientRoleAssignment {
+	return domain.ClientRoleAssignment{
+		ID:        m.ID,
+		ClientID:  m.ClientID,
+		Role:      m.Role,
+		GroupID:   m.GroupID,
+		UserID:    m.UserID,
+		CreatedAt: m.CreatedAt.UTC(),
+	}
+}
+
 // --- methods ---
 
 func (r *Repo) CreateGroup(ctx context.Context, input domain.NewGroup) (domain.Group, error) {
@@ -292,4 +315,50 @@ func (r *Repo) SetClientEnforceGroupAssignment(ctx context.Context, clientID str
 	return r.ctx(ctx).Model(&OAuth2Client{}).
 		Where("client_id = ?", clientID).
 		Update("enforce_group_assignment", enforce).Error
+}
+
+func (r *Repo) AssignClientRole(ctx context.Context, input domain.NewClientRoleAssignment) error {
+	now := input.CreatedAt
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	return r.ctx(ctx).Create(&ClientRoleAssignment{
+		ID:        input.ID,
+		ClientID:  input.ClientID,
+		Role:      input.Role,
+		GroupID:   input.GroupID,
+		UserID:    input.UserID,
+		CreatedAt: now.UTC(),
+	}).Error
+}
+
+func (r *Repo) UnassignClientRole(ctx context.Context, assignmentID string) error {
+	return r.ctx(ctx).Where("id = ?", assignmentID).Delete(&ClientRoleAssignment{}).Error
+}
+
+func (r *Repo) ListClientRoleAssignments(ctx context.Context, clientID string) ([]*domain.ClientRoleAssignment, error) {
+	var rows []ClientRoleAssignment
+	if err := r.ctx(ctx).Where("client_id = ?", clientID).Order("role").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]*domain.ClientRoleAssignment, 0, len(rows))
+	for i := range rows {
+		d := rows[i].toDomain()
+		out = append(out, &d)
+	}
+	return out, nil
+}
+
+func (r *Repo) ResolveUserRolesForClient(ctx context.Context, clientID, userID string) ([]string, error) {
+	var roles []string
+	err := r.ctx(ctx).
+		Model(&ClientRoleAssignment{}).
+		Distinct("yauth_client_role_assignments.role").
+		Where("yauth_client_role_assignments.client_id = ? AND (yauth_client_role_assignments.user_id = ? OR yauth_client_role_assignments.group_id IN (?))",
+			clientID, userID,
+			r.ctx(ctx).Model(&GroupMember{}).Select("group_id").Where("user_id = ?", userID),
+		).
+		Order("yauth_client_role_assignments.role").
+		Pluck("yauth_client_role_assignments.role", &roles).Error
+	return roles, err
 }

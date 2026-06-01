@@ -167,6 +167,9 @@ type Repo struct {
 	groups       map[string]*domain.Group
 	groupMembers map[string]map[string]time.Time
 	clientGroups map[string]map[string]time.Time
+
+	// Client (per-app) role assignments keyed by assignment ID.
+	clientRoles map[string]*domain.ClientRoleAssignment
 }
 
 // rateLimitState is a fixed-window counter row.
@@ -233,6 +236,7 @@ func New() *Repo {
 		groups:                 make(map[string]*domain.Group),
 		groupMembers:           make(map[string]map[string]time.Time),
 		clientGroups:           make(map[string]map[string]time.Time),
+		clientRoles:            make(map[string]*domain.ClientRoleAssignment),
 	}
 }
 

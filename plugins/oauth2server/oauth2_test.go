@@ -616,6 +616,84 @@ func TestIDToken_GroupsClaim(t *testing.T) {
 	}
 }
 
+// TestIDToken_ClientRoles proves per-app (client) roles: a role assigned to a
+// user directly and via a group shows up in app1's token, while app2 (no
+// assignment) gets none — the "owner of app1 but not app2" case.
+func TestIDToken_ClientRoles(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	_, adminCookie := h.seedUser(t, "cr-admin@idp.test", "admin")
+	uid, userCookie := h.seedUser(t, "cr-user@idp.test", "user")
+
+	org, _ := h.repo.CreateOrganization(ctx, domain.NewOrganization{
+		ID: uuid.NewString(), Name: "O", Slug: "o-" + uuid.NewString()[:8], CreatedAt: now, UpdatedAt: now,
+	})
+	g, _ := h.repo.CreateGroup(ctx, domain.NewGroup{
+		ID: uuid.NewString(), OrganizationID: org.ID, Name: "devops", CreatedAt: now, UpdatedAt: now,
+	})
+	_ = h.repo.AddGroupMember(ctx, g.ID, uid, now)
+
+	app1, secret1, _ := h.createClient(t, adminCookie, `{"name":"app1","redirect_uris":["https://app.example/callback"],"grant_types":["authorization_code"],"scopes":["openid"],"is_public":false,"token_endpoint_auth_method":"client_secret_post"}`)
+	app2, secret2, _ := h.createClient(t, adminCookie, `{"name":"app2","redirect_uris":["https://app.example/callback"],"grant_types":["authorization_code"],"scopes":["openid"],"is_public":false,"token_endpoint_auth_method":"client_secret_post"}`)
+
+	gid := g.ID
+	// app1: "owner" to the individual, "admin" to the devops group.
+	if err := h.repo.AssignClientRole(ctx, domain.NewClientRoleAssignment{ID: uuid.NewString(), ClientID: app1, Role: "owner", UserID: &uid, CreatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.repo.AssignClientRole(ctx, domain.NewClientRoleAssignment{ID: uuid.NewString(), ClientID: app1, Role: "admin", GroupID: &gid, CreatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+
+	rolesFor := func(clientID, secret string) []string {
+		verifier := "this-is-a-43-character-pkce-verifier-string-x"
+		challenge := pkceS256(verifier)
+		code := h.authorizeAndConsent(t, userCookie, clientID, "https://app.example/callback", "openid", challenge, "s", "")
+		form := url.Values{}
+		form.Set("grant_type", "authorization_code")
+		form.Set("code", code)
+		form.Set("redirect_uri", "https://app.example/callback")
+		form.Set("client_id", clientID)
+		form.Set("client_secret", secret)
+		form.Set("code_verifier", verifier)
+		status, body := h.postForm(t, "/api/auth/oauth/token", form, "", "")
+		if status != http.StatusOK {
+			t.Fatalf("token status=%d body=%v", status, body)
+		}
+		parsed, _, err := jwt.NewParser().ParseUnverified(body["id_token"].(string), jwt.MapClaims{})
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		var out []string
+		if rc, ok := parsed.Claims.(jwt.MapClaims)["roles"].([]any); ok {
+			for _, r := range rc {
+				out = append(out, r.(string))
+			}
+		}
+		return out
+	}
+
+	r1 := rolesFor(app1, secret1)
+	if len(r1) != 2 || !contains(r1, "owner") || !contains(r1, "admin") {
+		t.Fatalf("app1 roles: want [admin owner], got %v", r1)
+	}
+	r2 := rolesFor(app2, secret2)
+	if len(r2) != 0 {
+		t.Fatalf("app2 roles: want none (per-app scoping), got %v", r2)
+	}
+}
+
+func contains(s []string, v string) bool {
+	for _, x := range s {
+		if x == v {
+			return true
+		}
+	}
+	return false
+}
+
 // TestAuthorize_GroupAssignmentEnforced is the discriminating test for the
 // application-group-assignment feature: a client with enforcement on rejects a
 // user who is not a member of any assigned group, and admits them once added.

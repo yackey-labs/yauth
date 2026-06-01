@@ -54,5 +54,6 @@ func Migrate(ctx context.Context, db *gorm.DB) error {
 		&Group{},
 		&GroupMember{},
 		&ClientGroupAssignment{},
+		&ClientRoleAssignment{},
 	)
 }

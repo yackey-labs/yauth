@@ -1127,6 +1127,19 @@ func (r *Repo) ListBannedOAuth2Clients(ctx context.Context) ([]*domain.OAuth2Cli
 	return out, nil
 }
 
+func (r *Repo) ListOAuth2Clients(ctx context.Context) ([]*domain.OAuth2Client, error) {
+	rows, err := r.q.ListOAuth2Clients(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*domain.OAuth2Client, len(rows))
+	for i, row := range rows {
+		c := oauth2ClientToDomain(row)
+		out[i] = &c
+	}
+	return out, nil
+}
+
 // ─── AuthorizationCode ───────────────────────────────────────────────────────
 
 func (r *Repo) CreateAuthorizationCode(ctx context.Context, input domain.NewAuthorizationCode) error {

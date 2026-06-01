@@ -198,6 +198,12 @@ func (p *oauth2Plugin) Routes(host plugin.PluginHost, mux *http.ServeMux, prefix
 	mux.Handle("POST "+prefix+"/oauth2/clients/{id}/groups", mw.RequireAdmin(http.HandlerFunc(p.handleAssignClientGroup(host))))
 	mux.Handle("DELETE "+prefix+"/oauth2/clients/{id}/groups/{gid}", mw.RequireAdmin(http.HandlerFunc(p.handleUnassignClientGroup(host))))
 
+	// Application (client) roles — free-form labels assigned to groups or users,
+	// emitted per-app as the "roles" claim.
+	mux.Handle("GET "+prefix+"/oauth2/clients/{id}/roles", mw.RequireAdmin(http.HandlerFunc(p.handleListClientRoles(host))))
+	mux.Handle("POST "+prefix+"/oauth2/clients/{id}/roles", mw.RequireAdmin(http.HandlerFunc(p.handleAssignClientRole(host))))
+	mux.Handle("DELETE "+prefix+"/oauth2/clients/{id}/roles/{aid}", mw.RequireAdmin(http.HandlerFunc(p.handleUnassignClientRole(host))))
+
 	// --- RFC 8414 authorization server metadata ---
 	mux.Handle("GET "+prefix+"/.well-known/oauth-authorization-server", http.HandlerFunc(p.handleAuthServerMetadata(host)))
 

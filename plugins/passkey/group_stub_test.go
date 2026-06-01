@@ -52,3 +52,13 @@ func (*fakeRepo) SetClientEnforceGroupAssignment(context.Context, string, bool) 
 func (*fakeRepo) ListGroupNamesForUser(context.Context, string) ([]string, error) {
 	return nil, nil
 }
+
+func (*fakeRepo) AssignClientRole(context.Context, domain.NewClientRoleAssignment) error { return nil }
+func (*fakeRepo) UnassignClientRole(context.Context, string) error                       { return nil }
+func (*fakeRepo) ListClientRoleAssignments(context.Context, string) ([]*domain.ClientRoleAssignment, error) {
+	return nil, nil
+}
+func (*fakeRepo) ResolveUserRolesForClient(context.Context, string, string) ([]string, error) {
+	return nil, nil
+}
+func (*fakeRepo) ListOAuth2Clients(context.Context) ([]*domain.OAuth2Client, error) { return nil, nil }

@@ -92,6 +92,13 @@ func (p *oauth2Plugin) handleDCRRegister(host plugin.PluginHost, prefix string) 
 			writeDCRError(w, http.StatusBadRequest, "invalid_redirect_uri", "redirect_uris is required")
 			return
 		}
+		// Strip CR/LF and trim surrounding whitespace: terminals (notably tmux)
+		// line-wrap long URLs on copy/paste, and a valid URI never contains raw
+		// newlines — so this lets a wrapped, pasted redirect_uri register
+		// instead of failing the no-whitespace check below.
+		for i := range req.RedirectURIs {
+			req.RedirectURIs[i] = sanitizeURL(req.RedirectURIs[i])
+		}
 		allLoopback := true
 		for _, u := range req.RedirectURIs {
 			if u == "" || strings.ContainsAny(u, " \t\n\r") {

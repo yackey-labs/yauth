@@ -50,3 +50,27 @@ type ClientGroupAssignment struct {
 	GroupID   string
 	CreatedAt time.Time
 }
+
+// ClientRoleAssignment grants a free-form app role on a client to one
+// principal — either a group (every member inherits it) or an individual user
+// (Keycloak-style "client roles"). Resolved per (client, user) and emitted as
+// the per-app "roles" claim.
+type ClientRoleAssignment struct {
+	ID        string
+	ClientID  string
+	Role      string
+	GroupID   *string
+	UserID    *string
+	CreatedAt time.Time
+}
+
+// NewClientRoleAssignment is the input for assigning an app role. Exactly one
+// of GroupID / UserID must be set.
+type NewClientRoleAssignment struct {
+	ID        string
+	ClientID  string
+	Role      string
+	GroupID   *string
+	UserID    *string
+	CreatedAt time.Time
+}

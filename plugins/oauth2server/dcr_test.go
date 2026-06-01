@@ -527,3 +527,19 @@ func TestDCR_DefaultsApplied(t *testing.T) {
 		t.Fatalf("token_endpoint_auth_method default: %q (want secure default none)", m)
 	}
 }
+
+func TestDCR_RedirectURI_NewlineSanitized(t *testing.T) {
+	h := newDCRHarness(t, true)
+	// A redirect_uri that a terminal (tmux) line-wrapped on copy/paste: the
+	// JSON carries an escaped newline inside the URI string. It should be
+	// stripped and the client registered, not rejected for "whitespace".
+	body := "{\"redirect_uris\":[\"http://127.0.0.1:53517/\\ncallback\"],\"token_endpoint_auth_method\":\"none\"}"
+	status, b := h.register(t, body, "")
+	if status != http.StatusCreated {
+		t.Fatalf("expected 201 for a line-wrapped redirect_uri, got %d body=%v", status, b)
+	}
+	uris, _ := b["redirect_uris"].([]any)
+	if len(uris) != 1 || uris[0] != "http://127.0.0.1:53517/callback" {
+		t.Fatalf("redirect_uri should be sanitized to a single line, got %v", b["redirect_uris"])
+	}
+}

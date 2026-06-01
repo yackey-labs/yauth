@@ -555,6 +555,67 @@ func (h *harness) getAuthorize(t *testing.T, cookie, clientID, challenge string)
 	return res.StatusCode, body
 }
 
+// TestIDToken_GroupsClaim proves the IdP emits the user's group names in the
+// id_token when the "groups" scope is granted — the claim RPs (e.g. yauth-go's
+// ssooidc plugin) map to local roles.
+func TestIDToken_GroupsClaim(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	_, adminCookie := h.seedUser(t, "gc-admin@idp.test", "admin")
+	uid, userCookie := h.seedUser(t, "gc-user@idp.test", "user")
+
+	org, err := h.repo.CreateOrganization(ctx, domain.NewOrganization{
+		ID: uuid.NewString(), Name: "O", Slug: "o-" + uuid.NewString()[:8], CreatedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	g, err := h.repo.CreateGroup(ctx, domain.NewGroup{
+		ID: uuid.NewString(), OrganizationID: org.ID, Name: "Engineering", CreatedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("create group: %v", err)
+	}
+	if err := h.repo.AddGroupMember(ctx, g.ID, uid, now); err != nil {
+		t.Fatalf("add member: %v", err)
+	}
+
+	clientID, secret, _ := h.createClient(t, adminCookie, `{"name":"gc","redirect_uris":["https://app.example/callback"],"grant_types":["authorization_code"],"scopes":["openid","groups"],"is_public":false,"token_endpoint_auth_method":"client_secret_post"}`)
+	verifier := "this-is-a-43-character-pkce-verifier-string-x"
+	challenge := pkceS256(verifier)
+	code := h.authorizeAndConsent(t, userCookie, clientID, "https://app.example/callback", "openid groups", challenge, "s", "n")
+
+	form := url.Values{}
+	form.Set("grant_type", "authorization_code")
+	form.Set("code", code)
+	form.Set("redirect_uri", "https://app.example/callback")
+	form.Set("client_id", clientID)
+	form.Set("client_secret", secret)
+	form.Set("code_verifier", verifier)
+	status, body := h.postForm(t, "/api/auth/oauth/token", form, "", "")
+	if status != http.StatusOK {
+		t.Fatalf("token status=%d body=%v", status, body)
+	}
+	idt, _ := body["id_token"].(string)
+	parsed, _, err := jwt.NewParser().ParseUnverified(idt, jwt.MapClaims{})
+	if err != nil {
+		t.Fatalf("parse id_token: %v", err)
+	}
+	claims := parsed.Claims.(jwt.MapClaims)
+	groups, _ := claims["groups"].([]any)
+	found := false
+	for _, gg := range groups {
+		if gg == "Engineering" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected groups claim to contain Engineering, got %v", claims["groups"])
+	}
+}
+
 // TestAuthorize_GroupAssignmentEnforced is the discriminating test for the
 // application-group-assignment feature: a client with enforcement on rejects a
 // user who is not a member of any assigned group, and admits them once added.

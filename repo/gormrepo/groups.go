@@ -226,6 +226,18 @@ func (r *Repo) ListGroupsForUser(ctx context.Context, orgID, userID string) ([]*
 	return out, nil
 }
 
+func (r *Repo) ListGroupNamesForUser(ctx context.Context, userID string) ([]string, error) {
+	var names []string
+	err := r.ctx(ctx).
+		Model(&Group{}).
+		Distinct("yauth_groups.name").
+		Joins("JOIN yauth_group_members gm ON gm.group_id = yauth_groups.id").
+		Where("gm.user_id = ?", userID).
+		Order("yauth_groups.name").
+		Pluck("yauth_groups.name", &names).Error
+	return names, err
+}
+
 func (r *Repo) IsGroupMember(ctx context.Context, groupID, userID string) (bool, error) {
 	var count int64
 	err := r.ctx(ctx).Model(&GroupMember{}).

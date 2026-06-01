@@ -47,6 +47,12 @@ ORDER BY g.name;
 -- name: IsGroupMember :one
 SELECT EXISTS(SELECT 1 FROM yauth_group_members WHERE group_id = $1 AND user_id = $2);
 
+-- name: ListGroupNamesForUser :many
+SELECT DISTINCT g.name FROM yauth_groups g
+JOIN yauth_group_members gm ON gm.group_id = g.id
+WHERE gm.user_id = $1
+ORDER BY g.name;
+
 -- name: AssignClientGroup :exec
 INSERT INTO yauth_client_group_assignments (client_id, group_id, created_at)
 VALUES ($1, $2, $3)

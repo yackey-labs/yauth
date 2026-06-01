@@ -361,7 +361,11 @@ func (p *oauth2Plugin) mintTokensWithFamily(
 	}
 
 	if user != nil && hasScope(scopes, "openid") {
-		idToken, err := p.signIDToken(host, client.ClientID, user, nonce)
+		var groups []string
+		if hasScope(scopes, "groups") {
+			groups, _ = host.Repo().ListGroupNamesForUser(ctx, user.ID)
+		}
+		idToken, err := p.signIDToken(host, client.ClientID, user, nonce, groups)
 		if err != nil {
 			return nil, err
 		}
@@ -407,7 +411,7 @@ func (p *oauth2Plugin) signAccessToken(host plugin.PluginHost, subject, audience
 // is the original raw nonce supplied at /authorize (not its hash) and
 // is included in the id_token claims so relying parties can echo-check
 // it.
-func (p *oauth2Plugin) signIDToken(host plugin.PluginHost, audience string, user *domain.User, nonce *string) (string, error) {
+func (p *oauth2Plugin) signIDToken(host plugin.PluginHost, audience string, user *domain.User, nonce *string, groups []string) (string, error) {
 	now := time.Now().UTC()
 	claims := map[string]any{
 		"iss":            p.cfg.Issuer,
@@ -423,6 +427,11 @@ func (p *oauth2Plugin) signIDToken(host plugin.PluginHost, audience string, user
 	}
 	if nonce != nil && *nonce != "" {
 		claims["nonce"] = *nonce
+	}
+	// "groups" claim — emitted only when the groups scope was granted, so RPs
+	// (e.g. yauth-go's ssooidc plugin) can map IdP groups to local roles.
+	if len(groups) > 0 {
+		claims["groups"] = groups
 	}
 	if signer := host.JWTSigner(); signer != nil {
 		return signer.Sign(claims)

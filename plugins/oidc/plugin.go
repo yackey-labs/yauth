@@ -95,5 +95,5 @@ func (p *oidcPlugin) Name() string { return "oidc" }
 func (p *oidcPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux, prefix string) {
 	mw := host.Middleware()
 	mux.Handle("GET "+prefix+"/.well-known/openid-configuration", http.HandlerFunc(p.handleDiscovery(host)))
-	mux.Handle("GET "+prefix+"/userinfo", mw.RequireAuth(http.HandlerFunc(p.handleUserInfo())))
+	mux.Handle("GET "+prefix+"/userinfo", mw.RequireAuth(http.HandlerFunc(p.handleUserInfo(host))))
 }

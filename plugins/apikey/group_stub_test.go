@@ -48,3 +48,7 @@ func (*fakeRepo) UserInAssignedGroup(context.Context, string, string) (bool, err
 	return false, nil
 }
 func (*fakeRepo) SetClientEnforceGroupAssignment(context.Context, string, bool) error { return nil }
+
+func (*fakeRepo) ListGroupNamesForUser(context.Context, string) ([]string, error) {
+	return nil, nil
+}

@@ -42,7 +42,7 @@ func (p *oidcPlugin) handleDiscovery(host plugin.PluginHost) http.HandlerFunc {
 			ResponseTypesSupported: []string{"code"},
 			GrantTypesSupported:    []string{"authorization_code", "refresh_token"},
 			SubjectTypesSupported:  []string{"public"},
-			ScopesSupported:        []string{"openid", "email", "profile"},
+			ScopesSupported:        []string{"openid", "email", "profile", "groups"},
 			ClaimsSupported:        p.cfg.claimsSupported(),
 		}
 
@@ -72,17 +72,18 @@ func (p *oidcPlugin) handleDiscovery(host plugin.PluginHost) http.HandlerFunc {
 // (OIDC Core 1.0 §5.3.2). picture is included as a placeholder field;
 // yauth does not currently store user pictures so it is always omitted.
 type userInfoResponse struct {
-	Sub           string `json:"sub"`
-	Email         string `json:"email,omitempty"`
-	EmailVerified bool   `json:"email_verified"`
-	Name          string `json:"name,omitempty"`
-	Picture       string `json:"picture,omitempty"`
+	Sub           string   `json:"sub"`
+	Email         string   `json:"email,omitempty"`
+	EmailVerified bool     `json:"email_verified"`
+	Name          string   `json:"name,omitempty"`
+	Picture       string   `json:"picture,omitempty"`
+	Groups        []string `json:"groups,omitempty"`
 }
 
 // handleUserInfo returns standard OIDC claims for the authenticated
 // caller. The middleware has already enforced authentication via
 // RequireAuth, so context is guaranteed to carry an AuthUser.
-func (p *oidcPlugin) handleUserInfo() http.HandlerFunc {
+func (p *oidcPlugin) handleUserInfo(host plugin.PluginHost) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		au, ok := middleware.AuthUserFromContext(r.Context())
 		if !ok || au == nil {
@@ -96,6 +97,11 @@ func (p *oidcPlugin) handleUserInfo() http.HandlerFunc {
 		}
 		if au.User.DisplayName != nil {
 			resp.Name = *au.User.DisplayName
+		}
+		// Group memberships so RPs can map them to local roles. UserInfo is
+		// auth-gated; we include groups whenever the user has any.
+		if groups, err := host.Repo().ListGroupNamesForUser(r.Context(), au.User.ID); err == nil && len(groups) > 0 {
+			resp.Groups = groups
 		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")

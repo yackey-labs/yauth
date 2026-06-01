@@ -197,6 +197,27 @@ func (r *Repo) ListGroupsForUser(ctx context.Context, orgID, userID string) ([]*
 	return out, nil
 }
 
+func (r *Repo) ListGroupNamesForUser(ctx context.Context, userID string) ([]string, error) {
+	_ = ensureCtx(ctx)
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	seen := make(map[string]struct{})
+	var out []string
+	for gid, mem := range r.groupMembers {
+		if _, ok := mem[userID]; !ok {
+			continue
+		}
+		if g, ok := r.groups[gid]; ok {
+			if _, dup := seen[g.Name]; !dup {
+				seen[g.Name] = struct{}{}
+				out = append(out, g.Name)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
 func (r *Repo) IsGroupMember(ctx context.Context, groupID, userID string) (bool, error) {
 	_ = ensureCtx(ctx)
 	r.mu.RLock()

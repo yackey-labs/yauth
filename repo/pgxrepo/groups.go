@@ -162,6 +162,10 @@ func (r *Repo) ListGroupsForUser(ctx context.Context, orgID, userID string) ([]*
 	return out, nil
 }
 
+func (r *Repo) ListGroupNamesForUser(ctx context.Context, userID string) ([]string, error) {
+	return r.q.ListGroupNamesForUser(ctx, userID)
+}
+
 func (r *Repo) IsGroupMember(ctx context.Context, groupID, userID string) (bool, error) {
 	return r.q.IsGroupMember(ctx, pgxgen.IsGroupMemberParams{
 		GroupID: groupID,

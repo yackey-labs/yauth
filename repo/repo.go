@@ -569,6 +569,10 @@ type GroupRepository interface {
 	RemoveGroupMember(ctx context.Context, groupID, userID string) error
 	ListGroupMembers(ctx context.Context, groupID string) ([]*domain.User, error)
 	ListGroupsForUser(ctx context.Context, orgID, userID string) ([]*domain.Group, error)
+	// ListGroupNamesForUser returns the distinct names of every group the user
+	// belongs to, across all organizations — used to populate the OIDC
+	// "groups" claim.
+	ListGroupNamesForUser(ctx context.Context, userID string) ([]string, error)
 	IsGroupMember(ctx context.Context, groupID, userID string) (bool, error)
 
 	// AssignClientGroup is idempotent. UnassignClientGroup is a no-op when the

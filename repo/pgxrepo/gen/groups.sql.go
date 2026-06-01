@@ -249,6 +249,33 @@ func (q *Queries) ListGroupMembers(ctx context.Context, groupID string) ([]Yauth
 	return items, nil
 }
 
+const listGroupNamesForUser = `-- name: ListGroupNamesForUser :many
+SELECT DISTINCT g.name FROM yauth_groups g
+JOIN yauth_group_members gm ON gm.group_id = g.id
+WHERE gm.user_id = $1
+ORDER BY g.name
+`
+
+func (q *Queries) ListGroupNamesForUser(ctx context.Context, userID string) ([]string, error) {
+	rows, err := q.db.Query(ctx, listGroupNamesForUser, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		items = append(items, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listGroupsByOrg = `-- name: ListGroupsByOrg :many
 SELECT id, organization_id, name, description, external_id, created_at, updated_at FROM yauth_groups WHERE organization_id = $1 ORDER BY name
 `

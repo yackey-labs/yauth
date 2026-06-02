@@ -99,6 +99,23 @@ plugins:
 	}
 }
 
+func TestValidate_MemoryDriverNeedsNoDSN(t *testing.T) {
+	c := &Config{Database: DatabaseConfig{Driver: "memory"}}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("memory driver should validate without a DSN: %v", err)
+	}
+	// An unknown driver is still rejected.
+	bad := &Config{Database: DatabaseConfig{Driver: "cassandra"}}
+	if err := bad.Validate(); err == nil {
+		t.Fatal("expected unsupported-driver error")
+	}
+	// Non-memory drivers still require a DSN.
+	noDSN := &Config{Database: DatabaseConfig{Driver: "postgres"}}
+	if err := noDSN.Validate(); err == nil {
+		t.Fatal("expected dsn-required error for postgres")
+	}
+}
+
 func TestLoadTOML(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "yauth.toml")

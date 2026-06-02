@@ -15,6 +15,7 @@ import (
 	"github.com/yackey-labs/yauth-go/plugins/emailpassword"
 	smtpmailer "github.com/yackey-labs/yauth-go/plugins/mailer/smtp"
 	yauthrepo "github.com/yackey-labs/yauth-go/repo"
+	"github.com/yackey-labs/yauth-go/repo/memrepo"
 	"github.com/yackey-labs/yauth-go/repo/pgxrepo"
 	"github.com/yackey-labs/yauth-go/repo/redisrepo"
 	"github.com/yackey-labs/yauth-go/telemetry"
@@ -42,7 +43,12 @@ func NewFromConfig(ctx context.Context, cfg *yauthcfg.Config) (*YAuth, error) {
 
 	var repo yauthrepo.Repository
 
-	if cfg.Database.Driver == "pgx" {
+	if cfg.Database.Driver == "memory" || cfg.Database.Driver == "mem" {
+		// In-process, non-persistent backend (no DSN, no migrations). For dev,
+		// tests, and ephemeral throwaway instances — data is lost on restart and
+		// it is single-process only.
+		repo = memrepo.New()
+	} else if cfg.Database.Driver == "pgx" {
 		poolOpts := []pgxrepo.PoolOption{}
 		if cfg.Telemetry.Enabled {
 			poolOpts = append(poolOpts, pgxrepo.WithOTelTracing())

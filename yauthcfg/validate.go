@@ -6,13 +6,14 @@ import "fmt"
 // A non-nil result means the config is unsuitable for NewFromConfig.
 func (c *Config) Validate() error {
 	switch c.Database.Driver {
-	case "sqlite", "postgres", "mysql", "pgx":
+	case "sqlite", "postgres", "mysql", "pgx", "memory", "mem":
 	case "":
-		return fmt.Errorf("database.driver is required (sqlite | postgres | mysql | pgx)")
+		return fmt.Errorf("database.driver is required (sqlite | postgres | mysql | pgx | memory)")
 	default:
-		return fmt.Errorf("database.driver %q is not supported (sqlite | postgres | mysql | pgx)", c.Database.Driver)
+		return fmt.Errorf("database.driver %q is not supported (sqlite | postgres | mysql | pgx | memory)", c.Database.Driver)
 	}
-	if c.Database.DSN == "" {
+	// The in-memory backend (memrepo) is non-persistent and needs no DSN.
+	if c.Database.Driver != "memory" && c.Database.Driver != "mem" && c.Database.DSN == "" {
 		return fmt.Errorf("database.dsn is required")
 	}
 

@@ -222,6 +222,9 @@ func TestDiscovery_EndSessionWhenOAuth2Loaded(t *testing.T) {
 	if doc["end_session_endpoint"] != "http://idp.test/api/auth/oauth/end_session" {
 		t.Fatalf("end_session_endpoint mismatch: %v", doc["end_session_endpoint"])
 	}
+	if doc["backchannel_logout_supported"] != true {
+		t.Fatalf("expected backchannel_logout_supported=true, got %v", doc["backchannel_logout_supported"])
+	}
 }
 
 // Operator-supplied ClaimsSupported is reflected verbatim in the

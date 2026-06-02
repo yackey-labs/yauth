@@ -12,6 +12,7 @@ import (
 
 	"github.com/yackey-labs/yauth-go/auth"
 	"github.com/yackey-labs/yauth-go/domain"
+	"github.com/yackey-labs/yauth-go/events"
 	"github.com/yackey-labs/yauth-go/middleware"
 	"github.com/yackey-labs/yauth-go/plugin"
 	"github.com/yackey-labs/yauth-go/yautherr"
@@ -311,6 +312,12 @@ func (p *adminPlugin) handleBanUser(host plugin.PluginHost) http.HandlerFunc {
 			IPAddress: middleware.RequestIP(r),
 			CreatedAt: now,
 		})
+		// Notify the event pipeline (OIDC Back-Channel Logout fan-out, webhooks).
+		bid := u.ID
+		_, _ = host.Emit(r.Context(), events.AuthEvent{
+			Type: events.EventUserBanned, UserID: &bid,
+			IPAddress: middleware.RequestIP(r), Timestamp: now,
+		})
 
 		writeJSON(w, http.StatusOK, toUserJSON(u))
 	}
@@ -404,6 +411,12 @@ func (p *adminPlugin) handleSuspendUser(host plugin.PluginHost) http.HandlerFunc
 		_ = host.Repo().LogAuditEvent(r.Context(), domain.NewAuditLog{
 			ID: newID(), UserID: &u.ID, EventType: "admin.suspend", Metadata: meta,
 			IPAddress: middleware.RequestIP(r), CreatedAt: now,
+		})
+		// Notify the event pipeline (OIDC Back-Channel Logout fan-out, webhooks).
+		uid := u.ID
+		_, _ = host.Emit(r.Context(), events.AuthEvent{
+			Type: events.EventUserSuspended, UserID: &uid,
+			IPAddress: middleware.RequestIP(r), Timestamp: now,
 		})
 		writeJSON(w, http.StatusOK, toUserJSON(u))
 	}

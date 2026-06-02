@@ -21,6 +21,8 @@ const (
 	EventEmailVerified   EventType = "email.verified"
 	EventUserBanned      EventType = "user.banned"
 	EventUserUnbanned    EventType = "user.unbanned"
+	EventUserSuspended   EventType = "user.suspended"
+	EventUserUnsuspended EventType = "user.unsuspended"
 )
 
 // AuthEvent is an authentication lifecycle event handed to plugins/handlers.

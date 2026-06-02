@@ -6,6 +6,7 @@ package bearer
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/yackey-labs/yauth-go/domain"
 )
@@ -23,5 +24,11 @@ func (*fakeRepo) ListOAuth2ClientsWithBackchannelLogoutURI(context.Context) ([]*
 }
 
 func (*fakeRepo) ListAllSsoConnections(context.Context) ([]*domain.SsoConnection, error) {
+	return nil, nil
+}
+
+func (*fakeRepo) TouchOAuth2ClientLastUsed(context.Context, string, time.Time) error { return nil }
+
+func (*fakeRepo) PurgeStaleDynamicClients(context.Context, time.Time) ([]string, error) {
 	return nil, nil
 }

@@ -36,6 +36,14 @@ type OAuth2Client struct {
 	// BackchannelLogoutSessionRequired indicates the client requires a `sid`
 	// claim in the logout_token (OIDC Back-Channel Logout 1.0 §2.4).
 	BackchannelLogoutSessionRequired bool
+	// DynamicallyRegistered is true for clients created via RFC 7591 dynamic
+	// client registration (DCR). The stale-client sweep only ever touches these
+	// — never admin-provisioned clients.
+	DynamicallyRegistered bool
+	// LastUsedAt is the last successful token-endpoint use of this client
+	// (auth_code exchange or refresh grant). nil → never used since creation;
+	// the sweep falls back to CreatedAt. Keeps an actively-used client alive.
+	LastUsedAt *time.Time
 }
 
 // NewOAuth2Client is the input for registering an OAuth2 client.
@@ -56,6 +64,7 @@ type NewOAuth2Client struct {
 	PostLogoutRedirectURIs           json.RawMessage
 	BackchannelLogoutURI             *string
 	BackchannelLogoutSessionRequired bool
+	DynamicallyRegistered            bool
 }
 
 // AuthorizationCode is a single-use OAuth2 authorization code (RFC 6749).

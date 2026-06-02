@@ -971,6 +971,40 @@ func (r *Repo) ListOAuth2ClientsWithBackchannelLogoutURI(ctx context.Context) ([
 	return out, nil
 }
 
+func (r *Repo) TouchOAuth2ClientLastUsed(ctx context.Context, clientID string, at time.Time) error {
+	return r.ctx(ctx).Model(&OAuth2Client{}).Where("client_id = ?", clientID).Update("last_used_at", at.UTC()).Error
+}
+
+func (r *Repo) PurgeStaleDynamicClients(ctx context.Context, cutoff time.Time) ([]string, error) {
+	var swept []string
+	err := r.ctx(ctx).Transaction(func(tx *gorm.DB) error {
+		var ids []string
+		if err := tx.Model(&OAuth2Client{}).
+			Where("dynamically_registered = ? AND is_public = ? AND banned_at IS NULL AND COALESCE(last_used_at, created_at) < ?", true, true, cutoff.UTC()).
+			Pluck("client_id", &ids).Error; err != nil {
+			return err
+		}
+		if len(ids) == 0 {
+			return nil
+		}
+		if err := tx.Where("client_id IN ?", ids).Delete(&Consent{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("client_id IN ?", ids).Delete(&AuthorizationCode{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("client_id IN ?", ids).Delete(&DeviceCode{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("client_id IN ?", ids).Delete(&OAuth2Client{}).Error; err != nil {
+			return err
+		}
+		swept = ids
+		return nil
+	})
+	return swept, err
+}
+
 // --- AuthorizationCode ---
 
 func (r *Repo) CreateAuthorizationCode(ctx context.Context, input domain.NewAuthorizationCode) error {

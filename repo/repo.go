@@ -248,6 +248,13 @@ type OAuth2ClientRepository interface {
 	// ListOAuth2ClientsWithBackchannelLogoutURI returns clients that registered
 	// a back-channel logout endpoint, for logout_token fan-out.
 	ListOAuth2ClientsWithBackchannelLogoutURI(ctx context.Context) ([]*domain.OAuth2Client, error)
+	// TouchOAuth2ClientLastUsed stamps a client's last token-endpoint use, so an
+	// actively-used dynamically-registered client is never swept as stale.
+	TouchOAuth2ClientLastUsed(ctx context.Context, clientID string, at time.Time) error
+	// PurgeStaleDynamicClients deletes dynamically-registered, public, un-banned
+	// clients whose last use (or creation) predates cutoff, plus their dependent
+	// rows. Returns the swept client_ids. Never touches admin-provisioned clients.
+	PurgeStaleDynamicClients(ctx context.Context, cutoff time.Time) ([]string, error)
 }
 
 // AuthorizationCodeRepository covers single-use OAuth2 authorization codes.

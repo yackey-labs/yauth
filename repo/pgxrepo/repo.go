@@ -1098,7 +1098,66 @@ func (r *Repo) CreateOAuth2Client(ctx context.Context, input domain.NewOAuth2Cli
 		PostLogoutRedirectUris:           jsonArrayOrEmpty(input.PostLogoutRedirectURIs),
 		BackchannelLogoutUri:             input.BackchannelLogoutURI,
 		BackchannelLogoutSessionRequired: input.BackchannelLogoutSessionRequired,
+		DynamicallyRegistered:            input.DynamicallyRegistered,
 	})
+}
+
+// TouchOAuth2ClientLastUsed stamps a client's last token-endpoint use so an
+// actively-used dynamically-registered client is never swept.
+func (r *Repo) TouchOAuth2ClientLastUsed(ctx context.Context, clientID string, at time.Time) error {
+	_, err := r.q.TouchOAuth2ClientLastUsed(ctx, pgxgen.TouchOAuth2ClientLastUsedParams{
+		ClientID:   clientID,
+		LastUsedAt: tsPtr(&at),
+	})
+	return err
+}
+
+// PurgeStaleDynamicClients deletes dynamically-registered, public, un-banned
+// clients whose last use (or creation, if never used) predates cutoff, together
+// with their dependent consents/auth-codes/device-codes (no FK cascade exists).
+// Returns the client_ids that were swept. Admin-provisioned clients are never
+// touched (dynamically_registered = FALSE).
+func (r *Repo) PurgeStaleDynamicClients(ctx context.Context, cutoff time.Time) ([]string, error) {
+	var swept []string
+	err := r.withTx(ctx, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			SELECT client_id FROM yauth_oauth2_clients
+			WHERE dynamically_registered = TRUE
+			  AND is_public = TRUE
+			  AND banned_at IS NULL
+			  AND COALESCE(last_used_at, created_at) < $1
+			FOR UPDATE`, cutoff.UTC())
+		if err != nil {
+			return err
+		}
+		ids := make([]string, 0)
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return err
+			}
+			ids = append(ids, id)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		if len(ids) == 0 {
+			return nil
+		}
+		for _, tbl := range []string{"yauth_consents", "yauth_authorization_codes", "yauth_device_codes"} {
+			if _, err := tx.Exec(ctx, "DELETE FROM "+tbl+" WHERE client_id = ANY($1)", ids); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.Exec(ctx, "DELETE FROM yauth_oauth2_clients WHERE client_id = ANY($1)", ids); err != nil {
+			return err
+		}
+		swept = ids
+		return nil
+	})
+	return swept, err
 }
 
 // jsonArrayOrEmpty renders a JSON-array column value, defaulting an absent/empty
@@ -2697,6 +2756,8 @@ func oauth2ClientToDomain(m pgxgen.YauthOauth2Client) domain.OAuth2Client {
 		PostLogoutRedirectURIs:           json.RawMessage(m.PostLogoutRedirectUris),
 		BackchannelLogoutURI:             m.BackchannelLogoutUri,
 		BackchannelLogoutSessionRequired: m.BackchannelLogoutSessionRequired,
+		DynamicallyRegistered:            m.DynamicallyRegistered,
+		LastUsedAt:                       fromTSPtr(m.LastUsedAt),
 	}
 }
 

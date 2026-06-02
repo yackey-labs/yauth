@@ -40,6 +40,7 @@ func (r *Repo) CreateOAuth2Client(ctx context.Context, input domain.NewOAuth2Cli
 
 		BackchannelLogoutURI:             input.BackchannelLogoutURI,
 		BackchannelLogoutSessionRequired: input.BackchannelLogoutSessionRequired,
+		DynamicallyRegistered:            input.DynamicallyRegistered,
 	}
 	if len(input.PostLogoutRedirectURIs) > 0 {
 		c.PostLogoutRedirectURIs = append([]byte(nil), input.PostLogoutRedirectURIs...)
@@ -170,6 +171,61 @@ func (r *Repo) ListOAuth2ClientsWithBackchannelLogoutURI(ctx context.Context) ([
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
 	return out, nil
+}
+
+func (r *Repo) TouchOAuth2ClientLastUsed(ctx context.Context, clientID string, at time.Time) error {
+	_ = ensureCtx(ctx)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	id, ok := r.oauth2ClientIDIdx[clientID]
+	if !ok {
+		return nil
+	}
+	t := at.UTC()
+	r.oauth2Clients[id].LastUsedAt = &t
+	return nil
+}
+
+func (r *Repo) PurgeStaleDynamicClients(ctx context.Context, cutoff time.Time) ([]string, error) {
+	_ = ensureCtx(ctx)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	cutoff = cutoff.UTC()
+	swept := make([]string, 0)
+	for id, c := range r.oauth2Clients {
+		if !c.DynamicallyRegistered || !c.IsPublic || c.BannedAt != nil {
+			continue
+		}
+		last := c.CreatedAt
+		if c.LastUsedAt != nil {
+			last = *c.LastUsedAt
+		}
+		if !last.Before(cutoff) {
+			continue
+		}
+		swept = append(swept, c.ClientID)
+		// Delete dependents by client_id, then the client row + index.
+		for cid, cons := range r.consents {
+			if cons.ClientID == c.ClientID {
+				delete(r.consents, cid)
+			}
+		}
+		for acid, ac := range r.authCodes {
+			if ac.ClientID == c.ClientID {
+				delete(r.authCodeHashIdx, ac.CodeHash)
+				delete(r.authCodes, acid)
+			}
+		}
+		for dcid, dc := range r.deviceCodes {
+			if dc.ClientID == c.ClientID {
+				delete(r.deviceCodeHashIdx, dc.DeviceCodeHash)
+				delete(r.deviceCodes, dcid)
+			}
+		}
+		delete(r.oauth2ClientIDIdx, c.ClientID)
+		delete(r.oauth2Clients, id)
+	}
+	return swept, nil
 }
 
 // --- AuthorizationCode ---

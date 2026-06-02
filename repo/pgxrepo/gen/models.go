@@ -194,6 +194,8 @@ type YauthOauth2Client struct {
 	PostLogoutRedirectUris           string
 	BackchannelLogoutUri             *string
 	BackchannelLogoutSessionRequired bool
+	DynamicallyRegistered            bool
+	LastUsedAt                       pgtype.Timestamptz
 }
 
 type YauthOauthAccount struct {

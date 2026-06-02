@@ -13,6 +13,7 @@ import (
 
 	"github.com/yackey-labs/yauth-go/auth"
 	"github.com/yackey-labs/yauth-go/domain"
+	"github.com/yackey-labs/yauth-go/middleware"
 	"github.com/yackey-labs/yauth-go/plugin"
 	"github.com/yackey-labs/yauth-go/yautherr"
 )
@@ -203,11 +204,30 @@ func (p *oauth2Plugin) handleDCRRegister(host plugin.PluginHost, prefix string) 
 			IsPublic:                isPublic,
 			CreatedAt:               now,
 			TokenEndpointAuthMethod: &method,
+			// Mark as DCR-created so the stale-client sweep may reclaim it; never
+			// touches admin-provisioned clients.
+			DynamicallyRegistered: true,
 		}
 		if err := host.Repo().CreateOAuth2Client(r.Context(), newClient); err != nil {
 			writeDCRError(w, http.StatusInternalServerError, "server_error", "create client: "+sanitizeErr(err)) // nosemgrep: go.lang.security.injection.tainted-sql-string.tainted-sql-string
 			return
 		}
+		// Audit the registration as a durable record, independent of the client
+		// row (which the stale-client sweep may later reclaim).
+		regMeta, _ := json.Marshal(map[string]any{
+			"client_id":     clientID,
+			"client_name":   req.ClientName,
+			"is_public":     isPublic,
+			"redirect_uris": req.RedirectURIs,
+			"source":        "dcr",
+		})
+		_ = host.Repo().LogAuditEvent(r.Context(), domain.NewAuditLog{
+			ID:        uuid.NewString(),
+			EventType: "oauth2.client.registered",
+			Metadata:  regMeta,
+			IPAddress: middleware.RequestIP(r),
+			CreatedAt: now,
+		})
 
 		regToken, err := signRegistrationAccessToken(host, p.cfg.Issuer, clientID)
 		if err != nil {

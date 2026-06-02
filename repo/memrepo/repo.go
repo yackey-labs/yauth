@@ -491,6 +491,13 @@ func cloneOAuth2Client(o *domain.OAuth2Client) *domain.OAuth2Client {
 	if len(o.Scopes) > 0 {
 		c.Scopes = append([]byte(nil), o.Scopes...)
 	}
+	if len(o.PostLogoutRedirectURIs) > 0 {
+		c.PostLogoutRedirectURIs = append([]byte(nil), o.PostLogoutRedirectURIs...)
+	}
+	if o.BackchannelLogoutURI != nil {
+		s := *o.BackchannelLogoutURI
+		c.BackchannelLogoutURI = &s
+	}
 	return &c
 }
 

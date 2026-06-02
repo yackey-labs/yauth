@@ -152,11 +152,19 @@ type OAuth2Client struct {
 	BannedAt                *time.Time `gorm:"column:banned_at"`
 	BannedReason            *string    `gorm:"column:banned_reason"`
 	EnforceGroupAssignment  bool       `gorm:"column:enforce_group_assignment;not null;default:false"`
+
+	PostLogoutRedirectURIs           string  `gorm:"column:post_logout_redirect_uris;type:text;not null;default:'[]'"`
+	BackchannelLogoutURI             *string `gorm:"column:backchannel_logout_uri;type:text"`
+	BackchannelLogoutSessionRequired bool    `gorm:"column:backchannel_logout_session_required;not null;default:false"`
 }
 
 func (OAuth2Client) TableName() string { return "yauth_oauth2_clients" }
 
 func (m *OAuth2Client) toDomain() domain.OAuth2Client {
+	plru := m.PostLogoutRedirectURIs
+	if plru == "" {
+		plru = "[]"
+	}
 	return domain.OAuth2Client{
 		ID:                      m.ID,
 		ClientID:                m.ClientID,
@@ -173,10 +181,18 @@ func (m *OAuth2Client) toDomain() domain.OAuth2Client {
 		BannedAt:                ptrUTC(m.BannedAt),
 		BannedReason:            m.BannedReason,
 		EnforceGroupAssignment:  m.EnforceGroupAssignment,
+
+		PostLogoutRedirectURIs:           json.RawMessage(plru),
+		BackchannelLogoutURI:             m.BackchannelLogoutURI,
+		BackchannelLogoutSessionRequired: m.BackchannelLogoutSessionRequired,
 	}
 }
 
 func oauth2ClientFromDomain(in domain.NewOAuth2Client) OAuth2Client {
+	plru := string(in.PostLogoutRedirectURIs)
+	if plru == "" {
+		plru = "[]"
+	}
 	return OAuth2Client{
 		ID:                      in.ID,
 		ClientID:                in.ClientID,
@@ -191,6 +207,10 @@ func oauth2ClientFromDomain(in domain.NewOAuth2Client) OAuth2Client {
 		PublicKeyPEM:            in.PublicKeyPEM,
 		JWKSURI:                 in.JWKSURI,
 		EnforceGroupAssignment:  in.EnforceGroupAssignment,
+
+		PostLogoutRedirectURIs:           plru,
+		BackchannelLogoutURI:             in.BackchannelLogoutURI,
+		BackchannelLogoutSessionRequired: in.BackchannelLogoutSessionRequired,
 	}
 }
 

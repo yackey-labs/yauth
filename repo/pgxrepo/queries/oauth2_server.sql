@@ -1,6 +1,14 @@
 -- name: CreateOAuth2Client :exec
-INSERT INTO yauth_oauth2_clients (id, client_id, client_secret_hash, redirect_uris, client_name, grant_types, scopes, is_public, created_at, token_endpoint_auth_method, public_key_pem, jwks_uri, banned_at, banned_reason)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14);
+INSERT INTO yauth_oauth2_clients (id, client_id, client_secret_hash, redirect_uris, client_name, grant_types, scopes, is_public, created_at, token_endpoint_auth_method, public_key_pem, jwks_uri, banned_at, banned_reason, post_logout_redirect_uris, backchannel_logout_uri, backchannel_logout_session_required)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17);
+
+-- name: SetOAuth2ClientLogout :execrows
+UPDATE yauth_oauth2_clients
+SET post_logout_redirect_uris = $2, backchannel_logout_uri = $3, backchannel_logout_session_required = $4
+WHERE client_id = $1;
+
+-- name: ListOAuth2ClientsWithBackchannelLogout :many
+SELECT * FROM yauth_oauth2_clients WHERE backchannel_logout_uri IS NOT NULL AND backchannel_logout_uri <> '';
 
 -- name: GetOAuth2ClientByClientID :one
 SELECT * FROM yauth_oauth2_clients WHERE client_id = $1 LIMIT 1;
@@ -42,6 +50,9 @@ VALUES ($1, $2, $3, $4, $5);
 
 -- name: GetConsentByUserAndClient :one
 SELECT * FROM yauth_consents WHERE user_id = $1 AND client_id = $2 LIMIT 1;
+
+-- name: ListConsentsByUserID :many
+SELECT * FROM yauth_consents WHERE user_id = $1;
 
 -- name: UpdateConsentScopes :execrows
 UPDATE yauth_consents SET scopes = $2 WHERE id = $1;

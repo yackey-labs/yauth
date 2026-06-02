@@ -2,6 +2,7 @@ package repo
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/yackey-labs/yauth-go/domain"
@@ -240,6 +241,13 @@ type OAuth2ClientRepository interface {
 	ListBannedOAuth2Clients(ctx context.Context) ([]*domain.OAuth2Client, error)
 	// ListOAuth2Clients returns all registered clients (admin enumeration).
 	ListOAuth2Clients(ctx context.Context) ([]*domain.OAuth2Client, error)
+	// SetOAuth2ClientLogout updates a client's OIDC logout configuration
+	// (post_logout_redirect_uris, backchannel_logout_uri, session_required).
+	// Returns true if a row was updated.
+	SetOAuth2ClientLogout(ctx context.Context, clientID string, postLogoutRedirectURIs json.RawMessage, backchannelLogoutURI *string, sessionRequired bool) (bool, error)
+	// ListOAuth2ClientsWithBackchannelLogoutURI returns clients that registered
+	// a back-channel logout endpoint, for logout_token fan-out.
+	ListOAuth2ClientsWithBackchannelLogoutURI(ctx context.Context) ([]*domain.OAuth2Client, error)
 }
 
 // AuthorizationCodeRepository covers single-use OAuth2 authorization codes.
@@ -259,6 +267,9 @@ type ConsentRepository interface {
 	CreateConsent(ctx context.Context, input domain.NewConsent) error
 	GetConsentByUserAndClient(ctx context.Context, userID, clientID string) (*domain.Consent, error)
 	UpdateConsentScopes(ctx context.Context, id string, scopes []byte) error
+	// ListConsentsByUserID returns all client grants for a user, used to target
+	// back-channel logout to the RPs the user actually authorized.
+	ListConsentsByUserID(ctx context.Context, userID string) ([]*domain.Consent, error)
 }
 
 // DeviceCodeRepository covers OAuth2 device-authorization-grant codes.

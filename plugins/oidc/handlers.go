@@ -16,6 +16,7 @@ type discoveryDoc struct {
 	AuthorizationEndpoint            string   `json:"authorization_endpoint,omitempty"`
 	TokenEndpoint                    string   `json:"token_endpoint,omitempty"`
 	RegistrationEndpoint             string   `json:"registration_endpoint,omitempty"`
+	EndSessionEndpoint               string   `json:"end_session_endpoint,omitempty"`
 	UserInfoEndpoint                 string   `json:"userinfo_endpoint"`
 	JWKSURI                          string   `json:"jwks_uri"`
 	ResponseTypesSupported           []string `json:"response_types_supported"`
@@ -60,6 +61,9 @@ func (p *oidcPlugin) handleDiscovery(host plugin.PluginHost) http.HandlerFunc {
 			// that want DCR will attempt it; the endpoint itself enforces
 			// the DCREnabled gate.
 			doc.RegistrationEndpoint = base + "/oauth/register"
+			// OIDC RP-Initiated Logout 1.0. Back-Channel Logout is advertised
+			// separately once delivery is implemented.
+			doc.EndSessionEndpoint = base + "/oauth/end_session"
 		}
 
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")

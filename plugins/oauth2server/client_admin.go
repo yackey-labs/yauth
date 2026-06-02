@@ -33,6 +33,10 @@ type clientJSON struct {
 	BannedReason            *string   `json:"banned_reason,omitempty"`
 	EnforceGroupAssignment  bool      `json:"enforce_group_assignment"`
 	CreatedAt               time.Time `json:"created_at"`
+
+	PostLogoutRedirectURIs           []string `json:"post_logout_redirect_uris"`
+	BackchannelLogoutURI             *string  `json:"backchannel_logout_uri,omitempty"`
+	BackchannelLogoutSessionRequired bool     `json:"backchannel_logout_session_required"`
 }
 
 // createClientRequest is the body for POST /oauth2/clients.
@@ -46,6 +50,10 @@ type createClientRequest struct {
 	PublicKeyPEM            *string  `json:"public_key_pem,omitempty"`
 	JWKSURI                 *string  `json:"jwks_uri,omitempty"`
 	EnforceGroupAssignment  bool     `json:"enforce_group_assignment,omitempty"`
+
+	PostLogoutRedirectURIs           []string `json:"post_logout_redirect_uris,omitempty"`
+	BackchannelLogoutURI             *string  `json:"backchannel_logout_uri,omitempty"`
+	BackchannelLogoutSessionRequired bool     `json:"backchannel_logout_session_required,omitempty"`
 }
 
 type createClientResponse struct {
@@ -60,6 +68,12 @@ type patchClientRequest struct {
 	BannedReason           *string `json:"banned_reason,omitempty"`
 	PublicKeyPEM           *string `json:"public_key_pem,omitempty"`
 	EnforceGroupAssignment *bool   `json:"enforce_group_assignment,omitempty"`
+
+	// OIDC logout config. Any non-nil field triggers a logout-config update
+	// (merged with the client's current values for the fields left nil).
+	PostLogoutRedirectURIs           *[]string `json:"post_logout_redirect_uris,omitempty"`
+	BackchannelLogoutURI             *string   `json:"backchannel_logout_uri,omitempty"`
+	BackchannelLogoutSessionRequired *bool     `json:"backchannel_logout_session_required,omitempty"`
 }
 
 // toClientJSON converts a domain.OAuth2Client to its JSON shape.
@@ -79,6 +93,10 @@ func toClientJSON(c domain.OAuth2Client) clientJSON {
 		BannedReason:            c.BannedReason,
 		EnforceGroupAssignment:  c.EnforceGroupAssignment,
 		CreatedAt:               c.CreatedAt,
+
+		PostLogoutRedirectURIs:           decodeScopes(c.PostLogoutRedirectURIs),
+		BackchannelLogoutURI:             c.BackchannelLogoutURI,
+		BackchannelLogoutSessionRequired: c.BackchannelLogoutSessionRequired,
 	}
 }
 
@@ -104,6 +122,13 @@ func (p *oauth2Plugin) handleCreateClient(host plugin.PluginHost) http.HandlerFu
 		// wrapping long redirect URIs.
 		for i := range req.RedirectURIs {
 			req.RedirectURIs[i] = sanitizeURL(req.RedirectURIs[i])
+		}
+		for i := range req.PostLogoutRedirectURIs {
+			req.PostLogoutRedirectURIs[i] = sanitizeURL(req.PostLogoutRedirectURIs[i])
+		}
+		if req.BackchannelLogoutURI != nil {
+			s := sanitizeURL(*req.BackchannelLogoutURI)
+			req.BackchannelLogoutURI = &s
 		}
 
 		clientID, err := randomHex(16)
@@ -143,6 +168,10 @@ func (p *oauth2Plugin) handleCreateClient(host plugin.PluginHost) http.HandlerFu
 			PublicKeyPEM:            req.PublicKeyPEM,
 			JWKSURI:                 req.JWKSURI,
 			EnforceGroupAssignment:  req.EnforceGroupAssignment,
+
+			PostLogoutRedirectURIs:           rawJSON(req.PostLogoutRedirectURIs),
+			BackchannelLogoutURI:             req.BackchannelLogoutURI,
+			BackchannelLogoutSessionRequired: req.BackchannelLogoutSessionRequired,
 		}
 		if err := host.Repo().CreateOAuth2Client(r.Context(), new); err != nil {
 			// writeOAuthError emits a JSON response body per RFC 6749 §5.2, not a SQL string.
@@ -236,6 +265,43 @@ func (p *oauth2Plugin) handlePatchClient(host plugin.PluginHost) http.HandlerFun
 		}
 		if req.EnforceGroupAssignment != nil {
 			if err := host.Repo().SetClientEnforceGroupAssignment(r.Context(), id, *req.EnforceGroupAssignment); err != nil {
+				writeOAuthError(w, "server_error", err.Error())
+				return
+			}
+		}
+		if req.PostLogoutRedirectURIs != nil || req.BackchannelLogoutURI != nil || req.BackchannelLogoutSessionRequired != nil {
+			// Merge against current values for the logout fields not provided.
+			cur, err := host.Repo().GetOAuth2ClientByClientID(r.Context(), id)
+			if err != nil {
+				if errors.Is(err, yautherr.ErrNotFound) {
+					writeOAuthError(w, "invalid_request", "client not found")
+					return
+				}
+				writeOAuthError(w, "server_error", err.Error())
+				return
+			}
+			plru := cur.PostLogoutRedirectURIs
+			if req.PostLogoutRedirectURIs != nil {
+				uris := *req.PostLogoutRedirectURIs
+				for i := range uris {
+					uris[i] = sanitizeURL(uris[i])
+				}
+				plru = rawJSON(uris)
+			}
+			bclURI := cur.BackchannelLogoutURI
+			if req.BackchannelLogoutURI != nil {
+				s := sanitizeURL(*req.BackchannelLogoutURI)
+				if s == "" {
+					bclURI = nil // explicit empty string clears back-channel logout
+				} else {
+					bclURI = &s
+				}
+			}
+			sessReq := cur.BackchannelLogoutSessionRequired
+			if req.BackchannelLogoutSessionRequired != nil {
+				sessReq = *req.BackchannelLogoutSessionRequired
+			}
+			if _, err := host.Repo().SetOAuth2ClientLogout(r.Context(), id, plru, bclURI, sessReq); err != nil {
 				writeOAuthError(w, "server_error", err.Error())
 				return
 			}

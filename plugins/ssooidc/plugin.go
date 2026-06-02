@@ -94,6 +94,10 @@ type ssoOIDCPlugin struct {
 	// deployments do not collide.
 	jwksCacheOnce sync.Once
 	jwksCacheRef  *jwksCache
+
+	// bclJTIOnce guards lazy init of the Back-Channel Logout jti replay cache.
+	bclJTIOnce sync.Once
+	bclJTIRef  *bclJTICache
 }
 
 // New constructs the sso_oidc plugin. Returns a non-nil error when the
@@ -150,6 +154,11 @@ func (p *ssoOIDCPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux, prefi
 	mux.Handle("GET "+prefix+"/sso/login", http.HandlerFunc(p.handleSsoLogin(host)))
 	mux.Handle("GET "+prefix+"/sso/callback", http.HandlerFunc(p.handleSsoCallback(host)))
 	mux.Handle("POST "+prefix+"/sso/callback", http.HandlerFunc(p.handleSsoCallback(host)))
+
+	// OIDC Back-Channel Logout 1.0 receiver: the upstream IdP POSTs a
+	// logout_token here when a user is logged out/offboarded, and we terminate
+	// the matching local sessions. Public (verified by logout_token signature).
+	mux.Handle("POST "+prefix+"/sso/backchannel-logout", http.HandlerFunc(p.handleBackchannelLogout(host)))
 }
 
 // httpClient returns the configured HTTP client or a 10s-timeout

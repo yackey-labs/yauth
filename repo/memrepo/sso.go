@@ -84,6 +84,23 @@ func (r *Repo) ListSsoConnectionsByOrg(ctx context.Context, organizationID strin
 	return out, nil
 }
 
+func (r *Repo) ListAllSsoConnections(ctx context.Context) ([]*domain.SsoConnection, error) {
+	_ = ensureCtx(ctx)
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]*domain.SsoConnection, 0, len(r.ssoConnections))
+	for _, c := range r.ssoConnections {
+		out = append(out, cloneSsoConnection(c))
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].CreatedAt.Before(out[j].CreatedAt)
+	})
+	return out, nil
+}
+
 func (r *Repo) UpdateSsoConnection(ctx context.Context, id string, changes domain.UpdateSsoConnection) (domain.SsoConnection, error) {
 	_ = ensureCtx(ctx)
 	r.mu.Lock()

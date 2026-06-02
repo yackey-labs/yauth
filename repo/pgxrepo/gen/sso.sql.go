@@ -211,6 +211,41 @@ func (q *Queries) GetSsoConnectionByID(ctx context.Context, id string) (YauthSso
 	return i, err
 }
 
+const listAllSsoConnections = `-- name: ListAllSsoConnections :many
+SELECT id, organization_id, kind, name, status, config, jit_provisioning_enabled, default_role_on_jit, created_at, updated_at FROM yauth_sso_connections ORDER BY created_at ASC, id ASC
+`
+
+func (q *Queries) ListAllSsoConnections(ctx context.Context) ([]YauthSsoConnection, error) {
+	rows, err := q.db.Query(ctx, listAllSsoConnections)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []YauthSsoConnection{}
+	for rows.Next() {
+		var i YauthSsoConnection
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrganizationID,
+			&i.Kind,
+			&i.Name,
+			&i.Status,
+			&i.Config,
+			&i.JitProvisioningEnabled,
+			&i.DefaultRoleOnJit,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listExternalIdentitiesByUser = `-- name: ListExternalIdentitiesByUser :many
 SELECT id, user_id, provider, external_id, linked_at, last_login_at FROM yauth_external_identities WHERE user_id = $1 ORDER BY linked_at ASC, id ASC
 `

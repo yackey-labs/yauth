@@ -291,6 +291,89 @@ func (c *jwksCache) verifyIDToken(ctx context.Context, jwksURL, rawToken, expect
 	return out, nil
 }
 
+// verifyLogoutToken verifies an OIDC Back-Channel Logout 1.0 logout_token's
+// signature against the JWKS at jwksURL and checks iss/aud, returning the
+// verified claims. Unlike verifyIDToken it does not require (or accept) a nonce
+// and tolerates an absent exp — the BCL-specific structural checks (events
+// claim, jti, sub/sid, nonce-absence) are applied by the caller.
+func (c *jwksCache) verifyLogoutToken(ctx context.Context, jwksURL, rawToken, expectedIssuer, expectedAudience string) (jwt.MapClaims, error) {
+	parser := jwt.NewParser(jwt.WithoutClaimsValidation())
+	parsed, _, err := parser.ParseUnverified(rawToken, jwt.MapClaims{})
+	if err != nil {
+		return nil, fmt.Errorf("ssooidc: parse logout_token header: %w", err)
+	}
+	var kid string
+	if k, ok := parsed.Header["kid"].(string); ok {
+		kid = k
+	}
+	set, err := c.get(ctx, jwksURL, kid)
+	if err != nil {
+		return nil, err
+	}
+	keyFunc := func(tok *jwt.Token) (any, error) {
+		alg, _ := tok.Header["alg"].(string)
+		if !strings.HasPrefix(alg, "RS") && !strings.HasPrefix(alg, "ES") && !strings.HasPrefix(alg, "PS") {
+			return nil, fmt.Errorf("ssooidc: unsupported alg %q", alg)
+		}
+		k, ok := set.LookupKeyID(kid)
+		if !ok {
+			refreshed, refreshErr := c.refresh(ctx, jwksURL)
+			if refreshErr != nil {
+				return nil, refreshErr
+			}
+			k, ok = refreshed.LookupKeyID(kid)
+			if !ok {
+				return nil, fmt.Errorf("ssooidc: no key with kid %q", kid)
+			}
+		}
+		var raw any
+		if err := k.Raw(&raw); err != nil {
+			return nil, fmt.Errorf("ssooidc: extract raw key: %w", err)
+		}
+		switch raw.(type) {
+		case *rsa.PublicKey, *ecdsa.PublicKey:
+			return raw, nil
+		default:
+			return nil, fmt.Errorf("ssooidc: unexpected key type %T", raw)
+		}
+	}
+	verified := jwt.MapClaims{}
+	if _, err := jwt.ParseWithClaims(rawToken, verified, keyFunc, jwt.WithLeeway(60*time.Second)); err != nil {
+		return nil, fmt.Errorf("ssooidc: verify logout_token: %w", err)
+	}
+	if expectedIssuer != "" {
+		if iss, _ := verified["iss"].(string); iss != expectedIssuer {
+			return nil, fmt.Errorf("ssooidc: logout_token issuer mismatch: got %q want %q", verified["iss"], expectedIssuer)
+		}
+	}
+	if expectedAudience != "" && !logoutTokenAudienceMatches(verified["aud"], expectedAudience) {
+		return nil, errors.New("ssooidc: logout_token audience mismatch")
+	}
+	return verified, nil
+}
+
+// logoutTokenAudienceMatches reports whether want is present in a JWT aud claim,
+// which may be a single string or an array of strings.
+func logoutTokenAudienceMatches(aud any, want string) bool {
+	switch v := aud.(type) {
+	case string:
+		return v == want
+	case []any:
+		for _, a := range v {
+			if s, ok := a.(string); ok && s == want {
+				return true
+			}
+		}
+	case []string:
+		for _, s := range v {
+			if s == want {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // decodeIDTokenClaims projects a verified jwt.MapClaims into the
 // strongly-typed IDTokenClaims shape, preserving every other claim in
 // Extras for the claim-mapping step.

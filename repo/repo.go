@@ -528,6 +528,11 @@ type SsoConnectionRepository interface {
 	CreateSsoConnection(ctx context.Context, input domain.NewSsoConnection) (domain.SsoConnection, error)
 	GetSsoConnectionByID(ctx context.Context, id string) (*domain.SsoConnection, error)
 	ListSsoConnectionsByOrg(ctx context.Context, organizationID string) ([]*domain.SsoConnection, error)
+	// ListAllSsoConnections returns every connection across all orgs. Used by
+	// the federated-logout receivers (OIDC Back-Channel Logout / SAML SLO) to
+	// match an inbound logout against the connection it belongs to by
+	// issuer/entity-id, since those requests are unsolicited and carry no org.
+	ListAllSsoConnections(ctx context.Context) ([]*domain.SsoConnection, error)
 	UpdateSsoConnection(ctx context.Context, id string, changes domain.UpdateSsoConnection) (domain.SsoConnection, error)
 	// DeleteSsoConnection is idempotent — a non-existent id returns nil.
 	DeleteSsoConnection(ctx context.Context, id string) error

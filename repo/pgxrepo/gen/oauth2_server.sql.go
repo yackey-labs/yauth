@@ -137,8 +137,8 @@ func (q *Queries) CreateDeviceCode(ctx context.Context, arg CreateDeviceCodePara
 }
 
 const createOAuth2Client = `-- name: CreateOAuth2Client :exec
-INSERT INTO yauth_oauth2_clients (id, client_id, client_secret_hash, redirect_uris, client_name, grant_types, scopes, is_public, created_at, token_endpoint_auth_method, public_key_pem, jwks_uri, banned_at, banned_reason, post_logout_redirect_uris, backchannel_logout_uri, backchannel_logout_session_required)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+INSERT INTO yauth_oauth2_clients (id, client_id, client_secret_hash, redirect_uris, client_name, grant_types, scopes, is_public, created_at, token_endpoint_auth_method, public_key_pem, jwks_uri, banned_at, banned_reason, post_logout_redirect_uris, backchannel_logout_uri, backchannel_logout_session_required, dynamically_registered)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 `
 
 type CreateOAuth2ClientParams struct {
@@ -159,6 +159,7 @@ type CreateOAuth2ClientParams struct {
 	PostLogoutRedirectUris           string
 	BackchannelLogoutUri             *string
 	BackchannelLogoutSessionRequired bool
+	DynamicallyRegistered            bool
 }
 
 func (q *Queries) CreateOAuth2Client(ctx context.Context, arg CreateOAuth2ClientParams) error {
@@ -180,6 +181,7 @@ func (q *Queries) CreateOAuth2Client(ctx context.Context, arg CreateOAuth2Client
 		arg.PostLogoutRedirectUris,
 		arg.BackchannelLogoutUri,
 		arg.BackchannelLogoutSessionRequired,
+		arg.DynamicallyRegistered,
 	)
 	return err
 }
@@ -313,7 +315,7 @@ func (q *Queries) GetDeviceCodeByUserCodePending(ctx context.Context, userCode s
 }
 
 const getOAuth2ClientByClientID = `-- name: GetOAuth2ClientByClientID :one
-SELECT id, client_id, client_secret_hash, redirect_uris, client_name, grant_types, scopes, is_public, created_at, token_endpoint_auth_method, public_key_pem, jwks_uri, banned_at, banned_reason, enforce_group_assignment, post_logout_redirect_uris, backchannel_logout_uri, backchannel_logout_session_required FROM yauth_oauth2_clients WHERE client_id = $1 LIMIT 1
+SELECT id, client_id, client_secret_hash, redirect_uris, client_name, grant_types, scopes, is_public, created_at, token_endpoint_auth_method, public_key_pem, jwks_uri, banned_at, banned_reason, enforce_group_assignment, post_logout_redirect_uris, backchannel_logout_uri, backchannel_logout_session_required, dynamically_registered, last_used_at FROM yauth_oauth2_clients WHERE client_id = $1 LIMIT 1
 `
 
 func (q *Queries) GetOAuth2ClientByClientID(ctx context.Context, clientID string) (YauthOauth2Client, error) {
@@ -338,6 +340,8 @@ func (q *Queries) GetOAuth2ClientByClientID(ctx context.Context, clientID string
 		&i.PostLogoutRedirectUris,
 		&i.BackchannelLogoutUri,
 		&i.BackchannelLogoutSessionRequired,
+		&i.DynamicallyRegistered,
+		&i.LastUsedAt,
 	)
 	return i, err
 }
@@ -359,7 +363,7 @@ func (q *Queries) GetOIDCNonceByHash(ctx context.Context, nonceHash string) (Yau
 }
 
 const listBannedOAuth2Clients = `-- name: ListBannedOAuth2Clients :many
-SELECT id, client_id, client_secret_hash, redirect_uris, client_name, grant_types, scopes, is_public, created_at, token_endpoint_auth_method, public_key_pem, jwks_uri, banned_at, banned_reason, enforce_group_assignment, post_logout_redirect_uris, backchannel_logout_uri, backchannel_logout_session_required FROM yauth_oauth2_clients WHERE banned_at IS NOT NULL ORDER BY banned_at DESC
+SELECT id, client_id, client_secret_hash, redirect_uris, client_name, grant_types, scopes, is_public, created_at, token_endpoint_auth_method, public_key_pem, jwks_uri, banned_at, banned_reason, enforce_group_assignment, post_logout_redirect_uris, backchannel_logout_uri, backchannel_logout_session_required, dynamically_registered, last_used_at FROM yauth_oauth2_clients WHERE banned_at IS NOT NULL ORDER BY banned_at DESC
 `
 
 func (q *Queries) ListBannedOAuth2Clients(ctx context.Context) ([]YauthOauth2Client, error) {
@@ -390,6 +394,8 @@ func (q *Queries) ListBannedOAuth2Clients(ctx context.Context) ([]YauthOauth2Cli
 			&i.PostLogoutRedirectUris,
 			&i.BackchannelLogoutUri,
 			&i.BackchannelLogoutSessionRequired,
+			&i.DynamicallyRegistered,
+			&i.LastUsedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -432,7 +438,7 @@ func (q *Queries) ListConsentsByUserID(ctx context.Context, userID string) ([]Ya
 }
 
 const listOAuth2Clients = `-- name: ListOAuth2Clients :many
-SELECT id, client_id, client_secret_hash, redirect_uris, client_name, grant_types, scopes, is_public, created_at, token_endpoint_auth_method, public_key_pem, jwks_uri, banned_at, banned_reason, enforce_group_assignment, post_logout_redirect_uris, backchannel_logout_uri, backchannel_logout_session_required FROM yauth_oauth2_clients ORDER BY created_at DESC
+SELECT id, client_id, client_secret_hash, redirect_uris, client_name, grant_types, scopes, is_public, created_at, token_endpoint_auth_method, public_key_pem, jwks_uri, banned_at, banned_reason, enforce_group_assignment, post_logout_redirect_uris, backchannel_logout_uri, backchannel_logout_session_required, dynamically_registered, last_used_at FROM yauth_oauth2_clients ORDER BY created_at DESC
 `
 
 func (q *Queries) ListOAuth2Clients(ctx context.Context) ([]YauthOauth2Client, error) {
@@ -463,6 +469,8 @@ func (q *Queries) ListOAuth2Clients(ctx context.Context) ([]YauthOauth2Client, e
 			&i.PostLogoutRedirectUris,
 			&i.BackchannelLogoutUri,
 			&i.BackchannelLogoutSessionRequired,
+			&i.DynamicallyRegistered,
+			&i.LastUsedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -475,7 +483,7 @@ func (q *Queries) ListOAuth2Clients(ctx context.Context) ([]YauthOauth2Client, e
 }
 
 const listOAuth2ClientsWithBackchannelLogout = `-- name: ListOAuth2ClientsWithBackchannelLogout :many
-SELECT id, client_id, client_secret_hash, redirect_uris, client_name, grant_types, scopes, is_public, created_at, token_endpoint_auth_method, public_key_pem, jwks_uri, banned_at, banned_reason, enforce_group_assignment, post_logout_redirect_uris, backchannel_logout_uri, backchannel_logout_session_required FROM yauth_oauth2_clients WHERE backchannel_logout_uri IS NOT NULL AND backchannel_logout_uri <> ''
+SELECT id, client_id, client_secret_hash, redirect_uris, client_name, grant_types, scopes, is_public, created_at, token_endpoint_auth_method, public_key_pem, jwks_uri, banned_at, banned_reason, enforce_group_assignment, post_logout_redirect_uris, backchannel_logout_uri, backchannel_logout_session_required, dynamically_registered, last_used_at FROM yauth_oauth2_clients WHERE backchannel_logout_uri IS NOT NULL AND backchannel_logout_uri <> ''
 `
 
 func (q *Queries) ListOAuth2ClientsWithBackchannelLogout(ctx context.Context) ([]YauthOauth2Client, error) {
@@ -506,6 +514,8 @@ func (q *Queries) ListOAuth2ClientsWithBackchannelLogout(ctx context.Context) ([
 			&i.PostLogoutRedirectUris,
 			&i.BackchannelLogoutUri,
 			&i.BackchannelLogoutSessionRequired,
+			&i.DynamicallyRegistered,
+			&i.LastUsedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -550,7 +560,7 @@ const setOAuth2ClientBanned = `-- name: SetOAuth2ClientBanned :one
 UPDATE yauth_oauth2_clients
 SET banned_at = $2, banned_reason = $3
 WHERE client_id = $1
-RETURNING id, client_id, client_secret_hash, redirect_uris, client_name, grant_types, scopes, is_public, created_at, token_endpoint_auth_method, public_key_pem, jwks_uri, banned_at, banned_reason, enforce_group_assignment, post_logout_redirect_uris, backchannel_logout_uri, backchannel_logout_session_required
+RETURNING id, client_id, client_secret_hash, redirect_uris, client_name, grant_types, scopes, is_public, created_at, token_endpoint_auth_method, public_key_pem, jwks_uri, banned_at, banned_reason, enforce_group_assignment, post_logout_redirect_uris, backchannel_logout_uri, backchannel_logout_session_required, dynamically_registered, last_used_at
 `
 
 type SetOAuth2ClientBannedParams struct {
@@ -581,6 +591,8 @@ func (q *Queries) SetOAuth2ClientBanned(ctx context.Context, arg SetOAuth2Client
 		&i.PostLogoutRedirectUris,
 		&i.BackchannelLogoutUri,
 		&i.BackchannelLogoutSessionRequired,
+		&i.DynamicallyRegistered,
+		&i.LastUsedAt,
 	)
 	return i, err
 }
@@ -622,6 +634,23 @@ func (q *Queries) SetOAuth2ClientLogout(ctx context.Context, arg SetOAuth2Client
 		arg.BackchannelLogoutUri,
 		arg.BackchannelLogoutSessionRequired,
 	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const touchOAuth2ClientLastUsed = `-- name: TouchOAuth2ClientLastUsed :execrows
+UPDATE yauth_oauth2_clients SET last_used_at = $2 WHERE client_id = $1
+`
+
+type TouchOAuth2ClientLastUsedParams struct {
+	ClientID   string
+	LastUsedAt pgtype.Timestamptz
+}
+
+func (q *Queries) TouchOAuth2ClientLastUsed(ctx context.Context, arg TouchOAuth2ClientLastUsedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, touchOAuth2ClientLastUsed, arg.ClientID, arg.LastUsedAt)
 	if err != nil {
 		return 0, err
 	}

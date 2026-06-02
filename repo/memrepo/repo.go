@@ -498,6 +498,10 @@ func cloneOAuth2Client(o *domain.OAuth2Client) *domain.OAuth2Client {
 		s := *o.BackchannelLogoutURI
 		c.BackchannelLogoutURI = &s
 	}
+	if o.LastUsedAt != nil {
+		t := *o.LastUsedAt
+		c.LastUsedAt = &t
+	}
 	return &c
 }
 

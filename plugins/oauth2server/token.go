@@ -195,6 +195,8 @@ func (p *oauth2Plugin) grantAuthCode(host plugin.PluginHost, w http.ResponseWrit
 		writeOAuthError(w, "server_error", err3.Error())
 		return
 	}
+	// Mark the client used so the stale-client sweep keeps it alive.
+	_ = repo.TouchOAuth2ClientLastUsed(r.Context(), client.ClientID, time.Now().UTC())
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -263,6 +265,8 @@ func (p *oauth2Plugin) grantRefreshToken(host plugin.PluginHost, w http.Response
 		writeOAuthError(w, "server_error", err3.Error())
 		return
 	}
+	// Mark the client used so the stale-client sweep keeps it alive.
+	_ = repo.TouchOAuth2ClientLastUsed(r.Context(), client.ClientID, time.Now().UTC())
 	writeJSON(w, http.StatusOK, resp)
 }
 

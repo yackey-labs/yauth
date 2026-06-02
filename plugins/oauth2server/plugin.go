@@ -131,6 +131,16 @@ type Config struct {
 	// (the OP→RP logout_token POST). Default: 5s. Delivery is best-effort and
 	// asynchronous; this only caps how long a single attempt may hang.
 	BackchannelLogoutTimeout time.Duration
+	// DCRStaleClientTTL enables the background sweep of stale dynamically-
+	// registered clients: a DCR client unused (no token-endpoint use) for longer
+	// than this is purged along with its dependent consents/codes. 0 (default)
+	// disables the sweep entirely. Admin-provisioned clients are never touched.
+	// A sensible value is the refresh-token TTL — past it, any token the client
+	// minted is already expired, so the client provably can't grant access.
+	DCRStaleClientTTL time.Duration
+	// DCRStaleSweepInterval is how often the sweep runs when DCRStaleClientTTL
+	// is set. Default: 24h.
+	DCRStaleSweepInterval time.Duration
 }
 
 // oauth2Plugin is the unexported plugin.Plugin implementation.
@@ -146,6 +156,9 @@ type oauth2Plugin struct {
 	// jwksMu guards the per-client JWKS cache used by private_key_jwt.
 	jwksMu sync.Mutex
 	jwks   map[string]*jwksEntry
+
+	// sweepOnce guards one-time start of the stale-DCR-client sweep goroutine.
+	sweepOnce sync.Once
 }
 
 // New constructs the oauth2-server plugin.
@@ -174,6 +187,9 @@ func New(cfg Config) plugin.Plugin {
 	if cfg.BackchannelLogoutTimeout <= 0 {
 		cfg.BackchannelLogoutTimeout = 5 * time.Second
 	}
+	if cfg.DCRStaleClientTTL > 0 && cfg.DCRStaleSweepInterval <= 0 {
+		cfg.DCRStaleSweepInterval = 24 * time.Hour
+	}
 	return &oauth2Plugin{
 		cfg:     cfg,
 		pending: map[string]*pendingRequest{},
@@ -193,6 +209,11 @@ func (p *oauth2Plugin) Routes(host plugin.PluginHost, mux *http.ServeMux, prefix
 	// OIDC Back-Channel Logout: react to logout/suspend/ban events by notifying
 	// the user's RPs that registered a backchannel_logout_uri.
 	host.RegisterEventHandler(&bclEventHandler{p: p, host: host})
+
+	// Opt-in background sweep of stale dynamically-registered clients.
+	if p.cfg.DCRStaleClientTTL > 0 {
+		p.startStaleClientSweep(host)
+	}
 
 	// --- admin client CRUD ---
 	mux.Handle("GET "+prefix+"/oauth2/clients", mw.RequireAdmin(http.HandlerFunc(p.handleListClients(host))))

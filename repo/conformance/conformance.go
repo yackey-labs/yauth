@@ -1096,6 +1096,50 @@ var oauth2ClientCases = []testCase{
 			t.Fatalf("expected 1 banned; got len=%d err=%v", len(out), err)
 		}
 	}},
+	{"purge_stale_dynamic_clients", func(t *testing.T, r repo.Repository) {
+		now := nowUTC()
+		old := now.Add(-48 * time.Hour)
+		mk := func(id, clientID string, dynamic bool, created time.Time) {
+			_ = r.CreateOAuth2Client(ctx(), domain.NewOAuth2Client{
+				ID: id, ClientID: clientID, IsPublic: true,
+				RedirectURIs: json.RawMessage(`[]`), GrantTypes: json.RawMessage(`[]`), Scopes: json.RawMessage(`[]`),
+				CreatedAt: created, DynamicallyRegistered: dynamic,
+			})
+		}
+		// Stale DCR client (old, never used) → swept.
+		mk("c_stale", "stale", true, old)
+		// Admin-provisioned client, equally old → MUST survive (not dynamic).
+		mk("c_admin", "admin", false, old)
+		// DCR client recently touched → MUST survive.
+		mk("c_fresh", "fresh", true, old)
+		if err := r.TouchOAuth2ClientLastUsed(ctx(), "fresh", now); err != nil {
+			t.Fatalf("touch: %v", err)
+		}
+		// A dependent consent on the stale client must be cascaded.
+		mustCreateUser(t, r, "u_ps", "ps@example.com")
+		_ = r.CreateConsent(ctx(), domain.NewConsent{ID: "cons_stale", UserID: "u_ps", ClientID: "stale", Scopes: json.RawMessage(`["openid"]`), CreatedAt: old})
+
+		cutoff := now.Add(-1 * time.Hour)
+		swept, err := r.PurgeStaleDynamicClients(ctx(), cutoff)
+		if err != nil {
+			t.Fatalf("purge: %v", err)
+		}
+		if len(swept) != 1 || swept[0] != "stale" {
+			t.Fatalf("expected swept=[stale]; got %v", swept)
+		}
+		if got, _ := r.GetOAuth2ClientByClientID(ctx(), "stale"); got != nil {
+			t.Fatalf("stale client should be purged; got %+v", got)
+		}
+		if got, _ := r.GetOAuth2ClientByClientID(ctx(), "admin"); got == nil {
+			t.Fatalf("admin-provisioned client must survive the sweep")
+		}
+		if got, _ := r.GetOAuth2ClientByClientID(ctx(), "fresh"); got == nil {
+			t.Fatalf("recently-used DCR client must survive the sweep")
+		}
+		if got, _ := r.GetConsentByUserAndClient(ctx(), "u_ps", "stale"); got != nil {
+			t.Fatalf("stale client's consent should be cascaded; got %+v", got)
+		}
+	}},
 }
 
 // ----- authorization codes -----

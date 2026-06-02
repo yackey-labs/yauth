@@ -68,6 +68,12 @@ func (c *Config) Validate() error {
 	if p.Passkey.Enabled && (p.Passkey.RPID == "" || p.Passkey.RPOrigin == "") {
 		return fmt.Errorf("plugins.passkey requires rp_id and rp_origin")
 	}
+	if p.OAuth2Server.Enabled {
+		if p.OAuth2Server.AccessTTL < 0 || p.OAuth2Server.BackchannelLogoutTimeout < 0 ||
+			p.OAuth2Server.AuthorizationCodeTTL < 0 || p.OAuth2Server.DeviceCodeTTL < 0 {
+			return fmt.Errorf("plugins.oauth2_server TTL/timeout values must be non-negative")
+		}
+	}
 
 	if c.Cache.Enabled {
 		switch c.Cache.Provider {

@@ -57,6 +57,48 @@ plugins:
 	}
 }
 
+func TestLoadYAML_OAuth2ServerTTLs(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "yauth.yaml")
+	body := []byte(`database:
+  driver: sqlite
+  dsn: "file::memory:?cache=shared"
+plugins:
+  oauth2_server:
+    enabled: true
+    authorization_code_ttl: 10m
+    device_code_ttl: 5m
+    access_ttl: 5m
+    backchannel_logout_timeout: 3s
+`)
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	o := cfg.Plugins.OAuth2Server
+	if o.AccessTTL != 5*time.Minute {
+		t.Errorf("oauth2_server.access_ttl = %v, want 5m", o.AccessTTL)
+	}
+	if o.BackchannelLogoutTimeout != 3*time.Second {
+		t.Errorf("oauth2_server.backchannel_logout_timeout = %v, want 3s", o.BackchannelLogoutTimeout)
+	}
+	if o.AuthorizationCodeTTL != 10*time.Minute {
+		t.Errorf("oauth2_server.authorization_code_ttl = %v, want 10m", o.AuthorizationCodeTTL)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+
+	// Negative values are rejected.
+	cfg.Plugins.OAuth2Server.AccessTTL = -time.Second
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected validation error for negative access_ttl")
+	}
+}
+
 func TestLoadTOML(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "yauth.toml")

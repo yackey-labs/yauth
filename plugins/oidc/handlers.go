@@ -12,19 +12,21 @@ import (
 // discoveryDoc is the subset of OpenID Provider Metadata (OIDC
 // Discovery 1.0 §3) yauth advertises today.
 type discoveryDoc struct {
-	Issuer                           string   `json:"issuer"`
-	AuthorizationEndpoint            string   `json:"authorization_endpoint,omitempty"`
-	TokenEndpoint                    string   `json:"token_endpoint,omitempty"`
-	RegistrationEndpoint             string   `json:"registration_endpoint,omitempty"`
-	EndSessionEndpoint               string   `json:"end_session_endpoint,omitempty"`
-	UserInfoEndpoint                 string   `json:"userinfo_endpoint"`
-	JWKSURI                          string   `json:"jwks_uri"`
-	ResponseTypesSupported           []string `json:"response_types_supported"`
-	GrantTypesSupported              []string `json:"grant_types_supported"`
-	SubjectTypesSupported            []string `json:"subject_types_supported"`
-	IDTokenSigningAlgValuesSupported []string `json:"id_token_signing_alg_values_supported"`
-	ScopesSupported                  []string `json:"scopes_supported,omitempty"`
-	ClaimsSupported                  []string `json:"claims_supported,omitempty"`
+	Issuer                            string   `json:"issuer"`
+	AuthorizationEndpoint             string   `json:"authorization_endpoint,omitempty"`
+	TokenEndpoint                     string   `json:"token_endpoint,omitempty"`
+	RegistrationEndpoint              string   `json:"registration_endpoint,omitempty"`
+	EndSessionEndpoint                string   `json:"end_session_endpoint,omitempty"`
+	UserInfoEndpoint                  string   `json:"userinfo_endpoint"`
+	JWKSURI                           string   `json:"jwks_uri"`
+	ResponseTypesSupported            []string `json:"response_types_supported"`
+	GrantTypesSupported               []string `json:"grant_types_supported"`
+	SubjectTypesSupported             []string `json:"subject_types_supported"`
+	IDTokenSigningAlgValuesSupported  []string `json:"id_token_signing_alg_values_supported"`
+	ScopesSupported                   []string `json:"scopes_supported,omitempty"`
+	ClaimsSupported                   []string `json:"claims_supported,omitempty"`
+	BackchannelLogoutSupported        bool     `json:"backchannel_logout_supported,omitempty"`
+	BackchannelLogoutSessionSupported bool     `json:"backchannel_logout_session_supported,omitempty"`
 }
 
 // handleDiscovery returns the OpenID Provider discovery document. The
@@ -61,9 +63,13 @@ func (p *oidcPlugin) handleDiscovery(host plugin.PluginHost) http.HandlerFunc {
 			// that want DCR will attempt it; the endpoint itself enforces
 			// the DCREnabled gate.
 			doc.RegistrationEndpoint = base + "/oauth/register"
-			// OIDC RP-Initiated Logout 1.0. Back-Channel Logout is advertised
-			// separately once delivery is implemented.
+			// OIDC RP-Initiated Logout 1.0.
 			doc.EndSessionEndpoint = base + "/oauth/end_session"
+			// OIDC Back-Channel Logout 1.0: the OP delivers logout_tokens to
+			// RPs' backchannel_logout_uri. We send sub-only logout_tokens
+			// (no sid), so session-based logout is not advertised.
+			doc.BackchannelLogoutSupported = true
+			doc.BackchannelLogoutSessionSupported = false
 		}
 
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")

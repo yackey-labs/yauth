@@ -127,6 +127,10 @@ type Config struct {
 	// (SSRF protection). Set true only in development/test environments where
 	// local JWKS endpoints are needed.
 	AllowPrivateNetworkJWKSURI bool
+	// BackchannelLogoutTimeout bounds each OIDC Back-Channel Logout delivery
+	// (the OP→RP logout_token POST). Default: 5s. Delivery is best-effort and
+	// asynchronous; this only caps how long a single attempt may hang.
+	BackchannelLogoutTimeout time.Duration
 }
 
 // oauth2Plugin is the unexported plugin.Plugin implementation.
@@ -167,6 +171,9 @@ func New(cfg Config) plugin.Plugin {
 	if cfg.VerificationURI == "" {
 		cfg.VerificationURI = "/oauth/device"
 	}
+	if cfg.BackchannelLogoutTimeout <= 0 {
+		cfg.BackchannelLogoutTimeout = 5 * time.Second
+	}
 	return &oauth2Plugin{
 		cfg:     cfg,
 		pending: map[string]*pendingRequest{},
@@ -182,6 +189,10 @@ func (p *oauth2Plugin) Name() string { return "oauth2-server" }
 // endpoints described in the package doc.
 func (p *oauth2Plugin) Routes(host plugin.PluginHost, mux *http.ServeMux, prefix string) {
 	mw := host.Middleware()
+
+	// OIDC Back-Channel Logout: react to logout/suspend/ban events by notifying
+	// the user's RPs that registered a backchannel_logout_uri.
+	host.RegisterEventHandler(&bclEventHandler{p: p, host: host})
 
 	// --- admin client CRUD ---
 	mux.Handle("GET "+prefix+"/oauth2/clients", mw.RequireAdmin(http.HandlerFunc(p.handleListClients(host))))

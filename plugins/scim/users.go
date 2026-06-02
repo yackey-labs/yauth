@@ -14,6 +14,7 @@ import (
 
 	"github.com/yackey-labs/yauth-go/auth"
 	"github.com/yackey-labs/yauth-go/domain"
+	"github.com/yackey-labs/yauth-go/events"
 	"github.com/yackey-labs/yauth-go/plugin"
 	"github.com/yackey-labs/yauth-go/yautherr"
 )
@@ -923,6 +924,11 @@ func applyScimActiveLifecycle(ctx context.Context, host plugin.PluginHost, u *do
 		// de-provision still flushes any sessions/tokens minted in between.
 		_, _ = repo.DeleteUserSessions(ctx, u.ID)
 		_, _ = repo.RevokeAllUserRefreshTokens(ctx, u.ID)
+		// Notify the event pipeline (OIDC Back-Channel Logout fan-out, webhooks).
+		uid := u.ID
+		_, _ = host.Emit(ctx, events.AuthEvent{
+			Type: events.EventUserSuspended, UserID: &uid, Timestamp: now,
+		})
 		return nil
 	}
 	// active:true → reactivate, but never silently override an admin offboard.

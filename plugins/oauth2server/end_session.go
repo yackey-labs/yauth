@@ -52,7 +52,10 @@ func (p *oauth2Plugin) handleEndSession(host plugin.PluginHost) http.HandlerFunc
 			clientID = clientIDParam
 		}
 
-		// Terminate the current browser session (instant local logout).
+		// Terminate the current browser session (instant local logout). This is
+		// RP-Initiated Logout only — we do NOT fan out Back-Channel Logout here
+		// (a sub-only logout_token would kill the user's other devices); BCL is
+		// reserved for offboarding (suspend/ban/SCIM-deprovision).
 		if c, err := r.Cookie(host.CookieName()); err == nil && c.Value != "" {
 			_, _ = host.Repo().DeleteSession(r.Context(), auth.HashToken(c.Value))
 		}

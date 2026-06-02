@@ -1,6 +1,7 @@
 package oauth2server
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"time"
@@ -68,6 +69,10 @@ func (p *oauth2Plugin) handleIntrospect(host plugin.PluginHost) http.HandlerFunc
 				writeJSON(w, http.StatusOK, inactive)
 				return
 			}
+			if !userActiveForIntrospect(r.Context(), host, rt.UserID) {
+				writeJSON(w, http.StatusOK, inactive)
+				return
+			}
 			writeJSON(w, http.StatusOK, introspectionResponse{
 				Active:   true,
 				Sub:      rt.UserID,
@@ -104,6 +109,14 @@ func (p *oauth2Plugin) handleIntrospect(host plugin.PluginHost) http.HandlerFunc
 		}
 		if v, ok := claims["sub"].(string); ok {
 			out.Sub = v
+			// Reflect user lifecycle: a suspended/banned user's token is
+			// inactive even if the JWT is otherwise valid (RFC 7662 lets the
+			// AS consider any policy). This makes per-request introspection an
+			// instant-termination path for RPs.
+			if !userActiveForIntrospect(r.Context(), host, v) {
+				writeJSON(w, http.StatusOK, inactive)
+				return
+			}
 		}
 		if v, ok := claims["aud"].(string); ok {
 			out.ClientID = v
@@ -147,4 +160,20 @@ func verifyAccessJWT(host plugin.PluginHost, token string) (jwt.MapClaims, error
 		return nil, errors.New("token not valid")
 	}
 	return claims, nil
+}
+
+// userActiveForIntrospect reports whether the token's subject may still be
+// considered active. A user that is banned or suspended makes the token
+// inactive (lifecycle-aware introspection). Tokens whose subject is not a user
+// (e.g. client_credentials, where sub is the client_id) are not gated, and
+// lookup errors fail open so a transient DB blip doesn't break introspection.
+func userActiveForIntrospect(ctx context.Context, host plugin.PluginHost, userID string) bool {
+	if userID == "" {
+		return true
+	}
+	u, err := host.Repo().GetUserByID(ctx, userID)
+	if errors.Is(err, yautherr.ErrNotFound) || err != nil || u == nil {
+		return true
+	}
+	return u.CanAuthenticate(time.Now().UTC())
 }

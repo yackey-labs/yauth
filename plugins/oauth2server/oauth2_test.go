@@ -467,6 +467,68 @@ func TestRevokeAndIntrospect(t *testing.T) {
 	}
 }
 
+// TestIntrospect_SuspendedUser_ReflectsInactive proves lifecycle-aware
+// introspection: once a user is suspended (offboarded), introspecting their
+// otherwise-valid access token returns active:false. This is the per-request
+// instant-termination path for RPs that introspect.
+func TestIntrospect_SuspendedUser_ReflectsInactive(t *testing.T) {
+	h := newHarness(t)
+	adminID, adminCookie := h.seedUser(t, "admin@idp.test", "admin")
+	_ = adminID
+	userID, userCookie := h.seedUser(t, "alice@idp.test", "user")
+
+	body := `{"name":"introspect-suspend","redirect_uris":["https://app.example/callback"],"grant_types":["authorization_code","refresh_token"],"scopes":["read"],"is_public":false,"token_endpoint_auth_method":"client_secret_post"}`
+	clientID, clientSecret, _ := h.createClient(t, adminCookie, body)
+
+	verifier := "introspect-suspend-verifier-43-chars-here-okay"
+	challenge := pkceS256(verifier)
+	code := h.authorizeAndConsent(t, userCookie, clientID, "https://app.example/callback", "read", challenge, "s3", "")
+	form := url.Values{}
+	form.Set("grant_type", "authorization_code")
+	form.Set("code", code)
+	form.Set("redirect_uri", "https://app.example/callback")
+	form.Set("client_id", clientID)
+	form.Set("client_secret", clientSecret)
+	form.Set("code_verifier", verifier)
+	status, tok := h.postForm(t, "/api/auth/oauth/token", form, "", "")
+	if status != http.StatusOK {
+		t.Fatalf("token: %d %v", status, tok)
+	}
+	access := tok["access_token"].(string)
+
+	// Active before suspension.
+	iform := url.Values{}
+	iform.Set("token", access)
+	iform.Set("client_id", clientID)
+	iform.Set("client_secret", clientSecret)
+	status, ib := h.postForm(t, "/api/auth/oauth/introspect", iform, "", "")
+	if status != http.StatusOK || !ib["active"].(bool) {
+		t.Fatalf("expected active=true pre-suspend, got %d %v", status, ib)
+	}
+
+	// Suspend the user globally.
+	now := time.Now().UTC()
+	nowPtr := &now
+	reason := "offboarded"
+	reasonPtr := &reason
+	if _, err := h.repo.UpdateUser(context.Background(), userID, domain.UpdateUser{
+		SuspendedAt:     &nowPtr,
+		SuspendedReason: &reasonPtr,
+		UpdatedAt:       &now,
+	}); err != nil {
+		t.Fatalf("suspend: %v", err)
+	}
+
+	// Same valid JWT, now introspects inactive.
+	status, ib2 := h.postForm(t, "/api/auth/oauth/introspect", iform, "", "")
+	if status != http.StatusOK {
+		t.Fatalf("introspect post-suspend: %d", status)
+	}
+	if active, _ := ib2["active"].(bool); active {
+		t.Fatalf("expected active=false for suspended user's token, got %v", ib2)
+	}
+}
+
 func TestConsentStorage_SkipsPromptOnSecondAuth(t *testing.T) {
 	h := newHarness(t)
 	_, adminCookie := h.seedUser(t, "admin@idp.test", "admin")

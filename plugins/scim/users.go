@@ -351,6 +351,14 @@ func (p *scimPlugin) handleCreateUser(host plugin.PluginHost) http.HandlerFunc {
 			}
 		}
 
+		// SCIM active maps to the global lifecycle (instant lockout on
+		// de-provision), not only the org membership status above.
+		active := payload.Active == nil || *payload.Active
+		if err := applyScimActiveLifecycle(ctx, host, u, active, now); err != nil {
+			writeScimError(w, repoToScim(err))
+			return
+		}
+
 		// Re-read fresh user for the response.
 		fresh, err := repo.GetUserByID(ctx, u.ID)
 		if err != nil || fresh == nil {
@@ -622,6 +630,14 @@ func (p *scimPlugin) handlePutUser(host plugin.PluginHost) http.HandlerFunc {
 			return
 		}
 
+		// SCIM active drives the global lifecycle (instant lockout on
+		// de-provision), in addition to the org membership status above.
+		active := payload.Active == nil || *payload.Active
+		if err := applyScimActiveLifecycle(ctx, host, user, active, now); err != nil {
+			writeScimError(w, repoToScim(err))
+			return
+		}
+
 		fresh, err := repo.GetUserByID(ctx, user.ID)
 		if err != nil || fresh == nil {
 			writeScimError(w, InternalError())
@@ -795,6 +811,11 @@ func (p *scimPlugin) handlePatchUser(host plugin.PluginHost) http.HandlerFunc {
 				writeScimError(w, repoToScim(err))
 				return
 			}
+			// Mirror active onto the global lifecycle (instant lockout).
+			if err := applyScimActiveLifecycle(ctx, host, user, *newActive, now); err != nil {
+				writeScimError(w, repoToScim(err))
+				return
+			}
 		}
 
 		fresh, err := repo.GetUserByID(ctx, user.ID)
@@ -855,7 +876,70 @@ func (p *scimPlugin) handleDeleteUser(host plugin.PluginHost) http.HandlerFunc {
 		if ext, _ := findExternalIDForUser(ctx, host, orgID, userID); ext != nil {
 			_ = repo.DeleteExternalIdentity(ctx, ext.ID)
 		}
+		// Deprovision is a removal: trip the kill switch so any live access is
+		// revoked immediately. We don't set suspended_at here (unlike
+		// active:false) so a later re-POST provisions a clean, usable account.
+		_, _ = repo.DeleteUserSessions(ctx, userID)
+		_, _ = repo.RevokeAllUserRefreshTokens(ctx, userID)
 		auditScim(ctx, host, principal, "scim_user_deleted", userID)
 		writeScimNoContent(w)
 	}
+}
+
+// scimSuspendReason marks a suspension as SCIM-originated. Only suspensions
+// carrying this reason are auto-cleared by a subsequent SCIM active:true, so a
+// manual admin offboard survives routine IdP profile-sync PUTs (which default
+// active to true). See applyScimActiveLifecycle.
+const scimSuspendReason = "SCIM deprovisioned"
+
+// applyScimActiveLifecycle maps the SCIM `active` attribute onto the user's
+// *global* lifecycle, not just their membership in one org. SCIM is the
+// workforce system of record: when an IdP de-provisions a user (active:false),
+// IT expects an instant lockout everywhere, so we suspend the account (sets
+// suspended_at) and trip the kill switch — terminate every session and revoke
+// every refresh token. active:true reverses it, but ONLY for SCIM-originated
+// suspensions — an admin's manual offboard is never silently undone by a
+// routine SCIM sync.
+//
+// It is idempotent: a no-op when the user is already in the requested state.
+// Errors from the kill-switch calls are intentionally ignored (best-effort
+// cleanup); only the UpdateUser write is surfaced.
+func applyScimActiveLifecycle(ctx context.Context, host plugin.PluginHost, u *domain.User, active bool, now time.Time) error {
+	repo := host.Repo()
+	if !active {
+		if u.SuspendedAt == nil {
+			reason := scimSuspendReason
+			nowPtr := &now
+			reasonPtr := &reason
+			if _, err := repo.UpdateUser(ctx, u.ID, domain.UpdateUser{
+				SuspendedAt:     &nowPtr,
+				SuspendedReason: &reasonPtr,
+				UpdatedAt:       &now,
+			}); err != nil {
+				return err
+			}
+		}
+		// Always (re-)assert the kill switch on active:false so a repeated
+		// de-provision still flushes any sessions/tokens minted in between.
+		_, _ = repo.DeleteUserSessions(ctx, u.ID)
+		_, _ = repo.RevokeAllUserRefreshTokens(ctx, u.ID)
+		return nil
+	}
+	// active:true → reactivate, but never silently override an admin offboard.
+	if u.SuspendedAt == nil {
+		return nil
+	}
+	if u.SuspendedReason == nil || *u.SuspendedReason != scimSuspendReason {
+		// Manually-suspended (or unknown-origin) account: leave it locked.
+		// An operator must reactivate via the admin API on purpose.
+		return nil
+	}
+	var nilT *time.Time
+	var nilS *string
+	_, err := repo.UpdateUser(ctx, u.ID, domain.UpdateUser{
+		SuspendedAt:     &nilT,
+		SuspendedReason: &nilS,
+		UpdatedAt:       &now,
+	})
+	return err
 }

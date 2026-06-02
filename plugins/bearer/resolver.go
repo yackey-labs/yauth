@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/yackey-labs/yauth-go/domain"
 	"github.com/yackey-labs/yauth-go/plugin"
@@ -70,6 +71,14 @@ func (b *bearerResolver) Resolve(r *http.Request) (*domain.AuthUser, bool, error
 	}
 	if user.Banned {
 		return nil, true, yautherr.ErrUserBanned
+	}
+	// Reject any token whose subject can no longer authenticate — suspended
+	// (offboarded) or not-yet-started (staged) — on every request. This is what
+	// makes ban/suspend instant for yauth-go-protected resources. (A staged user
+	// shouldn't hold a token yet, but we gate it the same way for consistency
+	// with the cookie path in middleware.go.)
+	if !user.CanAuthenticate(time.Now().UTC()) {
+		return nil, true, yautherr.ErrUnauthorized
 	}
 	au := &domain.AuthUser{User: *user, Method: domain.AuthMethodBearer}
 	if parsed.Org != "" {

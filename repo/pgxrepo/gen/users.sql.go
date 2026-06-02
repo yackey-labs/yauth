@@ -35,22 +35,25 @@ func (q *Queries) CountUsersSearch(ctx context.Context, dollar_1 string) (int64,
 }
 
 const createUser = `-- name: CreateUser :one
-INSERT INTO yauth_users (id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-RETURNING id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at
+INSERT INTO yauth_users (id, email, display_name, email_verified, role, banned, banned_reason, banned_until, suspended_at, suspended_reason, activates_at, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+RETURNING id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at, suspended_at, suspended_reason, activates_at
 `
 
 type CreateUserParams struct {
-	ID            string
-	Email         string
-	DisplayName   *string
-	EmailVerified bool
-	Role          string
-	Banned        bool
-	BannedReason  *string
-	BannedUntil   pgtype.Timestamptz
-	CreatedAt     pgtype.Timestamptz
-	UpdatedAt     pgtype.Timestamptz
+	ID              string
+	Email           string
+	DisplayName     *string
+	EmailVerified   bool
+	Role            string
+	Banned          bool
+	BannedReason    *string
+	BannedUntil     pgtype.Timestamptz
+	SuspendedAt     pgtype.Timestamptz
+	SuspendedReason *string
+	ActivatesAt     pgtype.Timestamptz
+	CreatedAt       pgtype.Timestamptz
+	UpdatedAt       pgtype.Timestamptz
 }
 
 func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (YauthUser, error) {
@@ -63,6 +66,9 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (YauthUs
 		arg.Banned,
 		arg.BannedReason,
 		arg.BannedUntil,
+		arg.SuspendedAt,
+		arg.SuspendedReason,
+		arg.ActivatesAt,
 		arg.CreatedAt,
 		arg.UpdatedAt,
 	)
@@ -78,6 +84,9 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (YauthUs
 		&i.BannedUntil,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SuspendedAt,
+		&i.SuspendedReason,
+		&i.ActivatesAt,
 	)
 	return i, err
 }
@@ -95,7 +104,7 @@ func (q *Queries) DeleteUser(ctx context.Context, id string) (int64, error) {
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at FROM yauth_users WHERE email = $1 LIMIT 1
+SELECT id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at, suspended_at, suspended_reason, activates_at FROM yauth_users WHERE email = $1 LIMIT 1
 `
 
 func (q *Queries) GetUserByEmail(ctx context.Context, email string) (YauthUser, error) {
@@ -112,12 +121,15 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (YauthUser, 
 		&i.BannedUntil,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SuspendedAt,
+		&i.SuspendedReason,
+		&i.ActivatesAt,
 	)
 	return i, err
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at FROM yauth_users WHERE id = $1 LIMIT 1
+SELECT id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at, suspended_at, suspended_reason, activates_at FROM yauth_users WHERE id = $1 LIMIT 1
 `
 
 func (q *Queries) GetUserByID(ctx context.Context, id string) (YauthUser, error) {
@@ -134,12 +146,15 @@ func (q *Queries) GetUserByID(ctx context.Context, id string) (YauthUser, error)
 		&i.BannedUntil,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SuspendedAt,
+		&i.SuspendedReason,
+		&i.ActivatesAt,
 	)
 	return i, err
 }
 
 const listUsersSearch = `-- name: ListUsersSearch :many
-SELECT id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at FROM yauth_users
+SELECT id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at, suspended_at, suspended_reason, activates_at FROM yauth_users
 WHERE ($1::text = '' OR LOWER(email) LIKE '%' || LOWER($1::text) || '%' OR LOWER(COALESCE(display_name, '')) LIKE '%' || LOWER($1::text) || '%')
 ORDER BY created_at ASC, id ASC
 LIMIT CASE WHEN $2::int > 0 THEN $2::int ELSE NULL END
@@ -172,6 +187,9 @@ func (q *Queries) ListUsersSearch(ctx context.Context, arg ListUsersSearchParams
 			&i.BannedUntil,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.SuspendedAt,
+			&i.SuspendedReason,
+			&i.ActivatesAt,
 		); err != nil {
 			return nil, err
 		}
@@ -181,6 +199,18 @@ func (q *Queries) ListUsersSearch(ctx context.Context, arg ListUsersSearchParams
 		return nil, err
 	}
 	return items, nil
+}
+
+const revokeAllUserRefreshTokens = `-- name: RevokeAllUserRefreshTokens :execrows
+UPDATE yauth_refresh_tokens SET revoked = true WHERE user_id = $1 AND revoked = false
+`
+
+func (q *Queries) RevokeAllUserRefreshTokens(ctx context.Context, userID string) (int64, error) {
+	result, err := q.db.Exec(ctx, revokeAllUserRefreshTokens, userID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const updateUserFull = `-- name: UpdateUserFull :one
@@ -193,24 +223,33 @@ SET
     banned         = COALESCE($8, banned),
     banned_reason  = CASE WHEN $9::boolean THEN $10 ELSE banned_reason END,
     banned_until   = CASE WHEN $11::boolean THEN $12 ELSE banned_until END,
+    suspended_at      = CASE WHEN $13::boolean THEN $14 ELSE suspended_at END,
+    suspended_reason  = CASE WHEN $15::boolean THEN $16 ELSE suspended_reason END,
+    activates_at      = CASE WHEN $17::boolean THEN $18 ELSE activates_at END,
     updated_at     = $1
 WHERE id = $2
-RETURNING id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at
+RETURNING id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at, suspended_at, suspended_reason, activates_at
 `
 
 type UpdateUserFullParams struct {
-	UpdatedAt       pgtype.Timestamptz
-	ID              string
-	Email           *string
-	SetDisplayName  bool
-	DisplayName     *string
-	EmailVerified   *bool
-	Role            *string
-	Banned          *bool
-	SetBannedReason bool
-	BannedReason    *string
-	SetBannedUntil  bool
-	BannedUntil     pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+	ID                 string
+	Email              *string
+	SetDisplayName     bool
+	DisplayName        *string
+	EmailVerified      *bool
+	Role               *string
+	Banned             *bool
+	SetBannedReason    bool
+	BannedReason       *string
+	SetBannedUntil     bool
+	BannedUntil        pgtype.Timestamptz
+	SetSuspendedAt     bool
+	SuspendedAt        pgtype.Timestamptz
+	SetSuspendedReason bool
+	SuspendedReason    *string
+	SetActivatesAt     bool
+	ActivatesAt        pgtype.Timestamptz
 }
 
 func (q *Queries) UpdateUserFull(ctx context.Context, arg UpdateUserFullParams) (YauthUser, error) {
@@ -227,6 +266,12 @@ func (q *Queries) UpdateUserFull(ctx context.Context, arg UpdateUserFullParams) 
 		arg.BannedReason,
 		arg.SetBannedUntil,
 		arg.BannedUntil,
+		arg.SetSuspendedAt,
+		arg.SuspendedAt,
+		arg.SetSuspendedReason,
+		arg.SuspendedReason,
+		arg.SetActivatesAt,
+		arg.ActivatesAt,
 	)
 	var i YauthUser
 	err := row.Scan(
@@ -240,6 +285,9 @@ func (q *Queries) UpdateUserFull(ctx context.Context, arg UpdateUserFullParams) 
 		&i.BannedUntil,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SuspendedAt,
+		&i.SuspendedReason,
+		&i.ActivatesAt,
 	)
 	return i, err
 }

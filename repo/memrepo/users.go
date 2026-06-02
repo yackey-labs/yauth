@@ -34,16 +34,19 @@ func (r *Repo) CreateUser(ctx context.Context, input domain.NewUser) (domain.Use
 	}
 
 	u := &domain.User{
-		ID:            input.ID,
-		Email:         input.Email,
-		DisplayName:   input.DisplayName,
-		EmailVerified: input.EmailVerified,
-		Role:          input.Role,
-		Banned:        input.Banned,
-		BannedReason:  input.BannedReason,
-		BannedUntil:   input.BannedUntil,
-		CreatedAt:     created.UTC(),
-		UpdatedAt:     updated.UTC(),
+		ID:              input.ID,
+		Email:           input.Email,
+		DisplayName:     input.DisplayName,
+		EmailVerified:   input.EmailVerified,
+		Role:            input.Role,
+		Banned:          input.Banned,
+		BannedReason:    input.BannedReason,
+		BannedUntil:     input.BannedUntil,
+		SuspendedAt:     input.SuspendedAt,
+		SuspendedReason: input.SuspendedReason,
+		ActivatesAt:     input.ActivatesAt,
+		CreatedAt:       created.UTC(),
+		UpdatedAt:       updated.UTC(),
 	}
 	if u.BannedUntil != nil {
 		t := u.BannedUntil.UTC()
@@ -116,6 +119,25 @@ func (r *Repo) UpdateUser(ctx context.Context, id string, changes domain.UpdateU
 			u.BannedUntil = &t
 		} else {
 			u.BannedUntil = nil
+		}
+	}
+	if changes.SuspendedAt != nil {
+		if v := *changes.SuspendedAt; v != nil {
+			t := v.UTC()
+			u.SuspendedAt = &t
+		} else {
+			u.SuspendedAt = nil
+		}
+	}
+	if changes.SuspendedReason != nil {
+		u.SuspendedReason = *changes.SuspendedReason
+	}
+	if changes.ActivatesAt != nil {
+		if v := *changes.ActivatesAt; v != nil {
+			t := v.UTC()
+			u.ActivatesAt = &t
+		} else {
+			u.ActivatesAt = nil
 		}
 	}
 	if changes.UpdatedAt != nil {

@@ -124,9 +124,9 @@ type CORSConfig struct {
 // (the default) writes deliveries to stderr; "smtp" routes through the
 // configured SMTP server.
 type MailerConfig struct {
-	Provider string         `yaml:"provider" toml:"provider"`
-	From     string         `yaml:"from" toml:"from"`
-	SMTP     SMTPConfig     `yaml:"smtp" toml:"smtp"`
+	Provider string     `yaml:"provider" toml:"provider"`
+	From     string     `yaml:"from" toml:"from"`
+	SMTP     SMTPConfig `yaml:"smtp" toml:"smtp"`
 }
 
 // SMTPConfig holds SMTP connection details. Username/password are
@@ -411,6 +411,14 @@ type OAuth2ServerPluginConfig struct {
 	AuthorizationCodeTTL time.Duration `yaml:"authorization_code_ttl" toml:"authorization_code_ttl"`
 	DeviceCodeTTL        time.Duration `yaml:"device_code_ttl" toml:"device_code_ttl"`
 	RequirePKCE          bool          `yaml:"require_pkce" toml:"require_pkce"`
+	// AccessTTL is the lifetime of issued OAuth2/OIDC access tokens. Shorter is
+	// better for instant termination: it bounds how long a suspended/banned
+	// user's token stays usable at RPs that validate the JWT locally (rather
+	// than introspecting). Empty → the oauth2server plugin default (15m).
+	AccessTTL time.Duration `yaml:"access_ttl" toml:"access_ttl"`
+	// BackchannelLogoutTimeout bounds each OIDC Back-Channel Logout delivery
+	// (the OP→RP logout_token POST). Empty → the plugin default (5s).
+	BackchannelLogoutTimeout time.Duration `yaml:"backchannel_logout_timeout" toml:"backchannel_logout_timeout"`
 }
 
 // Default returns a Config populated with sensible development defaults

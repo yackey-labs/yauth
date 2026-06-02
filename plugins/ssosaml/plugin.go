@@ -199,6 +199,8 @@ func (p *ssoSAMLPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux, prefi
 	mux.Handle("GET "+prefix+"/sso/saml/login", http.HandlerFunc(p.handleSamlLogin(host)))
 	mux.Handle("POST "+prefix+"/sso/saml/acs", http.HandlerFunc(p.handleSamlACS(host)))
 	mux.Handle("GET "+prefix+"/sso/saml/logout", http.HandlerFunc(p.handleSamlLogout(host)))
+	// IdP-initiated Single Logout (HTTP-Redirect binding is GET; some IdPs POST).
+	mux.Handle("GET "+prefix+"/sso/saml/slo", http.HandlerFunc(p.handleSamlSLO(host)))
 	mux.Handle("POST "+prefix+"/sso/saml/slo", http.HandlerFunc(p.handleSamlSLO(host)))
 }
 

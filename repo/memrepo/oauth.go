@@ -214,6 +214,20 @@ func (r *Repo) RevokeRefreshTokenFamily(ctx context.Context, familyID string) (i
 	return n, nil
 }
 
+func (r *Repo) RevokeAllUserRefreshTokens(ctx context.Context, userID string) (int64, error) {
+	_ = ensureCtx(ctx)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var n int64
+	for _, t := range r.refreshTokens {
+		if t.UserID == userID && !t.Revoked {
+			t.Revoked = true
+			n++
+		}
+	}
+	return n, nil
+}
+
 // --- APIKey ---
 
 // strPtrCopy duplicates a *string so callers cannot mutate the stored row.

@@ -52,6 +52,7 @@ func (f *fakeRepo) CreateUser(_ context.Context, in domain.NewUser) (domain.User
 		ID: in.ID, Email: in.Email, DisplayName: in.DisplayName,
 		EmailVerified: in.EmailVerified, Role: in.Role,
 		Banned: in.Banned, BannedReason: in.BannedReason, BannedUntil: in.BannedUntil,
+		SuspendedAt: in.SuspendedAt, SuspendedReason: in.SuspendedReason, ActivatesAt: in.ActivatesAt,
 		CreatedAt: in.CreatedAt, UpdatedAt: in.UpdatedAt,
 	}
 	f.users[in.ID] = u

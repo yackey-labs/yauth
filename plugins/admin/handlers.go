@@ -23,30 +23,38 @@ func newID() string { return uuid.NewString() }
 // plugin's userJSON but adds the admin-relevant fields (banned, banned_*,
 // timestamps) the admin UI needs.
 type userJSON struct {
-	ID            string     `json:"id"`
-	Email         string     `json:"email"`
-	DisplayName   *string    `json:"display_name,omitempty"`
-	EmailVerified bool       `json:"email_verified"`
-	Role          string     `json:"role"`
-	Banned        bool       `json:"banned"`
-	BannedReason  *string    `json:"banned_reason,omitempty"`
-	BannedUntil   *time.Time `json:"banned_until,omitempty"`
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at"`
+	ID              string     `json:"id"`
+	Email           string     `json:"email"`
+	DisplayName     *string    `json:"display_name,omitempty"`
+	EmailVerified   bool       `json:"email_verified"`
+	Role            string     `json:"role"`
+	Banned          bool       `json:"banned"`
+	BannedReason    *string    `json:"banned_reason,omitempty"`
+	BannedUntil     *time.Time `json:"banned_until,omitempty"`
+	Suspended       bool       `json:"suspended"`
+	SuspendedAt     *time.Time `json:"suspended_at,omitempty"`
+	SuspendedReason *string    `json:"suspended_reason,omitempty"`
+	ActivatesAt     *time.Time `json:"activates_at,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
 }
 
 func toUserJSON(u domain.User) userJSON {
 	return userJSON{
-		ID:            u.ID,
-		Email:         u.Email,
-		DisplayName:   u.DisplayName,
-		EmailVerified: u.EmailVerified,
-		Role:          u.Role,
-		Banned:        u.Banned,
-		BannedReason:  u.BannedReason,
-		BannedUntil:   u.BannedUntil,
-		CreatedAt:     u.CreatedAt,
-		UpdatedAt:     u.UpdatedAt,
+		ID:              u.ID,
+		Email:           u.Email,
+		DisplayName:     u.DisplayName,
+		EmailVerified:   u.EmailVerified,
+		Role:            u.Role,
+		Banned:          u.Banned,
+		BannedReason:    u.BannedReason,
+		BannedUntil:     u.BannedUntil,
+		Suspended:       u.SuspendedAt != nil,
+		SuspendedAt:     u.SuspendedAt,
+		SuspendedReason: u.SuspendedReason,
+		ActivatesAt:     u.ActivatesAt,
+		CreatedAt:       u.CreatedAt,
+		UpdatedAt:       u.UpdatedAt,
 	}
 }
 
@@ -348,6 +356,124 @@ func (p *adminPlugin) handleUnbanUser(host plugin.PluginHost) http.HandlerFunc {
 			CreatedAt: now,
 		})
 
+		writeJSON(w, http.StatusOK, toUserJSON(u))
+	}
+}
+
+// --- POST /admin/users/{id}/suspend & /unsuspend (offboarding) -----------
+
+type suspendRequest struct {
+	Reason string `json:"reason,omitempty"`
+}
+
+// handleSuspendUser globally deactivates a user (offboarding) and instantly
+// terminates access: it sets suspended_at, kills all sessions, and revokes all
+// refresh tokens. The account is retained (distinct from ban / delete).
+func (p *adminPlugin) handleSuspendUser(host plugin.PluginHost) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req suspendRequest
+		_ = decodeJSON(r, &req)
+		id := r.PathValue("id")
+		now := time.Now().UTC()
+		nowPtr := &now
+		suspendedPP := &nowPtr
+		var reasonPtr *string
+		if s := strings.TrimSpace(req.Reason); s != "" {
+			reasonPtr = &s
+		}
+		reasonPP := &reasonPtr
+
+		u, err := host.Repo().UpdateUser(r.Context(), id, domain.UpdateUser{
+			SuspendedAt:     suspendedPP,
+			SuspendedReason: reasonPP,
+			UpdatedAt:       &now,
+		})
+		if err != nil {
+			if errors.Is(err, yautherr.ErrNotFound) {
+				writeError(w, http.StatusNotFound, "NOT_FOUND", "user not found")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to suspend user")
+			return
+		}
+		// Kill switch: terminate sessions + revoke refresh tokens now.
+		_, _ = host.Repo().DeleteUserSessions(r.Context(), id)
+		_, _ = host.Repo().RevokeAllUserRefreshTokens(r.Context(), id)
+
+		meta, _ := json.Marshal(map[string]any{"admin_id": actorIDFromCtx(r), "reason": req.Reason})
+		_ = host.Repo().LogAuditEvent(r.Context(), domain.NewAuditLog{
+			ID: newID(), UserID: &u.ID, EventType: "admin.suspend", Metadata: meta,
+			IPAddress: middleware.RequestIP(r), CreatedAt: now,
+		})
+		writeJSON(w, http.StatusOK, toUserJSON(u))
+	}
+}
+
+func (p *adminPlugin) handleUnsuspendUser(host plugin.PluginHost) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		now := time.Now().UTC()
+		var nilT *time.Time
+		nilTPP := &nilT
+		var nilStr *string
+		nilStrPP := &nilStr
+
+		u, err := host.Repo().UpdateUser(r.Context(), id, domain.UpdateUser{
+			SuspendedAt:     nilTPP,
+			SuspendedReason: nilStrPP,
+			UpdatedAt:       &now,
+		})
+		if err != nil {
+			if errors.Is(err, yautherr.ErrNotFound) {
+				writeError(w, http.StatusNotFound, "NOT_FOUND", "user not found")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to reactivate user")
+			return
+		}
+		meta, _ := json.Marshal(map[string]any{"admin_id": actorIDFromCtx(r)})
+		_ = host.Repo().LogAuditEvent(r.Context(), domain.NewAuditLog{
+			ID: newID(), UserID: &u.ID, EventType: "admin.unsuspend", Metadata: meta,
+			IPAddress: middleware.RequestIP(r), CreatedAt: now,
+		})
+		writeJSON(w, http.StatusOK, toUserJSON(u))
+	}
+}
+
+// --- POST /admin/users/{id}/schedule-start (staged onboarding) -----------
+
+type scheduleStartRequest struct {
+	// ActivatesAt is the scheduled start. Null/absent clears it (active now).
+	ActivatesAt *time.Time `json:"activates_at"`
+}
+
+func (p *adminPlugin) handleScheduleStart(host plugin.PluginHost) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req scheduleStartRequest
+		if err := decodeJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+			return
+		}
+		id := r.PathValue("id")
+		now := time.Now().UTC()
+		var at *time.Time
+		if req.ActivatesAt != nil {
+			t := req.ActivatesAt.UTC()
+			at = &t
+		}
+		atPP := &at
+		u, err := host.Repo().UpdateUser(r.Context(), id, domain.UpdateUser{
+			ActivatesAt: atPP,
+			UpdatedAt:   &now,
+		})
+		if err != nil {
+			if errors.Is(err, yautherr.ErrNotFound) {
+				writeError(w, http.StatusNotFound, "NOT_FOUND", "user not found")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to schedule start")
+			return
+		}
 		writeJSON(w, http.StatusOK, toUserJSON(u))
 	}
 }

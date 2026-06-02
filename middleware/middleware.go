@@ -298,6 +298,11 @@ func (m *Middleware) resolveCookie(r *http.Request) (*domain.AuthUser, error) {
 	if user.Banned {
 		return nil, yautherr.ErrUserBanned
 	}
+	// Suspended (offboarded) or staged (scheduled start not yet reached) users
+	// cannot authenticate — gates every RequireAuth route, including /authorize.
+	if !user.CanAuthenticate(time.Now().UTC()) {
+		return nil, yautherr.ErrUnauthorized
+	}
 
 	return &domain.AuthUser{User: *user, Session: *sess, Method: domain.AuthMethodCookie}, nil
 }

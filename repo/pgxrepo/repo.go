@@ -49,16 +49,19 @@ func (r *Repo) withTx(ctx context.Context, fn func(tx pgx.Tx) error) error {
 
 func (r *Repo) CreateUser(ctx context.Context, input domain.NewUser) (domain.User, error) {
 	row, err := r.q.CreateUser(ctx, pgxgen.CreateUserParams{
-		ID:            input.ID,
-		Email:         input.Email,
-		DisplayName:   input.DisplayName,
-		EmailVerified: input.EmailVerified,
-		Role:          input.Role,
-		Banned:        input.Banned,
-		BannedReason:  input.BannedReason,
-		BannedUntil:   tsPtr(input.BannedUntil),
-		CreatedAt:     ts(input.CreatedAt),
-		UpdatedAt:     ts(input.UpdatedAt),
+		ID:              input.ID,
+		Email:           input.Email,
+		DisplayName:     input.DisplayName,
+		EmailVerified:   input.EmailVerified,
+		Role:            input.Role,
+		Banned:          input.Banned,
+		BannedReason:    input.BannedReason,
+		BannedUntil:     tsPtr(input.BannedUntil),
+		SuspendedAt:     tsPtr(input.SuspendedAt),
+		SuspendedReason: input.SuspendedReason,
+		ActivatesAt:     tsPtr(input.ActivatesAt),
+		CreatedAt:       ts(input.CreatedAt),
+		UpdatedAt:       ts(input.UpdatedAt),
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -121,6 +124,18 @@ func (r *Repo) UpdateUser(ctx context.Context, id string, changes domain.UpdateU
 	if changes.BannedUntil != nil {
 		params.SetBannedUntil = true
 		params.BannedUntil = tsPtr(*changes.BannedUntil)
+	}
+	if changes.SuspendedAt != nil {
+		params.SetSuspendedAt = true
+		params.SuspendedAt = tsPtr(*changes.SuspendedAt)
+	}
+	if changes.SuspendedReason != nil {
+		params.SetSuspendedReason = true
+		params.SuspendedReason = *changes.SuspendedReason
+	}
+	if changes.ActivatesAt != nil {
+		params.SetActivatesAt = true
+		params.ActivatesAt = tsPtr(*changes.ActivatesAt)
 	}
 
 	row, err := r.q.UpdateUserFull(ctx, params)
@@ -945,6 +960,10 @@ func (r *Repo) RevokeRefreshToken(ctx context.Context, id string) error {
 
 func (r *Repo) RevokeRefreshTokenFamily(ctx context.Context, familyID string) (int64, error) {
 	return r.q.RevokeRefreshTokenFamily(ctx, familyID)
+}
+
+func (r *Repo) RevokeAllUserRefreshTokens(ctx context.Context, userID string) (int64, error) {
+	return r.q.RevokeAllUserRefreshTokens(ctx, userID)
 }
 
 // ─── APIKey ──────────────────────────────────────────────────────────────────
@@ -2499,16 +2518,19 @@ func (r *Repo) ConsumeSsoLoginState(ctx context.Context, state string) (*domain.
 
 func userToDomain(m pgxgen.YauthUser) domain.User {
 	return domain.User{
-		ID:            m.ID,
-		Email:         m.Email,
-		DisplayName:   m.DisplayName,
-		EmailVerified: m.EmailVerified,
-		Role:          m.Role,
-		Banned:        m.Banned,
-		BannedReason:  m.BannedReason,
-		BannedUntil:   fromTSPtr(m.BannedUntil),
-		CreatedAt:     fromTS(m.CreatedAt),
-		UpdatedAt:     fromTS(m.UpdatedAt),
+		ID:              m.ID,
+		Email:           m.Email,
+		DisplayName:     m.DisplayName,
+		EmailVerified:   m.EmailVerified,
+		Role:            m.Role,
+		Banned:          m.Banned,
+		BannedReason:    m.BannedReason,
+		BannedUntil:     fromTSPtr(m.BannedUntil),
+		SuspendedAt:     fromTSPtr(m.SuspendedAt),
+		SuspendedReason: m.SuspendedReason,
+		ActivatesAt:     fromTSPtr(m.ActivatesAt),
+		CreatedAt:       fromTS(m.CreatedAt),
+		UpdatedAt:       fromTS(m.UpdatedAt),
 	}
 }
 

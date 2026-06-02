@@ -93,6 +93,25 @@ func (r *Repo) UpdateUser(ctx context.Context, id string, changes domain.UpdateU
 			updates["banned_until"] = nil
 		}
 	}
+	if changes.SuspendedAt != nil {
+		if v := *changes.SuspendedAt; v != nil {
+			u := v.UTC()
+			updates["suspended_at"] = &u
+		} else {
+			updates["suspended_at"] = nil
+		}
+	}
+	if changes.SuspendedReason != nil {
+		updates["suspended_reason"] = *changes.SuspendedReason
+	}
+	if changes.ActivatesAt != nil {
+		if v := *changes.ActivatesAt; v != nil {
+			u := v.UTC()
+			updates["activates_at"] = &u
+		} else {
+			updates["activates_at"] = nil
+		}
+	}
 	if changes.UpdatedAt != nil {
 		updates["updated_at"] = changes.UpdatedAt.UTC()
 	}

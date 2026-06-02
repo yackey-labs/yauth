@@ -146,6 +146,77 @@ func TestResolver_BannedUser(t *testing.T) {
 	}
 }
 
+func TestResolver_SuspendedUser(t *testing.T) {
+	fr := newFakeRepo()
+	now := time.Now().UTC().Truncate(time.Second)
+	suspendedAt := now
+	user, err := fr.CreateUser(context.Background(), domain.NewUser{
+		ID: uuid.NewString(), Email: "suspended@example.com", Role: "user",
+		SuspendedAt: &suspendedAt, CreatedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+
+	cfg := Config{
+		JWTSecret: []byte("secret-secret-secret-secret-secret"),
+		AccessTTL: time.Minute, Issuer: "yauth-test",
+	}
+	host := newFakeHost(fr, cfg.JWTSecret)
+	res := newResolver(host, cfg)
+
+	tok, _, _ := signAccessToken(cfg.JWTSecret, user.ID, uuid.NewString(), cfg, now, activeOrgClaims{})
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+
+	au, recognized, err := res.Resolve(req)
+	if !recognized {
+		t.Fatalf("expected recognized=true")
+	}
+	if au != nil {
+		t.Fatalf("expected nil user for suspended account")
+	}
+	if !errors.Is(err, yautherr.ErrUnauthorized) {
+		t.Fatalf("expected ErrUnauthorized, got %v", err)
+	}
+}
+
+func TestResolver_StagedUser(t *testing.T) {
+	fr := newFakeRepo()
+	now := time.Now().UTC().Truncate(time.Second)
+	// activates_at in the future → not yet started.
+	activatesAt := now.Add(24 * time.Hour)
+	user, err := fr.CreateUser(context.Background(), domain.NewUser{
+		ID: uuid.NewString(), Email: "staged@example.com", Role: "user",
+		ActivatesAt: &activatesAt, CreatedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+
+	cfg := Config{
+		JWTSecret: []byte("secret-secret-secret-secret-secret"),
+		AccessTTL: time.Minute, Issuer: "yauth-test",
+	}
+	host := newFakeHost(fr, cfg.JWTSecret)
+	res := newResolver(host, cfg)
+
+	tok, _, _ := signAccessToken(cfg.JWTSecret, user.ID, uuid.NewString(), cfg, now, activeOrgClaims{})
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+
+	au, recognized, err := res.Resolve(req)
+	if !recognized {
+		t.Fatalf("expected recognized=true")
+	}
+	if au != nil {
+		t.Fatalf("expected nil user for not-yet-started account")
+	}
+	if !errors.Is(err, yautherr.ErrUnauthorized) {
+		t.Fatalf("expected ErrUnauthorized, got %v", err)
+	}
+}
+
 func TestVerifyAccessToken_Expired(t *testing.T) {
 	cfg := Config{
 		JWTSecret: []byte("secret-secret-secret-secret-secret"),

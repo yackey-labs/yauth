@@ -367,6 +367,16 @@ func (p *emailPasswordPlugin) handleLogin(host plugin.PluginHost) http.HandlerFu
 			writeError(w, http.StatusForbidden, "USER_BANNED", "account suspended")
 			return
 		}
+		if user.SuspendedAt != nil {
+			p.emitLoginFailed(ctx, host, &user.ID, &user.Email, ip, "suspended")
+			writeError(w, http.StatusForbidden, "USER_SUSPENDED", "account is deactivated")
+			return
+		}
+		if user.Staged(time.Now().UTC()) {
+			p.emitLoginFailed(ctx, host, &user.ID, &user.Email, ip, "staged")
+			writeError(w, http.StatusForbidden, "USER_NOT_STARTED", "account is not active yet")
+			return
+		}
 
 		pw, err := repo.GetPasswordByUserID(ctx, user.ID)
 		if err != nil {

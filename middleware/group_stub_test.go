@@ -62,3 +62,5 @@ func (*fakeRepo) ResolveUserRolesForClient(context.Context, string, string) ([]s
 	return nil, nil
 }
 func (*fakeRepo) ListOAuth2Clients(context.Context) ([]*domain.OAuth2Client, error) { return nil, nil }
+
+func (*fakeRepo) RevokeAllUserRefreshTokens(context.Context, string) (int64, error) { return 0, nil }

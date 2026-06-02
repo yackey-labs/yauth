@@ -731,6 +731,11 @@ func (r *Repo) RevokeRefreshTokenFamily(ctx context.Context, familyID string) (i
 	return res.RowsAffected, res.Error
 }
 
+func (r *Repo) RevokeAllUserRefreshTokens(ctx context.Context, userID string) (int64, error) {
+	res := r.ctx(ctx).Model(&RefreshToken{}).Where("user_id = ? AND revoked = ?", userID, false).Update("revoked", true)
+	return res.RowsAffected, res.Error
+}
+
 // --- APIKey ---
 
 // validateAPIKeyOwner enforces the "exactly one of UserID /

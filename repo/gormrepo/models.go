@@ -8,47 +8,56 @@ import (
 
 // User mirrors yauth_users.
 type User struct {
-	ID            string     `gorm:"column:id;primaryKey"`
-	Email         string     `gorm:"column:email;not null;uniqueIndex"`
-	DisplayName   *string    `gorm:"column:display_name"`
-	EmailVerified bool       `gorm:"column:email_verified;not null"`
-	Role          string     `gorm:"column:role;not null;default:user"`
-	Banned        bool       `gorm:"column:banned;not null"`
-	BannedReason  *string    `gorm:"column:banned_reason"`
-	BannedUntil   *time.Time `gorm:"column:banned_until"`
-	CreatedAt     time.Time  `gorm:"column:created_at;not null"`
-	UpdatedAt     time.Time  `gorm:"column:updated_at;not null"`
+	ID              string     `gorm:"column:id;primaryKey"`
+	Email           string     `gorm:"column:email;not null;uniqueIndex"`
+	DisplayName     *string    `gorm:"column:display_name"`
+	EmailVerified   bool       `gorm:"column:email_verified;not null"`
+	Role            string     `gorm:"column:role;not null;default:user"`
+	Banned          bool       `gorm:"column:banned;not null"`
+	BannedReason    *string    `gorm:"column:banned_reason"`
+	BannedUntil     *time.Time `gorm:"column:banned_until"`
+	SuspendedAt     *time.Time `gorm:"column:suspended_at"`
+	SuspendedReason *string    `gorm:"column:suspended_reason"`
+	ActivatesAt     *time.Time `gorm:"column:activates_at"`
+	CreatedAt       time.Time  `gorm:"column:created_at;not null"`
+	UpdatedAt       time.Time  `gorm:"column:updated_at;not null"`
 }
 
 func (User) TableName() string { return "yauth_users" }
 
 func (m *User) toDomain() domain.User {
 	return domain.User{
-		ID:            m.ID,
-		Email:         m.Email,
-		DisplayName:   m.DisplayName,
-		EmailVerified: m.EmailVerified,
-		Role:          m.Role,
-		Banned:        m.Banned,
-		BannedReason:  m.BannedReason,
-		BannedUntil:   ptrUTC(m.BannedUntil),
-		CreatedAt:     m.CreatedAt.UTC(),
-		UpdatedAt:     m.UpdatedAt.UTC(),
+		ID:              m.ID,
+		Email:           m.Email,
+		DisplayName:     m.DisplayName,
+		EmailVerified:   m.EmailVerified,
+		Role:            m.Role,
+		Banned:          m.Banned,
+		BannedReason:    m.BannedReason,
+		BannedUntil:     ptrUTC(m.BannedUntil),
+		SuspendedAt:     ptrUTC(m.SuspendedAt),
+		SuspendedReason: m.SuspendedReason,
+		ActivatesAt:     ptrUTC(m.ActivatesAt),
+		CreatedAt:       m.CreatedAt.UTC(),
+		UpdatedAt:       m.UpdatedAt.UTC(),
 	}
 }
 
 func userFromDomain(in domain.NewUser) User {
 	return User{
-		ID:            in.ID,
-		Email:         in.Email,
-		DisplayName:   in.DisplayName,
-		EmailVerified: in.EmailVerified,
-		Role:          in.Role,
-		Banned:        in.Banned,
-		BannedReason:  in.BannedReason,
-		BannedUntil:   ptrUTC(in.BannedUntil),
-		CreatedAt:     in.CreatedAt.UTC(),
-		UpdatedAt:     in.UpdatedAt.UTC(),
+		ID:              in.ID,
+		Email:           in.Email,
+		DisplayName:     in.DisplayName,
+		EmailVerified:   in.EmailVerified,
+		Role:            in.Role,
+		Banned:          in.Banned,
+		BannedReason:    in.BannedReason,
+		BannedUntil:     ptrUTC(in.BannedUntil),
+		SuspendedAt:     ptrUTC(in.SuspendedAt),
+		SuspendedReason: in.SuspendedReason,
+		ActivatesAt:     ptrUTC(in.ActivatesAt),
+		CreatedAt:       in.CreatedAt.UTC(),
+		UpdatedAt:       in.UpdatedAt.UTC(),
 	}
 }
 

@@ -179,6 +179,9 @@ type RefreshTokenRepository interface {
 	GetRefreshTokenByHash(ctx context.Context, tokenHash string) (*domain.RefreshToken, error)
 	RevokeRefreshToken(ctx context.Context, id string) error
 	RevokeRefreshTokenFamily(ctx context.Context, familyID string) (int64, error)
+	// RevokeAllUserRefreshTokens revokes every active refresh token for a user
+	// — the instant-termination kill switch on suspend.
+	RevokeAllUserRefreshTokens(ctx context.Context, userID string) (int64, error)
 }
 
 // APIKeyRepository covers long-lived API keys identified by prefix.

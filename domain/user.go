@@ -12,32 +12,57 @@ type User struct {
 	Banned        bool
 	BannedReason  *string
 	BannedUntil   *time.Time
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	// SuspendedAt globally disables the account (offboarding) — distinct from
+	// Banned, which is for security incidents. A suspended user cannot log in,
+	// receive tokens, or pass auth resolution; the account is retained.
+	SuspendedAt     *time.Time
+	SuspendedReason *string
+	// ActivatesAt schedules a start: while it is in the future the user is
+	// "staged" and cannot authenticate yet (onboarding ahead of a start date).
+	ActivatesAt *time.Time
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+// Staged reports whether the user has a scheduled start still in the future.
+func (u User) Staged(now time.Time) bool {
+	return u.ActivatesAt != nil && now.Before(*u.ActivatesAt)
+}
+
+// CanAuthenticate reports whether the user may currently sign in or receive
+// tokens: not banned, not suspended, and past any scheduled start.
+func (u User) CanAuthenticate(now time.Time) bool {
+	return !u.Banned && u.SuspendedAt == nil && !u.Staged(now)
 }
 
 // NewUser is the input for creating a user.
 type NewUser struct {
-	ID            string
-	Email         string
-	DisplayName   *string
-	EmailVerified bool
-	Role          string
-	Banned        bool
-	BannedReason  *string
-	BannedUntil   *time.Time
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	ID              string
+	Email           string
+	DisplayName     *string
+	EmailVerified   bool
+	Role            string
+	Banned          bool
+	BannedReason    *string
+	BannedUntil     *time.Time
+	SuspendedAt     *time.Time
+	SuspendedReason *string
+	ActivatesAt     *time.Time
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 // UpdateUser is a partial update payload; nil fields are unchanged.
 type UpdateUser struct {
-	Email         *string
-	DisplayName   **string
-	EmailVerified *bool
-	Role          *string
-	Banned        *bool
-	BannedReason  **string
-	BannedUntil   **time.Time
-	UpdatedAt     *time.Time
+	Email           *string
+	DisplayName     **string
+	EmailVerified   *bool
+	Role            *string
+	Banned          *bool
+	BannedReason    **string
+	BannedUntil     **time.Time
+	SuspendedAt     **time.Time
+	SuspendedReason **string
+	ActivatesAt     **time.Time
+	UpdatedAt       *time.Time
 }

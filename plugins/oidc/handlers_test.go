@@ -21,6 +21,7 @@ import (
 	"github.com/yackey-labs/yauth-go/auth"
 	"github.com/yackey-labs/yauth-go/domain"
 	"github.com/yackey-labs/yauth-go/plugins/asymjwt"
+	"github.com/yackey-labs/yauth-go/plugins/oauth2server"
 	"github.com/yackey-labs/yauth-go/plugins/oidc"
 	"github.com/yackey-labs/yauth-go/repo/gormrepo"
 )
@@ -153,6 +154,10 @@ func TestDiscovery_Document(t *testing.T) {
 	if _, hasTok := doc["token_endpoint"]; hasTok {
 		t.Fatalf("token_endpoint should be absent without oauth2-server")
 	}
+	// end_session_endpoint is also gated on oauth2-server being loaded.
+	if _, hasES := doc["end_session_endpoint"]; hasES {
+		t.Fatalf("end_session_endpoint should be absent without oauth2-server")
+	}
 	// claims_supported is advertised with the default baseline when
 	// the operator does not override it.
 	rawClaims, ok := doc["claims_supported"].([]any)
@@ -171,6 +176,51 @@ func TestDiscovery_Document(t *testing.T) {
 		if _, ok := want[s]; !ok {
 			t.Fatalf("unexpected claim %q in claims_supported", s)
 		}
+	}
+}
+
+// When oauth2-server is loaded, the discovery document advertises the OIDC
+// RP-Initiated Logout end_session_endpoint.
+func TestDiscovery_EndSessionWhenOAuth2Loaded(t *testing.T) {
+	dsn := "file:" + uuid.NewString() + "?mode=memory&cache=shared&_pragma=foreign_keys(1)"
+	db, err := gormrepo.OpenSQLite(dsn)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	if err := gormrepo.Migrate(context.Background(), db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	r := gormrepo.New(db)
+	dir := t.TempDir()
+	priv, pub := writeRSAKeys(t, dir)
+	asym, err := asymjwt.New(asymjwt.Config{KeyType: "RS256", PrivateKeyPath: priv, PublicKeyPath: pub, KID: "test-kid"})
+	if err != nil {
+		t.Fatalf("asymjwt.New: %v", err)
+	}
+	ya, err := yauth.New(r, yauth.NewDefaultConfig()).
+		WithPlugin(asym).
+		WithPlugin(oauth2server.New(oauth2server.Config{Issuer: "http://idp.test", BasePath: "/api/auth"})).
+		WithPlugin(oidc.New(oidc.Config{Issuer: "http://idp.test", BasePath: "/api/auth"})).
+		Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	mux := http.NewServeMux()
+	mux.Handle("/api/auth/", http.StripPrefix("/api/auth", ya.Router()))
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	res, err := http.Get(srv.URL + "/api/auth/.well-known/openid-configuration")
+	if err != nil {
+		t.Fatalf("discovery: %v", err)
+	}
+	defer res.Body.Close()
+	var doc map[string]any
+	if err := json.NewDecoder(res.Body).Decode(&doc); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if doc["end_session_endpoint"] != "http://idp.test/api/auth/oauth/end_session" {
+		t.Fatalf("end_session_endpoint mismatch: %v", doc["end_session_endpoint"])
 	}
 }
 

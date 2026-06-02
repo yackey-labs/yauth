@@ -1094,7 +1094,50 @@ func (r *Repo) CreateOAuth2Client(ctx context.Context, input domain.NewOAuth2Cli
 		JwksUri:                 input.JWKSURI,
 		BannedAt:                tsPtr(nil),
 		BannedReason:            nil,
+
+		PostLogoutRedirectUris:           jsonArrayOrEmpty(input.PostLogoutRedirectURIs),
+		BackchannelLogoutUri:             input.BackchannelLogoutURI,
+		BackchannelLogoutSessionRequired: input.BackchannelLogoutSessionRequired,
 	})
+}
+
+// jsonArrayOrEmpty renders a JSON-array column value, defaulting an absent/empty
+// raw message to "[]" so the NOT NULL post_logout_redirect_uris column is always
+// a valid JSON array.
+func jsonArrayOrEmpty(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return "[]"
+	}
+	return string(raw)
+}
+
+// SetOAuth2ClientLogout updates a client's OIDC logout configuration.
+func (r *Repo) SetOAuth2ClientLogout(ctx context.Context, clientID string, postLogoutRedirectURIs json.RawMessage, backchannelLogoutURI *string, sessionRequired bool) (bool, error) {
+	n, err := r.q.SetOAuth2ClientLogout(ctx, pgxgen.SetOAuth2ClientLogoutParams{
+		ClientID:                         clientID,
+		PostLogoutRedirectUris:           jsonArrayOrEmpty(postLogoutRedirectURIs),
+		BackchannelLogoutUri:             backchannelLogoutURI,
+		BackchannelLogoutSessionRequired: sessionRequired,
+	})
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+// ListOAuth2ClientsWithBackchannelLogoutURI returns clients that registered a
+// back-channel logout endpoint (for logout_token fan-out).
+func (r *Repo) ListOAuth2ClientsWithBackchannelLogoutURI(ctx context.Context) ([]*domain.OAuth2Client, error) {
+	rows, err := r.q.ListOAuth2ClientsWithBackchannelLogout(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*domain.OAuth2Client, len(rows))
+	for i, row := range rows {
+		c := oauth2ClientToDomain(row)
+		out[i] = &c
+	}
+	return out, nil
 }
 
 func (r *Repo) GetOAuth2ClientByClientID(ctx context.Context, clientID string) (*domain.OAuth2Client, error) {
@@ -1235,6 +1278,24 @@ func (r *Repo) GetConsentByUserAndClient(ctx context.Context, userID, clientID s
 		CreatedAt: fromTS(row.CreatedAt),
 	}
 	return &c, nil
+}
+
+func (r *Repo) ListConsentsByUserID(ctx context.Context, userID string) ([]*domain.Consent, error) {
+	rows, err := r.q.ListConsentsByUserID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*domain.Consent, len(rows))
+	for i, row := range rows {
+		out[i] = &domain.Consent{
+			ID:        row.ID,
+			UserID:    row.UserID,
+			ClientID:  row.ClientID,
+			Scopes:    jsonBytesPtr(row.Scopes),
+			CreatedAt: fromTS(row.CreatedAt),
+		}
+	}
+	return out, nil
 }
 
 func (r *Repo) UpdateConsentScopes(ctx context.Context, id string, scopes []byte) error {
@@ -2619,6 +2680,10 @@ func oauth2ClientToDomain(m pgxgen.YauthOauth2Client) domain.OAuth2Client {
 		BannedAt:                fromTSPtr(m.BannedAt),
 		BannedReason:            m.BannedReason,
 		EnforceGroupAssignment:  m.EnforceGroupAssignment,
+
+		PostLogoutRedirectURIs:           json.RawMessage(m.PostLogoutRedirectUris),
+		BackchannelLogoutURI:             m.BackchannelLogoutUri,
+		BackchannelLogoutSessionRequired: m.BackchannelLogoutSessionRequired,
 	}
 }
 

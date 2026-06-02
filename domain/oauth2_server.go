@@ -25,23 +25,37 @@ type OAuth2Client struct {
 	// are members of at least one assigned group (see ClientGroupAssignment).
 	// Default false: any authenticated user may complete the flow.
 	EnforceGroupAssignment bool
+	// PostLogoutRedirectURIs is a JSON array of URIs the client may be
+	// redirected to after RP-Initiated Logout (OIDC RP-Initiated Logout 1.0).
+	// A post_logout_redirect_uri parameter MUST match one of these exactly.
+	PostLogoutRedirectURIs json.RawMessage
+	// BackchannelLogoutURI is the client's OIDC Back-Channel Logout endpoint.
+	// When set, the OP POSTs a signed logout_token there when the user's
+	// session ends. nil → the client does not support back-channel logout.
+	BackchannelLogoutURI *string
+	// BackchannelLogoutSessionRequired indicates the client requires a `sid`
+	// claim in the logout_token (OIDC Back-Channel Logout 1.0 §2.4).
+	BackchannelLogoutSessionRequired bool
 }
 
 // NewOAuth2Client is the input for registering an OAuth2 client.
 type NewOAuth2Client struct {
-	ID                      string
-	ClientID                string
-	ClientSecretHash        *string
-	RedirectURIs            json.RawMessage
-	ClientName              *string
-	GrantTypes              json.RawMessage
-	Scopes                  json.RawMessage
-	IsPublic                bool
-	CreatedAt               time.Time
-	TokenEndpointAuthMethod *string
-	PublicKeyPEM            *string
-	JWKSURI                 *string
-	EnforceGroupAssignment  bool
+	ID                               string
+	ClientID                         string
+	ClientSecretHash                 *string
+	RedirectURIs                     json.RawMessage
+	ClientName                       *string
+	GrantTypes                       json.RawMessage
+	Scopes                           json.RawMessage
+	IsPublic                         bool
+	CreatedAt                        time.Time
+	TokenEndpointAuthMethod          *string
+	PublicKeyPEM                     *string
+	JWKSURI                          *string
+	EnforceGroupAssignment           bool
+	PostLogoutRedirectURIs           json.RawMessage
+	BackchannelLogoutURI             *string
+	BackchannelLogoutSessionRequired bool
 }
 
 // AuthorizationCode is a single-use OAuth2 authorization code (RFC 6749).

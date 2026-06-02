@@ -218,6 +218,12 @@ func (p *oauth2Plugin) Routes(host plugin.PluginHost, mux *http.ServeMux, prefix
 	mux.Handle("POST "+prefix+"/oauth/authorize", mw.RequireAuth(http.HandlerFunc(p.handleAuthorize(host))))
 	mux.Handle("POST "+prefix+"/oauth2/consent", mw.RequireAuth(http.HandlerFunc(p.handleConsent(host))))
 
+	// --- OIDC RP-Initiated Logout 1.0 (end_session) ---
+	// Public: must work whether or not a session is still active, and is
+	// browser-facing (GET) as well as form-POST.
+	mux.Handle("GET "+prefix+"/oauth/end_session", http.HandlerFunc(p.handleEndSession(host)))
+	mux.Handle("POST "+prefix+"/oauth/end_session", http.HandlerFunc(p.handleEndSession(host)))
+
 	// --- token / introspect / revoke ---
 	mux.Handle("POST "+prefix+"/oauth/token", http.HandlerFunc(p.handleToken(host)))
 	mux.Handle("POST "+prefix+"/oauth/introspect", http.HandlerFunc(p.handleIntrospect(host)))

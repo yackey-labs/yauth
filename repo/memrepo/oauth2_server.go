@@ -2,6 +2,7 @@ package memrepo
 
 import (
 	"context"
+	"encoding/json"
 	"sort"
 	"time"
 
@@ -36,6 +37,14 @@ func (r *Repo) CreateOAuth2Client(ctx context.Context, input domain.NewOAuth2Cli
 		PublicKeyPEM:            input.PublicKeyPEM,
 		JWKSURI:                 input.JWKSURI,
 		EnforceGroupAssignment:  input.EnforceGroupAssignment,
+
+		BackchannelLogoutURI:             input.BackchannelLogoutURI,
+		BackchannelLogoutSessionRequired: input.BackchannelLogoutSessionRequired,
+	}
+	if len(input.PostLogoutRedirectURIs) > 0 {
+		c.PostLogoutRedirectURIs = append([]byte(nil), input.PostLogoutRedirectURIs...)
+	} else {
+		c.PostLogoutRedirectURIs = json.RawMessage("[]")
 	}
 	if len(input.RedirectURIs) > 0 {
 		c.RedirectURIs = append([]byte(nil), input.RedirectURIs...)
@@ -120,6 +129,44 @@ func (r *Repo) ListOAuth2Clients(ctx context.Context) ([]*domain.OAuth2Client, e
 	out := make([]*domain.OAuth2Client, 0, len(r.oauth2Clients))
 	for _, c := range r.oauth2Clients {
 		out = append(out, cloneOAuth2Client(c))
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	return out, nil
+}
+
+func (r *Repo) SetOAuth2ClientLogout(ctx context.Context, clientID string, postLogoutRedirectURIs json.RawMessage, backchannelLogoutURI *string, sessionRequired bool) (bool, error) {
+	_ = ensureCtx(ctx)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	id, ok := r.oauth2ClientIDIdx[clientID]
+	if !ok {
+		return false, nil
+	}
+	c := r.oauth2Clients[id]
+	if len(postLogoutRedirectURIs) > 0 {
+		c.PostLogoutRedirectURIs = append([]byte(nil), postLogoutRedirectURIs...)
+	} else {
+		c.PostLogoutRedirectURIs = json.RawMessage("[]")
+	}
+	if backchannelLogoutURI != nil {
+		s := *backchannelLogoutURI
+		c.BackchannelLogoutURI = &s
+	} else {
+		c.BackchannelLogoutURI = nil
+	}
+	c.BackchannelLogoutSessionRequired = sessionRequired
+	return true, nil
+}
+
+func (r *Repo) ListOAuth2ClientsWithBackchannelLogoutURI(ctx context.Context) ([]*domain.OAuth2Client, error) {
+	_ = ensureCtx(ctx)
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]*domain.OAuth2Client, 0)
+	for _, c := range r.oauth2Clients {
+		if c.BackchannelLogoutURI != nil && *c.BackchannelLogoutURI != "" {
+			out = append(out, cloneOAuth2Client(c))
+		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
 	return out, nil
@@ -238,6 +285,19 @@ func (r *Repo) GetConsentByUserAndClient(ctx context.Context, userID, clientID s
 		}
 	}
 	return nil, yautherr.ErrNotFound
+}
+
+func (r *Repo) ListConsentsByUserID(ctx context.Context, userID string) ([]*domain.Consent, error) {
+	_ = ensureCtx(ctx)
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]*domain.Consent, 0)
+	for _, c := range r.consents {
+		if c.UserID == userID {
+			out = append(out, cloneConsent(c))
+		}
+	}
+	return out, nil
 }
 
 func (r *Repo) UpdateConsentScopes(ctx context.Context, id string, scopes []byte) error {

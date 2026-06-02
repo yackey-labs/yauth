@@ -176,21 +176,24 @@ type YauthMembership struct {
 }
 
 type YauthOauth2Client struct {
-	ID                      string
-	ClientID                string
-	ClientSecretHash        *string
-	RedirectUris            string
-	ClientName              *string
-	GrantTypes              string
-	Scopes                  *string
-	IsPublic                bool
-	CreatedAt               pgtype.Timestamptz
-	TokenEndpointAuthMethod *string
-	PublicKeyPem            *string
-	JwksUri                 *string
-	BannedAt                pgtype.Timestamptz
-	BannedReason            *string
-	EnforceGroupAssignment  bool
+	ID                               string
+	ClientID                         string
+	ClientSecretHash                 *string
+	RedirectUris                     string
+	ClientName                       *string
+	GrantTypes                       string
+	Scopes                           *string
+	IsPublic                         bool
+	CreatedAt                        pgtype.Timestamptz
+	TokenEndpointAuthMethod          *string
+	PublicKeyPem                     *string
+	JwksUri                          *string
+	BannedAt                         pgtype.Timestamptz
+	BannedReason                     *string
+	EnforceGroupAssignment           bool
+	PostLogoutRedirectUris           string
+	BackchannelLogoutUri             *string
+	BackchannelLogoutSessionRequired bool
 }
 
 type YauthOauthAccount struct {

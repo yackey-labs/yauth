@@ -2,6 +2,7 @@ package gormrepo
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -940,6 +941,36 @@ func (r *Repo) ListOAuth2Clients(ctx context.Context) ([]*domain.OAuth2Client, e
 	return out, nil
 }
 
+func (r *Repo) SetOAuth2ClientLogout(ctx context.Context, clientID string, postLogoutRedirectURIs json.RawMessage, backchannelLogoutURI *string, sessionRequired bool) (bool, error) {
+	plru := string(postLogoutRedirectURIs)
+	if plru == "" {
+		plru = "[]"
+	}
+	updates := map[string]any{
+		"post_logout_redirect_uris":           plru,
+		"backchannel_logout_uri":              backchannelLogoutURI,
+		"backchannel_logout_session_required": sessionRequired,
+	}
+	res := r.ctx(ctx).Model(&OAuth2Client{}).Where("client_id = ?", clientID).Updates(updates)
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected > 0, nil
+}
+
+func (r *Repo) ListOAuth2ClientsWithBackchannelLogoutURI(ctx context.Context) ([]*domain.OAuth2Client, error) {
+	var rows []OAuth2Client
+	if err := r.ctx(ctx).Where("backchannel_logout_uri IS NOT NULL AND backchannel_logout_uri <> ''").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]*domain.OAuth2Client, len(rows))
+	for i := range rows {
+		d := rows[i].toDomain()
+		out[i] = &d
+	}
+	return out, nil
+}
+
 // --- AuthorizationCode ---
 
 func (r *Repo) CreateAuthorizationCode(ctx context.Context, input domain.NewAuthorizationCode) error {
@@ -1030,6 +1061,19 @@ func (r *Repo) GetConsentByUserAndClient(ctx context.Context, userID, clientID s
 	}
 	d := m.toDomain()
 	return &d, nil
+}
+
+func (r *Repo) ListConsentsByUserID(ctx context.Context, userID string) ([]*domain.Consent, error) {
+	var ms []Consent
+	if err := r.ctx(ctx).Where("user_id = ?", userID).Find(&ms).Error; err != nil {
+		return nil, err
+	}
+	out := make([]*domain.Consent, len(ms))
+	for i := range ms {
+		d := ms[i].toDomain()
+		out[i] = &d
+	}
+	return out, nil
 }
 
 func (r *Repo) UpdateConsentScopes(ctx context.Context, id string, scopes []byte) error {

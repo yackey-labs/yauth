@@ -559,23 +559,7 @@ func (p *ssoSAMLPlugin) handleSamlLogout(host plugin.PluginHost) http.HandlerFun
 	}
 }
 
-// --- POST /sso/saml/slo -----------------------------------------------
-
-func (p *ssoSAMLPlugin) handleSamlSLO(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		// IdP-initiated SLO. Accept the request, tear down the
-		// session, optionally reply with a LogoutResponse. We do not
-		// attempt to validate the LogoutRequest signature in this
-		// MVP — SAML SLO is brittle and the worst case (an attacker
-		// forces a logout) is a denial of service, not a credential
-		// compromise. Documented as a known gap.
-		http.SetCookie(w, auth.SessionCookie(
-			cookieOptionsFromHost(host, r, -1),
-			"",
-		))
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-	}
-}
+// handleSamlSLO (IdP-initiated Single Logout) is implemented in slo.go.
 
 // --- helpers ----------------------------------------------------------
 

@@ -9,6 +9,9 @@ SELECT * FROM yauth_sso_connections WHERE id = $1 LIMIT 1;
 -- name: ListSsoConnectionsByOrg :many
 SELECT * FROM yauth_sso_connections WHERE organization_id = $1 ORDER BY created_at ASC, id ASC;
 
+-- name: ListAllSsoConnections :many
+SELECT * FROM yauth_sso_connections ORDER BY created_at ASC, id ASC;
+
 -- name: UpdateSsoConnection :one
 UPDATE yauth_sso_connections
 SET

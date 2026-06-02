@@ -2421,6 +2421,19 @@ func (r *Repo) ListSsoConnectionsByOrg(ctx context.Context, organizationID strin
 	return out, nil
 }
 
+func (r *Repo) ListAllSsoConnections(ctx context.Context) ([]*domain.SsoConnection, error) {
+	rows, err := r.q.ListAllSsoConnections(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*domain.SsoConnection, len(rows))
+	for i, row := range rows {
+		c := ssoConnToDomain(row)
+		out[i] = &c
+	}
+	return out, nil
+}
+
 func (r *Repo) UpdateSsoConnection(ctx context.Context, id string, changes domain.UpdateSsoConnection) (domain.SsoConnection, error) {
 	now := time.Now().UTC()
 	updatedAt := ts(now)

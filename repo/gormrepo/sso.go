@@ -119,6 +119,19 @@ func (r *Repo) ListSsoConnectionsByOrg(ctx context.Context, organizationID strin
 	return out, nil
 }
 
+func (r *Repo) ListAllSsoConnections(ctx context.Context) ([]*domain.SsoConnection, error) {
+	var rows []SsoConnection
+	if err := r.ctx(ctx).Order("created_at ASC, id ASC").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]*domain.SsoConnection, 0, len(rows))
+	for i := range rows {
+		d := rows[i].toDomain()
+		out = append(out, &d)
+	}
+	return out, nil
+}
+
 func (r *Repo) UpdateSsoConnection(ctx context.Context, id string, changes domain.UpdateSsoConnection) (domain.SsoConnection, error) {
 	var m SsoConnection
 	err := r.ctx(ctx).Transaction(func(tx *gorm.DB) error {

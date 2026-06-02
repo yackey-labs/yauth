@@ -21,3 +21,7 @@ func (*fakeRepo) SetOAuth2ClientLogout(context.Context, string, json.RawMessage,
 func (*fakeRepo) ListOAuth2ClientsWithBackchannelLogoutURI(context.Context) ([]*domain.OAuth2Client, error) {
 	return nil, nil
 }
+
+func (*fakeRepo) ListAllSsoConnections(context.Context) ([]*domain.SsoConnection, error) {
+	return nil, nil
+}

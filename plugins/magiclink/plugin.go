@@ -13,10 +13,9 @@
 package magiclink
 
 import (
-	"github.com/danielgtaylor/huma/v2"
-
-	"net/http"
 	"time"
+
+	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/yackey-labs/yauth-go/plugin"
 )
@@ -62,8 +61,16 @@ func New(cfg Config) plugin.Plugin {
 // Name implements plugin.Plugin.
 func (p *magicLinkPlugin) Name() string { return "magic-link" }
 
-// Routes implements plugin.Plugin.
+// Routes implements plugin.Plugin. Both routes are huma-native, public
+// (no auth gate, mirroring the passwordless flow), and use StashHTTPHuma to
+// reach the underlying *http.Request / http.ResponseWriter so the migrated
+// handlers keep byte-identical body parsing (strict decode, the
+// enumeration-safe send semantics) and the verify route's Set-Cookie write.
+// The input structs carry NO huma Body field, so huma leaves the request body
+// intact for the plugin's own strict decoder. The mux is retained in the
+// signature for plugins that still register raw net/http routes; magic-link no
+// longer uses it.
 func (p *magicLinkPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.API, prefix string) {
-	mux.Handle("POST "+prefix+"/magic-link/send", http.HandlerFunc(p.handleSend(host)))
-	mux.Handle("POST "+prefix+"/magic-link/verify", http.HandlerFunc(p.handleVerify(host)))
+	p.registerSend(host, api, prefix)
+	p.registerVerify(host, api, prefix)
 }

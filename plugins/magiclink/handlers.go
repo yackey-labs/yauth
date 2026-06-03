@@ -1,6 +1,7 @@
 package magiclink
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/google/uuid"
 
 	"github.com/yackey-labs/yauth-go/auth"
@@ -28,25 +30,30 @@ import (
 // of entropy.
 const magicTokenBytes = 32
 
-type errorBody struct {
-	Error errorPayload `json:"error"`
+// magicGuards is the per-operation middleware chain shared by both magic-link
+// routes. The flow is public (no auth), so the only middleware stashes the raw
+// request/writer onto the operation context: /send reuses the strict body
+// decoder and /verify additionally needs the writer for its Set-Cookie.
+func magicGuards(api huma.API) huma.Middlewares {
+	return huma.Middlewares{middleware.StashHTTPHuma(api)}
 }
 
-type errorPayload struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+// reqFromCtx returns the *http.Request stashed by StashHTTPHuma. On a magic-link
+// route it is always present; the nil guard keeps the helper safe and maps an
+// absent request to a 500 problem+json.
+func reqFromCtx(ctx context.Context) (*http.Request, error) {
+	r := middleware.HTTPRequestFromContext(ctx)
+	if r == nil {
+		return nil, huma.Error500InternalServerError("request unavailable")
+	}
+	return r, nil
 }
 
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeError(w http.ResponseWriter, status int, code, message string) {
-	writeJSON(w, status, errorBody{Error: errorPayload{Code: code, Message: message}})
-}
-
+// decodeJSON parses r.Body into v, enforcing a 1 MiB body cap. Migrated
+// handlers call it on the *http.Request stashed onto the operation context by
+// StashHTTPHuma — the input structs carry NO huma Body field, so huma never
+// consumes the body and this strict decoder (DisallowUnknownFields) stays
+// byte-identical to the legacy net/http handlers.
 func decodeJSON(r *http.Request, v any) error {
 	r.Body = http.MaxBytesReader(nil, r.Body, 1<<20)
 	dec := json.NewDecoder(r.Body)
@@ -127,44 +134,62 @@ type sendResponse struct {
 
 const magicLinkSendMessage = "If the email exists, a magic link has been sent."
 
-func (p *magicLinkPlugin) handleSend(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+// sendOutput wraps sendResponse so huma marshals exactly the legacy 200 body.
+type sendOutput struct {
+	Body sendResponse
+}
+
+// registerSend wires POST {prefix}/magic-link/send as a public huma-native
+// operation. It REUSES the legacy strict body decode (via the stashed request),
+// the enumeration-resistant logic, token issuance, and mailer dispatch; only the
+// transport changes. Every success path returns the same generic 200 body so the
+// response never admits whether the email is registered.
+func (p *magicLinkPlugin) registerSend(host plugin.PluginHost, api huma.API, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "magicLinkSend",
+		Method:      http.MethodPost,
+		Path:        prefix + "/magic-link/send",
+		Summary:     "Request a single-use magic-link login email",
+		Tags:        []string{"magic-link"},
+		Security:    []map[string][]string{}, // explicitly public
+		Middlewares: magicGuards(api),
+	}, func(ctx context.Context, _ *struct{}) (*sendOutput, error) {
+		r, err := reqFromCtx(ctx)
+		if err != nil {
+			return nil, err
+		}
+
 		var req sendRequest
 		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
-			return
+			return nil, huma.Error400BadRequest(err.Error())
 		}
 		req.Email = strings.TrimSpace(strings.ToLower(req.Email))
 		if !validEmail(req.Email) {
-			writeError(w, http.StatusBadRequest, "INVALID_EMAIL", "email must contain '@'")
-			return
+			return nil, huma.Error400BadRequest("email must contain '@'")
 		}
 
-		ctx := r.Context()
 		repo := host.Repo()
+		ok := &sendOutput{Body: sendResponse{Message: magicLinkSendMessage}}
 
 		// Look up the user but DO NOT branch the response on the result —
-		// /send always returns {"sent": true}.
-		_, err := repo.GetUserByEmail(ctx, req.Email)
+		// /send always returns the same generic 200 body.
+		_, err = repo.GetUserByEmail(ctx, req.Email)
 		userExists := err == nil
 		if err != nil && !errors.Is(err, yautherr.ErrNotFound) {
 			// Backend failure: we still respond 200 to preserve enumeration
 			// resistance; the operator sees the error in logs.
-			writeJSON(w, http.StatusOK, sendResponse{Message: magicLinkSendMessage})
-			return
+			return ok, nil
 		}
 
 		// Issue the token only if the user exists OR signup is enabled. In
 		// both other cases we skip persistence/email but still return 200.
 		if !userExists && !p.cfg.SignupEnabled {
-			writeJSON(w, http.StatusOK, sendResponse{Message: magicLinkSendMessage})
-			return
+			return ok, nil
 		}
 
 		raw, hash, err := generateToken()
 		if err != nil {
-			writeJSON(w, http.StatusOK, sendResponse{Message: magicLinkSendMessage})
-			return
+			return ok, nil
 		}
 
 		now := time.Now().UTC()
@@ -175,15 +200,14 @@ func (p *magicLinkPlugin) handleSend(host plugin.PluginHost) http.HandlerFunc {
 			ExpiresAt: now.Add(p.cfg.TokenTTL),
 			CreatedAt: now,
 		}); err != nil {
-			writeJSON(w, http.StatusOK, sendResponse{Message: magicLinkSendMessage})
-			return
+			return ok, nil
 		}
 
 		link := buildLink(p.cfg.LinkBaseURL, raw)
 		_ = p.cfg.Mailer.SendMagicLink(ctx, req.Email, link)
 
-		writeJSON(w, http.StatusOK, sendResponse{Message: magicLinkSendMessage})
-	}
+		return ok, nil
+	})
 }
 
 // --- /magic-link/verify ---------------------------------------------------
@@ -219,20 +243,46 @@ func toVerifyResponse(u domain.User) verifyResponse {
 	}
 }
 
-func (p *magicLinkPlugin) handleVerify(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+// verifyOutput wraps verifyResponse so huma marshals exactly the legacy 200
+// body. The session cookie is written out-of-band on the stashed writer.
+type verifyOutput struct {
+	Body verifyResponse
+}
+
+// registerVerify wires POST {prefix}/magic-link/verify as a public huma-native
+// operation. It REUSES the legacy token consumption, user resolve/create, ban
+// check, session issuance, and event emission; the Set-Cookie is written on the
+// http.ResponseWriter stashed by StashHTTPHuma (huma writes the 200 + body after
+// the handler returns, so the cookie header lands first) — the same pattern as
+// admin's impersonate route.
+func (p *magicLinkPlugin) registerVerify(host plugin.PluginHost, api huma.API, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "magicLinkVerify",
+		Method:      http.MethodPost,
+		Path:        prefix + "/magic-link/verify",
+		Summary:     "Exchange a magic-link token for a session",
+		Tags:        []string{"magic-link"},
+		Security:    []map[string][]string{}, // explicitly public
+		Middlewares: magicGuards(api),
+	}, func(ctx context.Context, _ *struct{}) (*verifyOutput, error) {
+		r, err := reqFromCtx(ctx)
+		if err != nil {
+			return nil, err
+		}
+		w := middleware.HTTPResponseFromContext(ctx)
+		if w == nil {
+			return nil, huma.Error500InternalServerError("response unavailable")
+		}
+
 		var req verifyRequest
 		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
-			return
+			return nil, huma.Error400BadRequest(err.Error())
 		}
 		raw := strings.TrimSpace(req.Token)
 		if raw == "" {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "token is required")
-			return
+			return nil, huma.Error400BadRequest("token is required")
 		}
 
-		ctx := r.Context()
 		repo := host.Repo()
 		ip := middleware.RequestIP(r)
 		method := "magic-link"
@@ -242,20 +292,17 @@ func (p *magicLinkPlugin) handleVerify(host plugin.PluginHost) http.HandlerFunc 
 
 		ml, err := repo.ConsumeMagicLink(ctx, hash)
 		if err != nil || ml == nil {
-			writeError(w, http.StatusUnauthorized, "INVALID_TOKEN", "token is invalid, expired, or already used")
-			return
+			return nil, huma.Error401Unauthorized("token is invalid, expired, or already used")
 		}
 
 		// Resolve or create the user.
 		user, err := repo.GetUserByEmail(ctx, ml.Email)
 		if err != nil && !errors.Is(err, yautherr.ErrNotFound) {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to look up user")
-			return
+			return nil, huma.Error500InternalServerError("unable to look up user")
 		}
 		if user == nil {
 			if !p.cfg.SignupEnabled {
-				writeError(w, http.StatusUnauthorized, "INVALID_TOKEN", "token is invalid, expired, or already used")
-				return
+				return nil, huma.Error401Unauthorized("token is invalid, expired, or already used")
 			}
 			now := time.Now().UTC()
 			created, err := repo.CreateUser(ctx, domain.NewUser{
@@ -267,8 +314,7 @@ func (p *magicLinkPlugin) handleVerify(host plugin.PluginHost) http.HandlerFunc 
 				UpdatedAt:     now,
 			})
 			if err != nil {
-				writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to create user")
-				return
+				return nil, huma.Error500InternalServerError("unable to create user")
 			}
 			user = &created
 			uid := user.ID
@@ -284,14 +330,12 @@ func (p *magicLinkPlugin) handleVerify(host plugin.PluginHost) http.HandlerFunc 
 		}
 
 		if user.Banned {
-			writeError(w, http.StatusForbidden, "USER_BANNED", "account suspended")
-			return
+			return nil, huma.Error403Forbidden("account suspended")
 		}
 
 		raw2, _, err := auth.IssueSession(ctx, repo, user.ID, ip, requestUA(r), host.SessionTTL())
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to issue session")
-			return
+			return nil, huma.Error500InternalServerError("unable to issue session")
 		}
 
 		uid := user.ID
@@ -309,6 +353,6 @@ func (p *magicLinkPlugin) handleVerify(host plugin.PluginHost) http.HandlerFunc 
 			cookieOptionsFromHost(host, r, int(host.SessionTTL().Seconds())),
 			raw2,
 		))
-		writeJSON(w, http.StatusOK, toVerifyResponse(*user))
-	}
+		return &verifyOutput{Body: toVerifyResponse(*user)}, nil
+	})
 }

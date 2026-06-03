@@ -181,22 +181,10 @@ func (p *adminPlugin) handleListUsers(host plugin.PluginHost) http.HandlerFunc {
 }
 
 // --- GET /admin/users/{id} ------------------------------------------------
-
-func (p *adminPlugin) handleGetUser(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		u, err := host.Repo().GetUserByID(r.Context(), id)
-		if err != nil {
-			if errors.Is(err, yautherr.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "NOT_FOUND", "user not found")
-				return
-			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to load user")
-			return
-		}
-		writeJSON(w, http.StatusOK, toUserJSON(*u))
-	}
-}
+//
+// Migrated to a huma-native operation in plugin.go (registerGetUser). The
+// userJSON projection (toUserJSON) is shared with the other admin handlers
+// and remains here.
 
 // --- PATCH /admin/users/{id} ---------------------------------------------
 

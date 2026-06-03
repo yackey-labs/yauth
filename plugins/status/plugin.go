@@ -14,7 +14,10 @@
 package status
 
 import (
+	"context"
 	"net/http"
+
+	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/yackey-labs/yauth-go/plugin"
 )
@@ -32,10 +35,37 @@ func New() plugin.Plugin { return &statusPlugin{} }
 func (p *statusPlugin) Name() string { return "status" }
 
 // Routes implements plugin.Plugin.
-func (p *statusPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux, prefix string) {
+func (p *statusPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux, api huma.API, prefix string) {
 	mw := host.Middleware()
 	mux.Handle("GET "+prefix+"/status", mw.RequireAdmin(http.HandlerFunc(p.handleStatus(host))))
+
 	// /config is public — the SPA needs it before login (signups/email-verify
 	// flags drive UI gating). Mirrors yauth's `core_public_routes` policy.
-	mux.HandleFunc("GET "+prefix+"/config", p.handleConfig(host))
+	//
+	// Reference migration (huma-native phase 0): /config is the plugin's only
+	// unauthenticated route, so it proves the no-auth huma path. The response
+	// body is byte-for-byte the legacy handleConfig output (configResponse).
+	huma.Register(api, huma.Operation{
+		OperationID: "get-config",
+		Method:      http.MethodGet,
+		Path:        prefix + "/config",
+		Summary:     "Public client config",
+		Description: "Operator-toggled flags the SPA reads before login (signups, email-verify gating). Unauthenticated.",
+		Tags:        []string{"status"},
+		Security:    []map[string][]string{}, // explicitly public
+	}, func(_ context.Context, _ *configInput) (*configOutput, error) {
+		return &configOutput{Body: configResponse{
+			AllowSignups:             host.AllowSignups(),
+			RequireEmailVerification: false,
+		}}, nil
+	})
+}
+
+// configInput has no fields — GET /config takes no parameters or body.
+type configInput struct{}
+
+// configOutput wraps the legacy configResponse so huma emits exactly the
+// same JSON object the net/http handler did.
+type configOutput struct {
+	Body configResponse
 }

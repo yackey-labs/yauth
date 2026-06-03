@@ -17,7 +17,6 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"context"
-	"net/http"
 	"time"
 
 	"github.com/yackey-labs/yauth-go/plugin"
@@ -129,13 +128,24 @@ func New(cfg Config) plugin.Plugin {
 func (p *lockoutPlugin) Name() string { return "lockout" }
 
 // Routes implements plugin.Plugin. Registers the events.Handler with the
-// host (so login attempts are intercepted) and mounts the unlock routes.
+// host (so login attempts are intercepted) and mounts the unlock routes as
+// huma-native typed operations.
+//
+// The two public POST routes (account/unlock, account/request-unlock) parse a
+// JSON body with the strict DisallowUnknownFields + 1 MiB-cap decoder, so they
+// pair StashHTTPHuma with the existing decodeJSON helper to stay byte-identical
+// to the legacy handlers; they carry Security:[] (public). The two admin routes
+// (force-unlock, lockout/state) are gated by RequireAdminHuma — force-unlock
+// recovers its {id} via a typed path input, and lockout/state takes no input.
+//
+// The mux is retained in the signature for plugins that still register raw
+// net/http routes; lockout no longer uses it.
 func (p *lockoutPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.API, prefix string) {
 	host.RegisterEventHandler(&loginEventHandler{cfg: p.cfg, host: host})
 
 	mw := host.Middleware()
-	mux.Handle("POST "+prefix+"/account/unlock", http.HandlerFunc(p.handleUnlock(host)))
-	mux.Handle("POST "+prefix+"/account/request-unlock", http.HandlerFunc(p.handleUnlockRequest(host)))
-	mux.Handle("POST "+prefix+"/admin/users/{id}/unlock", mw.RequireAdmin(http.HandlerFunc(p.handleAdminUnlock(host))))
-	mux.Handle("GET "+prefix+"/lockout/state", mw.RequireAdmin(http.HandlerFunc(p.handleLockoutState(host))))
+	p.registerUnlock(host, api, prefix)
+	p.registerUnlockRequest(host, api, prefix)
+	p.registerAdminUnlock(host, api, mw, prefix)
+	p.registerLockoutState(host, api, mw, prefix)
 }

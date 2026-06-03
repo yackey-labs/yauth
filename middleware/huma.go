@@ -10,6 +10,7 @@
 package middleware
 
 import (
+	"context"
 	"errors"
 	"net/http"
 
@@ -35,6 +36,51 @@ func RequireAuthHuma(api huma.API, mw *Middleware) func(huma.Context, func(huma.
 		}
 		next(huma.WithValue(ctx, authUserKey, au))
 	}
+}
+
+// httpReqKey / httpRespKey carry the underlying *http.Request and
+// http.ResponseWriter onto the huma operation context so migrated handlers can
+// reuse net/http-shaped helpers (parseLimitOffset, decodeJSON, RequestIP,
+// cookie writes) without re-deriving them from typed huma fields. They are a
+// migration bridge: the operation handler receives only a context.Context, and
+// humago.Unwrap needs a huma.Context (unavailable inside the handler), so the
+// request/writer must be stashed by a middleware that DOES hold the
+// huma.Context.
+type httpReqKey struct{}
+type httpRespKey struct{}
+
+// StashHTTPHuma returns a huma per-operation middleware that injects the
+// underlying *http.Request and http.ResponseWriter onto the operation context
+// (recoverable via HTTPRequestFromContext / HTTPResponseFromContext). It is
+// purely additive — it never short-circuits the chain — and pairs with
+// RequireAdminHuma so migrated handlers keep byte-identical request parsing
+// (custom query precedence, strict body decode, RequestIP) and response-side
+// cookie writes.
+func StashHTTPHuma(api huma.API) func(huma.Context, func(huma.Context)) {
+	return func(ctx huma.Context, next func(huma.Context)) {
+		r, w := humago.Unwrap(ctx)
+		ctx = huma.WithValue(ctx, httpReqKey{}, r)
+		ctx = huma.WithValue(ctx, httpRespKey{}, w)
+		next(ctx)
+	}
+}
+
+// HTTPRequestFromContext returns the *http.Request stashed by StashHTTPHuma, or
+// nil if absent.
+func HTTPRequestFromContext(ctx context.Context) *http.Request {
+	if r, ok := ctx.Value(httpReqKey{}).(*http.Request); ok {
+		return r
+	}
+	return nil
+}
+
+// HTTPResponseFromContext returns the http.ResponseWriter stashed by
+// StashHTTPHuma, or nil if absent.
+func HTTPResponseFromContext(ctx context.Context) http.ResponseWriter {
+	if w, ok := ctx.Value(httpRespKey{}).(http.ResponseWriter); ok {
+		return w
+	}
+	return nil
 }
 
 // RequireAdminHuma returns a huma per-operation middleware that requires a

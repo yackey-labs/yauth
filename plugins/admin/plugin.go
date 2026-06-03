@@ -48,30 +48,42 @@ func New() plugin.Plugin { return &adminPlugin{} }
 // Name implements plugin.Plugin.
 func (p *adminPlugin) Name() string { return "admin" }
 
-// Routes implements plugin.Plugin.
+// Routes implements plugin.Plugin. Every admin route is huma-native: a typed
+// operation guarded by RequireAdminHuma, with StashHTTPHuma threading the
+// underlying *http.Request / http.ResponseWriter onto the operation context so
+// the ported handlers keep byte-identical request parsing (custom query
+// precedence, strict body decode, RequestIP) and response-side cookie writes.
+// The mux is retained in the signature for plugins that still register raw
+// net/http routes; admin no longer uses it.
 func (p *adminPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux, api huma.API, prefix string) {
 	mw := host.Middleware()
 
-	mux.Handle("GET "+prefix+"/admin/users", mw.RequireAdmin(http.HandlerFunc(p.handleListUsers(host))))
-	// GET /admin/users/{id} is the reference authenticated migration (huma
-	// phase 0): path-param input, RequireAdminHuma gating, typed userJSON
-	// output (incl. lifecycle fields), and not-found/auth errors via the
-	// shared {"error":{code,message}} envelope. The remaining admin routes
-	// stay on mux.Handle below until later phases.
+	p.registerListUsers(host, api, mw, prefix)
 	p.registerGetUser(host, api, mw, prefix)
-	mux.Handle("PATCH "+prefix+"/admin/users/{id}", mw.RequireAdmin(http.HandlerFunc(p.handlePatchUser(host))))
-	mux.Handle("PUT "+prefix+"/admin/users/{id}", mw.RequireAdmin(http.HandlerFunc(p.handlePatchUser(host))))
-	mux.Handle("DELETE "+prefix+"/admin/users/{id}", mw.RequireAdmin(http.HandlerFunc(p.handleDeleteUser(host))))
-	mux.Handle("POST "+prefix+"/admin/users/{id}/ban", mw.RequireAdmin(http.HandlerFunc(p.handleBanUser(host))))
-	mux.Handle("POST "+prefix+"/admin/users/{id}/unban", mw.RequireAdmin(http.HandlerFunc(p.handleUnbanUser(host))))
-	mux.Handle("POST "+prefix+"/admin/users/{id}/suspend", mw.RequireAdmin(http.HandlerFunc(p.handleSuspendUser(host))))
-	mux.Handle("POST "+prefix+"/admin/users/{id}/unsuspend", mw.RequireAdmin(http.HandlerFunc(p.handleUnsuspendUser(host))))
-	mux.Handle("POST "+prefix+"/admin/users/{id}/schedule-start", mw.RequireAdmin(http.HandlerFunc(p.handleScheduleStart(host))))
-	mux.Handle("POST "+prefix+"/admin/users/{id}/impersonate", mw.RequireAdmin(http.HandlerFunc(p.handleImpersonate(host))))
-	mux.Handle("DELETE "+prefix+"/admin/users/{id}/sessions", mw.RequireAdmin(http.HandlerFunc(p.handleDeleteUserSessions(host))))
-	mux.Handle("GET "+prefix+"/admin/sessions", mw.RequireAdmin(http.HandlerFunc(p.handleListSessions(host))))
-	mux.Handle("DELETE "+prefix+"/admin/sessions/{id}", mw.RequireAdmin(http.HandlerFunc(p.handleDeleteSession(host))))
-	mux.Handle("GET "+prefix+"/admin/audit", mw.RequireAdmin(http.HandlerFunc(p.handleListAudit(host))))
+	// PATCH and its PUT alias (Rust parity) share one handler but need
+	// distinct OperationIDs — huma requires operation-id uniqueness.
+	p.registerPatchUser(host, api, mw, prefix, http.MethodPatch, "admin-patch-user")
+	p.registerPatchUser(host, api, mw, prefix, http.MethodPut, "admin-put-user")
+	p.registerDeleteUser(host, api, mw, prefix)
+	p.registerBanUser(host, api, mw, prefix)
+	p.registerUnbanUser(host, api, mw, prefix)
+	p.registerSuspendUser(host, api, mw, prefix)
+	p.registerUnsuspendUser(host, api, mw, prefix)
+	p.registerScheduleStart(host, api, mw, prefix)
+	p.registerImpersonate(host, api, mw, prefix)
+	p.registerDeleteUserSessions(host, api, mw, prefix)
+	p.registerListSessions(host, api, mw, prefix)
+	p.registerDeleteSession(host, api, mw, prefix)
+	p.registerListAudit(host, api, mw, prefix)
+}
+
+// adminGuards is the per-operation middleware chain shared by every admin
+// route: stash the raw request/writer, then require an admin identity.
+func adminGuards(api huma.API, mw *middleware.Middleware) huma.Middlewares {
+	return huma.Middlewares{
+		middleware.StashHTTPHuma(api),
+		middleware.RequireAdminHuma(api, mw),
+	}
 }
 
 // getUserInput is the typed request for GET /admin/users/{id}: a single
@@ -98,7 +110,7 @@ func (p *adminPlugin) registerGetUser(host plugin.PluginHost, api huma.API, mw *
 		Summary:     "Fetch a single user",
 		Tags:        []string{"admin"},
 		Security:    []map[string][]string{{"sessionCookie": {}}},
-		Middlewares: huma.Middlewares{middleware.RequireAdminHuma(api, mw)},
+		Middlewares: adminGuards(api, mw),
 	}, func(ctx context.Context, in *getUserInput) (*getUserOutput, error) {
 		// The RequireAdminHuma middleware injected the resolved admin via
 		// huma.WithValue under the same key AuthUserFromContext reads, so the

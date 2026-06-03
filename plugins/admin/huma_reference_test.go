@@ -2,6 +2,7 @@ package admin_test
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"testing"
 	"time"
@@ -130,4 +131,112 @@ func TestHumaRef_AdminGetUser_AuthMatrix(t *testing.T) {
 	if env404.Error.Code != "NOT_FOUND" {
 		t.Fatalf("not-found: expected code=NOT_FOUND (handler-preserved), got %q", env404.Error.Code)
 	}
+}
+
+// TestHuma_AdminRoutes_AuthMatrix proves the full huma-native admin migration
+// across three route shapes — GET+query (list users), POST+body→200 (ban), and
+// DELETE→204 (delete user) — each enforcing the auth gate (no-auth→401,
+// non-admin→403, admin→success) and preserving the exact success status code.
+func TestHuma_AdminRoutes_AuthMatrix(t *testing.T) {
+	env := newEnv(t)
+	defer env.stop()
+
+	admin := env.seedUser(t, "admin@example.com", "admin")
+	adminTok := env.issueSession(t, admin.ID)
+	regular := env.seedUser(t, "regular@example.com", "user")
+	regTok := env.issueSession(t, regular.ID)
+
+	// matrix runs the three-way gate check for one route, then invokes onAdmin
+	// to assert the route-specific success behavior with admin creds.
+	matrix := func(name, method, path string, body any, onAdmin func(t *testing.T)) {
+		t.Run(name, func(t *testing.T) {
+			// no auth → 401
+			res := env.do(t, method, path, "", body)
+			if res.StatusCode != http.StatusUnauthorized {
+				t.Fatalf("no-auth: want 401, got %d (%s)", res.StatusCode, drain(res))
+			}
+			res.Body.Close()
+			// non-admin → 403
+			res = env.do(t, method, path, regTok, body)
+			if res.StatusCode != http.StatusForbidden {
+				t.Fatalf("non-admin: want 403, got %d (%s)", res.StatusCode, drain(res))
+			}
+			res.Body.Close()
+			// admin → route-specific success
+			onAdmin(t)
+		})
+	}
+
+	// GET /admin/users (+query) → 200 with the `users` envelope.
+	matrix("list-users", http.MethodGet, "/api/auth/admin/users?search=&limit=10", nil, func(t *testing.T) {
+		res := env.do(t, http.MethodGet, "/api/auth/admin/users?limit=10", adminTok, nil)
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("admin list: want 200, got %d (%s)", res.StatusCode, drain(res))
+		}
+		var body struct {
+			Users   []map[string]any `json:"users"`
+			PerPage int              `json:"per_page"`
+		}
+		if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+			t.Fatalf("admin list: decode: %v", err)
+		}
+		res.Body.Close()
+		if body.PerPage != 10 {
+			t.Fatalf("admin list: want per_page=10 (query parsed), got %d", body.PerPage)
+		}
+		if len(body.Users) < 2 {
+			t.Fatalf("admin list: want >=2 users, got %d", len(body.Users))
+		}
+	})
+
+	// POST /admin/users/{id}/ban (+body) → 200 with the banned userJSON.
+	banTarget := env.seedUser(t, "ban-target@example.com", "user")
+	matrix("ban-user", http.MethodPost, "/api/auth/admin/users/"+banTarget.ID+"/ban",
+		map[string]any{"reason": "policy"}, func(t *testing.T) {
+			res := env.do(t, http.MethodPost, "/api/auth/admin/users/"+banTarget.ID+"/ban", adminTok,
+				map[string]any{"reason": "policy"})
+			if res.StatusCode != http.StatusOK {
+				t.Fatalf("admin ban: want 200, got %d (%s)", res.StatusCode, drain(res))
+			}
+			var body map[string]any
+			if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+				t.Fatalf("admin ban: decode: %v", err)
+			}
+			res.Body.Close()
+			if body["banned"] != true {
+				t.Fatalf("admin ban: want banned=true, got %v", body["banned"])
+			}
+		})
+
+	// POST /admin/users/{id}/ban with no reason → 400 INVALID_REQUEST
+	// (strict body decode preserved through the raw-request bridge).
+	t.Run("ban-no-reason-400", func(t *testing.T) {
+		res := env.do(t, http.MethodPost, "/api/auth/admin/users/"+banTarget.ID+"/ban", adminTok,
+			map[string]any{})
+		if res.StatusCode != http.StatusBadRequest {
+			t.Fatalf("ban no-reason: want 400, got %d (%s)", res.StatusCode, drain(res))
+		}
+		var e errorEnvelope
+		if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+			t.Fatalf("ban no-reason: decode: %v", err)
+		}
+		res.Body.Close()
+		if e.Error.Code != "INVALID_REQUEST" {
+			t.Fatalf("ban no-reason: want code=INVALID_REQUEST, got %q", e.Error.Code)
+		}
+	})
+
+	// DELETE /admin/users/{id} → 204 no body.
+	delTarget := env.seedUser(t, "del-target@example.com", "user")
+	matrix("delete-user", http.MethodDelete, "/api/auth/admin/users/"+delTarget.ID, nil, func(t *testing.T) {
+		res := env.do(t, http.MethodDelete, "/api/auth/admin/users/"+delTarget.ID, adminTok, nil)
+		if res.StatusCode != http.StatusNoContent {
+			t.Fatalf("admin delete: want 204, got %d (%s)", res.StatusCode, drain(res))
+		}
+		b, _ := io.ReadAll(res.Body)
+		res.Body.Close()
+		if len(b) != 0 {
+			t.Fatalf("admin delete: want empty body, got %q", string(b))
+		}
+	})
 }

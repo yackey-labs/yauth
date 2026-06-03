@@ -24,6 +24,7 @@ import (
 
 	"github.com/go-webauthn/webauthn/webauthn"
 
+	"github.com/yackey-labs/yauth-go/middleware"
 	"github.com/yackey-labs/yauth-go/plugin"
 )
 
@@ -74,16 +75,109 @@ func New(cfg Config) (plugin.Plugin, error) {
 // Name implements plugin.Plugin.
 func (p *passkeyPlugin) Name() string { return "passkey" }
 
-// Routes implements plugin.Plugin.
+// Routes registers the passkey operations as huma-native typed handlers on the
+// shared huma.API. The mux is retained in the signature for parity with the
+// plugin interface but is no longer used directly.
+//
+// Middleware wiring is per-route, following the rule "StashHTTPHuma whenever a
+// route consumes a JSON body, sets a cookie, or does custom query parsing —
+// otherwise pure typed huma I/O":
+//
+//   - register/begin — RequireAuthHuma + StashHTTPHuma: no body to decode, but
+//     its success body carries a *protocol.CredentialCreation (WebAuthn options)
+//     emitted through the legacy default-escaping json.Encoder with a
+//     "charset=utf-8" content type. Writing it onto the stashed writer keeps the
+//     bytes (and header) byte-identical to the legacy handler.
+//   - register/finish — RequireAuthHuma + StashHTTPHuma: needs the raw request
+//     for the strict decodeJSON (DisallowUnknownFields) that keeps a malformed
+//     body a 400 (a huma Body input would yield 422), and writes its 201 body
+//     itself for byte-identity.
+//   - login/begin — StashHTTPHuma (public): optional body decode + charset-exact
+//     options response.
+//   - login/finish — StashHTTPHuma (public): body decode (400 on malformed),
+//     Set-Cookie on success, and a user body that may contain HTML-escapable
+//     characters.
+//   - list — RequireAuthHuma + StashHTTPHuma: custom paginationFromQuery tolerates
+//     garbage query values (defaults) where huma query ints would 422.
+//   - delete {id} — RequireAuthHuma only: path param + 204, no body/cookie. Pure
+//     typed huma I/O.
 func (p *passkeyPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.API, prefix string) {
 	mw := host.Middleware()
 
-	mux.Handle("POST "+prefix+"/passkeys/register/begin", mw.RequireAuth(http.HandlerFunc(p.handleRegisterBegin(host))))
-	mux.Handle("POST "+prefix+"/passkeys/register/finish", mw.RequireAuth(http.HandlerFunc(p.handleRegisterFinish(host))))
+	authStashMw := huma.Middlewares{
+		middleware.StashHTTPHuma(api),
+		middleware.RequireAuthHuma(api, mw),
+	}
+	authMw := huma.Middlewares{
+		middleware.RequireAuthHuma(api, mw),
+	}
+	publicStashMw := huma.Middlewares{
+		middleware.StashHTTPHuma(api),
+	}
+	sec := []map[string][]string{
+		{"sessionCookie": {}},
+		{"bearer": {}},
+		{"apiKey": {}},
+	}
 
-	mux.Handle("POST "+prefix+"/passkey/login/begin", http.HandlerFunc(p.handleLoginBegin(host)))
-	mux.Handle("POST "+prefix+"/passkey/login/finish", http.HandlerFunc(p.handleLoginFinish(host)))
+	huma.Register(api, huma.Operation{
+		OperationID: "passkey-register-begin",
+		Method:      http.MethodPost,
+		Path:        prefix + "/passkeys/register/begin",
+		Summary:     "Start passkey registration; return CredentialCreation options",
+		Tags:        []string{"passkey"},
+		Security:    sec,
+		Middlewares: authStashMw,
+	}, p.handleRegisterBegin(host))
 
-	mux.Handle("GET "+prefix+"/passkeys", mw.RequireAuth(http.HandlerFunc(p.handleList(host))))
-	mux.Handle("DELETE "+prefix+"/passkeys/{id}", mw.RequireAuth(http.HandlerFunc(p.handleDelete(host))))
+	huma.Register(api, huma.Operation{
+		OperationID: "passkey-register-finish",
+		Method:      http.MethodPost,
+		Path:        prefix + "/passkeys/register/finish",
+		Summary:     "Finalize attestation and store the credential",
+		Tags:        []string{"passkey"},
+		Security:    sec,
+		Middlewares: authStashMw,
+	}, p.handleRegisterFinish(host))
+
+	huma.Register(api, huma.Operation{
+		OperationID: "passkey-login-begin",
+		Method:      http.MethodPost,
+		Path:        prefix + "/passkey/login/begin",
+		Summary:     "Start a passkey assertion; supports discoverable flow",
+		Tags:        []string{"passkey"},
+		Security:    []map[string][]string{},
+		Middlewares: publicStashMw,
+	}, p.handleLoginBegin(host))
+
+	huma.Register(api, huma.Operation{
+		OperationID: "passkey-login-finish",
+		Method:      http.MethodPost,
+		Path:        prefix + "/passkey/login/finish",
+		Summary:     "Verify assertion and issue a session",
+		Tags:        []string{"passkey"},
+		Security:    []map[string][]string{},
+		Middlewares: publicStashMw,
+	}, p.handleLoginFinish(host))
+
+	huma.Register(api, huma.Operation{
+		OperationID: "passkey-list",
+		Method:      http.MethodGet,
+		Path:        prefix + "/passkeys",
+		Summary:     "List the caller's passkeys",
+		Tags:        []string{"passkey"},
+		Security:    sec,
+		Middlewares: authStashMw,
+	}, p.handleList(host))
+
+	huma.Register(api, huma.Operation{
+		OperationID:   "passkey-delete",
+		Method:        http.MethodDelete,
+		Path:          prefix + "/passkeys/{id}",
+		Summary:       "Delete one of the caller's passkeys",
+		Tags:          []string{"passkey"},
+		Security:      sec,
+		DefaultStatus: http.StatusNoContent,
+		Middlewares:   authMw,
+	}, p.handleDelete(host))
 }

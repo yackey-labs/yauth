@@ -153,7 +153,9 @@ type OAuth2Client struct {
 	BannedReason            *string    `gorm:"column:banned_reason"`
 	EnforceGroupAssignment  bool       `gorm:"column:enforce_group_assignment;not null;default:false"`
 
-	PostLogoutRedirectURIs           string     `gorm:"column:post_logout_redirect_uris;type:text;not null;default:'[]'"`
+	// No DB-level default: MySQL forbids DEFAULT on TEXT/JSON columns. The value
+	// is always set in oauth2ClientFromDomain (empty -> "[]"), so NOT NULL holds.
+	PostLogoutRedirectURIs           string     `gorm:"column:post_logout_redirect_uris;type:text;not null"`
 	BackchannelLogoutURI             *string    `gorm:"column:backchannel_logout_uri;type:text"`
 	BackchannelLogoutSessionRequired bool       `gorm:"column:backchannel_logout_session_required;not null;default:false"`
 	DynamicallyRegistered            bool       `gorm:"column:dynamically_registered;not null;default:false"`

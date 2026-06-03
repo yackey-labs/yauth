@@ -43,12 +43,13 @@ func NewFromConfig(ctx context.Context, cfg *yauthcfg.Config) (*YAuth, error) {
 
 	var repo yauthrepo.Repository
 
-	if cfg.Database.Driver == "memory" || cfg.Database.Driver == "mem" {
+	switch cfg.Database.Driver {
+	case "memory", "mem":
 		// In-process, non-persistent backend (no DSN, no migrations). For dev,
 		// tests, and ephemeral throwaway instances — data is lost on restart and
 		// it is single-process only.
 		repo = memrepo.New()
-	} else if cfg.Database.Driver == "pgx" {
+	case "pgx":
 		poolOpts := []pgxrepo.PoolOption{}
 		if cfg.Telemetry.Enabled {
 			poolOpts = append(poolOpts, pgxrepo.WithOTelTracing())
@@ -67,7 +68,7 @@ func NewFromConfig(ctx context.Context, cfg *yauthcfg.Config) (*YAuth, error) {
 			}
 		}
 		repo = pgxrepo.New(pool)
-	} else {
+	default:
 		b, err := lookupBackend(cfg.Database.Driver)
 		if err != nil {
 			return nil, err

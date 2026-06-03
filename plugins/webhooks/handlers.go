@@ -1,6 +1,7 @@
 package webhooks
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -9,9 +10,11 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/google/uuid"
 
 	"github.com/yackey-labs/yauth-go/domain"
+	"github.com/yackey-labs/yauth-go/middleware"
 	"github.com/yackey-labs/yauth-go/plugin"
 	"github.com/yackey-labs/yauth-go/yautherr"
 )
@@ -21,28 +24,21 @@ import (
 // for HMAC-SHA256 and short enough to copy/paste.
 const secretBytes = 32
 
-// errorBody mirrors the email-password plugin's canonical error shape:
-//
-//	{"error": {"code": "...", "message": "..."}}
-type errorBody struct {
-	Error errorPayload `json:"error"`
+// reqFromCtx returns the *http.Request stashed by StashHTTPHuma. On a route in
+// this plugin's StashHTTPHuma chain it is always present; the nil guard keeps
+// the helper safe.
+func reqFromCtx(ctx context.Context) (*http.Request, error) {
+	r := middleware.HTTPRequestFromContext(ctx)
+	if r == nil {
+		return nil, huma.Error500InternalServerError("request unavailable")
+	}
+	return r, nil
 }
 
-type errorPayload struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeError(w http.ResponseWriter, status int, code, message string) {
-	writeJSON(w, status, errorBody{Error: errorPayload{Code: code, Message: message}})
-}
-
+// decodeJSON parses r.Body into v with a 1 MiB cap and strict
+// (DisallowUnknownFields) decoding so the migrated create/update handlers keep
+// byte-identical request parsing — a malformed or unknown field still yields a
+// 400, exactly as the legacy net/http handler did.
 func decodeJSON(r *http.Request, v any) error {
 	r.Body = http.MaxBytesReader(nil, r.Body, 1<<20)
 	dec := json.NewDecoder(r.Body)
@@ -51,8 +47,7 @@ func decodeJSON(r *http.Request, v any) error {
 }
 
 // generateSecret returns a hex-encoded random secret of secretBytes
-// length. Panics on entropy failure — the same posture as the Go
-// standard library's crypto/rand consumers.
+// length.
 func generateSecret() (string, error) {
 	buf := make([]byte, secretBytes)
 	if _, err := rand.Read(buf); err != nil {
@@ -100,22 +95,62 @@ func decodeEventsList(raw json.RawMessage) []string {
 	return out
 }
 
+// webhookSecurity is the security requirement shared by every webhooks route:
+// an admin session cookie (mirroring the openapi spec's secCookie()).
+func webhookSecurity() []map[string][]string {
+	return []map[string][]string{{"sessionCookie": {}}}
+}
+
+// webhookGuards is the per-operation middleware chain shared by every webhooks
+// route: stash the raw request/writer, then require an admin identity.
+func webhookGuards(api huma.API, mw *middleware.Middleware) huma.Middlewares {
+	return huma.Middlewares{
+		middleware.StashHTTPHuma(api),
+		middleware.RequireAdminHuma(api, mw),
+	}
+}
+
+// idInput is the typed request for routes scoped to a single webhook: a single
+// required path parameter.
+type idInput struct {
+	ID string `path:"id" doc:"Webhook id"`
+}
+
 // --- GET /webhooks ------------------------------------------------------
 
-// listResponse wraps GET /webhooks with pagination metadata.
-type listResponse struct {
+// webhookListResponse wraps GET /webhooks with pagination metadata.
+type webhookListResponse struct {
 	Items   []webhookJSON `json:"items"`
 	Total   int64         `json:"total"`
 	Page    int           `json:"page"`
 	PerPage int           `json:"per_page"`
 }
 
-func (p *webhooksPlugin) handleList(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		hooks, err := host.Repo().ListWebhooks(r.Context())
+type webhookListOutput struct {
+	Body webhookListResponse
+}
+
+// registerList wires GET /webhooks as a huma-native operation guarded by
+// RequireAdminHuma. It pairs with StashHTTPHuma so paginationFromQuery keeps its
+// lenient ?page=/?per_page= parsing (bad values degrade to defaults rather than
+// 422).
+func (p *webhooksPlugin) registerList(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "webhook-list",
+		Method:      http.MethodGet,
+		Path:        prefix + "/webhooks",
+		Summary:     "List webhooks (admin)",
+		Tags:        []string{"webhooks"},
+		Security:    webhookSecurity(),
+		Middlewares: webhookGuards(api, mw),
+	}, func(ctx context.Context, _ *struct{}) (*webhookListOutput, error) {
+		r, err := reqFromCtx(ctx)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to list webhooks")
-			return
+			return nil, err
+		}
+		hooks, err := host.Repo().ListWebhooks(ctx)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("unable to list webhooks")
 		}
 		page, perPage := paginationFromQuery(r)
 		total := int64(len(hooks))
@@ -132,13 +167,13 @@ func (p *webhooksPlugin) handleList(host plugin.PluginHost) http.HandlerFunc {
 		for _, h := range page1 {
 			out = append(out, toWebhookJSON(*h, false))
 		}
-		writeJSON(w, http.StatusOK, listResponse{
+		return &webhookListOutput{Body: webhookListResponse{
 			Items:   out,
 			Total:   total,
 			Page:    page,
 			PerPage: perPage,
-		})
-	}
+		}}, nil
+	})
 }
 
 func paginationFromQuery(r *http.Request) (page, perPage int) {
@@ -171,34 +206,52 @@ type createWebhookRequest struct {
 	Secret string `json:"secret,omitempty"`
 }
 
-func (p *webhooksPlugin) handleCreate(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+type webhookCreateOutput struct {
+	Body webhookJSON
+}
+
+// registerCreate wires POST /webhooks as a huma-native operation guarded by
+// RequireAdminHuma. It pairs with StashHTTPHuma and reuses the strict decodeJSON
+// (DisallowUnknownFields, 1 MiB cap) on the stashed request so the request body
+// parsing — including the 400 on unknown/malformed fields — stays
+// byte-identical to the legacy handler. The input struct carries NO huma Body
+// field, so huma never consumes the body itself.
+func (p *webhooksPlugin) registerCreate(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID:   "webhook-create",
+		Method:        http.MethodPost,
+		Path:          prefix + "/webhooks",
+		Summary:       "Create a webhook; secret is returned exactly once",
+		Tags:          []string{"webhooks"},
+		Security:      webhookSecurity(),
+		DefaultStatus: http.StatusCreated,
+		Middlewares:   webhookGuards(api, mw),
+	}, func(ctx context.Context, _ *struct{}) (*webhookCreateOutput, error) {
+		r, err := reqFromCtx(ctx)
+		if err != nil {
+			return nil, err
+		}
 		var req createWebhookRequest
 		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
-			return
+			return nil, huma.Error400BadRequest(err.Error())
 		}
 		if req.URL == "" {
-			writeError(w, http.StatusBadRequest, "INVALID_URL", "url is required")
-			return
+			return nil, huma.Error400BadRequest("url is required")
 		}
 		if len(req.Events) == 0 {
-			writeError(w, http.StatusBadRequest, "INVALID_EVENTS", "events must contain at least one entry")
-			return
+			return nil, huma.Error400BadRequest("events must contain at least one entry")
 		}
 
 		eventsRaw, err := json.Marshal(req.Events)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to encode events")
-			return
+			return nil, huma.Error500InternalServerError("unable to encode events")
 		}
 
 		rawSecret := req.Secret
 		if rawSecret == "" {
 			s, err := generateSecret()
 			if err != nil {
-				writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to generate secret")
-				return
+				return nil, huma.Error500InternalServerError("unable to generate secret")
 			}
 			rawSecret = s
 		}
@@ -208,8 +261,7 @@ func (p *webhooksPlugin) handleCreate(host plugin.PluginHost) http.HandlerFunc {
 		webhookKey := deriveWebhookKey(host.JWTSecret())
 		storedSecret, err := encryptSecret(webhookKey, rawSecret)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to encrypt secret")
-			return
+			return nil, huma.Error500InternalServerError("unable to encrypt secret")
 		}
 
 		now := time.Now().UTC()
@@ -222,9 +274,8 @@ func (p *webhooksPlugin) handleCreate(host plugin.PluginHost) http.HandlerFunc {
 			CreatedAt: now,
 			UpdatedAt: now,
 		}
-		if err := host.Repo().CreateWebhook(r.Context(), input); err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to create webhook")
-			return
+		if err := host.Repo().CreateWebhook(ctx, input); err != nil {
+			return nil, huma.Error500InternalServerError("unable to create webhook")
 		}
 
 		// Return the row with the plaintext secret exposed exactly once.
@@ -238,8 +289,8 @@ func (p *webhooksPlugin) handleCreate(host plugin.PluginHost) http.HandlerFunc {
 			CreatedAt: input.CreatedAt,
 			UpdatedAt: input.UpdatedAt,
 		}
-		writeJSON(w, http.StatusCreated, toWebhookJSON(created, true))
-	}
+		return &webhookCreateOutput{Body: toWebhookJSON(created, true)}, nil
+	})
 }
 
 // --- GET /webhooks/{id} -------------------------------------------------
@@ -252,22 +303,33 @@ type webhookShowResponse struct {
 	Webhook webhookJSON `json:"webhook"`
 }
 
-func (p *webhooksPlugin) handleGet(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		hook, err := host.Repo().GetWebhookByID(r.Context(), id)
+type webhookGetOutput struct {
+	Body webhookShowResponse
+}
+
+// registerGet wires GET /webhooks/{id}. It takes a native path param (no
+// StashHTTPHuma needed — no body, no custom query parsing).
+func (p *webhooksPlugin) registerGet(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "webhook-get",
+		Method:      http.MethodGet,
+		Path:        prefix + "/webhooks/{id}",
+		Summary:     "Fetch a single webhook (no secret)",
+		Tags:        []string{"webhooks"},
+		Security:    webhookSecurity(),
+		Middlewares: huma.Middlewares{middleware.RequireAdminHuma(api, mw)},
+	}, func(ctx context.Context, in *idInput) (*webhookGetOutput, error) {
+		hook, err := host.Repo().GetWebhookByID(ctx, in.ID)
 		if err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "NOT_FOUND", "webhook not found")
-				return
+				return nil, huma.Error404NotFound("webhook not found")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to load webhook")
-			return
+			return nil, huma.Error500InternalServerError("unable to load webhook")
 		}
-		writeJSON(w, http.StatusOK, webhookShowResponse{
+		return &webhookGetOutput{Body: webhookShowResponse{
 			Webhook: toWebhookJSON(*hook, false),
-		})
-	}
+		}}, nil
+	})
 }
 
 // --- PATCH /webhooks/{id} -----------------------------------------------
@@ -282,13 +344,30 @@ type updateWebhookRequest struct {
 	Secret *string `json:"secret"`
 }
 
-func (p *webhooksPlugin) handleUpdate(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
+type webhookUpdateOutput struct {
+	Body webhookJSON
+}
+
+// registerUpdate wires PATCH (and, with a distinct OperationID, its PUT alias —
+// Rust parity) for /webhooks/{id}. Like create it pairs with StashHTTPHuma and
+// reuses the strict decodeJSON so request-body parsing stays byte-identical.
+func (p *webhooksPlugin) registerUpdate(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix, method, operationID string) {
+	huma.Register(api, huma.Operation{
+		OperationID: operationID,
+		Method:      method,
+		Path:        prefix + "/webhooks/{id}",
+		Summary:     "Update url/events/active and optionally rotate the secret",
+		Tags:        []string{"webhooks"},
+		Security:    webhookSecurity(),
+		Middlewares: webhookGuards(api, mw),
+	}, func(ctx context.Context, in *idInput) (*webhookUpdateOutput, error) {
+		r, err := reqFromCtx(ctx)
+		if err != nil {
+			return nil, err
+		}
 		var req updateWebhookRequest
 		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
-			return
+			return nil, huma.Error400BadRequest(err.Error())
 		}
 
 		now := time.Now().UTC()
@@ -299,8 +378,7 @@ func (p *webhooksPlugin) handleUpdate(host plugin.PluginHost) http.HandlerFunc {
 		if req.Events != nil {
 			eventsRaw, err := json.Marshal(*req.Events)
 			if err != nil {
-				writeError(w, http.StatusBadRequest, "INVALID_EVENTS", "events could not be encoded")
-				return
+				return nil, huma.Error400BadRequest("events could not be encoded")
 			}
 			rm := json.RawMessage(eventsRaw)
 			changes.Events = &rm
@@ -314,44 +392,53 @@ func (p *webhooksPlugin) handleUpdate(host plugin.PluginHost) http.HandlerFunc {
 			webhookKey := deriveWebhookKey(host.JWTSecret())
 			enc, err := encryptSecret(webhookKey, newRawSecret)
 			if err != nil {
-				writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to encrypt secret")
-				return
+				return nil, huma.Error500InternalServerError("unable to encrypt secret")
 			}
 			changes.Secret = &enc
 		}
 
-		updated, err := host.Repo().UpdateWebhook(r.Context(), id, changes)
+		updated, err := host.Repo().UpdateWebhook(ctx, in.ID, changes)
 		if err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "NOT_FOUND", "webhook not found")
-				return
+				return nil, huma.Error404NotFound("webhook not found")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to update webhook")
-			return
+			return nil, huma.Error500InternalServerError("unable to update webhook")
 		}
 		// Expose the new plaintext secret exactly once when it was just rotated.
 		if newRawSecret != "" {
 			updated.Secret = newRawSecret
 		}
-		writeJSON(w, http.StatusOK, toWebhookJSON(updated, newRawSecret != ""))
-	}
+		return &webhookUpdateOutput{Body: toWebhookJSON(updated, newRawSecret != "")}, nil
+	})
 }
 
 // --- DELETE /webhooks/{id} ----------------------------------------------
 
-func (p *webhooksPlugin) handleDelete(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		if err := host.Repo().DeleteWebhook(r.Context(), id); err != nil {
+// emptyOutput carries no body and lets the operation drive a 204 via
+// DefaultStatus.
+type emptyOutput struct{}
+
+// registerDelete wires DELETE /webhooks/{id}. Native path param, 204 via
+// DefaultStatus.
+func (p *webhooksPlugin) registerDelete(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID:   "webhook-delete",
+		Method:        http.MethodDelete,
+		Path:          prefix + "/webhooks/{id}",
+		Summary:       "Delete a webhook",
+		Tags:          []string{"webhooks"},
+		Security:      webhookSecurity(),
+		DefaultStatus: http.StatusNoContent,
+		Middlewares:   huma.Middlewares{middleware.RequireAdminHuma(api, mw)},
+	}, func(ctx context.Context, in *idInput) (*emptyOutput, error) {
+		if err := host.Repo().DeleteWebhook(ctx, in.ID); err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "NOT_FOUND", "webhook not found")
-				return
+				return nil, huma.Error404NotFound("webhook not found")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to delete webhook")
-			return
+			return nil, huma.Error500InternalServerError("unable to delete webhook")
 		}
-		w.WriteHeader(http.StatusNoContent)
-	}
+		return &emptyOutput{}, nil
+	})
 }
 
 // --- GET /webhooks/{id}/deliveries --------------------------------------
@@ -376,18 +463,33 @@ type listDeliveriesResponse struct {
 	PerPage int            `json:"per_page"`
 }
 
-func (p *webhooksPlugin) handleDeliveries(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
+type webhookListDeliveriesOutput struct {
+	Body listDeliveriesResponse
+}
+
+// registerDeliveries wires GET /webhooks/{id}/deliveries. It pairs with
+// StashHTTPHuma so paginationFromQuery keeps its lenient parsing.
+func (p *webhooksPlugin) registerDeliveries(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "webhook-list-deliveries",
+		Method:      http.MethodGet,
+		Path:        prefix + "/webhooks/{id}/deliveries",
+		Summary:     "List recent delivery attempts for a webhook",
+		Tags:        []string{"webhooks"},
+		Security:    webhookSecurity(),
+		Middlewares: webhookGuards(api, mw),
+	}, func(ctx context.Context, in *idInput) (*webhookListDeliveriesOutput, error) {
+		r, err := reqFromCtx(ctx)
+		if err != nil {
+			return nil, err
+		}
 		// Confirm the webhook exists so callers can distinguish "no
 		// deliveries yet" (200, empty list) from "no such webhook" (404).
-		if _, err := host.Repo().GetWebhookByID(r.Context(), id); err != nil {
+		if _, err := host.Repo().GetWebhookByID(ctx, in.ID); err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "NOT_FOUND", "webhook not found")
-				return
+				return nil, huma.Error404NotFound("webhook not found")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to load webhook")
-			return
+			return nil, huma.Error500InternalServerError("unable to load webhook")
 		}
 
 		page, perPage := paginationFromQuery(r)
@@ -395,10 +497,9 @@ func (p *webhooksPlugin) handleDeliveries(host plugin.PluginHost) http.HandlerFu
 		// query uses a hard limit; for v0.1.0 we cap at 1000 rows of
 		// underlying data and slice the requested page out.
 		const fetchCap = 1000
-		rows, err := host.Repo().ListWebhookDeliveriesByWebhookID(r.Context(), id, fetchCap)
+		rows, err := host.Repo().ListWebhookDeliveriesByWebhookID(ctx, in.ID, fetchCap)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to list deliveries")
-			return
+			return nil, huma.Error500InternalServerError("unable to list deliveries")
 		}
 		total := int64(len(rows))
 		start := (page - 1) * perPage
@@ -423,41 +524,50 @@ func (p *webhooksPlugin) handleDeliveries(host plugin.PluginHost) http.HandlerFu
 				CreatedAt:    d.CreatedAt,
 			})
 		}
-		writeJSON(w, http.StatusOK, listDeliveriesResponse{
+		return &webhookListDeliveriesOutput{Body: listDeliveriesResponse{
 			Items:   out,
 			Total:   total,
 			Page:    page,
 			PerPage: perPage,
-		})
-	}
+		}}, nil
+	})
 }
 
 // --- POST /webhooks/{id}/test -------------------------------------------
 
-// testResponse acknowledges a queued test delivery; clients can poll
+// webhookTestResponse acknowledges a queued test delivery; clients can poll
 // /webhooks/{id}/deliveries to see the eventual result.
-type testResponse struct {
+type webhookTestResponse struct {
 	DeliveryQueued string `json:"delivery_queued"`
 }
 
-// handleTest enqueues a synthetic webhook.test event so operators can
+type webhookTestOutput struct {
+	Body webhookTestResponse
+}
+
+// registerTest enqueues a synthetic webhook.test event so operators can
 // verify their endpoint receives traffic and the signature validates.
 // The synthetic payload bypasses the active/events filter — even an
 // inactive or unsubscribed webhook will receive a /test fire.
 //
 // Returns 200 with the queued delivery id so callers can correlate
 // asynchronously without subscribing to webhooks.
-func (p *webhooksPlugin) handleTest(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		hook, err := host.Repo().GetWebhookByID(r.Context(), id)
+func (p *webhooksPlugin) registerTest(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "webhook-test",
+		Method:      http.MethodPost,
+		Path:        prefix + "/webhooks/{id}/test",
+		Summary:     "Enqueue a synthetic webhook.test delivery",
+		Tags:        []string{"webhooks"},
+		Security:    webhookSecurity(),
+		Middlewares: huma.Middlewares{middleware.RequireAdminHuma(api, mw)},
+	}, func(ctx context.Context, in *idInput) (*webhookTestOutput, error) {
+		hook, err := host.Repo().GetWebhookByID(ctx, in.ID)
 		if err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "NOT_FOUND", "webhook not found")
-				return
+				return nil, huma.Error404NotFound("webhook not found")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to load webhook")
-			return
+			return nil, huma.Error500InternalServerError("unable to load webhook")
 		}
 
 		const eventType = "webhook.test"
@@ -476,9 +586,8 @@ func (p *webhooksPlugin) handleTest(host plugin.PluginHost) http.HandlerFunc {
 			},
 		}
 		if err := p.dispatcher.Enqueue(job); err != nil {
-			writeError(w, http.StatusServiceUnavailable, "DISPATCHER_DOWN", "webhook dispatcher is shutting down")
-			return
+			return nil, huma.Error503ServiceUnavailable("webhook dispatcher is shutting down")
 		}
-		writeJSON(w, http.StatusOK, testResponse{DeliveryQueued: testDeliveryID})
-	}
+		return &webhookTestOutput{Body: webhookTestResponse{DeliveryQueued: testDeliveryID}}, nil
+	})
 }

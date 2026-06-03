@@ -31,15 +31,7 @@ func addOrganizations(api *huma.OpenAPI) {
 		Summary:  "List organizations the caller is a member of",
 		Security: secAny(),
 		Responses: map[string]*huma.Response{
-			"200": {
-				Description: "Caller's organizations.",
-				Content: map[string]*huma.MediaType{
-					"application/json": {Schema: &huma.Schema{
-						Type:  "array",
-						Items: schemaRef(organizationJSON{}),
-					}},
-				},
-			},
+			"200": jsonResponse("Caller's organizations.", organizationListResponse{}),
 			"401": errorResponse("Not authenticated."),
 		},
 	})
@@ -107,15 +99,7 @@ func addOrganizations(api *huma.OpenAPI) {
 		Security:   secAny(),
 		Parameters: []*huma.Param{orgIDParam},
 		Responses: map[string]*huma.Response{
-			"200": {
-				Description: "Members.",
-				Content: map[string]*huma.MediaType{
-					"application/json": {Schema: &huma.Schema{
-						Type:  "array",
-						Items: schemaRef(membershipJSON{}),
-					}},
-				},
-			},
+			"200": jsonResponse("Members.", membershipListResponse{}),
 			"401": errorResponse("Not authenticated."),
 			"403": errorResponse("Caller is not a member of this organization."),
 			"404": errorResponse("Organization not found."),

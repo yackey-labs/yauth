@@ -46,8 +46,25 @@ type adminUserJSON struct {
 	Banned        bool       `json:"banned"`
 	BannedReason  *string    `json:"banned_reason,omitempty"`
 	BannedUntil   *time.Time `json:"banned_until,omitempty"`
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at"`
+	// Lifecycle (user suspend/staged-start). Mirrors the admin handler's
+	// userJSON (plugins/admin/handlers.go) and Rust's AdminUserInfo.
+	Suspended       bool       `json:"suspended"`
+	SuspendedAt     *time.Time `json:"suspended_at,omitempty"`
+	SuspendedReason *string    `json:"suspended_reason,omitempty"`
+	ActivatesAt     *time.Time `json:"activates_at,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+}
+
+// adminSuspendRequest is the body for POST /admin/users/{id}/suspend.
+type adminSuspendRequest struct {
+	Reason *string `json:"reason,omitempty"`
+}
+
+// adminScheduleStartRequest is the body for POST /admin/users/{id}/schedule-start.
+// Null/absent activates_at clears the schedule (active now).
+type adminScheduleStartRequest struct {
+	ActivatesAt *time.Time `json:"activates_at,omitempty"`
 }
 
 // --- email-password ---------------------------------------------------
@@ -630,19 +647,26 @@ type oauth2IntrospectResponse struct {
 	TokenTyp string `json:"token_type,omitempty"`
 }
 type oauth2ClientJSON struct {
-	ID                      string    `json:"id"`
-	ClientID                string    `json:"client_id"`
-	Name                    *string   `json:"name,omitempty"`
-	RedirectURIs            []string  `json:"redirect_uris"`
-	GrantTypes              []string  `json:"grant_types"`
-	Scopes                  []string  `json:"scopes"`
-	IsPublic                bool      `json:"is_public"`
-	TokenEndpointAuthMethod *string   `json:"token_endpoint_auth_method,omitempty"`
-	JWKSURI                 *string   `json:"jwks_uri,omitempty"`
-	HasPublicKey            bool      `json:"has_public_key"`
-	Banned                  bool      `json:"banned"`
-	BannedReason            *string   `json:"banned_reason,omitempty"`
-	CreatedAt               time.Time `json:"created_at"`
+	ID                      string   `json:"id"`
+	ClientID                string   `json:"client_id"`
+	Name                    *string  `json:"name,omitempty"`
+	RedirectURIs            []string `json:"redirect_uris"`
+	GrantTypes              []string `json:"grant_types"`
+	Scopes                  []string `json:"scopes"`
+	IsPublic                bool     `json:"is_public"`
+	TokenEndpointAuthMethod *string  `json:"token_endpoint_auth_method,omitempty"`
+	JWKSURI                 *string  `json:"jwks_uri,omitempty"`
+	HasPublicKey            bool     `json:"has_public_key"`
+	Banned                  bool     `json:"banned"`
+	BannedReason            *string  `json:"banned_reason,omitempty"`
+	// OIDC logout config (RP-Initiated + Back-Channel Logout). Mirrors the
+	// handler's clientJSON (plugins/oauth2server/client_admin.go) and Rust's
+	// Oauth2ClientView. enforce_group_assignment is intentionally NOT mirrored
+	// here — it is a Go-only handler field absent from the Rust contract.
+	PostLogoutRedirectURIs           []string  `json:"post_logout_redirect_uris"`
+	BackchannelLogoutURI             *string   `json:"backchannel_logout_uri,omitempty"`
+	BackchannelLogoutSessionRequired bool      `json:"backchannel_logout_session_required"`
+	CreatedAt                        time.Time `json:"created_at"`
 }
 type oauth2CreateClientRequest struct {
 	Name                    *string  `json:"name,omitempty"`
@@ -662,6 +686,10 @@ type oauth2PatchClientRequest struct {
 	Banned       *bool   `json:"banned,omitempty"`
 	BannedReason *string `json:"banned_reason,omitempty"`
 	PublicKeyPEM *string `json:"public_key_pem,omitempty"`
+	// OIDC logout config. Any non-nil field updates the client's logout config.
+	PostLogoutRedirectURIs           *[]string `json:"post_logout_redirect_uris,omitempty"`
+	BackchannelLogoutURI             *string   `json:"backchannel_logout_uri,omitempty"`
+	BackchannelLogoutSessionRequired *bool     `json:"backchannel_logout_session_required,omitempty"`
 }
 type oauth2BannedClientsResponse struct {
 	Banned []oauth2ClientJSON `json:"banned"`
@@ -758,6 +786,19 @@ type listPermissionsResponseJSON struct {
 	OrganizationID string   `json:"organization_id"`
 	Role           string   `json:"role"`
 	Permissions    []string `json:"permissions"`
+}
+
+// List wrappers (yauth #126 contract). The handlers wrap their list results
+// under a single named key; the spec must declare the same object so the
+// generated client matches the Rust spec's *ListResponse shapes.
+type organizationListResponse struct {
+	Organizations []organizationJSON `json:"organizations"`
+}
+type membershipListResponse struct {
+	Members []membershipJSON `json:"members"`
+}
+type domainListResponse struct {
+	Domains []domainResponse `json:"domains"`
 }
 
 // --- per-org auth policy (yauth #92 port) ---------------------------------

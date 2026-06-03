@@ -28,7 +28,6 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/yackey-labs/yauth-go/humaerr"
 	"github.com/yackey-labs/yauth-go/middleware"
 	"github.com/yackey-labs/yauth-go/plugin"
 	"github.com/yackey-labs/yauth-go/yautherr"
@@ -55,7 +54,7 @@ func (p *adminPlugin) Name() string { return "admin" }
 // precedence, strict body decode, RequestIP) and response-side cookie writes.
 // The mux is retained in the signature for plugins that still register raw
 // net/http routes; admin no longer uses it.
-func (p *adminPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux, api huma.API, prefix string) {
+func (p *adminPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.API, prefix string) {
 	mw := host.Middleware()
 
 	p.registerListUsers(host, api, mw, prefix)
@@ -116,14 +115,14 @@ func (p *adminPlugin) registerGetUser(host plugin.PluginHost, api huma.API, mw *
 		// huma.WithValue under the same key AuthUserFromContext reads, so the
 		// operation ctx carries it — proving auth propagation end-to-end.
 		if _, ok := middleware.AuthUserFromContext(ctx); !ok {
-			return nil, humaerr.Errf(http.StatusUnauthorized, "unauthorized", "Unauthorized")
+			return nil, huma.Error401Unauthorized("Unauthorized")
 		}
 		u, err := host.Repo().GetUserByID(ctx, in.ID)
 		if err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				return nil, humaerr.Errf(http.StatusNotFound, "NOT_FOUND", "user not found")
+				return nil, huma.Error404NotFound("user not found")
 			}
-			return nil, humaerr.Errf(http.StatusInternalServerError, "INTERNAL", "unable to load user")
+			return nil, huma.Error500InternalServerError("unable to load user")
 		}
 		return &getUserOutput{Body: toUserJSON(*u)}, nil
 	})

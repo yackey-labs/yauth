@@ -15,6 +15,7 @@ package yauth
 import (
 	"context"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/yackey-labs/yauth-go/events"
@@ -41,6 +42,66 @@ type YAuth struct {
 	authResolvers []plugin.AuthResolver
 	jwtSigner     plugin.JWTSigner
 	jwtSecret     []byte
+
+	// recordedRoutes holds every (method, path) a plugin registered during
+	// Build, captured by the passive recordingRouter wrapper. Exposed via
+	// RegisteredRoutes for the route-level openapi spec-drift guard. Purely
+	// observational — it does not affect routing.
+	recordedRoutes []RouteInfo
+}
+
+// RouteInfo is a single observed route registration: the HTTP method and
+// the path pattern (Go 1.22 ServeMux syntax, e.g. "/admin/users/{id}").
+type RouteInfo struct {
+	Method string
+	Path   string
+}
+
+// recordingRouter is a passive plugin.Router that records every Handle /
+// HandleFunc registration as a RouteInfo before delegating to the real
+// *http.ServeMux. It splits the Go 1.22 "METHOD /path" pattern into method
+// and path; a pattern with no leading method (none of the plugins do this,
+// but ServeMux allows it) records an empty Method. Recording is append-only
+// and side-effect-free with respect to routing.
+type recordingRouter struct {
+	mux *http.ServeMux
+	out *[]RouteInfo
+}
+
+func (r *recordingRouter) record(pattern string) {
+	method, path := "", pattern
+	if i := strings.IndexByte(pattern, ' '); i >= 0 {
+		method, path = pattern[:i], strings.TrimSpace(pattern[i+1:])
+	}
+	*r.out = append(*r.out, RouteInfo{Method: method, Path: path})
+}
+
+func (r *recordingRouter) Handle(pattern string, handler http.Handler) {
+	r.record(pattern)
+	r.mux.Handle(pattern, handler)
+}
+
+func (r *recordingRouter) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
+	r.record(pattern)
+	r.mux.HandleFunc(pattern, handler)
+}
+
+// ServeHTTP delegates to the wrapped mux. It exists only so recordingRouter
+// satisfies humago.Mux (HandleFunc + ServeHTTP), letting humaapi.New build the
+// huma.API over the recording wrapper — that way huma.Register's HandleFunc
+// calls are recorded into RegisteredRoutes alongside the net/http ones. It is
+// not used for live request serving (YAuth.Router serves the bare mux).
+func (r *recordingRouter) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	r.mux.ServeHTTP(w, req)
+}
+
+// RegisteredRoutes returns every route every plugin registered during Build,
+// in registration order. Used by the openapi route-level spec-drift guard to
+// compare the served route set against openapi.Build()'s operations.
+func (y *YAuth) RegisteredRoutes() []RouteInfo {
+	out := make([]RouteInfo, len(y.recordedRoutes))
+	copy(out, y.recordedRoutes)
+	return out
 }
 
 // YAuthBuilder accumulates plugins before producing a YAuth via Build.
@@ -141,14 +202,6 @@ func (b *YAuthBuilder) Build() (*YAuth, error) {
 	})
 	mux := http.NewServeMux()
 
-	// huma.API for huma-native (typed) operations. Plugins migrated to huma
-	// serving register via huma.Register(api, ...); un-migrated plugins keep
-	// using mux directly. Both target the same mux. Constructing the api also
-	// installs humaerr.Override as huma's global error constructor so built-in
-	// huma errors share the {"error":{code,message}} envelope. The published
-	// OpenAPI spec is still produced by the openapi/ package this phase.
-	api := humaapi.New(mux)
-
 	// The HTTP server-span middleware defaults to on when telemetry is
 	// enabled, but consumers running their own HTTP instrumentation can
 	// opt out via WithTraceMiddleware(false) to avoid double-tracing.
@@ -166,8 +219,21 @@ func (b *YAuthBuilder) Build() (*YAuth, error) {
 		jwtSecret:        b.jwtSecret,
 	}
 
+	// recordingRouter is the single passive router every route registration
+	// flows through, so RegisteredRoutes() captures both styles:
+	//   - un-migrated plugins call rec.Handle/HandleFunc directly;
+	//   - the huma.API is built OVER rec (humago.Mux only needs HandleFunc +
+	//     ServeHTTP, both of which rec provides), so huma.Register's method-
+	//     prefixed HandleFunc("GET /config", ...) is recorded too.
+	// This keeps the openapi route-level spec-drift guard honest: served ==
+	// documented for net/http AND huma-native routes alike. The published
+	// OpenAPI spec is still produced by the openapi/ package this phase; huma
+	// no longer overrides huma.NewError, so its built-in errors marshal as
+	// native RFC 9457 problem+json.
+	rec := &recordingRouter{mux: mux, out: &ya.recordedRoutes}
+	api := humaapi.New(rec)
 	for _, p := range b.plugins {
-		p.Routes(ya, mux, api, "")
+		p.Routes(ya, rec, api, "")
 	}
 
 	return ya, nil

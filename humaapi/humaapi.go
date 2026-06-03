@@ -16,32 +16,23 @@
 package humaapi
 
 import (
-	"sync"
-
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
-
-	"github.com/yackey-labs/yauth-go/humaerr"
 )
 
-// overrideOnce guards the single process-global write of huma.NewError. It
-// is installed the first time New runs so parallel test builds don't race on
-// the package-level variable.
-var overrideOnce sync.Once
-
-// New builds the huma.API bound to mux. It also installs humaerr.Override as
-// huma's global error constructor (once), so huma's own built-in errors
-// marshal to yauth-go's {"error":{code,message}} envelope.
+// New builds the huma.API bound to mux. huma's global error constructor
+// (huma.NewError) is left at its default, so huma's own built-in errors —
+// request validation (422), content negotiation (406), and any 401/403/404/500
+// returned via huma.Error*/huma.WriteErr — marshal as native RFC 9457
+// problem+json ({type,title,status,detail}) with an application/problem+json
+// content type. (yauth#129's shared TS client normalizes problem+json, and the
+// conformance gate treats error-shape differences as informational — #54.)
 //
 // The OpenAPI metadata mirrors openapi/spec.go: title "yauth-go", the three
 // security schemes (sessionCookie / bearer / apiKey), and the same tag set,
 // so that if/when this API replaces the legacy spec the document is
 // consistent.
 func New(mux humago.Mux) huma.API {
-	overrideOnce.Do(func() {
-		huma.NewError = humaerr.Override
-	})
-
 	config := huma.Config{
 		OpenAPI: &huma.OpenAPI{
 			OpenAPI: "3.1.0",

@@ -183,7 +183,7 @@ func (p *ssoSAMLPlugin) Name() string { return "sso_saml" }
 // gates and the SsoConnection rows cascade with the org delete, so
 // mounting these routes in a deployment without the organizations
 // plugin is harmless (every route 403s on the membership lookup).
-func (p *ssoSAMLPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux, api huma.API, prefix string) {
+func (p *ssoSAMLPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.API, prefix string) {
 	mw := host.Middleware()
 
 	// Admin CRUD (SAML-specific path; see package doc).

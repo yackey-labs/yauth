@@ -130,7 +130,7 @@ func New(cfg Config) plugin.Plugin {
 func (p *emailPasswordPlugin) Name() string { return "email-password" }
 
 // Routes implements plugin.Plugin.
-func (p *emailPasswordPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux, api huma.API, prefix string) {
+func (p *emailPasswordPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.API, prefix string) {
 	mw := host.Middleware()
 
 	// Rate-limit windows for the public-facing email-password routes.

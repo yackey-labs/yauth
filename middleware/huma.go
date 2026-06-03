@@ -4,9 +4,9 @@
 // no auth logic is reimplemented — and inject the resolved *domain.AuthUser
 // so migrated handlers recover it via the unchanged AuthUserFromContext(ctx).
 //
-// On failure they write the canonical {"error":{code,message}} envelope via
-// the API's error path (huma.WriteErr → humaerr.Override) and stop the chain
-// by NOT calling next.
+// On failure they write a native RFC 9457 problem+json body
+// ({type,title,status,detail}) via the API's error path (huma.WriteErr →
+// huma.NewError default) and stop the chain by NOT calling next.
 package middleware
 
 import (
@@ -23,9 +23,9 @@ import (
 // RequireAuthHuma returns a huma per-operation middleware that requires a
 // valid identity. On success it injects the resolved AuthUser onto the huma
 // context (under the same key AuthUserFromContext reads) and calls next; on
-// failure it writes a 401 error envelope (via api's error path) and returns
+// failure it writes a 401 problem+json error (via api's error path) and returns
 // without calling next. api is captured so the error can be rendered through
-// the configured huma.NewError (humaerr.Override).
+// huma's default huma.NewError (native RFC 9457 problem+json).
 func RequireAuthHuma(api huma.API, mw *Middleware) func(huma.Context, func(huma.Context)) {
 	return func(ctx huma.Context, next func(huma.Context)) {
 		r, _ := humago.Unwrap(ctx)

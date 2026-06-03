@@ -12,13 +12,15 @@ import (
 	"github.com/yackey-labs/yauth-go/domain"
 )
 
-// errorEnvelope is the canonical yauth-go error wire shape
-// ({"error":{code,message}}) the migrated huma routes must preserve.
-type errorEnvelope struct {
-	Error struct {
-		Code    string `json:"code"`
-		Message string `json:"message"`
-	} `json:"error"`
+// problemJSON is the native RFC 9457 problem+json error wire shape
+// ({type,title,status,detail}) the migrated huma routes now emit (the legacy
+// {"error":{code,message}} override was removed). title is huma's status text
+// (e.g. "Unauthorized"); status mirrors the HTTP status code.
+type problemJSON struct {
+	Type   string `json:"type"`
+	Title  string `json:"title"`
+	Status int    `json:"status"`
+	Detail string `json:"detail"`
 }
 
 // TestHumaRef_AdminGetUser_AuthMatrix proves the huma-migrated
@@ -58,34 +60,37 @@ func TestHumaRef_AdminGetUser_AuthMatrix(t *testing.T) {
 	adminTok := env.issueSession(t, admin.ID)
 	path := "/api/auth/admin/users/" + target.ID
 
-	// (a) no auth → 401 + {"error":{"code":"unauthorized",...}}
+	// (a) no auth → 401 + problem+json {type,title,status,detail}
 	res := env.do(t, http.MethodGet, path, "", nil)
 	if res.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("no-auth: expected 401, got %d (%s)", res.StatusCode, drain(res))
 	}
-	var env401 errorEnvelope
+	if ct := res.Header.Get("Content-Type"); ct != "application/problem+json" {
+		t.Fatalf("no-auth: expected application/problem+json, got %q", ct)
+	}
+	var env401 problemJSON
 	if err := json.NewDecoder(res.Body).Decode(&env401); err != nil {
-		t.Fatalf("no-auth: decode envelope: %v", err)
+		t.Fatalf("no-auth: decode problem: %v", err)
 	}
 	res.Body.Close()
-	if env401.Error.Code != "unauthorized" {
-		t.Fatalf("no-auth: expected code=unauthorized, got %q", env401.Error.Code)
+	if env401.Status != http.StatusUnauthorized || env401.Title != "Unauthorized" {
+		t.Fatalf("no-auth: expected status=401 title=Unauthorized, got %+v", env401)
 	}
 
-	// (b) non-admin → 403 + {"error":{"code":"forbidden",...}}
+	// (b) non-admin → 403 + problem+json
 	regular := env.seedUser(t, "regular@example.com", "user")
 	regTok := env.issueSession(t, regular.ID)
 	res = env.do(t, http.MethodGet, path, regTok, nil)
 	if res.StatusCode != http.StatusForbidden {
 		t.Fatalf("non-admin: expected 403, got %d (%s)", res.StatusCode, drain(res))
 	}
-	var env403 errorEnvelope
+	var env403 problemJSON
 	if err := json.NewDecoder(res.Body).Decode(&env403); err != nil {
-		t.Fatalf("non-admin: decode envelope: %v", err)
+		t.Fatalf("non-admin: decode problem: %v", err)
 	}
 	res.Body.Close()
-	if env403.Error.Code != "forbidden" {
-		t.Fatalf("non-admin: expected code=forbidden, got %q", env403.Error.Code)
+	if env403.Status != http.StatusForbidden || env403.Title != "Forbidden" {
+		t.Fatalf("non-admin: expected status=403 title=Forbidden, got %+v", env403)
 	}
 
 	// (c) admin → 200 + full user JSON incl. lifecycle fields.
@@ -118,18 +123,22 @@ func TestHumaRef_AdminGetUser_AuthMatrix(t *testing.T) {
 		t.Fatalf("admin: unexpected $schema field in body (transformer leaked)")
 	}
 
-	// (d) admin, unknown id → 404 + {"error":{"code":"NOT_FOUND",...}}.
+	// (d) admin, unknown id → 404 + problem+json (handler returns
+	// huma.Error404NotFound, so the body is native problem+json too).
 	res = env.do(t, http.MethodGet, "/api/auth/admin/users/"+uuid.NewString(), adminTok, nil)
 	if res.StatusCode != http.StatusNotFound {
 		t.Fatalf("not-found: expected 404, got %d (%s)", res.StatusCode, drain(res))
 	}
-	var env404 errorEnvelope
+	if ct := res.Header.Get("Content-Type"); ct != "application/problem+json" {
+		t.Fatalf("not-found: expected application/problem+json, got %q", ct)
+	}
+	var env404 problemJSON
 	if err := json.NewDecoder(res.Body).Decode(&env404); err != nil {
-		t.Fatalf("not-found: decode envelope: %v", err)
+		t.Fatalf("not-found: decode problem: %v", err)
 	}
 	res.Body.Close()
-	if env404.Error.Code != "NOT_FOUND" {
-		t.Fatalf("not-found: expected code=NOT_FOUND (handler-preserved), got %q", env404.Error.Code)
+	if env404.Status != http.StatusNotFound || env404.Detail != "user not found" {
+		t.Fatalf("not-found: expected status=404 detail=%q, got %+v", "user not found", env404)
 	}
 }
 
@@ -216,13 +225,13 @@ func TestHuma_AdminRoutes_AuthMatrix(t *testing.T) {
 		if res.StatusCode != http.StatusBadRequest {
 			t.Fatalf("ban no-reason: want 400, got %d (%s)", res.StatusCode, drain(res))
 		}
-		var e errorEnvelope
+		var e problemJSON
 		if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
 			t.Fatalf("ban no-reason: decode: %v", err)
 		}
 		res.Body.Close()
-		if e.Error.Code != "INVALID_REQUEST" {
-			t.Fatalf("ban no-reason: want code=INVALID_REQUEST, got %q", e.Error.Code)
+		if e.Status != http.StatusBadRequest {
+			t.Fatalf("ban no-reason: want status=400 problem+json, got %+v", e)
 		}
 	})
 

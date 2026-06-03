@@ -35,7 +35,7 @@ func New() plugin.Plugin { return &statusPlugin{} }
 func (p *statusPlugin) Name() string { return "status" }
 
 // Routes implements plugin.Plugin.
-func (p *statusPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux, api huma.API, prefix string) {
+func (p *statusPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.API, prefix string) {
 	mw := host.Middleware()
 	mux.Handle("GET "+prefix+"/status", mw.RequireAdmin(http.HandlerFunc(p.handleStatus(host))))
 

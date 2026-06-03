@@ -51,24 +51,30 @@ def main(rust_path: str, go_path: str) -> int:
     security = [f for f in info if f["category"] == "SECURITY"]
     go_extra = [f for f in info if f["category"] == "GO-EXTRA"]
 
-    # SECURITY and GO-EXTRA are informational only — they do not block merges.
-    # GO-EXTRA routes (SAML SP redirect handlers, SCIM 2.0 endpoints) exist in
-    # the Go spec intentionally as a superset; they are not part of the core
-    # yauth auth spec published by the Rust crate.
-    # SECURITY divergences cover pre-existing tri-mode auth under-advertising.
-    blocking_total = len(breaking) + len(missing) + len(shape)
+    # SATISFIES-CONTRACT model (not byte-equality). A backend must SERVE every
+    # contract path + operation — so BREAKING (Rust path absent in Go) and
+    # MISSING (operation absent) stay blocking; if a backend doesn't serve a
+    # contract endpoint, the shared client 404s against it. But the two
+    # backends may legitimately differ in request/response SHAPE: extra fields,
+    # optional fields, and divergent error envelopes (e.g. Go RFC 9457
+    # problem+json vs Rust {error:{code,message}}) are tolerated and reconciled
+    # client-side by the normalizer. SHAPE, SECURITY and GO-EXTRA are therefore
+    # all informational — reported for visibility, never blocking.
+    blocking_total = len(breaking) + len(missing)
     if blocking_total == 0:
         info_notes = []
+        if shape:
+            info_notes.append(f"{len(shape)} SHAPE (informational)")
         if go_extra:
             info_notes.append(f"{len(go_extra)} GO-EXTRA (informational)")
         if security:
             info_notes.append(f"{len(security)} SECURITY (informational)")
         sec_note = " / " + " / ".join(info_notes) if info_notes else ""
         print(
-            f"OK: {rust_path} and {go_path} are in conformance "
-            f"(0 BREAKING / 0 MISSING / 0 SHAPE{sec_note})."
+            f"OK: {rust_path} and {go_path} satisfy the contract "
+            f"(0 BREAKING / 0 MISSING{sec_note})."
         )
-        if security:
+        if shape or security:
             sys.stdout.write(
                 diff.render_report(rust_path, go_path, rust, go, must, info)
             )
@@ -77,8 +83,9 @@ def main(rust_path: str, go_path: str) -> int:
     # Print the same human-readable report so CI logs explain what to fix.
     sys.stdout.write(diff.render_report(rust_path, go_path, rust, go, must, info))
     print(
-        "\nFAIL: spec drift between yauth and yauth-go. Resolve "
-        "BREAKING/MISSING/SHAPE above before merging.",
+        "\nFAIL: a backend does not satisfy the contract — a path or operation "
+        "the other serves is missing. Resolve BREAKING/MISSING above before "
+        "merging. (SHAPE differences are allowed and reconciled client-side.)",
         file=sys.stderr,
     )
     return 1

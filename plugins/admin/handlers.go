@@ -15,7 +15,6 @@ import (
 	"github.com/yackey-labs/yauth-go/auth"
 	"github.com/yackey-labs/yauth-go/domain"
 	"github.com/yackey-labs/yauth-go/events"
-	"github.com/yackey-labs/yauth-go/humaerr"
 	"github.com/yackey-labs/yauth-go/middleware"
 	"github.com/yackey-labs/yauth-go/plugin"
 	"github.com/yackey-labs/yauth-go/yautherr"
@@ -137,7 +136,7 @@ func cookieOptionsFromHost(host plugin.PluginHost, r *http.Request, maxAge int) 
 func reqFromCtx(ctx context.Context) (*http.Request, error) {
 	r := middleware.HTTPRequestFromContext(ctx)
 	if r == nil {
-		return nil, humaerr.Errf(http.StatusInternalServerError, "INTERNAL", "request unavailable")
+		return nil, huma.Error500InternalServerError("request unavailable")
 	}
 	return r, nil
 }
@@ -174,7 +173,7 @@ func (p *adminPlugin) registerListUsers(host plugin.PluginHost, api huma.API, mw
 
 		users, total, err := host.Repo().ListUsers(ctx, search, limit, offset)
 		if err != nil {
-			return nil, humaerr.Errf(http.StatusInternalServerError, "INTERNAL", "unable to list users")
+			return nil, huma.Error500InternalServerError("unable to list users")
 		}
 
 		out := make([]userJSON, 0, len(users))
@@ -228,7 +227,7 @@ func (p *adminPlugin) registerPatchUser(host plugin.PluginHost, api huma.API, mw
 		}
 		var req patchUserRequest
 		if err := decodeJSON(r, &req); err != nil {
-			return nil, humaerr.Errf(http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+			return nil, huma.Error400BadRequest(err.Error())
 		}
 		now := time.Now().UTC()
 
@@ -247,9 +246,9 @@ func (p *adminPlugin) registerPatchUser(host plugin.PluginHost, api huma.API, mw
 		u, err := host.Repo().UpdateUser(ctx, in.ID, changes)
 		if err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				return nil, humaerr.Errf(http.StatusNotFound, "NOT_FOUND", "user not found")
+				return nil, huma.Error404NotFound("user not found")
 			}
-			return nil, humaerr.Errf(http.StatusInternalServerError, "INTERNAL", "unable to update user")
+			return nil, huma.Error500InternalServerError("unable to update user")
 		}
 		return &userOutput{Body: toUserJSON(u)}, nil
 	})
@@ -278,10 +277,10 @@ func (p *adminPlugin) registerBanUser(host plugin.PluginHost, api huma.API, mw *
 		}
 		var req banRequest
 		if err := decodeJSON(r, &req); err != nil {
-			return nil, humaerr.Errf(http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+			return nil, huma.Error400BadRequest(err.Error())
 		}
 		if strings.TrimSpace(req.Reason) == "" {
-			return nil, humaerr.Errf(http.StatusBadRequest, "INVALID_REQUEST", "reason is required")
+			return nil, huma.Error400BadRequest("reason is required")
 		}
 		id := in.ID
 		now := time.Now().UTC()
@@ -310,9 +309,9 @@ func (p *adminPlugin) registerBanUser(host plugin.PluginHost, api huma.API, mw *
 		u, err := host.Repo().UpdateUser(ctx, id, changes)
 		if err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				return nil, humaerr.Errf(http.StatusNotFound, "NOT_FOUND", "user not found")
+				return nil, huma.Error404NotFound("user not found")
 			}
-			return nil, humaerr.Errf(http.StatusInternalServerError, "INTERNAL", "unable to ban user")
+			return nil, huma.Error500InternalServerError("unable to ban user")
 		}
 
 		// Revoke every session of the banned user so they are kicked out
@@ -379,9 +378,9 @@ func (p *adminPlugin) registerUnbanUser(host plugin.PluginHost, api huma.API, mw
 		u, err := host.Repo().UpdateUser(ctx, id, changes)
 		if err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				return nil, humaerr.Errf(http.StatusNotFound, "NOT_FOUND", "user not found")
+				return nil, huma.Error404NotFound("user not found")
 			}
-			return nil, humaerr.Errf(http.StatusInternalServerError, "INTERNAL", "unable to unban user")
+			return nil, huma.Error500InternalServerError("unable to unban user")
 		}
 
 		actorID := actorIDFromContext(ctx)
@@ -442,9 +441,9 @@ func (p *adminPlugin) registerSuspendUser(host plugin.PluginHost, api huma.API, 
 		})
 		if err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				return nil, humaerr.Errf(http.StatusNotFound, "NOT_FOUND", "user not found")
+				return nil, huma.Error404NotFound("user not found")
 			}
-			return nil, humaerr.Errf(http.StatusInternalServerError, "INTERNAL", "unable to suspend user")
+			return nil, huma.Error500InternalServerError("unable to suspend user")
 		}
 		// Kill switch: terminate sessions + revoke refresh tokens now.
 		_, _ = host.Repo().DeleteUserSessions(ctx, id)
@@ -493,9 +492,9 @@ func (p *adminPlugin) registerUnsuspendUser(host plugin.PluginHost, api huma.API
 		})
 		if err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				return nil, humaerr.Errf(http.StatusNotFound, "NOT_FOUND", "user not found")
+				return nil, huma.Error404NotFound("user not found")
 			}
-			return nil, humaerr.Errf(http.StatusInternalServerError, "INTERNAL", "unable to reactivate user")
+			return nil, huma.Error500InternalServerError("unable to reactivate user")
 		}
 		meta, _ := json.Marshal(map[string]any{"admin_id": actorIDFromContext(ctx)})
 		_ = host.Repo().LogAuditEvent(ctx, domain.NewAuditLog{
@@ -529,7 +528,7 @@ func (p *adminPlugin) registerScheduleStart(host plugin.PluginHost, api huma.API
 		}
 		var req scheduleStartRequest
 		if err := decodeJSON(r, &req); err != nil {
-			return nil, humaerr.Errf(http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+			return nil, huma.Error400BadRequest(err.Error())
 		}
 		id := in.ID
 		now := time.Now().UTC()
@@ -545,9 +544,9 @@ func (p *adminPlugin) registerScheduleStart(host plugin.PluginHost, api huma.API
 		})
 		if err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				return nil, humaerr.Errf(http.StatusNotFound, "NOT_FOUND", "user not found")
+				return nil, huma.Error404NotFound("user not found")
 			}
-			return nil, humaerr.Errf(http.StatusInternalServerError, "INTERNAL", "unable to schedule start")
+			return nil, huma.Error500InternalServerError("unable to schedule start")
 		}
 		return &userOutput{Body: toUserJSON(u)}, nil
 	})
@@ -583,21 +582,21 @@ func (p *adminPlugin) registerImpersonate(host plugin.PluginHost, api huma.API, 
 		}
 		w := middleware.HTTPResponseFromContext(ctx)
 		if w == nil {
-			return nil, humaerr.Errf(http.StatusInternalServerError, "INTERNAL", "response unavailable")
+			return nil, huma.Error500InternalServerError("response unavailable")
 		}
 		id := in.ID
 
 		target, err := host.Repo().GetUserByID(ctx, id)
 		if err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				return nil, humaerr.Errf(http.StatusNotFound, "NOT_FOUND", "user not found")
+				return nil, huma.Error404NotFound("user not found")
 			}
-			return nil, humaerr.Errf(http.StatusInternalServerError, "INTERNAL", "unable to load user")
+			return nil, huma.Error500InternalServerError("unable to load user")
 		}
 
 		raw, _, err := auth.IssueSession(ctx, host.Repo(), target.ID, middleware.RequestIP(r), nil, host.SessionTTL())
 		if err != nil {
-			return nil, humaerr.Errf(http.StatusInternalServerError, "INTERNAL", "unable to issue session")
+			return nil, huma.Error500InternalServerError("unable to issue session")
 		}
 
 		actorID := actorIDFromContext(ctx)
@@ -643,7 +642,7 @@ func (p *adminPlugin) registerDeleteUserSessions(host plugin.PluginHost, api hum
 	}, func(ctx context.Context, in *idInput) (*deleteSessionsOutput, error) {
 		n, err := host.Repo().DeleteUserSessions(ctx, in.ID)
 		if err != nil {
-			return nil, humaerr.Errf(http.StatusInternalServerError, "INTERNAL", "unable to delete sessions")
+			return nil, huma.Error500InternalServerError("unable to delete sessions")
 		}
 		return &deleteSessionsOutput{Body: deleteSessionsResponse{Deleted: n}}, nil
 	})
@@ -679,7 +678,7 @@ func (p *adminPlugin) registerDeleteUser(host plugin.PluginHost, api huma.API, m
 		// Self-delete protection. The acting admin's id is on the operation
 		// context; refuse with 409 when targeting the same user.
 		if actor := actorIDFromContext(ctx); actor != "" && actor == id {
-			return nil, humaerr.Errf(http.StatusConflict, "SELF_DELETE", "admins cannot delete their own account")
+			return nil, huma.Error409Conflict("admins cannot delete their own account")
 		}
 
 		// Body is optional but accepted for an audit-log reason. An empty
@@ -687,15 +686,15 @@ func (p *adminPlugin) registerDeleteUser(host plugin.PluginHost, api huma.API, m
 		var req deleteUserRequest
 		if r.ContentLength != 0 {
 			if err := decodeJSON(r, &req); err != nil {
-				return nil, humaerr.Errf(http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+				return nil, huma.Error400BadRequest(err.Error())
 			}
 		}
 
 		if err := host.Repo().DeleteUser(ctx, id); err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				return nil, humaerr.Errf(http.StatusNotFound, "NOT_FOUND", "user not found")
+				return nil, huma.Error404NotFound("user not found")
 			}
-			return nil, humaerr.Errf(http.StatusInternalServerError, "INTERNAL", "unable to delete user")
+			return nil, huma.Error500InternalServerError("unable to delete user")
 		}
 
 		actorID := actorIDFromContext(ctx)
@@ -762,7 +761,7 @@ func (p *adminPlugin) registerListSessions(host plugin.PluginHost, api huma.API,
 
 		sessions, total, err := host.Repo().ListSessions(ctx, filters)
 		if err != nil {
-			return nil, humaerr.Errf(http.StatusInternalServerError, "INTERNAL", "unable to list sessions")
+			return nil, huma.Error500InternalServerError("unable to list sessions")
 		}
 
 		out := make([]sessionJSON, 0, len(sessions))
@@ -817,9 +816,9 @@ func (p *adminPlugin) registerDeleteSession(host plugin.PluginHost, api huma.API
 
 		if err := host.Repo().DeleteSessionByID(ctx, id); err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				return nil, humaerr.Errf(http.StatusNotFound, "NOT_FOUND", "session not found")
+				return nil, huma.Error404NotFound("session not found")
 			}
-			return nil, humaerr.Errf(http.StatusInternalServerError, "INTERNAL", "unable to delete session")
+			return nil, huma.Error500InternalServerError("unable to delete session")
 		}
 
 		actorID := actorIDFromContext(ctx)
@@ -885,7 +884,7 @@ func (p *adminPlugin) registerListAudit(host plugin.PluginHost, api huma.API, mw
 
 		entries, err := host.Repo().ListAuditLog(ctx, filters)
 		if err != nil {
-			return nil, humaerr.Errf(http.StatusInternalServerError, "INTERNAL", "unable to list audit log")
+			return nil, huma.Error500InternalServerError("unable to list audit log")
 		}
 
 		out := make([]auditEntryJSON, 0, len(entries))

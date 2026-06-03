@@ -135,7 +135,7 @@ func (p *webhooksPlugin) Name() string { return "webhooks" }
 // Routes implements plugin.Plugin. It starts the dispatcher's worker
 // goroutines, registers the events.Handler that fans events out to it,
 // and mounts admin endpoints under prefix guarded by RequireAdmin.
-func (p *webhooksPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux, prefix string) {
+func (p *webhooksPlugin) Routes(host plugin.PluginHost, mux plugin.Router, prefix string) {
 	mw := host.Middleware()
 
 	httpClient := p.cfg.HTTPClient

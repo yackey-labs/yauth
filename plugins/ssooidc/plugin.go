@@ -138,7 +138,7 @@ func (p *ssoOIDCPlugin) Name() string { return "sso_oidc" }
 //
 // User-facing login/callback routes are gated on the same hosting
 // invariant. Phase A (this commit) ships the admin surface only.
-func (p *ssoOIDCPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux, prefix string) {
+func (p *ssoOIDCPlugin) Routes(host plugin.PluginHost, mux plugin.Router, prefix string) {
 	mw := host.Middleware()
 
 	mux.Handle("POST "+prefix+"/organizations/{id}/sso/connections", mw.RequireAuth(http.HandlerFunc(p.handleCreateConnection(host))))

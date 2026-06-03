@@ -129,13 +129,25 @@ func New(cfg Config) plugin.Plugin {
 // Name implements plugin.Plugin.
 func (p *emailPasswordPlugin) Name() string { return "email-password" }
 
-// Routes implements plugin.Plugin.
+// Routes implements plugin.Plugin. Every route is huma-native. The six
+// public routes (register/login/verify-email/resend-verification/
+// forgot-password/reset-password) carry their original fixed-window rate
+// limiter as the OUTERMOST per-operation middleware via RateLimitHuma, then
+// StashHTTPHuma so the migrated handlers keep byte-identical body parsing
+// (strict decode, the enumeration-safe responses, RequestIP) and the
+// register/login Set-Cookie writes. The three authenticated routes
+// (logout/change-password/PATCH me) are gated by RequireAuthHuma with
+// StashHTTPHuma; /session needs only RequireAuthHuma (it reads the AuthUser
+// from ctx — no body, cookie, or IP). The mux is retained in the signature
+// for plugins that still register raw net/http routes; email-password no
+// longer uses it.
+//
+// host.RateLimit is a no-op when max<=0, so the same wiring works regardless
+// of the operator's config; the RateLimitHuma bridge preserves the plain-text
+// 429 and X-RateLimit-* headers on block (NOT problem+json).
 func (p *emailPasswordPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.API, prefix string) {
 	mw := host.Middleware()
 
-	// Rate-limit windows for the public-facing email-password routes.
-	// host.RateLimit is a no-op when max<=0 so the same wrapper code
-	// works regardless of the operator's config.
 	registerRL := host.RateLimit("emailpassword.register", 10, 60*time.Second)
 	loginRL := host.RateLimit("emailpassword.login", 10, 60*time.Second)
 	verifyEmailRL := host.RateLimit("emailpassword.verify_email", 10, 60*time.Second)
@@ -143,15 +155,14 @@ func (p *emailPasswordPlugin) Routes(host plugin.PluginHost, mux plugin.Router, 
 	forgotRL := host.RateLimit("emailpassword.forgot_password", 5, 60*time.Second)
 	resetRL := host.RateLimit("emailpassword.reset_password", 5, 60*time.Second)
 
-	mux.Handle("POST "+prefix+"/register", registerRL(http.HandlerFunc(p.handleRegister(host))))
-	mux.Handle("POST "+prefix+"/login", loginRL(http.HandlerFunc(p.handleLogin(host))))
-	mux.Handle("POST "+prefix+"/logout", mw.RequireAuth(http.HandlerFunc(p.handleLogout(host))))
-	mux.Handle("GET "+prefix+"/session", mw.RequireAuth(http.HandlerFunc(p.handleSession(host))))
-	mux.Handle("POST "+prefix+"/change-password", mw.RequireAuth(http.HandlerFunc(p.handleChangePassword(host))))
-	mux.Handle("PATCH "+prefix+"/me", mw.RequireAuth(http.HandlerFunc(p.handlePatchMe(host))))
-
-	mux.Handle("POST "+prefix+"/verify-email", verifyEmailRL(http.HandlerFunc(p.handleVerifyEmail(host))))
-	mux.Handle("POST "+prefix+"/resend-verification", resendVerifyRL(http.HandlerFunc(p.handleResendVerification(host))))
-	mux.Handle("POST "+prefix+"/forgot-password", forgotRL(http.HandlerFunc(p.handleForgotPassword(host))))
-	mux.Handle("POST "+prefix+"/reset-password", resetRL(http.HandlerFunc(p.handleResetPassword(host))))
+	p.registerRegister(host, api, prefix, registerRL)
+	p.registerLogin(host, api, prefix, loginRL)
+	p.registerLogout(host, api, mw, prefix)
+	p.registerSession(host, api, mw, prefix)
+	p.registerChangePassword(host, api, mw, prefix)
+	p.registerPatchMe(host, api, mw, prefix)
+	p.registerVerifyEmail(host, api, prefix, verifyEmailRL)
+	p.registerResendVerification(host, api, prefix, resendVerifyRL)
+	p.registerForgotPassword(host, api, prefix, forgotRL)
+	p.registerResetPassword(host, api, prefix, resetRL)
 }

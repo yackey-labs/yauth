@@ -116,14 +116,25 @@ func MustNew(cfg Config) plugin.Plugin {
 // Name implements plugin.Plugin.
 func (p *oauthPlugin) Name() string { return "oauth" }
 
-// Routes implements plugin.Plugin.
+// Routes implements plugin.Plugin. Every route is huma-native.
+//
+// The provider-redirect (/authorize) and callback (/callback) routes are
+// public browser flows: they stash the raw *http.Request / http.ResponseWriter
+// (via StashHTTPHuma) so the migrated handlers keep byte-identical query/form/
+// JSON parsing, state/CSRF validation, Set-Cookie session writes, and 302
+// redirects. /accounts, /link and the unlink route gate on RequireAuthHuma —
+// the SAME identity rule as the legacy mw.RequireAuth wrappers — and recover
+// the AuthUser via middleware.AuthUserFromContext, unchanged.
+//
+// The mux is retained in the signature for plugins that still register raw
+// net/http routes; oauth no longer uses it.
 func (p *oauthPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.API, prefix string) {
 	mw := host.Middleware()
 
-	mux.Handle("GET "+prefix+"/oauth/{provider}/authorize", http.HandlerFunc(p.handleAuthorize(host)))
-	mux.Handle("GET "+prefix+"/oauth/{provider}/callback", http.HandlerFunc(p.handleCallback(host)))
-	mux.Handle("POST "+prefix+"/oauth/{provider}/callback", http.HandlerFunc(p.handleCallback(host)))
-	mux.Handle("GET "+prefix+"/oauth/accounts", mw.RequireAuth(http.HandlerFunc(p.handleListAccounts(host))))
-	mux.Handle("DELETE "+prefix+"/oauth/{provider}", mw.RequireAuth(http.HandlerFunc(p.handleUnlink(host))))
-	mux.Handle("POST "+prefix+"/oauth/{provider}/link", mw.RequireAuth(http.HandlerFunc(p.handleLink(host))))
+	p.registerAuthorize(host, api, prefix)
+	p.registerCallback(host, api, prefix, http.MethodGet, "oauthCallback")
+	p.registerCallback(host, api, prefix, http.MethodPost, "oauthCallbackPost")
+	p.registerListAccounts(host, api, mw, prefix)
+	p.registerUnlink(host, api, mw, prefix)
+	p.registerLink(host, api, mw, prefix)
 }

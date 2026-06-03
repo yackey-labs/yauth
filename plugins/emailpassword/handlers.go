@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/google/uuid"
 
 	"github.com/yackey-labs/yauth-go/auth"
@@ -26,10 +27,10 @@ import (
 	"github.com/yackey-labs/yauth-go/yautherr"
 )
 
-// userJSON is the shape of a User returned in API responses. It maps
+// epUserJSON is the shape of a User returned in API responses. It maps
 // pointer fields to their JSON representation explicitly so the response
 // is stable regardless of how domain.User evolves.
-type userJSON struct {
+type epUserJSON struct {
 	ID            string  `json:"id"`
 	Email         string  `json:"email"`
 	DisplayName   *string `json:"display_name,omitempty"`
@@ -37,8 +38,8 @@ type userJSON struct {
 	Role          string  `json:"role"`
 }
 
-func toUserJSON(u domain.User) userJSON {
-	return userJSON{
+func toEPUserJSON(u domain.User) epUserJSON {
+	return epUserJSON{
 		ID:            u.ID,
 		Email:         u.Email,
 		DisplayName:   u.DisplayName,
@@ -47,26 +48,49 @@ func toUserJSON(u domain.User) userJSON {
 	}
 }
 
-// errorBody is the canonical error response shape:
-//
-//	{"error": {"code": "INVALID_CREDENTIALS", "message": "..."}}
-type errorBody struct {
-	Error errorPayload `json:"error"`
+// reqFromCtx returns the *http.Request stashed by StashHTTPHuma. On an
+// email-password route guarded by StashHTTPHuma it is always present; the nil
+// guard maps an absent request to a 500 problem+json.
+func reqFromCtx(ctx context.Context) (*http.Request, error) {
+	r := middleware.HTTPRequestFromContext(ctx)
+	if r == nil {
+		return nil, huma.Error500InternalServerError("request unavailable")
+	}
+	return r, nil
 }
 
-type errorPayload struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+// respFromCtx returns the http.ResponseWriter stashed by StashHTTPHuma, used by
+// the routes that issue a Set-Cookie out-of-band (register, login,
+// change-password). huma writes the status + body after the handler returns, so
+// the cookie header lands first — the same pattern as magiclink's verify route.
+func respFromCtx(ctx context.Context) (http.ResponseWriter, error) {
+	w := middleware.HTTPResponseFromContext(ctx)
+	if w == nil {
+		return nil, huma.Error500InternalServerError("response unavailable")
+	}
+	return w, nil
 }
 
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+// stashGuards is the per-operation middleware chain for the three
+// authenticated routes (logout, change-password, PATCH me): stash the raw
+// request/writer, then require a valid identity. AuthUserFromContext recovers
+// the resolved user inside the handler.
+func stashGuards(api huma.API, mw *middleware.Middleware) huma.Middlewares {
+	return huma.Middlewares{
+		middleware.StashHTTPHuma(api),
+		middleware.RequireAuthHuma(api, mw),
+	}
 }
 
-func writeError(w http.ResponseWriter, status int, code, message string) {
-	writeJSON(w, status, errorBody{Error: errorPayload{Code: code, Message: message}})
+// rateLimitedGuards is the per-operation middleware chain for the six public
+// routes: the route's fixed-window rate limiter (outermost, preserving the
+// plain-text 429 on block) followed by StashHTTPHuma so the handler reuses the
+// strict body decoder, RequestIP, and cookie writes.
+func rateLimitedGuards(rl func(http.Handler) http.Handler, api huma.API) huma.Middlewares {
+	return huma.Middlewares{
+		middleware.RateLimitHuma(rl),
+		middleware.StashHTTPHuma(api),
+	}
 }
 
 // cookieOptionsFromHost mirrors host config onto auth.CookieOptions.
@@ -115,37 +139,89 @@ type registerRequest struct {
 // an optional human-readable message. SPAs can read `User` to skip the
 // post-register login redirect; the session cookie has already been
 // issued.
+//
+// It is a UNION of the two legacy /register bodies so a single huma operation
+// can marshal either, byte-identically:
+//
+//   - success (201): {"user": {...}, "message": "Account created."}
+//   - enumeration-safe pending (200): {"status": "...", "message": "..."}
+//
+// Fields are declared in their original key order with omitempty so the
+// emitted JSON matches the legacy writeJSON output exactly for each branch.
+// User is a pointer so the success branch carries `user` and the pending
+// branch omits it.
 type registerResponse struct {
-	User    userJSON `json:"user"`
-	Message string   `json:"message,omitempty"`
+	User    *epUserJSON `json:"user,omitempty"`
+	Status  string      `json:"status,omitempty"`
+	Message string      `json:"message,omitempty"`
 }
 
-func (p *emailPasswordPlugin) handleRegister(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+// registerOutput carries the dynamic status: 200 for the enumeration-safe
+// pending response, 201 for a fresh account. The Status field overrides the
+// operation's DefaultStatus per-response, so every return path sets it.
+type registerOutput struct {
+	Status int
+	Body   registerResponse
+}
+
+// pendingRegisterOutput builds the enumeration-safe 200 response returned when
+// the supplied email already maps to an existing account (or a concurrent
+// registration won the race). The shape mirrors a fresh-registration "check
+// your inbox" UX without admitting that anything actually happened.
+func pendingRegisterOutput() *registerOutput {
+	return &registerOutput{
+		Status: http.StatusOK,
+		Body: registerResponse{
+			Status:  "pending_verification",
+			Message: "If the email is available, an account has been created. Check your inbox.",
+		},
+	}
+}
+
+// registerRegister wires POST {prefix}/register as a public, rate-limited
+// huma-native operation. It REUSES the legacy strict body decode, signups
+// gate, password complexity / HIBP checks, enumeration-resistant duplicate
+// handling, user+password+session creation, auto-join hook, and Set-Cookie;
+// only the transport changes. Errors are RFC 9457 problem+json; success bodies
+// stay byte-identical to the legacy writeJSON output.
+func (p *emailPasswordPlugin) registerRegister(host plugin.PluginHost, api huma.API, prefix string, rl func(http.Handler) http.Handler) {
+	huma.Register(api, huma.Operation{
+		OperationID:   "emailPasswordRegister",
+		Method:        http.MethodPost,
+		Path:          prefix + "/register",
+		Summary:       "Create an account and start a session",
+		Tags:          []string{"email-password"},
+		Security:      []map[string][]string{}, // explicitly public
+		DefaultStatus: http.StatusCreated,
+		Middlewares:   rateLimitedGuards(rl, api),
+	}, func(ctx context.Context, _ *struct{}) (*registerOutput, error) {
+		r, err := reqFromCtx(ctx)
+		if err != nil {
+			return nil, err
+		}
+		w, err := respFromCtx(ctx)
+		if err != nil {
+			return nil, err
+		}
+
 		if !host.AllowSignups() {
-			writeError(w, http.StatusForbidden, "SIGNUPS_DISABLED", "public registration is disabled")
-			return
+			return nil, huma.Error403Forbidden("public registration is disabled")
 		}
 		var req registerRequest
 		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
-			return
+			return nil, huma.Error400BadRequest(err.Error())
 		}
 		req.Email = strings.TrimSpace(strings.ToLower(req.Email))
 		if !validEmail(req.Email) {
-			writeError(w, http.StatusBadRequest, "INVALID_EMAIL", "email must contain '@'")
-			return
+			return nil, huma.Error400BadRequest("email must contain '@'")
 		}
 		if err := p.validatePasswordComplexity(req.Password); err != nil {
-			writeError(w, http.StatusBadRequest, "WEAK_PASSWORD", err.Error())
-			return
+			return nil, huma.Error400BadRequest(err.Error())
 		}
-		if pwned, msg := p.checkHIBP(r.Context(), req.Password); pwned {
-			writeError(w, http.StatusUnprocessableEntity, "PASSWORD_BREACHED", msg)
-			return
+		if pwned, msg := p.checkHIBP(ctx, req.Password); pwned {
+			return nil, huma.Error422UnprocessableEntity(msg)
 		}
 
-		ctx := r.Context()
 		repo := host.Repo()
 
 		// Email-enumeration resistance: when the email already has an
@@ -158,14 +234,9 @@ func (p *emailPasswordPlugin) handleRegister(host plugin.PluginHost) http.Handle
 					log.Printf("yauth: SendAccountExists failed for %s: %v", email, err)
 				}
 			}(req.Email)
-			writeJSON(w, http.StatusOK, pendingVerificationResponse{
-				Status:  "pending_verification",
-				Message: "If the email is available, an account has been created. Check your inbox.",
-			})
-			return
+			return pendingRegisterOutput(), nil
 		} else if err != nil && !errors.Is(err, yautherr.ErrNotFound) {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to look up user")
-			return
+			return nil, huma.Error500InternalServerError("unable to look up user")
 		}
 
 		role := "user"
@@ -206,27 +277,20 @@ func (p *emailPasswordPlugin) handleRegister(host plugin.PluginHost) http.Handle
 						log.Printf("yauth: SendAccountExists failed for %s: %v", email, err)
 					}
 				}(req.Email)
-				writeJSON(w, http.StatusOK, pendingVerificationResponse{
-					Status:  "pending_verification",
-					Message: "If the email is available, an account has been created. Check your inbox.",
-				})
-				return
+				return pendingRegisterOutput(), nil
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to create user")
-			return
+			return nil, huma.Error500InternalServerError("unable to create user")
 		}
 
 		hash, err := auth.HashPassword(req.Password)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to hash password")
-			return
+			return nil, huma.Error500InternalServerError("unable to hash password")
 		}
 		if err := repo.UpsertPassword(ctx, domain.NewPassword{
 			UserID:       user.ID,
 			PasswordHash: hash,
 		}); err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to store password")
-			return
+			return nil, huma.Error500InternalServerError("unable to store password")
 		}
 
 		// Issue a verification token and email the link. Failures are
@@ -266,8 +330,7 @@ func (p *emailPasswordPlugin) handleRegister(host plugin.PluginHost) http.Handle
 
 		raw, _, err := auth.IssueSession(ctx, repo, user.ID, middleware.RequestIP(r), requestUA(r), host.SessionTTL())
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to issue session")
-			return
+			return nil, huma.Error500InternalServerError("unable to issue session")
 		}
 
 		// Informational: webhooks/audit listen, decisions ignored.
@@ -286,20 +349,15 @@ func (p *emailPasswordPlugin) handleRegister(host plugin.PluginHost) http.Handle
 			cookieOptionsFromHost(host, r, int(host.SessionTTL().Seconds())),
 			raw,
 		))
-		writeJSON(w, http.StatusCreated, registerResponse{
-			User:    toUserJSON(user),
-			Message: "Account created.",
-		})
-	}
-}
-
-// pendingVerificationResponse is the enumeration-safe reply the
-// /register handler returns when the supplied email already maps to
-// an existing account. The shape mirrors a fresh-registration "check
-// your inbox" UX without admitting that anything actually happened.
-type pendingVerificationResponse struct {
-	Status  string `json:"status"`
-	Message string `json:"message"`
+		uj := toEPUserJSON(user)
+		return &registerOutput{
+			Status: http.StatusCreated,
+			Body: registerResponse{
+				User:    &uj,
+				Message: "Account created.",
+			},
+		}, nil
+	})
 }
 
 // --- /login -------------------------------------------------------------
@@ -310,29 +368,60 @@ type loginRequest struct {
 	RememberMe bool   `json:"remember_me,omitempty"`
 }
 
+// loginResponse is the union of the two legacy /login 200 bodies so a single
+// huma operation marshals either, byte-identically:
+//
+//   - success: {"user": {...}}
+//   - MFA step-up: {"require_mfa": true, "pending_session_id": "..."}
+//
+// Fields are in the original key order with omitempty: the success branch sets
+// only User; the MFA branch sets only RequireMfa + PendingSessionID. The
+// pending_session_id is opaque to this plugin; the MFA plugin owns its shape
+// and consumption.
 type loginResponse struct {
-	User userJSON `json:"user"`
+	User             *epUserJSON `json:"user,omitempty"`
+	RequireMfa       bool        `json:"require_mfa,omitempty"`
+	PendingSessionID string      `json:"pending_session_id,omitempty"`
 }
 
-// loginMfaResponse is the body returned when an event handler issues a
-// RequireMfa decision after successful password verification. The
-// pending_session_id is opaque to this plugin; the MFA plugin owns its
-// shape and consumption.
-type loginMfaResponse struct {
-	RequireMfa       bool   `json:"require_mfa"`
-	PendingSessionID string `json:"pending_session_id"`
+// loginOutput wraps loginResponse; both branches return the default 200.
+type loginOutput struct {
+	Body loginResponse
 }
 
-func (p *emailPasswordPlugin) handleLogin(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+// registerLogin wires POST {prefix}/login as a public, rate-limited huma-native
+// operation. It REUSES the legacy strict body decode, the login-attempt /
+// login-failed / login-succeeded event hooks (and their Block decisions), the
+// timing/enumeration mitigation (DummyVerify on user-not-found and no-password,
+// identical 401 detail), the ban/suspend/staged gates, the optional email-
+// verification gate, MFA step-up, remember-me TTL, session issuance, and the
+// Set-Cookie. The Block decisions return huma.NewError so a dynamic status
+// (e.g. a lockout 429) is preserved; all other errors are problem+json.
+func (p *emailPasswordPlugin) registerLogin(host plugin.PluginHost, api huma.API, prefix string, rl func(http.Handler) http.Handler) {
+	huma.Register(api, huma.Operation{
+		OperationID: "emailPasswordLogin",
+		Method:      http.MethodPost,
+		Path:        prefix + "/login",
+		Summary:     "Verify a password and start a session",
+		Tags:        []string{"email-password"},
+		Security:    []map[string][]string{}, // explicitly public
+		Middlewares: rateLimitedGuards(rl, api),
+	}, func(ctx context.Context, _ *struct{}) (*loginOutput, error) {
+		r, err := reqFromCtx(ctx)
+		if err != nil {
+			return nil, err
+		}
+		w, err := respFromCtx(ctx)
+		if err != nil {
+			return nil, err
+		}
+
 		var req loginRequest
 		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
-			return
+			return nil, huma.Error400BadRequest(err.Error())
 		}
 		req.Email = strings.TrimSpace(strings.ToLower(req.Email))
 
-		ctx := r.Context()
 		repo := host.Repo()
 		ip := middleware.RequestIP(r)
 		method := "email-password"
@@ -345,8 +434,7 @@ func (p *emailPasswordPlugin) handleLogin(host plugin.PluginHost) http.HandlerFu
 			IPAddress: ip,
 			Method:    &method,
 		}); dec.Kind == events.DecisionKindBlock {
-			writeError(w, decBlockStatus(dec), "BLOCKED", decBlockMessage(dec))
-			return
+			return nil, huma.NewError(decBlockStatus(dec), decBlockMessage(dec))
 		}
 
 		user, err := repo.GetUserByEmail(ctx, req.Email)
@@ -356,26 +444,21 @@ func (p *emailPasswordPlugin) handleLogin(host plugin.PluginHost) http.HandlerFu
 				// enumeration via timing.
 				_ = auth.DummyVerify(req.Password)
 				p.emitLoginFailed(ctx, host, nil, &emailPtr, ip, "user-not-found")
-				writeError(w, http.StatusUnauthorized, "INVALID_CREDENTIALS", "invalid email or password")
-				return
+				return nil, huma.Error401Unauthorized("invalid email or password")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to look up user")
-			return
+			return nil, huma.Error500InternalServerError("unable to look up user")
 		}
 		if user.Banned {
 			p.emitLoginFailed(ctx, host, &user.ID, &user.Email, ip, "banned")
-			writeError(w, http.StatusForbidden, "USER_BANNED", "account suspended")
-			return
+			return nil, huma.Error403Forbidden("account suspended")
 		}
 		if user.SuspendedAt != nil {
 			p.emitLoginFailed(ctx, host, &user.ID, &user.Email, ip, "suspended")
-			writeError(w, http.StatusForbidden, "USER_SUSPENDED", "account is deactivated")
-			return
+			return nil, huma.Error403Forbidden("account is deactivated")
 		}
 		if user.Staged(time.Now().UTC()) {
 			p.emitLoginFailed(ctx, host, &user.ID, &user.Email, ip, "staged")
-			writeError(w, http.StatusForbidden, "USER_NOT_STARTED", "account is not active yet")
-			return
+			return nil, huma.Error403Forbidden("account is not active yet")
 		}
 
 		pw, err := repo.GetPasswordByUserID(ctx, user.ID)
@@ -383,11 +466,9 @@ func (p *emailPasswordPlugin) handleLogin(host plugin.PluginHost) http.HandlerFu
 			if errors.Is(err, yautherr.ErrNotFound) {
 				_ = auth.DummyVerify(req.Password)
 				p.emitLoginFailed(ctx, host, &user.ID, &user.Email, ip, "no-password")
-				writeError(w, http.StatusUnauthorized, "INVALID_CREDENTIALS", "invalid email or password")
-				return
+				return nil, huma.Error401Unauthorized("invalid email or password")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to look up password")
-			return
+			return nil, huma.Error500InternalServerError("unable to look up password")
 		}
 		ok, err := auth.VerifyPassword(req.Password, pw.PasswordHash)
 		if err != nil || !ok {
@@ -400,17 +481,14 @@ func (p *emailPasswordPlugin) handleLogin(host plugin.PluginHost) http.HandlerFu
 				Method:    &method,
 				Reason:    strPtr("bad-password"),
 			}); dec.Kind == events.DecisionKindBlock {
-				writeError(w, decBlockStatus(dec), "BLOCKED", decBlockMessage(dec))
-				return
+				return nil, huma.NewError(decBlockStatus(dec), decBlockMessage(dec))
 			}
-			writeError(w, http.StatusUnauthorized, "INVALID_CREDENTIALS", "invalid email or password")
-			return
+			return nil, huma.Error401Unauthorized("invalid email or password")
 		}
 
 		if p.cfg.RequireEmailVerification && !user.EmailVerified {
 			p.emitLoginFailed(ctx, host, &user.ID, &user.Email, ip, "email-unverified")
-			writeError(w, http.StatusForbidden, "EMAIL_NOT_VERIFIED", "verify your email before logging in")
-			return
+			return nil, huma.Error403Forbidden("verify your email before logging in")
 		}
 
 		// Password is correct. Give handlers a chance to interpose:
@@ -424,14 +502,12 @@ func (p *emailPasswordPlugin) handleLogin(host plugin.PluginHost) http.HandlerFu
 		})
 		switch dec.Kind {
 		case events.DecisionKindBlock:
-			writeError(w, decBlockStatus(dec), "BLOCKED", decBlockMessage(dec))
-			return
+			return nil, huma.NewError(decBlockStatus(dec), decBlockMessage(dec))
 		case events.DecisionKindRequireMfa:
-			writeJSON(w, http.StatusOK, loginMfaResponse{
+			return &loginOutput{Body: loginResponse{
 				RequireMfa:       true,
 				PendingSessionID: dec.PendingSessionID,
-			})
-			return
+			}}, nil
 		}
 
 		ttl := host.SessionTTL()
@@ -441,16 +517,16 @@ func (p *emailPasswordPlugin) handleLogin(host plugin.PluginHost) http.HandlerFu
 
 		raw, _, err := auth.IssueSession(ctx, repo, user.ID, ip, requestUA(r), ttl)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to issue session")
-			return
+			return nil, huma.Error500InternalServerError("unable to issue session")
 		}
 
 		http.SetCookie(w, auth.SessionCookie(
 			cookieOptionsFromHost(host, r, int(ttl.Seconds())),
 			raw,
 		))
-		writeJSON(w, http.StatusOK, loginResponse{User: toUserJSON(*user)})
-	}
+		uj := toEPUserJSON(*user)
+		return &loginOutput{Body: loginResponse{User: &uj}}, nil
+	})
 }
 
 // emitLoginFailed fires a login.failed event without honoring the
@@ -487,27 +563,53 @@ func decBlockMessage(d events.Decision) string {
 
 // --- /logout ------------------------------------------------------------
 
-func (p *emailPasswordPlugin) handleLogout(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+// logoutOutput carries no body; the operation's DefaultStatus drives the 204.
+type logoutOutput struct{}
+
+// registerLogout wires POST {prefix}/logout as an authenticated huma-native
+// operation (RequireAuthHuma). It REUSES the legacy session deletion by cookie
+// token-hash, the informational logout event, and the cookie-clear; the
+// Set-Cookie is written on the stashed writer and the 204 comes from
+// DefaultStatus.
+func (p *emailPasswordPlugin) registerLogout(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID:   "emailPasswordLogout",
+		Method:        http.MethodPost,
+		Path:          prefix + "/logout",
+		Summary:       "Delete the current session and clear the cookie",
+		Tags:          []string{"email-password"},
+		Security:      []map[string][]string{{"sessionCookie": {}}},
+		DefaultStatus: http.StatusNoContent,
+		Middlewares:   stashGuards(api, mw),
+	}, func(ctx context.Context, _ *struct{}) (*logoutOutput, error) {
+		r, err := reqFromCtx(ctx)
+		if err != nil {
+			return nil, err
+		}
+		w, err := respFromCtx(ctx)
+		if err != nil {
+			return nil, err
+		}
+
 		// RequireAuth has placed an AuthUser in ctx. We could read the
 		// session ID from there, but using the cookie is the simpler and
 		// equally correct path: hash and delete by token hash.
 		c, err := r.Cookie(host.CookieName())
 		if err == nil && c.Value != "" {
 			hash := auth.HashToken(c.Value)
-			_, _ = host.Repo().DeleteSession(r.Context(), hash)
+			_, _ = host.Repo().DeleteSession(ctx, hash)
 		}
 
 		// Informational logout event. AuthUser is in context (RequireAuth
 		// guarded this route); pull user/session ids from it when present.
 		var userID, sessionID *string
-		if au, ok := middleware.AuthUserFromContext(r.Context()); ok && au != nil {
+		if au, ok := middleware.AuthUserFromContext(ctx); ok && au != nil {
 			uid := au.User.ID
 			sid := au.Session.ID
 			userID = &uid
 			sessionID = &sid
 		}
-		_, _ = host.Emit(r.Context(), events.AuthEvent{
+		_, _ = host.Emit(ctx, events.AuthEvent{
 			Type:      events.EventLogout,
 			UserID:    userID,
 			SessionID: sessionID,
@@ -515,8 +617,8 @@ func (p *emailPasswordPlugin) handleLogout(host plugin.PluginHost) http.HandlerF
 		})
 
 		http.SetCookie(w, auth.ClearSessionCookie(cookieOptionsFromHost(host, r, -1)))
-		w.WriteHeader(http.StatusNoContent)
-	}
+		return &logoutOutput{}, nil
+	})
 }
 
 // --- /session -----------------------------------------------------------
@@ -564,15 +666,31 @@ func toSessionResponse(au *domain.AuthUser) sessionResponse {
 	return sessionResponse{User: toSessionUserBody(au)}
 }
 
-func (p *emailPasswordPlugin) handleSession(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := middleware.AuthUserFromContext(r.Context())
+// sessionOutput wraps sessionResponse; returns the default 200.
+type sessionOutput struct {
+	Body sessionResponse
+}
+
+// registerSession wires GET {prefix}/session as an authenticated huma-native
+// operation. RequireAuthHuma resolves the identity and injects it; the handler
+// reads it from ctx (no body, cookie, or IP, so no StashHTTPHuma is needed) and
+// projects the same sessionResponse the legacy handler produced.
+func (p *emailPasswordPlugin) registerSession(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "emailPasswordSession",
+		Method:      http.MethodGet,
+		Path:        prefix + "/session",
+		Summary:     "Return the current authenticated user",
+		Tags:        []string{"email-password"},
+		Security:    []map[string][]string{{"sessionCookie": {}}},
+		Middlewares: huma.Middlewares{middleware.RequireAuthHuma(api, mw)},
+	}, func(ctx context.Context, _ *struct{}) (*sessionOutput, error) {
+		au, ok := middleware.AuthUserFromContext(ctx)
 		if !ok || au == nil {
-			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "not authenticated")
-			return
+			return nil, huma.Error401Unauthorized("not authenticated")
 		}
-		writeJSON(w, http.StatusOK, toSessionResponse(au))
-	}
+		return &sessionOutput{Body: toSessionResponse(au)}, nil
+	})
 }
 
 // --- /change-password ---------------------------------------------------
@@ -586,59 +704,76 @@ type changePasswordResponse struct {
 	Message string `json:"message"`
 }
 
-func (p *emailPasswordPlugin) handleChangePassword(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := middleware.AuthUserFromContext(r.Context())
+// changePasswordOutput wraps changePasswordResponse; returns the default 200.
+type changePasswordOutput struct {
+	Body changePasswordResponse
+}
+
+// registerChangePassword wires POST {prefix}/change-password as an
+// authenticated huma-native operation (RequireAuthHuma). It REUSES the legacy
+// strict body decode, current-password verification, reuse / history / HIBP
+// checks, password rotation, full session revocation + re-issue for the caller,
+// and the password-changed event; the new session cookie is written on the
+// stashed writer.
+func (p *emailPasswordPlugin) registerChangePassword(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "emailPasswordChangePassword",
+		Method:      http.MethodPost,
+		Path:        prefix + "/change-password",
+		Summary:     "Rotate the current user's password",
+		Tags:        []string{"email-password"},
+		Security:    []map[string][]string{{"sessionCookie": {}}},
+		Middlewares: stashGuards(api, mw),
+	}, func(ctx context.Context, _ *struct{}) (*changePasswordOutput, error) {
+		r, err := reqFromCtx(ctx)
+		if err != nil {
+			return nil, err
+		}
+		w, err := respFromCtx(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		au, ok := middleware.AuthUserFromContext(ctx)
 		if !ok || au == nil {
-			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "not authenticated")
-			return
+			return nil, huma.Error401Unauthorized("not authenticated")
 		}
 
 		var req changePasswordRequest
 		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
-			return
+			return nil, huma.Error400BadRequest(err.Error())
 		}
 		if err := p.validatePasswordComplexity(req.NewPassword); err != nil {
-			writeError(w, http.StatusBadRequest, "WEAK_PASSWORD", err.Error())
-			return
+			return nil, huma.Error400BadRequest(err.Error())
 		}
 
-		ctx := r.Context()
 		repoRef := host.Repo()
 
 		pw, err := repoRef.GetPasswordByUserID(ctx, au.User.ID)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to load current password")
-			return
+			return nil, huma.Error500InternalServerError("unable to load current password")
 		}
 		ok2, err := auth.VerifyPassword(req.CurrentPassword, pw.PasswordHash)
 		if err != nil || !ok2 {
-			writeError(w, http.StatusUnauthorized, "INVALID_CREDENTIALS", "current password is incorrect")
-			return
+			return nil, huma.Error401Unauthorized("current password is incorrect")
 		}
 
 		// Reject reuse of the current password.
 		if same, _ := auth.VerifyPassword(req.NewPassword, pw.PasswordHash); same {
-			writeError(w, http.StatusBadRequest, "PASSWORD_REUSED",
-				"new password must differ from current password")
-			return
+			return nil, huma.Error400BadRequest("new password must differ from current password")
 		}
 
 		if err := p.checkHistory(ctx, repoRef, au.User.ID, req.NewPassword); err != nil {
-			writeError(w, http.StatusBadRequest, "PASSWORD_REUSED", err.Error())
-			return
+			return nil, huma.Error400BadRequest(err.Error())
 		}
 
 		if pwned, msg := p.checkHIBP(ctx, req.NewPassword); pwned {
-			writeError(w, http.StatusUnprocessableEntity, "PASSWORD_BREACHED", msg)
-			return
+			return nil, huma.Error422UnprocessableEntity(msg)
 		}
 
 		newHash, err := auth.HashPassword(req.NewPassword)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to hash password")
-			return
+			return nil, huma.Error500InternalServerError("unable to hash password")
 		}
 
 		// Append the previous hash to history before overwriting.
@@ -648,8 +783,7 @@ func (p *emailPasswordPlugin) handleChangePassword(host plugin.PluginHost) http.
 			UserID:       au.User.ID,
 			PasswordHash: newHash,
 		}); err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to store password")
-			return
+			return nil, huma.Error500InternalServerError("unable to store password")
 		}
 
 		// Invalidate every other session for this user, then re-issue a
@@ -657,13 +791,11 @@ func (p *emailPasswordPlugin) handleChangePassword(host plugin.PluginHost) http.
 		// the user logged in on the request that just rotated their
 		// password while logging them out everywhere else.
 		if _, err := repoRef.DeleteUserSessions(ctx, au.User.ID); err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to revoke sessions")
-			return
+			return nil, huma.Error500InternalServerError("unable to revoke sessions")
 		}
 		raw, _, err := auth.IssueSession(ctx, repoRef, au.User.ID, middleware.RequestIP(r), requestUA(r), host.SessionTTL())
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to re-issue session")
-			return
+			return nil, huma.Error500InternalServerError("unable to re-issue session")
 		}
 		http.SetCookie(w, auth.SessionCookie(
 			cookieOptionsFromHost(host, r, int(host.SessionTTL().Seconds())),
@@ -679,8 +811,8 @@ func (p *emailPasswordPlugin) handleChangePassword(host plugin.PluginHost) http.
 			IPAddress: middleware.RequestIP(r),
 		})
 
-		writeJSON(w, http.StatusOK, changePasswordResponse{Message: "Password changed."})
-	}
+		return &changePasswordOutput{Body: changePasswordResponse{Message: "Password changed."}}, nil
+	})
 }
 
 // --- PATCH /me ---------------------------------------------------------
@@ -689,18 +821,38 @@ type patchMeRequest struct {
 	DisplayName *string `json:"display_name,omitempty"`
 }
 
-func (p *emailPasswordPlugin) handlePatchMe(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := middleware.AuthUserFromContext(r.Context())
+// patchMeOutput wraps sessionResponse; returns the default 200.
+type patchMeOutput struct {
+	Body sessionResponse
+}
+
+// registerPatchMe wires PATCH {prefix}/me as an authenticated huma-native
+// operation (RequireAuthHuma). It REUSES the legacy strict body decode and the
+// display-name update (trim-to-nil clears it), and re-projects the updated user
+// through the same sessionResponse shape.
+func (p *emailPasswordPlugin) registerPatchMe(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "emailPasswordPatchMe",
+		Method:      http.MethodPatch,
+		Path:        prefix + "/me",
+		Summary:     "Update the current user's profile",
+		Tags:        []string{"email-password"},
+		Security:    []map[string][]string{{"sessionCookie": {}}},
+		Middlewares: stashGuards(api, mw),
+	}, func(ctx context.Context, _ *struct{}) (*patchMeOutput, error) {
+		r, err := reqFromCtx(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		au, ok := middleware.AuthUserFromContext(ctx)
 		if !ok || au == nil {
-			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "not authenticated")
-			return
+			return nil, huma.Error401Unauthorized("not authenticated")
 		}
 
 		var req patchMeRequest
 		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
-			return
+			return nil, huma.Error400BadRequest(err.Error())
 		}
 
 		changes := domain.UpdateUser{}
@@ -715,15 +867,14 @@ func (p *emailPasswordPlugin) handlePatchMe(host plugin.PluginHost) http.Handler
 		now := time.Now().UTC()
 		changes.UpdatedAt = &now
 
-		updated, err := host.Repo().UpdateUser(r.Context(), au.User.ID, changes)
+		updated, err := host.Repo().UpdateUser(ctx, au.User.ID, changes)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to update user")
-			return
+			return nil, huma.Error500InternalServerError("unable to update user")
 		}
 		newAu := *au
 		newAu.User = updated
-		writeJSON(w, http.StatusOK, toSessionResponse(&newAu))
-	}
+		return &patchMeOutput{Body: toSessionResponse(&newAu)}, nil
+	})
 }
 
 // --- helpers ------------------------------------------------------------
@@ -758,27 +909,45 @@ type verifyEmailResponse struct {
 	Message string `json:"message"`
 }
 
-func (p *emailPasswordPlugin) handleVerifyEmail(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+// verifyEmailOutput wraps verifyEmailResponse; returns the default 200.
+type verifyEmailOutput struct {
+	Body verifyEmailResponse
+}
+
+// registerVerifyEmail wires POST {prefix}/verify-email as a public,
+// rate-limited huma-native operation. It REUSES the legacy strict body decode,
+// token consumption, the email-verified flag update, the email-verified event,
+// and the JIT auto-join second chance; only the transport changes.
+func (p *emailPasswordPlugin) registerVerifyEmail(host plugin.PluginHost, api huma.API, prefix string, rl func(http.Handler) http.Handler) {
+	huma.Register(api, huma.Operation{
+		OperationID: "emailPasswordVerifyEmail",
+		Method:      http.MethodPost,
+		Path:        prefix + "/verify-email",
+		Summary:     "Consume an email-verification token",
+		Tags:        []string{"email-password"},
+		Security:    []map[string][]string{}, // explicitly public
+		Middlewares: rateLimitedGuards(rl, api),
+	}, func(ctx context.Context, _ *struct{}) (*verifyEmailOutput, error) {
+		r, err := reqFromCtx(ctx)
+		if err != nil {
+			return nil, err
+		}
+
 		var req verifyEmailRequest
 		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
-			return
+			return nil, huma.Error400BadRequest(err.Error())
 		}
 		raw := strings.TrimSpace(req.Token)
 		if raw == "" {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "token is required")
-			return
+			return nil, huma.Error400BadRequest("token is required")
 		}
 
-		ctx := r.Context()
 		repoRef := host.Repo()
 		hash := hashTokenSHA256(raw)
 
 		ev, err := repoRef.ConsumeEmailVerification(ctx, hash)
 		if err != nil || ev == nil {
-			writeError(w, http.StatusUnauthorized, "INVALID_TOKEN", "token is invalid, expired, or already used")
-			return
+			return nil, huma.Error401Unauthorized("token is invalid, expired, or already used")
 		}
 
 		now := time.Now().UTC()
@@ -787,8 +956,7 @@ func (p *emailPasswordPlugin) handleVerifyEmail(host plugin.PluginHost) http.Han
 			EmailVerified: &verified,
 			UpdatedAt:     &now,
 		}); err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to mark email verified")
-			return
+			return nil, huma.Error500InternalServerError("unable to mark email verified")
 		}
 
 		uid := ev.UserID
@@ -830,8 +998,8 @@ func (p *emailPasswordPlugin) handleVerifyEmail(host plugin.PluginHost) http.Han
 			}
 		}
 
-		writeJSON(w, http.StatusOK, verifyEmailResponse{Message: "Email verified."})
-	}
+		return &verifyEmailOutput{Body: verifyEmailResponse{Message: "Email verified."}}, nil
+	})
 }
 
 // --- /resend-verification -----------------------------------------------
@@ -846,38 +1014,57 @@ type resendVerificationResponse struct {
 
 const resendVerificationMessage = "If the email exists, a verification link has been sent."
 
-func (p *emailPasswordPlugin) handleResendVerification(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+// resendVerificationOutput wraps resendVerificationResponse; returns 200.
+type resendVerificationOutput struct {
+	Body resendVerificationResponse
+}
+
+// registerResendVerification wires POST {prefix}/resend-verification as a
+// public, rate-limited huma-native operation. It REUSES the legacy strict body
+// decode and the enumeration-safe semantics: every success path returns the
+// same generic 200 body whether or not the account exists or is already
+// verified; only a malformed body or invalid email yields a 4xx.
+func (p *emailPasswordPlugin) registerResendVerification(host plugin.PluginHost, api huma.API, prefix string, rl func(http.Handler) http.Handler) {
+	huma.Register(api, huma.Operation{
+		OperationID: "emailPasswordResendVerification",
+		Method:      http.MethodPost,
+		Path:        prefix + "/resend-verification",
+		Summary:     "Email a fresh verification link",
+		Tags:        []string{"email-password"},
+		Security:    []map[string][]string{}, // explicitly public
+		Middlewares: rateLimitedGuards(rl, api),
+	}, func(ctx context.Context, _ *struct{}) (*resendVerificationOutput, error) {
+		r, err := reqFromCtx(ctx)
+		if err != nil {
+			return nil, err
+		}
+
 		var req resendVerificationRequest
 		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
-			return
+			return nil, huma.Error400BadRequest(err.Error())
 		}
 		req.Email = strings.TrimSpace(strings.ToLower(req.Email))
 		if !validEmail(req.Email) {
-			writeError(w, http.StatusBadRequest, "INVALID_EMAIL", "email must contain '@'")
-			return
+			return nil, huma.Error400BadRequest("email must contain '@'")
 		}
 
-		ctx := r.Context()
 		repoRef := host.Repo()
+		ok := &resendVerificationOutput{Body: resendVerificationResponse{Message: resendVerificationMessage}}
 
 		// Always 200 to prevent enumeration. Quietly skip when the
 		// account is missing or already verified.
 		user, err := repoRef.GetUserByEmail(ctx, req.Email)
 		if err != nil || user == nil {
-			writeJSON(w, http.StatusOK, resendVerificationResponse{Message: resendVerificationMessage})
-			return
+			return ok, nil
 		}
 		if user.EmailVerified {
-			writeJSON(w, http.StatusOK, resendVerificationResponse{Message: resendVerificationMessage})
-			return
+			return ok, nil
 		}
 		if err := p.issueVerificationEmail(ctx, repoRef, user.ID, user.Email); err != nil {
 			log.Printf("yauth: issue verification email for %s: %v", user.Email, err)
 		}
-		writeJSON(w, http.StatusOK, resendVerificationResponse{Message: resendVerificationMessage})
-	}
+		return ok, nil
+	})
 }
 
 // --- /forgot-password ---------------------------------------------------
@@ -892,32 +1079,52 @@ type forgotPasswordResponse struct {
 
 const forgotPasswordMessage = "If the email exists, a password-reset link has been sent."
 
-func (p *emailPasswordPlugin) handleForgotPassword(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+// forgotPasswordOutput wraps forgotPasswordResponse; returns 200.
+type forgotPasswordOutput struct {
+	Body forgotPasswordResponse
+}
+
+// registerForgotPassword wires POST {prefix}/forgot-password as a public,
+// rate-limited huma-native operation. It REUSES the legacy strict body decode,
+// reset-token issuance, and mailer dispatch — and the enumeration-safe
+// semantics: every success path (unknown email, token-gen failure, persistence
+// failure, mail failure) returns the same generic 200 body; only a malformed
+// body or invalid email yields a 4xx.
+func (p *emailPasswordPlugin) registerForgotPassword(host plugin.PluginHost, api huma.API, prefix string, rl func(http.Handler) http.Handler) {
+	huma.Register(api, huma.Operation{
+		OperationID: "emailPasswordForgotPassword",
+		Method:      http.MethodPost,
+		Path:        prefix + "/forgot-password",
+		Summary:     "Email a password-reset link",
+		Tags:        []string{"email-password"},
+		Security:    []map[string][]string{}, // explicitly public
+		Middlewares: rateLimitedGuards(rl, api),
+	}, func(ctx context.Context, _ *struct{}) (*forgotPasswordOutput, error) {
+		r, err := reqFromCtx(ctx)
+		if err != nil {
+			return nil, err
+		}
+
 		var req forgotPasswordRequest
 		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
-			return
+			return nil, huma.Error400BadRequest(err.Error())
 		}
 		req.Email = strings.TrimSpace(strings.ToLower(req.Email))
 		if !validEmail(req.Email) {
-			writeError(w, http.StatusBadRequest, "INVALID_EMAIL", "email must contain '@'")
-			return
+			return nil, huma.Error400BadRequest("email must contain '@'")
 		}
 
-		ctx := r.Context()
 		repoRef := host.Repo()
+		ok := &forgotPasswordOutput{Body: forgotPasswordResponse{Message: forgotPasswordMessage}}
 
 		user, err := repoRef.GetUserByEmail(ctx, req.Email)
 		if err != nil || user == nil {
-			writeJSON(w, http.StatusOK, forgotPasswordResponse{Message: forgotPasswordMessage})
-			return
+			return ok, nil
 		}
 
 		raw, hash, err := generateRawToken()
 		if err != nil {
-			writeJSON(w, http.StatusOK, forgotPasswordResponse{Message: forgotPasswordMessage})
-			return
+			return ok, nil
 		}
 		now := time.Now().UTC()
 		if err := repoRef.CreatePasswordReset(ctx, domain.NewPasswordReset{
@@ -927,15 +1134,14 @@ func (p *emailPasswordPlugin) handleForgotPassword(host plugin.PluginHost) http.
 			ExpiresAt: now.Add(p.cfg.PasswordResetTokenTTL),
 			CreatedAt: now,
 		}); err != nil {
-			writeJSON(w, http.StatusOK, forgotPasswordResponse{Message: forgotPasswordMessage})
-			return
+			return ok, nil
 		}
 		link := buildLink(p.cfg.PasswordResetLinkBaseURL, raw)
 		if err := p.cfg.Mailer.SendPasswordReset(ctx, user.Email, link); err != nil {
 			log.Printf("yauth: SendPasswordReset for %s: %v", user.Email, err)
 		}
-		writeJSON(w, http.StatusOK, forgotPasswordResponse{Message: forgotPasswordMessage})
-	}
+		return ok, nil
+	})
 }
 
 // --- /reset-password ----------------------------------------------------
@@ -949,31 +1155,49 @@ type resetPasswordResponse struct {
 	Message string `json:"message"`
 }
 
-func (p *emailPasswordPlugin) handleResetPassword(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+// resetPasswordOutput wraps resetPasswordResponse; returns the default 200.
+type resetPasswordOutput struct {
+	Body resetPasswordResponse
+}
+
+// registerResetPassword wires POST {prefix}/reset-password as a public,
+// rate-limited huma-native operation. It REUSES the legacy strict body decode,
+// token consumption, reuse / history / HIBP checks, password rotation, full
+// session revocation (the caller is unauthenticated, so no session survives),
+// and the password-reset event; only the transport changes.
+func (p *emailPasswordPlugin) registerResetPassword(host plugin.PluginHost, api huma.API, prefix string, rl func(http.Handler) http.Handler) {
+	huma.Register(api, huma.Operation{
+		OperationID: "emailPasswordResetPassword",
+		Method:      http.MethodPost,
+		Path:        prefix + "/reset-password",
+		Summary:     "Consume a reset token and set a new password",
+		Tags:        []string{"email-password"},
+		Security:    []map[string][]string{}, // explicitly public
+		Middlewares: rateLimitedGuards(rl, api),
+	}, func(ctx context.Context, _ *struct{}) (*resetPasswordOutput, error) {
+		r, err := reqFromCtx(ctx)
+		if err != nil {
+			return nil, err
+		}
+
 		var req resetPasswordRequest
 		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
-			return
+			return nil, huma.Error400BadRequest(err.Error())
 		}
 		raw := strings.TrimSpace(req.Token)
 		if raw == "" {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "token is required")
-			return
+			return nil, huma.Error400BadRequest("token is required")
 		}
 		if err := p.validatePasswordComplexity(req.Password); err != nil {
-			writeError(w, http.StatusBadRequest, "WEAK_PASSWORD", err.Error())
-			return
+			return nil, huma.Error400BadRequest(err.Error())
 		}
 
-		ctx := r.Context()
 		repoRef := host.Repo()
 		hash := hashTokenSHA256(raw)
 
 		pr, err := repoRef.ConsumePasswordReset(ctx, hash)
 		if err != nil || pr == nil {
-			writeError(w, http.StatusUnauthorized, "INVALID_TOKEN", "token is invalid, expired, or already used")
-			return
+			return nil, huma.Error401Unauthorized("token is invalid, expired, or already used")
 		}
 
 		// Load current hash (if any) so we can compare and append to
@@ -985,24 +1209,19 @@ func (p *emailPasswordPlugin) handleResetPassword(host plugin.PluginHost) http.H
 		}
 		if currentHash != "" {
 			if same, _ := auth.VerifyPassword(req.Password, currentHash); same {
-				writeError(w, http.StatusBadRequest, "PASSWORD_REUSED",
-					"new password must differ from current password")
-				return
+				return nil, huma.Error400BadRequest("new password must differ from current password")
 			}
 		}
 		if err := p.checkHistory(ctx, repoRef, pr.UserID, req.Password); err != nil {
-			writeError(w, http.StatusBadRequest, "PASSWORD_REUSED", err.Error())
-			return
+			return nil, huma.Error400BadRequest(err.Error())
 		}
 		if pwned, msg := p.checkHIBP(ctx, req.Password); pwned {
-			writeError(w, http.StatusUnprocessableEntity, "PASSWORD_BREACHED", msg)
-			return
+			return nil, huma.Error422UnprocessableEntity(msg)
 		}
 
 		newHash, err := auth.HashPassword(req.Password)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to hash password")
-			return
+			return nil, huma.Error500InternalServerError("unable to hash password")
 		}
 		if currentHash != "" {
 			p.recordHistory(ctx, repoRef, pr.UserID, currentHash)
@@ -1011,8 +1230,7 @@ func (p *emailPasswordPlugin) handleResetPassword(host plugin.PluginHost) http.H
 			UserID:       pr.UserID,
 			PasswordHash: newHash,
 		}); err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to store password")
-			return
+			return nil, huma.Error500InternalServerError("unable to store password")
 		}
 
 		// Invalidate every session for this user — a /reset-password
@@ -1028,8 +1246,8 @@ func (p *emailPasswordPlugin) handleResetPassword(host plugin.PluginHost) http.H
 			IPAddress: middleware.RequestIP(r),
 		})
 
-		writeJSON(w, http.StatusOK, resetPasswordResponse{Message: "Password reset."})
-	}
+		return &resetPasswordOutput{Body: resetPasswordResponse{Message: "Password reset."}}, nil
+	})
 }
 
 // --- helpers (emailpassword) --------------------------------------------

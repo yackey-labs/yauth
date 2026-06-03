@@ -83,6 +83,40 @@ func HTTPResponseFromContext(ctx context.Context) http.ResponseWriter {
 	return nil
 }
 
+// RateLimitHuma adapts a net/http rate-limit middleware (as returned by
+// PluginHost.RateLimit / middleware.RateLimit) into a huma per-operation
+// middleware so migrated routes keep their EXACT fixed-window limiting,
+// X-RateLimit-* headers, and plain-text 429 (NOT problem+json) on block.
+//
+// It runs the limiter against a sentinel http.Handler that records whether it
+// was invoked. On allow the limiter sets the X-RateLimit-* headers on the raw
+// writer and runs the sentinel; we then call huma's next so the operation
+// handler produces its normal response. On block the limiter writes its own
+// 429 ("Too Many Requests", Retry-After, X-RateLimit-*) directly to the raw
+// writer and never runs the sentinel; we then do NOT call next, leaving that
+// byte-identical legacy 429 as the response. It takes no huma.API because it
+// never renders through huma's error path — that is precisely what preserves
+// the legacy 429 shape.
+//
+// A nil limiter (e.g. RateLimit returns next unchanged when disabled) is
+// handled by the limiter itself becoming a passthrough; callers always wrap
+// with the limiter their host.RateLimit produced.
+func RateLimitHuma(limiter func(http.Handler) http.Handler) func(huma.Context, func(huma.Context)) {
+	return func(ctx huma.Context, next func(huma.Context)) {
+		r, w := humago.Unwrap(ctx)
+		allowed := false
+		sentinel := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			allowed = true
+		})
+		limiter(sentinel).ServeHTTP(w, r)
+		if !allowed {
+			// Limiter blocked the request and already wrote the 429 to w.
+			return
+		}
+		next(ctx)
+	}
+}
+
 // RequireAdminHuma returns a huma per-operation middleware that requires a
 // valid admin identity (same rules as RequireAdmin: role=="admin", and —
 // unless AllowAdminMachineCallers — a cookie-resolved session). It writes 401

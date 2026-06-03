@@ -1,9 +1,10 @@
 package oidc
 
 import (
-	"encoding/json"
-	"net/http"
+	"context"
 	"strings"
+
+	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/yackey-labs/yauth-go/middleware"
 	"github.com/yackey-labs/yauth-go/plugin"
@@ -29,53 +30,61 @@ type discoveryDoc struct {
 	BackchannelLogoutSessionSupported bool     `json:"backchannel_logout_session_supported,omitempty"`
 }
 
-// handleDiscovery returns the OpenID Provider discovery document. The
+// discoveryInput has no fields — GET /.well-known/openid-configuration takes
+// no parameters or body.
+type discoveryInput struct{}
+
+// discoveryOutput wraps discoveryDoc so huma marshals exactly the same JSON
+// object the net/http handler did, and carries the Cache-Control header the
+// legacy handler set.
+type discoveryOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         discoveryDoc
+}
+
+// discovery builds the OpenID Provider discovery document. The
 // authorization/token endpoints are advertised only when the
 // oauth2-server plugin is loaded; otherwise they are omitted (relying
 // parties that do not need the auth/token flow can still consume the
 // JWKS + UserInfo endpoints).
-func (p *oidcPlugin) handleDiscovery(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
-		base := strings.TrimRight(p.cfg.Issuer, "/") + strings.TrimRight(p.cfg.BasePath, "/")
+func (p *oidcPlugin) discovery(host plugin.PluginHost) *discoveryOutput {
+	base := strings.TrimRight(p.cfg.Issuer, "/") + strings.TrimRight(p.cfg.BasePath, "/")
 
-		doc := discoveryDoc{
-			Issuer:                 p.cfg.Issuer,
-			UserInfoEndpoint:       base + "/userinfo",
-			JWKSURI:                base + "/.well-known/jwks.json",
-			ResponseTypesSupported: []string{"code"},
-			GrantTypesSupported:    []string{"authorization_code", "refresh_token"},
-			SubjectTypesSupported:  []string{"public"},
-			ScopesSupported:        []string{"openid", "email", "profile", "groups"},
-			ClaimsSupported:        p.cfg.claimsSupported(),
-		}
-
-		if signer := host.JWTSigner(); signer != nil {
-			doc.IDTokenSigningAlgValuesSupported = []string{signer.Algo()}
-		} else {
-			doc.IDTokenSigningAlgValuesSupported = []string{"HS256"}
-		}
-
-		if hasPlugin(host, "oauth2-server") {
-			doc.AuthorizationEndpoint = base + "/oauth/authorize"
-			doc.TokenEndpoint = base + "/oauth/token"
-			// Always advertise the registration endpoint when the oauth2
-			// server is loaded, matching Rust yauth's behavior. Clients
-			// that want DCR will attempt it; the endpoint itself enforces
-			// the DCREnabled gate.
-			doc.RegistrationEndpoint = base + "/oauth/register"
-			// OIDC RP-Initiated Logout 1.0.
-			doc.EndSessionEndpoint = base + "/oauth/end_session"
-			// OIDC Back-Channel Logout 1.0: the OP delivers logout_tokens to
-			// RPs' backchannel_logout_uri. We send sub-only logout_tokens
-			// (no sid), so session-based logout is not advertised.
-			doc.BackchannelLogoutSupported = true
-			doc.BackchannelLogoutSessionSupported = false
-		}
-
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		w.Header().Set("Cache-Control", "public, max-age=300")
-		_ = json.NewEncoder(w).Encode(doc)
+	doc := discoveryDoc{
+		Issuer:                 p.cfg.Issuer,
+		UserInfoEndpoint:       base + "/userinfo",
+		JWKSURI:                base + "/.well-known/jwks.json",
+		ResponseTypesSupported: []string{"code"},
+		GrantTypesSupported:    []string{"authorization_code", "refresh_token"},
+		SubjectTypesSupported:  []string{"public"},
+		ScopesSupported:        []string{"openid", "email", "profile", "groups"},
+		ClaimsSupported:        p.cfg.claimsSupported(),
 	}
+
+	if signer := host.JWTSigner(); signer != nil {
+		doc.IDTokenSigningAlgValuesSupported = []string{signer.Algo()}
+	} else {
+		doc.IDTokenSigningAlgValuesSupported = []string{"HS256"}
+	}
+
+	if hasPlugin(host, "oauth2-server") {
+		doc.AuthorizationEndpoint = base + "/oauth/authorize"
+		doc.TokenEndpoint = base + "/oauth/token"
+		// Always advertise the registration endpoint when the oauth2
+		// server is loaded, matching Rust yauth's behavior. Clients
+		// that want DCR will attempt it; the endpoint itself enforces
+		// the DCREnabled gate.
+		doc.RegistrationEndpoint = base + "/oauth/register"
+		// OIDC RP-Initiated Logout 1.0.
+		doc.EndSessionEndpoint = base + "/oauth/end_session"
+		// OIDC Back-Channel Logout 1.0: the OP delivers logout_tokens to
+		// RPs' backchannel_logout_uri. We send sub-only logout_tokens
+		// (no sid), so session-based logout is not advertised.
+		doc.BackchannelLogoutSupported = true
+		doc.BackchannelLogoutSessionSupported = false
+	}
+
+	return &discoveryOutput{CacheControl: "public, max-age=300", Body: doc}
 }
 
 // userInfoResponse is the body returned from the UserInfo endpoint
@@ -90,33 +99,40 @@ type userInfoResponse struct {
 	Groups        []string `json:"groups,omitempty"`
 }
 
-// handleUserInfo returns standard OIDC claims for the authenticated
-// caller. The middleware has already enforced authentication via
-// RequireAuth, so context is guaranteed to carry an AuthUser.
-func (p *oidcPlugin) handleUserInfo(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := middleware.AuthUserFromContext(r.Context())
-		if !ok || au == nil {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
-		}
-		resp := userInfoResponse{
-			Sub:           au.User.ID,
-			Email:         au.User.Email,
-			EmailVerified: au.User.EmailVerified,
-		}
-		if au.User.DisplayName != nil {
-			resp.Name = *au.User.DisplayName
-		}
-		// Group memberships so RPs can map them to local roles. UserInfo is
-		// auth-gated; we include groups whenever the user has any.
-		if groups, err := host.Repo().ListGroupNamesForUser(r.Context(), au.User.ID); err == nil && len(groups) > 0 {
-			resp.Groups = groups
-		}
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		w.Header().Set("Cache-Control", "no-store")
-		_ = json.NewEncoder(w).Encode(resp)
+// userInfoInput has no fields — GET /userinfo takes no parameters or body;
+// the identity comes from the auth middleware.
+type userInfoInput struct{}
+
+// userInfoOutput wraps userInfoResponse so huma marshals exactly the body the
+// legacy handler produced, and carries the no-store Cache-Control header.
+type userInfoOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         userInfoResponse
+}
+
+// userInfo returns standard OIDC claims for the authenticated caller.
+// RequireAuthHuma has already enforced authentication and injected the
+// AuthUser onto ctx, so it is guaranteed present; the defensive nil-check is
+// kept for parity with the legacy handler.
+func (p *oidcPlugin) userInfo(ctx context.Context, host plugin.PluginHost) (*userInfoOutput, error) {
+	au, ok := middleware.AuthUserFromContext(ctx)
+	if !ok || au == nil {
+		return nil, huma.Error401Unauthorized("Unauthorized")
 	}
+	resp := userInfoResponse{
+		Sub:           au.User.ID,
+		Email:         au.User.Email,
+		EmailVerified: au.User.EmailVerified,
+	}
+	if au.User.DisplayName != nil {
+		resp.Name = *au.User.DisplayName
+	}
+	// Group memberships so RPs can map them to local roles. UserInfo is
+	// auth-gated; we include groups whenever the user has any.
+	if groups, err := host.Repo().ListGroupNamesForUser(ctx, au.User.ID); err == nil && len(groups) > 0 {
+		resp.Groups = groups
+	}
+	return &userInfoOutput{CacheControl: "no-store", Body: resp}, nil
 }
 
 // hasPlugin reports whether the host has a plugin with the given name

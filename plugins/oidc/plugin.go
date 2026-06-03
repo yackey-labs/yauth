@@ -18,11 +18,13 @@
 package oidc
 
 import (
-	"github.com/danielgtaylor/huma/v2"
-
+	"context"
 	"net/http"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
+
+	"github.com/yackey-labs/yauth-go/middleware"
 	"github.com/yackey-labs/yauth-go/plugin"
 )
 
@@ -90,12 +92,51 @@ func New(cfg Config) plugin.Plugin {
 // Name implements plugin.Plugin.
 func (p *oidcPlugin) Name() string { return "oidc" }
 
-// Routes implements plugin.Plugin. It mounts:
+// Routes implements plugin.Plugin. Both routes are huma-native typed
+// operations registered on the shared huma.API:
 //
 //	GET {prefix}/.well-known/openid-configuration   public discovery doc.
-//	GET {prefix}/userinfo                           Bearer-protected.
+//	GET {prefix}/userinfo                           RequireAuth-gated UserInfo.
+//
+// The mux is retained in the signature for plugins that still register raw
+// net/http routes; oidc no longer uses it. Neither route needs StashHTTPHuma:
+// discovery ignores the request entirely, and userinfo recovers the resolved
+// AuthUser from the operation context (injected by RequireAuthHuma) — no raw
+// *http.Request/ResponseWriter access is required.
 func (p *oidcPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.API, prefix string) {
 	mw := host.Middleware()
-	mux.Handle("GET "+prefix+"/.well-known/openid-configuration", http.HandlerFunc(p.handleDiscovery(host)))
-	mux.Handle("GET "+prefix+"/userinfo", mw.RequireAuth(http.HandlerFunc(p.handleUserInfo(host))))
+
+	// Discovery is unauthenticated (Security: none), mirroring the public
+	// net/http route it replaces.
+	huma.Register(api, huma.Operation{
+		OperationID: "oidc-discovery",
+		Method:      http.MethodGet,
+		Path:        prefix + "/.well-known/openid-configuration",
+		Summary:     "OpenID Provider discovery document",
+		Description: "OIDC Discovery 1.0 §3 provider metadata. Unauthenticated.",
+		Tags:        []string{"oidc"},
+		Security:    []map[string][]string{}, // explicitly public
+	}, func(_ context.Context, _ *discoveryInput) (*discoveryOutput, error) {
+		return p.discovery(host), nil
+	})
+
+	// UserInfo is auth-gated: RequireAuthHuma resolves cookie-or-bearer
+	// identity (the same logic as the legacy mw.RequireAuth wrapper) and
+	// injects the AuthUser onto the operation context.
+	huma.Register(api, huma.Operation{
+		OperationID: "oidc-userinfo",
+		Method:      http.MethodGet,
+		Path:        prefix + "/userinfo",
+		Summary:     "OIDC UserInfo",
+		Description: "OIDC Core 1.0 §5.3 standard claims for the authenticated caller.",
+		Tags:        []string{"oidc"},
+		Security: []map[string][]string{
+			{"sessionCookie": {}},
+			{"bearer": {}},
+			{"apiKey": {}},
+		},
+		Middlewares: huma.Middlewares{middleware.RequireAuthHuma(api, mw)},
+	}, func(ctx context.Context, _ *userInfoInput) (*userInfoOutput, error) {
+		return p.userInfo(ctx, host)
+	})
 }

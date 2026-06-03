@@ -128,6 +128,9 @@ func TestDiscovery_Document(t *testing.T) {
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", res.StatusCode)
 	}
+	if cc := res.Header.Get("Cache-Control"); cc != "public, max-age=300" {
+		t.Fatalf("discovery Cache-Control mismatch: got %q want %q", cc, "public, max-age=300")
+	}
 
 	var doc map[string]any
 	if err := json.NewDecoder(res.Body).Decode(&doc); err != nil {
@@ -300,6 +303,9 @@ func TestUserInfo_AuthOK(t *testing.T) {
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", res.StatusCode)
+	}
+	if cc := res.Header.Get("Cache-Control"); cc != "no-store" {
+		t.Fatalf("userinfo Cache-Control mismatch: got %q want %q", cc, "no-store")
 	}
 
 	var body struct {

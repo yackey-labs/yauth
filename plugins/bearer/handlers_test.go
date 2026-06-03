@@ -379,12 +379,21 @@ func TestToken_OrgScoped_NotMember(t *testing.T) {
 		t.Fatalf("expected 403, got %d body=%s", resp.Code, resp.Body.String())
 	}
 
-	var eb errorBody
-	if err := json.Unmarshal(resp.Body.Bytes(), &eb); err != nil {
-		t.Fatalf("unmarshal error body: %v", err)
+	// Errors are now huma-native RFC 9457 problem+json ({type,title,status,
+	// detail}); the body carries the legacy message as "detail" and the 403
+	// status both in the field and the HTTP status line.
+	var pj struct {
+		Status int    `json:"status"`
+		Detail string `json:"detail"`
 	}
-	if eb.Error.Code != "FORBIDDEN" {
-		t.Fatalf("expected error code FORBIDDEN, got %q", eb.Error.Code)
+	if err := json.Unmarshal(resp.Body.Bytes(), &pj); err != nil {
+		t.Fatalf("unmarshal problem+json: %v", err)
+	}
+	if pj.Status != http.StatusForbidden {
+		t.Fatalf("expected problem+json status 403, got %d", pj.Status)
+	}
+	if pj.Detail != "user is not an active member of the requested org" {
+		t.Fatalf("unexpected detail: %q", pj.Detail)
 	}
 }
 

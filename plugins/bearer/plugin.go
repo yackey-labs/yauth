@@ -23,9 +23,9 @@ package bearer
 import (
 	"github.com/danielgtaylor/huma/v2"
 
-	"net/http"
 	"time"
 
+	"github.com/yackey-labs/yauth-go/middleware"
 	"github.com/yackey-labs/yauth-go/plugin"
 )
 
@@ -72,7 +72,17 @@ func New(cfg Config) plugin.Plugin {
 func (p *bearerPlugin) Name() string { return "bearer" }
 
 // Routes implements plugin.Plugin. It resolves the JWT secret, registers
-// a Bearer AuthResolver with the host, and wires the /token endpoints.
+// a Bearer AuthResolver with the host, and wires the /token endpoints as
+// huma-native typed operations on the shared huma.API.
+//
+// Every route uses StashHTTPHuma so the migrated handlers keep byte-identical
+// request parsing: the input structs carry NO huma Body field, so huma never
+// consumes the body and bearer's strict decodeJSON (DisallowUnknownFields,
+// 1 MiB cap, INVALID_REQUEST error semantics) stays authoritative. /token and
+// /token/refresh are public (Security: none); /token/revoke is gated by
+// RequireAuthHuma — the same identity logic as the legacy mw.RequireAuth
+// wrapper. The mux is retained in the signature for plugins that still register
+// raw net/http routes; bearer no longer uses it.
 //
 // Panics if no JWT secret is available (neither Config.JWTSecret nor
 // host.JWTSecret()) — bearer cannot operate without one.
@@ -87,7 +97,14 @@ func (p *bearerPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api hum
 	host.RegisterAuthResolver(newResolver(host, p.cfg))
 
 	mw := host.Middleware()
-	mux.Handle("POST "+prefix+"/token", http.HandlerFunc(p.handleToken(host)))
-	mux.Handle("POST "+prefix+"/token/refresh", http.HandlerFunc(p.handleRefresh(host)))
-	mux.Handle("POST "+prefix+"/token/revoke", mw.RequireAuth(http.HandlerFunc(p.handleRevoke(host))))
+	p.registerToken(host, api, prefix)
+	p.registerRefresh(host, api, prefix)
+	p.registerRevoke(host, api, mw, prefix)
+}
+
+// stashOnly is the per-operation middleware chain for the public token
+// endpoints: stash the raw request/writer so the migrated handlers reuse
+// bearer's strict net/http body decoder.
+func stashOnly(api huma.API) huma.Middlewares {
+	return huma.Middlewares{middleware.StashHTTPHuma(api)}
 }

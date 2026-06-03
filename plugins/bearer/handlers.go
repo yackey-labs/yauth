@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/google/uuid"
 
 	"github.com/yackey-labs/yauth-go/auth"
@@ -26,30 +27,36 @@ type tokenResponse struct {
 	ExpiresIn    int    `json:"expires_in"`
 }
 
-type errorBody struct {
-	Error errorPayload `json:"error"`
+// tokenOutput wraps tokenResponse so huma marshals exactly the body the legacy
+// handlers produced: access_token, refresh_token, token_type, expires_in.
+type tokenOutput struct {
+	Body tokenResponse
 }
 
-type errorPayload struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-}
+// emptyOutput carries no body and lets the operation drive a 204 via
+// DefaultStatus — matching the legacy handleRevoke's w.WriteHeader(204).
+type emptyOutput struct{}
 
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeError(w http.ResponseWriter, status int, code, message string) {
-	writeJSON(w, status, errorBody{Error: errorPayload{Code: code, Message: message}})
-}
-
+// decodeJSON parses r.Body into v, enforcing a 1 MiB body cap and rejecting
+// unknown fields. The huma input structs carry NO Body field, so huma never
+// consumes the request body and this strict decoder stays byte-identical to the
+// pre-migration net/http handlers (preserving the INVALID_REQUEST decode
+// semantics surfaced as huma 400s below).
 func decodeJSON(r *http.Request, v any) error {
 	r.Body = http.MaxBytesReader(nil, r.Body, 1<<20)
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	return dec.Decode(v)
+}
+
+// reqFromCtx returns the *http.Request stashed by StashHTTPHuma. On a bearer
+// route it is always present; the nil guard keeps the helper safe.
+func reqFromCtx(ctx context.Context) (*http.Request, error) {
+	r := middleware.HTTPRequestFromContext(ctx)
+	if r == nil {
+		return nil, huma.Error500InternalServerError("request unavailable")
+	}
+	return r, nil
 }
 
 // --- POST /token -------------------------------------------------------
@@ -70,51 +77,57 @@ type tokenRequest struct {
 	Org string `json:"org,omitempty"`
 }
 
-func (p *bearerPlugin) handleToken(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+// registerToken wires POST {prefix}/token as a huma-native operation. It is
+// public (Security: none) — the legacy route had no auth wrapper. StashHTTPHuma
+// threads the raw request so the strict decodeJSON body parse is preserved.
+func (p *bearerPlugin) registerToken(host plugin.PluginHost, api huma.API, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "bearer-issue-token",
+		Method:      http.MethodPost,
+		Path:        prefix + "/token",
+		Summary:     "Exchange email+password for an access+refresh token pair",
+		Tags:        []string{"bearer"},
+		Security:    []map[string][]string{}, // explicitly public
+		Middlewares: stashOnly(api),
+	}, func(ctx context.Context, _ *struct{}) (*tokenOutput, error) {
+		r, err := reqFromCtx(ctx)
+		if err != nil {
+			return nil, err
+		}
 		var req tokenRequest
 		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
-			return
+			return nil, huma.Error400BadRequest(err.Error())
 		}
 		req.Email = strings.TrimSpace(strings.ToLower(req.Email))
 		if req.Email == "" || req.Password == "" {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "email and password are required")
-			return
+			return nil, huma.Error400BadRequest("email and password are required")
 		}
 
-		ctx := r.Context()
 		repo := host.Repo()
 
 		user, err := repo.GetUserByEmail(ctx, req.Email)
 		if err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
 				_ = auth.DummyVerify(req.Password)
-				writeError(w, http.StatusUnauthorized, "INVALID_CREDENTIALS", "invalid email or password")
-				return
+				return nil, huma.Error401Unauthorized("invalid email or password")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to look up user")
-			return
+			return nil, huma.Error500InternalServerError("unable to look up user")
 		}
 		if user.Banned {
-			writeError(w, http.StatusForbidden, "USER_BANNED", "account suspended")
-			return
+			return nil, huma.Error403Forbidden("account suspended")
 		}
 
 		pw, err := repo.GetPasswordByUserID(ctx, user.ID)
 		if err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
 				_ = auth.DummyVerify(req.Password)
-				writeError(w, http.StatusUnauthorized, "INVALID_CREDENTIALS", "invalid email or password")
-				return
+				return nil, huma.Error401Unauthorized("invalid email or password")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to look up password")
-			return
+			return nil, huma.Error500InternalServerError("unable to look up password")
 		}
 		ok, err := auth.VerifyPassword(req.Password, pw.PasswordHash)
 		if err != nil || !ok {
-			writeError(w, http.StatusUnauthorized, "INVALID_CREDENTIALS", "invalid email or password")
-			return
+			return nil, huma.Error401Unauthorized("invalid email or password")
 		}
 
 		// yauth #44: when the caller requests a specific org, verify active
@@ -124,12 +137,10 @@ func (p *bearerPlugin) handleToken(host plugin.PluginHost) http.HandlerFunc {
 		if req.Org != "" {
 			m, err := repo.GetMembershipByOrgUser(ctx, req.Org, user.ID)
 			if err != nil {
-				writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to look up membership")
-				return
+				return nil, huma.Error500InternalServerError("unable to look up membership")
 			}
 			if m == nil || m.Status != domain.MembershipActive {
-				writeError(w, http.StatusForbidden, "FORBIDDEN", "user is not an active member of the requested org")
-				return
+				return nil, huma.Error403Forbidden("user is not an active member of the requested org")
 			}
 			// Populate Orgs with the full membership list so downstream
 			// middleware that depends on AllOrgs doesn't regress.
@@ -140,11 +151,10 @@ func (p *bearerPlugin) handleToken(host plugin.PluginHost) http.HandlerFunc {
 
 		resp, err := p.mintTokensWithClaims(ctx, host, user.ID, uuid.NewString(), active)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to mint tokens")
-			return
+			return nil, huma.Error500InternalServerError("unable to mint tokens")
 		}
-		writeJSON(w, http.StatusOK, resp)
-	}
+		return &tokenOutput{Body: resp}, nil
+	})
 }
 
 // --- POST /token/refresh ----------------------------------------------
@@ -153,30 +163,41 @@ type refreshRequest struct {
 	RefreshToken string `json:"refresh_token"`
 }
 
-func (p *bearerPlugin) handleRefresh(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+// registerRefresh wires POST {prefix}/token/refresh. Public (Security: none),
+// like the route it replaces. Rotation and reuse-detection side effects are
+// preserved exactly.
+func (p *bearerPlugin) registerRefresh(host plugin.PluginHost, api huma.API, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "bearer-refresh",
+		Method:      http.MethodPost,
+		Path:        prefix + "/token/refresh",
+		Summary:     "Rotate the refresh token; re-mint access+refresh",
+		Description: "Reuse of a previously rotated refresh token revokes the entire family.",
+		Tags:        []string{"bearer"},
+		Security:    []map[string][]string{}, // explicitly public
+		Middlewares: stashOnly(api),
+	}, func(ctx context.Context, _ *struct{}) (*tokenOutput, error) {
+		r, err := reqFromCtx(ctx)
+		if err != nil {
+			return nil, err
+		}
 		var req refreshRequest
 		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
-			return
+			return nil, huma.Error400BadRequest(err.Error())
 		}
 		if req.RefreshToken == "" {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "refresh_token is required")
-			return
+			return nil, huma.Error400BadRequest("refresh_token is required")
 		}
 
-		ctx := r.Context()
 		repo := host.Repo()
 
 		hash := auth.HashToken(req.RefreshToken)
 		stored, err := repo.GetRefreshTokenByHash(ctx, hash)
 		if err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				writeError(w, http.StatusUnauthorized, "INVALID_GRANT", "refresh token not recognised")
-				return
+				return nil, huma.Error401Unauthorized("refresh token not recognised")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to look up refresh token")
-			return
+			return nil, huma.Error500InternalServerError("unable to look up refresh token")
 		}
 
 		// Reuse detection: a previously revoked refresh token has been
@@ -184,41 +205,34 @@ func (p *bearerPlugin) handleRefresh(host plugin.PluginHost) http.HandlerFunc {
 		// standard rotation-attack mitigation.
 		if stored.Revoked {
 			_, _ = repo.RevokeRefreshTokenFamily(ctx, stored.FamilyID)
-			writeError(w, http.StatusUnauthorized, "REFRESH_REUSE", "refresh token reuse detected; family revoked")
-			return
+			return nil, huma.Error401Unauthorized("refresh token reuse detected; family revoked")
 		}
 		if !stored.ExpiresAt.After(time.Now().UTC()) {
-			writeError(w, http.StatusUnauthorized, "TOKEN_EXPIRED", "refresh token expired")
-			return
+			return nil, huma.Error401Unauthorized("refresh token expired")
 		}
 
 		user, err := repo.GetUserByID(ctx, stored.UserID)
 		if err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				writeError(w, http.StatusUnauthorized, "INVALID_GRANT", "user no longer exists")
-				return
+				return nil, huma.Error401Unauthorized("user no longer exists")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to look up user")
-			return
+			return nil, huma.Error500InternalServerError("unable to look up user")
 		}
 		if user.Banned {
-			writeError(w, http.StatusForbidden, "USER_BANNED", "account suspended")
-			return
+			return nil, huma.Error403Forbidden("account suspended")
 		}
 
 		// Rotation: revoke the presented token, mint a fresh pair under
 		// the same family.
 		if err := repo.RevokeRefreshToken(ctx, stored.ID); err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to rotate refresh token")
-			return
+			return nil, huma.Error500InternalServerError("unable to rotate refresh token")
 		}
 		resp, err := p.mintTokens(ctx, host, user.ID, stored.FamilyID)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to mint tokens")
-			return
+			return nil, huma.Error500InternalServerError("unable to mint tokens")
 		}
-		writeJSON(w, http.StatusOK, resp)
-	}
+		return &tokenOutput{Body: resp}, nil
+	})
 }
 
 // --- POST /token/revoke ----------------------------------------------
@@ -227,47 +241,64 @@ type revokeRequest struct {
 	RefreshToken string `json:"refresh_token"`
 }
 
-func (p *bearerPlugin) handleRevoke(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := middleware.AuthUserFromContext(r.Context())
+// registerRevoke wires POST {prefix}/token/revoke. RequireAuthHuma applies the
+// SAME identity gate as the legacy mw.RequireAuth wrapper; the resolved
+// AuthUser is recovered from the operation context via AuthUserFromContext.
+// Returns 204 on success (RFC 7009: revocation of an unknown token is
+// idempotent and also 204).
+func (p *bearerPlugin) registerRevoke(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "bearer-revoke",
+		Method:      http.MethodPost,
+		Path:        prefix + "/token/revoke",
+		Summary:     "Revoke a refresh-token family",
+		Tags:        []string{"bearer"},
+		Security: []map[string][]string{
+			{"sessionCookie": {}},
+			{"bearer": {}},
+			{"apiKey": {}},
+		},
+		DefaultStatus: http.StatusNoContent,
+		Middlewares: huma.Middlewares{
+			middleware.StashHTTPHuma(api),
+			middleware.RequireAuthHuma(api, mw),
+		},
+	}, func(ctx context.Context, _ *struct{}) (*emptyOutput, error) {
+		au, ok := middleware.AuthUserFromContext(ctx)
 		if !ok || au == nil {
-			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "not authenticated")
-			return
+			return nil, huma.Error401Unauthorized("not authenticated")
+		}
+		r, err := reqFromCtx(ctx)
+		if err != nil {
+			return nil, err
 		}
 		var req revokeRequest
 		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
-			return
+			return nil, huma.Error400BadRequest(err.Error())
 		}
 		if req.RefreshToken == "" {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "refresh_token is required")
-			return
+			return nil, huma.Error400BadRequest("refresh_token is required")
 		}
 
-		ctx := r.Context()
 		repo := host.Repo()
 
 		stored, err := repo.GetRefreshTokenByHash(ctx, auth.HashToken(req.RefreshToken))
 		if err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
 				// RFC 7009: revocation is idempotent — unknown tokens
-				// return 200.
-				w.WriteHeader(http.StatusNoContent)
-				return
+				// return 204.
+				return &emptyOutput{}, nil
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to look up refresh token")
-			return
+			return nil, huma.Error500InternalServerError("unable to look up refresh token")
 		}
 		if stored.UserID != au.User.ID {
-			writeError(w, http.StatusForbidden, "FORBIDDEN", "refresh token does not belong to caller")
-			return
+			return nil, huma.Error403Forbidden("refresh token does not belong to caller")
 		}
 		if _, err := repo.RevokeRefreshTokenFamily(ctx, stored.FamilyID); err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to revoke refresh token")
-			return
+			return nil, huma.Error500InternalServerError("unable to revoke refresh token")
 		}
-		w.WriteHeader(http.StatusNoContent)
-	}
+		return &emptyOutput{}, nil
+	})
 }
 
 // --- shared minting ---------------------------------------------------

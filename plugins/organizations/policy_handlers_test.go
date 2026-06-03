@@ -2,6 +2,8 @@
 package organizations
 
 import (
+	"github.com/yackey-labs/yauth-go/humaapi"
+
 	"bytes"
 	"context"
 	"encoding/json"
@@ -24,7 +26,7 @@ func newPolicyTestServer(t *testing.T, user domain.User) (*httptest.Server, repo
 	host.mw.AddResolver(&stubResolver{user: &domain.AuthUser{User: user}})
 	mux := http.NewServeMux()
 	p := New(Config{}).(*orgsPlugin)
-	p.Routes(host, mux, "")
+	p.Routes(host, mux, humaapi.New(mux), "")
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv, r

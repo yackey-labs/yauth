@@ -1,6 +1,8 @@
 package apikey
 
 import (
+	"github.com/yackey-labs/yauth-go/humaapi"
+
 	"bytes"
 	"encoding/json"
 	"net/http"
@@ -36,7 +38,7 @@ func newServer(t *testing.T, cfg Config, user domain.User, repo *fakeRepo) (*htt
 
 	mux := http.NewServeMux()
 	p := New(cfg).(*apiKeyPlugin)
-	p.Routes(host, mux, "")
+	p.Routes(host, mux, humaapi.New(mux), "")
 
 	return httptest.NewServer(mux), host
 }

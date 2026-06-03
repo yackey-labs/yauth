@@ -1,6 +1,8 @@
 package auditexport
 
 import (
+	"github.com/danielgtaylor/huma/v2"
+
 	"context"
 	"net/http"
 	"sync"
@@ -108,7 +110,7 @@ func (p *plugin) Name() string { return "audit-export" }
 // spawns one worker per active destination, and hooks an events.Handler
 // that fans every AuthEvent through EnqueueForAudit so the outbox
 // stays in sync with audit-log writes.
-func (p *plugin) Routes(host pluginpkg.PluginHost, mux *http.ServeMux, prefix string) {
+func (p *plugin) Routes(host pluginpkg.PluginHost, mux *http.ServeMux, api huma.API, prefix string) {
 	p.host = host
 	p.auditRepo = host.Repo()
 	mw := host.Middleware()

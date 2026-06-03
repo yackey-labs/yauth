@@ -1,6 +1,8 @@
 package ssooidc
 
 import (
+	"github.com/yackey-labs/yauth-go/humaapi"
+
 	"context"
 	"net/http"
 	"net/http/httptest"
@@ -89,7 +91,7 @@ func bclTestEnv(t *testing.T) (*httptest.Server, *memrepo.Repo, *fakeIDP, *domai
 
 	mux := http.NewServeMux()
 	host := newFakeHost(r, "")
-	p.Routes(host, mux, "")
+	p.Routes(host, mux, humaapi.New(mux), "")
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	host.base = srv.URL

@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
+
 	"github.com/yackey-labs/yauth-go/events"
 	"github.com/yackey-labs/yauth-go/middleware"
 	"github.com/yackey-labs/yauth-go/repo"
@@ -125,9 +127,14 @@ type JWTSigner interface {
 // every handler it owns onto mux using prefix as the path root (typically
 // the empty string when the YAuth router is later mounted under a parent
 // prefix via http.StripPrefix).
+//
+// api is the huma.API used by huma-native (typed) operations. Plugins
+// migrated to huma serving call huma.Register(api, ...); plugins still on
+// net/http ignore it and register onto mux as before. Both register against
+// the same underlying mux, so the two styles coexist during the migration.
 type Plugin interface {
 	Name() string
-	Routes(host PluginHost, mux *http.ServeMux, prefix string)
+	Routes(host PluginHost, mux *http.ServeMux, api huma.API, prefix string)
 }
 
 // ShutdownAware is an optional interface plugins implement when they own

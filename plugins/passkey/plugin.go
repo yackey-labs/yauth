@@ -17,6 +17,8 @@
 package passkey
 
 import (
+	"github.com/danielgtaylor/huma/v2"
+
 	"fmt"
 	"net/http"
 
@@ -73,7 +75,7 @@ func New(cfg Config) (plugin.Plugin, error) {
 func (p *passkeyPlugin) Name() string { return "passkey" }
 
 // Routes implements plugin.Plugin.
-func (p *passkeyPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux, prefix string) {
+func (p *passkeyPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux, api huma.API, prefix string) {
 	mw := host.Middleware()
 
 	mux.Handle("POST "+prefix+"/passkeys/register/begin", mw.RequireAuth(http.HandlerFunc(p.handleRegisterBegin(host))))

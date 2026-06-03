@@ -42,6 +42,8 @@
 package organizations
 
 import (
+	"github.com/danielgtaylor/huma/v2"
+
 	"net/http"
 	"time"
 
@@ -126,7 +128,7 @@ func New(cfg Config) plugin.Plugin {
 func (p *orgsPlugin) Name() string { return "organizations" }
 
 // Routes implements plugin.Plugin.
-func (p *orgsPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux, prefix string) {
+func (p *orgsPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux, api huma.API, prefix string) {
 	mw := host.Middleware()
 
 	mux.Handle("GET "+prefix+"/organizations", mw.RequireAuth(http.HandlerFunc(p.handleList(host))))

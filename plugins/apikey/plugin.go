@@ -23,6 +23,8 @@
 package apikey
 
 import (
+	"github.com/danielgtaylor/huma/v2"
+
 	"net/http"
 
 	"github.com/yackey-labs/yauth-go/plugin"
@@ -69,7 +71,7 @@ func (p *apiKeyPlugin) Name() string { return "api-key" }
 // the host so subsequent middleware-wrapped routes (in this plugin and
 // elsewhere) can authenticate via header, and mounts the management
 // endpoints under prefix/api-keys.
-func (p *apiKeyPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux, prefix string) {
+func (p *apiKeyPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux, api huma.API, prefix string) {
 	mw := host.Middleware()
 
 	host.RegisterAuthResolver(newResolver(host, p.cfg.Prefix))

@@ -23,6 +23,8 @@
 package asymjwt
 
 import (
+	"github.com/danielgtaylor/huma/v2"
+
 	"fmt"
 	"net/http"
 
@@ -102,7 +104,7 @@ func (p *asymjwtPlugin) Name() string { return "asymmetric-jwt" }
 // Routes implements plugin.Plugin. It registers the loaded signer with
 // the host (via SetJWTSigner if the host supports it) and mounts the
 // JWKS endpoint.
-func (p *asymjwtPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux, prefix string) {
+func (p *asymjwtPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux, api huma.API, prefix string) {
 	if setter, ok := host.(interface{ SetJWTSigner(plugin.JWTSigner) }); ok {
 		setter.SetJWTSigner(p.signer)
 	}

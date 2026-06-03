@@ -1,6 +1,8 @@
 package bearer
 
 import (
+	"github.com/yackey-labs/yauth-go/humaapi"
+
 	"bytes"
 	"context"
 	"encoding/json"
@@ -235,7 +237,7 @@ func newHarness(t *testing.T) (*harness, *fakeRepo, domain.User) {
 	host := newFakeHost(fr, cfg.JWTSecret)
 	p := New(cfg).(*bearerPlugin)
 	mux := http.NewServeMux()
-	p.Routes(host, mux, "")
+	p.Routes(host, mux, humaapi.New(mux), "")
 
 	return &harness{cfg: p.cfg, host: host, plugin: p, mux: mux}, fr, user
 }
@@ -302,7 +304,8 @@ func TestRoutes_PanicsWithoutSecret(t *testing.T) {
 	fr := newFakeRepo()
 	host := newFakeHost(fr, nil)
 	p := New(Config{}).(*bearerPlugin)
-	p.Routes(host, http.NewServeMux(), "")
+	mux := http.NewServeMux()
+	p.Routes(host, mux, humaapi.New(mux), "")
 }
 
 // --- POST /token with optional org field (yauth #44) -------------------

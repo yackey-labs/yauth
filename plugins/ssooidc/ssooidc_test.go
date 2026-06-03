@@ -13,6 +13,8 @@
 package ssooidc
 
 import (
+	"github.com/yackey-labs/yauth-go/humaapi"
+
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -385,7 +387,7 @@ func TestAdminCRUD_Create_List_Get_Update_Delete(t *testing.T) {
 	mux := http.NewServeMux()
 	host := newFakeHost(r, "")
 	host.mw.AddResolver(&stubResolver{user: &domain.AuthUser{User: admin}})
-	p.Routes(host, mux, "")
+	p.Routes(host, mux, humaapi.New(mux), "")
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	host.base = srv.URL
@@ -468,7 +470,7 @@ func TestAdminCRUD_NonAdmin_Forbidden(t *testing.T) {
 	// "other" has no membership in org.
 	host := newFakeHost(r, "")
 	host.mw.AddResolver(&stubResolver{user: &domain.AuthUser{User: other}})
-	p.Routes(host, mux, "")
+	p.Routes(host, mux, humaapi.New(mux), "")
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	host.base = srv.URL
@@ -491,7 +493,7 @@ func TestSsoLogin_HappyPath_JIT(t *testing.T) {
 	mux := http.NewServeMux()
 	host := newFakeHost(r, "")
 	host.mw.AddResolver(&stubResolver{user: &domain.AuthUser{User: admin}})
-	p.Routes(host, mux, "")
+	p.Routes(host, mux, humaapi.New(mux), "")
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	host.base = srv.URL
@@ -689,7 +691,7 @@ func TestPentest_JITDisabled_BlocksUnknownUser(t *testing.T) {
 	mux := http.NewServeMux()
 	host := newFakeHost(r, "")
 	host.mw.AddResolver(&stubResolver{user: &domain.AuthUser{User: admin}})
-	p.Routes(host, mux, "")
+	p.Routes(host, mux, humaapi.New(mux), "")
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	host.base = srv.URL
@@ -769,7 +771,7 @@ func setupForLogin(t *testing.T) (*ssoOIDCPlugin, *httptest.Server, repo.Reposit
 	mux := http.NewServeMux()
 	host := newFakeHost(r, "")
 	host.mw.AddResolver(&stubResolver{user: &domain.AuthUser{User: admin}})
-	p.Routes(host, mux, "")
+	p.Routes(host, mux, humaapi.New(mux), "")
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	host.base = srv.URL
@@ -825,4 +827,3 @@ func callback(t *testing.T, srv *httptest.Server, state string) *http.Response {
 	}
 	return resp
 }
-

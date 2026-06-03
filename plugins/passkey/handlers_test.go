@@ -1,6 +1,8 @@
 package passkey
 
 import (
+	"github.com/yackey-labs/yauth-go/humaapi"
+
 	"bytes"
 	"context"
 	"encoding/json"
@@ -282,7 +284,7 @@ func newHarness(t *testing.T) (*harness, *fakeRepo, domain.User) {
 	}
 	host := newFakeHost(fr)
 	mux := http.NewServeMux()
-	p.Routes(host, mux, "")
+	p.Routes(host, mux, humaapi.New(mux), "")
 
 	return &harness{host: host, mux: mux}, fr, user
 }

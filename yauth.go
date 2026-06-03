@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/yackey-labs/yauth-go/events"
+	"github.com/yackey-labs/yauth-go/humaapi"
 	"github.com/yackey-labs/yauth-go/middleware"
 	"github.com/yackey-labs/yauth-go/plugin"
 	"github.com/yackey-labs/yauth-go/repo"
@@ -140,6 +141,14 @@ func (b *YAuthBuilder) Build() (*YAuth, error) {
 	})
 	mux := http.NewServeMux()
 
+	// huma.API for huma-native (typed) operations. Plugins migrated to huma
+	// serving register via huma.Register(api, ...); un-migrated plugins keep
+	// using mux directly. Both target the same mux. Constructing the api also
+	// installs humaerr.Override as huma's global error constructor so built-in
+	// huma errors share the {"error":{code,message}} envelope. The published
+	// OpenAPI spec is still produced by the openapi/ package this phase.
+	api := humaapi.New(mux)
+
 	// The HTTP server-span middleware defaults to on when telemetry is
 	// enabled, but consumers running their own HTTP instrumentation can
 	// opt out via WithTraceMiddleware(false) to avoid double-tracing.
@@ -158,7 +167,7 @@ func (b *YAuthBuilder) Build() (*YAuth, error) {
 	}
 
 	for _, p := range b.plugins {
-		p.Routes(ya, mux, "")
+		p.Routes(ya, mux, api, "")
 	}
 
 	return ya, nil

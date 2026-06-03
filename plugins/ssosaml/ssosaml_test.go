@@ -22,6 +22,8 @@
 package ssosaml
 
 import (
+	"github.com/yackey-labs/yauth-go/humaapi"
+
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
@@ -523,7 +525,7 @@ func newE2E(t *testing.T) *e2eFixture {
 	p := newPlugin(t)
 	host := newFakeHost(r, "")
 	mux := http.NewServeMux()
-	p.Routes(host, mux, "")
+	p.Routes(host, mux, humaapi.New(mux), "")
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	host.base = srv.URL
@@ -1120,7 +1122,7 @@ func TestAdminCRUD_CreateListGetDelete(t *testing.T) {
 	mux := http.NewServeMux()
 	host := newFakeHost(r, "")
 	host.mw.AddResolver(&stubResolver{user: &domain.AuthUser{User: admin}})
-	p.Routes(host, mux, "")
+	p.Routes(host, mux, humaapi.New(mux), "")
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	host.base = srv.URL
@@ -1216,7 +1218,7 @@ func TestAdminCRUD_RejectsNonAdmin(t *testing.T) {
 	mux := http.NewServeMux()
 	host := newFakeHost(r, "")
 	host.mw.AddResolver(&stubResolver{user: &domain.AuthUser{User: nonAdmin}})
-	p.Routes(host, mux, "")
+	p.Routes(host, mux, humaapi.New(mux), "")
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	resp := doJSON(t, http.MethodGet, srv.URL+"/organizations/"+org.ID+"/sso/saml/connections", nil)

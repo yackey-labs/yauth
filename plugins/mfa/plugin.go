@@ -22,6 +22,8 @@
 package mfa
 
 import (
+	"github.com/danielgtaylor/huma/v2"
+
 	"errors"
 	"net/http"
 
@@ -58,7 +60,7 @@ type mfaPlugin struct {
 
 func (p *mfaPlugin) Name() string { return "mfa" }
 
-func (p *mfaPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux, prefix string) {
+func (p *mfaPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux, api huma.API, prefix string) {
 	mw := host.Middleware()
 
 	host.RegisterEventHandler(&loginEventHandler{

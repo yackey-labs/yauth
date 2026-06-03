@@ -21,6 +21,8 @@
 package bearer
 
 import (
+	"github.com/danielgtaylor/huma/v2"
+
 	"net/http"
 	"time"
 
@@ -74,7 +76,7 @@ func (p *bearerPlugin) Name() string { return "bearer" }
 //
 // Panics if no JWT secret is available (neither Config.JWTSecret nor
 // host.JWTSecret()) — bearer cannot operate without one.
-func (p *bearerPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux, prefix string) {
+func (p *bearerPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux, api huma.API, prefix string) {
 	if len(p.cfg.JWTSecret) == 0 {
 		p.cfg.JWTSecret = host.JWTSecret()
 	}

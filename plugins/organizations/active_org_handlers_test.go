@@ -1,6 +1,8 @@
 package organizations
 
 import (
+	"github.com/yackey-labs/yauth-go/humaapi"
+
 	"context"
 	"io"
 	"net/http"
@@ -64,7 +66,7 @@ func newTestServerSessionBound(t *testing.T, user domain.User) (*httptest.Server
 
 	mux := http.NewServeMux()
 	p := New(Config{}).(*orgsPlugin)
-	p.Routes(host, mux, "")
+	p.Routes(host, mux, humaapi.New(mux), "")
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv, r, sessionID

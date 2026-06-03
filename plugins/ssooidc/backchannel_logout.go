@@ -1,11 +1,13 @@
 package ssooidc
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/golang-jwt/jwt/v5"
 
 	"github.com/yackey-labs/yauth-go/domain"
@@ -55,48 +57,59 @@ func (p *ssoOIDCPlugin) jtiCache() *bclJTICache {
 	return p.bclJTIRef
 }
 
-// handleBackchannelLogout is the OIDC Back-Channel Logout 1.0 RP endpoint. The
-// OP POSTs a signed logout_token (form-encoded) here when a user is logged out
-// / offboarded at the IdP; we verify it and terminate the matching local
+// registerBackchannelLogout wires POST {prefix}/sso/backchannel-logout as a
+// public huma-native operation. The OIDC Back-Channel Logout 1.0 OP POSTs a
+// signed logout_token (form-encoded) here when a user is logged out /
+// offboarded at the IdP; we verify it and terminate the matching local
 // sessions, making IdP-side suspension propagate to this relying party.
 //
 // The request is unsolicited and org-less, so we match it to one of our SSO
 // connections by (issuer, audience=client_id), verify the signature against
 // that connection's published JWKS, then map the token's `sub` back to the
 // local user via the stored external identity and revoke their sessions.
-func (p *ssoOIDCPlugin) handleBackchannelLogout(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		// BCL §2.8: the response is plain and must not be cached.
-		w.Header().Set("Cache-Control", "no-store")
+//
+// Per BCL §2.8 the contract is plain text, NOT problem+json: errors are 400
+// text/plain and success is a bodyless 200, both with Cache-Control: no-store.
+// We therefore express the response via flowOutput (raw body + headers) and
+// never return huma.Error* (which would emit problem+json) nor raw-write the
+// status (which would double-write under huma).
+func (p *ssoOIDCPlugin) registerBackchannelLogout(host plugin.PluginHost, api huma.API, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "ssooidc-backchannel-logout",
+		Method:      http.MethodPost,
+		Path:        prefix + "/sso/backchannel-logout",
+		Summary:     "OIDC Back-Channel Logout 1.0 receiver",
+		Tags:        []string{"oauth"},
+		Security:    []map[string][]string{}, // explicitly public
+		Middlewares: flowGuards(api),
+	}, func(ctx context.Context, _ *struct{}) (*flowOutput, error) {
+		r, _, err := flowReqResp(ctx)
+		if err != nil {
+			return nil, err
+		}
 
 		if err := r.ParseForm(); err != nil {
-			writeBCLError(w, "could not parse request")
-			return
+			return bclError("could not parse request"), nil
 		}
 		raw := r.PostFormValue("logout_token")
 		if raw == "" {
-			writeBCLError(w, "missing logout_token")
-			return
+			return bclError("missing logout_token"), nil
 		}
 
 		// Unverified peek to learn the issuer + audience so we can pick a
 		// connection (and thus the JWKS) to verify against.
 		unv := jwt.MapClaims{}
 		if _, _, err := jwt.NewParser(jwt.WithoutClaimsValidation()).ParseUnverified(raw, unv); err != nil {
-			writeBCLError(w, "malformed logout_token")
-			return
+			return bclError("malformed logout_token"), nil
 		}
 		iss, _ := unv["iss"].(string)
 		if iss == "" {
-			writeBCLError(w, "logout_token missing iss")
-			return
+			return bclError("logout_token missing iss"), nil
 		}
 
-		ctx := r.Context()
 		conns, err := host.Repo().ListAllSsoConnections(ctx)
 		if err != nil {
-			writeBCLError(w, "internal error")
-			return
+			return bclError("internal error"), nil
 		}
 		var matched *OidcConnectionConfig
 		var issuerKey string
@@ -117,52 +130,43 @@ func (p *ssoOIDCPlugin) handleBackchannelLogout(host plugin.PluginHost) http.Han
 			}
 		}
 		if matched == nil {
-			writeBCLError(w, "no connection matches logout_token issuer/audience")
-			return
+			return bclError("no connection matches logout_token issuer/audience"), nil
 		}
 
 		disco, err := fetchDiscovery(ctx, p.httpClient(), matched.DiscoveryURL)
 		if err != nil {
-			writeBCLError(w, "discovery failed")
-			return
+			return bclError("discovery failed"), nil
 		}
 		claims, err := p.jwksCache().verifyLogoutToken(ctx, disco.JWKSURL, raw, disco.Issuer, matched.ClientID)
 		if err != nil {
-			writeBCLError(w, err.Error())
-			return
+			return bclError(err.Error()), nil
 		}
 
 		// BCL §2.4 structural validation.
 		if _, present := claims["nonce"]; present {
-			writeBCLError(w, "logout_token must not contain nonce")
-			return
+			return bclError("logout_token must not contain nonce"), nil
 		}
 		evs, ok := claims["events"].(map[string]any)
 		if !ok {
-			writeBCLError(w, "logout_token missing events claim")
-			return
+			return bclError("logout_token missing events claim"), nil
 		}
 		if _, ok := evs[backchannelLogoutEvent]; !ok {
-			writeBCLError(w, "logout_token events missing backchannel-logout")
-			return
+			return bclError("logout_token events missing backchannel-logout"), nil
 		}
 		jti, _ := claims["jti"].(string)
 		if jti == "" {
-			writeBCLError(w, "logout_token missing jti")
-			return
+			return bclError("logout_token missing jti"), nil
 		}
 		sub, _ := claims["sub"].(string)
 		if sub == "" {
 			// We support sub-based logout (kill all the user's sessions). A
 			// sid-only token can't be mapped without per-session sid tracking.
-			writeBCLError(w, "logout_token missing sub")
-			return
+			return bclError("logout_token missing sub"), nil
 		}
 
 		// Replay protection: a re-sent jti is a no-op success (idempotent).
 		if p.jtiCache().Seen(jti, time.Now().UTC()) {
-			w.WriteHeader(http.StatusOK)
-			return
+			return bclOK(), nil
 		}
 
 		// Map the IdP sub to the local user and revoke their sessions.
@@ -173,14 +177,27 @@ func (p *ssoOIDCPlugin) handleBackchannelLogout(host plugin.PluginHost) http.Han
 		}
 		// Always 200 on a valid token even if we had no local session — the OP
 		// only needs to know the token was accepted.
-		w.WriteHeader(http.StatusOK)
+		return bclOK(), nil
+	})
+}
+
+// bclCacheControl is the BCL §2.8 mandated response header.
+const bclCacheControl = "no-store"
+
+// bclError emits the BCL §2.8 error response: HTTP 400, text/plain, no-store.
+// Mirrors the legacy http.Error semantics (message + trailing newline).
+func bclError(msg string) *flowOutput {
+	return &flowOutput{
+		Status:       http.StatusBadRequest,
+		ContentType:  "text/plain; charset=utf-8",
+		CacheControl: bclCacheControl,
+		Body:         []byte(msg + "\n"),
 	}
 }
 
-// writeBCLError emits the BCL §2.8 error response: HTTP 400 with a short body.
-func writeBCLError(w http.ResponseWriter, msg string) {
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	http.Error(w, msg, http.StatusBadRequest)
+// bclOK emits the BCL §2.8 success response: bodyless 200, no-store.
+func bclOK() *flowOutput {
+	return &flowOutput{Status: http.StatusOK, CacheControl: bclCacheControl}
 }
 
 // normalizeIssuer trims a trailing slash so issuer comparisons are robust to the

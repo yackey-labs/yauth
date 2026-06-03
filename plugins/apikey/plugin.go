@@ -25,8 +25,6 @@ package apikey
 import (
 	"github.com/danielgtaylor/huma/v2"
 
-	"net/http"
-
 	"github.com/yackey-labs/yauth-go/plugin"
 )
 
@@ -70,13 +68,33 @@ func (p *apiKeyPlugin) Name() string { return "api-key" }
 // Routes implements plugin.Plugin. It registers the X-Api-Key resolver on
 // the host so subsequent middleware-wrapped routes (in this plugin and
 // elsewhere) can authenticate via header, and mounts the management
-// endpoints under prefix/api-keys.
+// endpoints under prefix/api-keys as huma-native operations.
+//
+// Every management route is huma-native: a typed operation guarded by
+// RequireAuthHuma (the same cookie-or-bearer-or-apiKey identity logic as the
+// legacy mw.RequireAuth wrapper). GET and POST additionally pair with
+// StashHTTPHuma so the ported handlers keep byte-identical request parsing —
+// the lenient ?page=/?per_page= query precedence on GET and the strict
+// DisallowUnknownFields body decode on POST. The mux is retained in the
+// signature for plugins that still register raw net/http routes; apikey no
+// longer uses it.
 func (p *apiKeyPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.API, prefix string) {
 	mw := host.Middleware()
 
 	host.RegisterAuthResolver(newResolver(host, p.cfg.Prefix))
 
-	mux.Handle("GET "+prefix+"/api-keys", mw.RequireAuth(http.HandlerFunc(p.handleList(host))))
-	mux.Handle("POST "+prefix+"/api-keys", mw.RequireAuth(http.HandlerFunc(p.handleCreate(host))))
-	mux.Handle("DELETE "+prefix+"/api-keys/{id}", mw.RequireAuth(http.HandlerFunc(p.handleDelete(host))))
+	p.registerList(host, api, mw, prefix)
+	p.registerCreate(host, api, mw, prefix)
+	p.registerDelete(host, api, mw, prefix)
+}
+
+// apiKeySecurity is the security requirement shared by every management
+// route: RequireAuth accepts a session cookie, a bearer token, or an API key,
+// so the operation advertises all three (mirroring oidc userinfo).
+func apiKeySecurity() []map[string][]string {
+	return []map[string][]string{
+		{"sessionCookie": {}},
+		{"bearer": {}},
+		{"apiKey": {}},
+	}
 }

@@ -57,7 +57,7 @@ func Build() *huma.OpenAPI {
 			{Name: "oidc", Description: "OpenID Connect discovery + UserInfo."},
 			{Name: "oauth2-server", Description: "RFC 6749 / 7636 / 7009 / 7662 / 8628 authorization server."},
 			{Name: "organizations", Description: "Multi-tenancy primitive — org CRUD, membership, invitations, and RBAC."},
-		{Name: "audit-export", Description: "Audit log SIEM/syslog export destinations and replay."},
+			{Name: "audit-export", Description: "Audit log SIEM/syslog export destinations and replay."},
 		},
 	}
 
@@ -145,6 +145,8 @@ func declareSchemas(r huma.Registry) {
 		reflect.TypeOf(adminListUsersResponse{}),
 		reflect.TypeOf(adminPatchUserRequest{}),
 		reflect.TypeOf(adminBanRequest{}),
+		reflect.TypeOf(adminSuspendRequest{}),
+		reflect.TypeOf(adminScheduleStartRequest{}),
 		reflect.TypeOf(adminImpersonateResponse{}),
 		reflect.TypeOf(adminDeleteSessionsResponse{}),
 		reflect.TypeOf(adminAuditEntryJSON{}),
@@ -219,6 +221,9 @@ func declareSchemas(r huma.Registry) {
 		reflect.TypeOf(changeRoleRequest{}),
 		reflect.TypeOf(transferOwnershipRequest{}),
 		reflect.TypeOf(listPermissionsResponseJSON{}),
+		reflect.TypeOf(organizationListResponse{}),
+		reflect.TypeOf(membershipListResponse{}),
+		reflect.TypeOf(domainListResponse{}),
 
 		// yauth #89 — active-org switcher
 		reflect.TypeOf(setActiveOrgRequest{}),

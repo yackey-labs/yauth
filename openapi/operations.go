@@ -428,6 +428,46 @@ func addAdmin(api *huma.OpenAPI) {
 		},
 	})
 	api.AddOperation(&huma.Operation{
+		Method: http.MethodPost, Path: "/admin/users/{id}/suspend",
+		Tags: []string{"admin"}, OperationID: "adminSuspendUser",
+		Summary:     "Globally suspend (offboard) a user; revokes sessions + tokens",
+		Description: "Sets suspended_at, terminating all access immediately. Distinct from ban (security incidents).",
+		Security:    secCookie(),
+		Parameters:  []*huma.Param{idParam},
+		RequestBody: jsonRequestBody(adminSuspendRequest{}, "Optional operator-facing reason"),
+		Responses: map[string]*huma.Response{
+			"200": jsonResponse("Suspended user.", adminUserJSON{}),
+			"403": errorResponse("Caller is not admin."),
+			"404": errorResponse("User not found."),
+		},
+	})
+	api.AddOperation(&huma.Operation{
+		Method: http.MethodPost, Path: "/admin/users/{id}/unsuspend",
+		Tags: []string{"admin"}, OperationID: "adminUnsuspendUser",
+		Summary:    "Lift a global suspension",
+		Security:   secCookie(),
+		Parameters: []*huma.Param{idParam},
+		Responses: map[string]*huma.Response{
+			"200": jsonResponse("Reinstated user.", adminUserJSON{}),
+			"403": errorResponse("Caller is not admin."),
+			"404": errorResponse("User not found."),
+		},
+	})
+	api.AddOperation(&huma.Operation{
+		Method: http.MethodPost, Path: "/admin/users/{id}/schedule-start",
+		Tags: []string{"admin"}, OperationID: "adminScheduleStart",
+		Summary:     "Schedule a staged start (staged onboarding)",
+		Description: "Sets activates_at; while in the future the user is \"staged\" and cannot authenticate. Null/absent clears it (active now).",
+		Security:    secCookie(),
+		Parameters:  []*huma.Param{idParam},
+		RequestBody: jsonRequestBody(adminScheduleStartRequest{}, "Scheduled start (RFC 3339), or null to clear"),
+		Responses: map[string]*huma.Response{
+			"200": jsonResponse("Updated user.", adminUserJSON{}),
+			"403": errorResponse("Caller is not admin."),
+			"404": errorResponse("User not found."),
+		},
+	})
+	api.AddOperation(&huma.Operation{
 		Method: http.MethodPost, Path: "/admin/users/{id}/impersonate",
 		Tags: []string{"admin"}, OperationID: "adminImpersonate",
 		Summary:    "Issue a session cookie for the target user",

@@ -36,15 +36,7 @@ func addDomains(api *huma.OpenAPI) {
 		Security:   secAny(),
 		Parameters: []*huma.Param{orgIDParam},
 		Responses: map[string]*huma.Response{
-			"200": {
-				Description: "Domain claims for this org.",
-				Content: map[string]*huma.MediaType{
-					"application/json": {Schema: &huma.Schema{
-						Type:  "array",
-						Items: schemaRef(domainResponse{}),
-					}},
-				},
-			},
+			"200": jsonResponse("Domain claims for this org.", domainListResponse{}),
 			"401": errorResponse("Not authenticated."),
 			"403": errorResponse("Caller is not a member of this organization."),
 			"404": errorResponse("Organization not found."),

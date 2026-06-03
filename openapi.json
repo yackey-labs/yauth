@@ -233,6 +233,16 @@
         },
         "type": "object"
       },
+      "AdminScheduleStartRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "activates_at": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "AdminSessionJSON": {
         "additionalProperties": false,
         "properties": {
@@ -265,9 +275,22 @@
         ],
         "type": "object"
       },
+      "AdminSuspendRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "AdminUserJSON": {
         "additionalProperties": false,
         "properties": {
+          "activates_at": {
+            "format": "date-time",
+            "type": "string"
+          },
           "banned": {
             "type": "boolean"
           },
@@ -297,6 +320,16 @@
           "role": {
             "type": "string"
           },
+          "suspended": {
+            "type": "boolean"
+          },
+          "suspended_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "suspended_reason": {
+            "type": "string"
+          },
           "updated_at": {
             "format": "date-time",
             "type": "string"
@@ -308,6 +341,7 @@
           "email_verified",
           "role",
           "banned",
+          "suspended",
           "created_at",
           "updated_at"
         ],
@@ -706,6 +740,24 @@
         "required": [
           "kind",
           "name"
+        ],
+        "type": "object"
+      },
+      "DomainListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "domains": {
+            "items": {
+              "$ref": "#/components/schemas/DomainResponse"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "domains"
         ],
         "type": "object"
       },
@@ -1325,6 +1377,24 @@
         ],
         "type": "object"
       },
+      "MembershipListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "members": {
+            "items": {
+              "$ref": "#/components/schemas/MembershipJSON"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "members"
+        ],
+        "type": "object"
+      },
       "MfaBackupCodesCountResponse": {
         "additionalProperties": false,
         "properties": {
@@ -1471,6 +1541,12 @@
       "Oauth2ClientJSON": {
         "additionalProperties": false,
         "properties": {
+          "backchannel_logout_session_required": {
+            "type": "boolean"
+          },
+          "backchannel_logout_uri": {
+            "type": "string"
+          },
           "banned": {
             "type": "boolean"
           },
@@ -1508,6 +1584,15 @@
           "name": {
             "type": "string"
           },
+          "post_logout_redirect_uris": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "redirect_uris": {
             "items": {
               "type": "string"
@@ -1539,6 +1624,8 @@
           "is_public",
           "has_public_key",
           "banned",
+          "post_logout_redirect_uris",
+          "backchannel_logout_session_required",
           "created_at"
         ],
         "type": "object"
@@ -1769,11 +1856,23 @@
       "Oauth2PatchClientRequest": {
         "additionalProperties": false,
         "properties": {
+          "backchannel_logout_session_required": {
+            "type": "boolean"
+          },
+          "backchannel_logout_uri": {
+            "type": "string"
+          },
           "banned": {
             "type": "boolean"
           },
           "banned_reason": {
             "type": "string"
+          },
+          "post_logout_redirect_uris": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           },
           "public_key_pem": {
             "type": "string"
@@ -2175,6 +2274,24 @@
           "slug",
           "created_at",
           "updated_at"
+        ],
+        "type": "object"
+      },
+      "OrganizationListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "organizations": {
+            "items": {
+              "$ref": "#/components/schemas/OrganizationJSON"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "organizations"
         ],
         "type": "object"
       },
@@ -3930,6 +4047,75 @@
         ]
       }
     },
+    "/admin/users/{id}/schedule-start": {
+      "post": {
+        "description": "Sets activates_at; while in the future the user is \"staged\" and cannot authenticate. Null/absent clears it (active now).",
+        "operationId": "adminScheduleStart",
+        "parameters": [
+          {
+            "description": "User id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminScheduleStartRequest"
+              }
+            }
+          },
+          "description": "Scheduled start (RFC 3339), or null to clear",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUserJSON"
+                }
+              }
+            },
+            "description": "Updated user."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Caller is not admin."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "User not found."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Schedule a staged start (staged onboarding)",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/admin/users/{id}/sessions": {
       "delete": {
         "operationId": "adminDeleteUserSessions",
@@ -3972,6 +4158,75 @@
           }
         ],
         "summary": "Revoke every session for a user",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/users/{id}/suspend": {
+      "post": {
+        "description": "Sets suspended_at, terminating all access immediately. Distinct from ban (security incidents).",
+        "operationId": "adminSuspendUser",
+        "parameters": [
+          {
+            "description": "User id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminSuspendRequest"
+              }
+            }
+          },
+          "description": "Optional operator-facing reason",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUserJSON"
+                }
+              }
+            },
+            "description": "Suspended user."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Caller is not admin."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "User not found."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Globally suspend (offboard) a user; revokes sessions + tokens",
         "tags": [
           "admin"
         ]
@@ -4078,6 +4333,63 @@
         "summary": "Force-unlock a user (admin)",
         "tags": [
           "lockout"
+        ]
+      }
+    },
+    "/admin/users/{id}/unsuspend": {
+      "post": {
+        "operationId": "adminUnsuspendUser",
+        "parameters": [
+          {
+            "description": "User id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUserJSON"
+                }
+              }
+            },
+            "description": "Reinstated user."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Caller is not admin."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "User not found."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Lift a global suspension",
+        "tags": [
+          "admin"
         ]
       }
     },
@@ -7623,10 +7935,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/OrganizationJSON"
-                  },
-                  "type": "array"
+                  "$ref": "#/components/schemas/OrganizationListResponse"
                 }
               }
             },
@@ -7989,10 +8298,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/DomainResponse"
-                  },
-                  "type": "array"
+                  "$ref": "#/components/schemas/DomainListResponse"
                 }
               }
             },
@@ -8529,10 +8835,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/MembershipJSON"
-                  },
-                  "type": "array"
+                  "$ref": "#/components/schemas/MembershipListResponse"
                 }
               }
             },

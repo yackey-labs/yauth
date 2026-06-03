@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/google/uuid"
 	"github.com/pquerna/otp/totp"
 	"github.com/skip2/go-qrcode"
@@ -27,28 +28,57 @@ import (
 	"github.com/yackey-labs/yauth-go/yautherr"
 )
 
+// mfaInput is the shared zero-field input for MFA operations. Request bodies
+// are decoded manually from the *http.Request stashed by StashHTTPHuma (strict
+// DisallowUnknownFields decode → byte-identical INVALID_REQUEST errors), so the
+// huma input struct carries no Body field and huma never consumes the body.
+type mfaInput struct{}
+
+// mfaEmptyOutput carries no body. The setup and verify handlers write their
+// success response directly onto the stashed http.ResponseWriter — their bodies
+// contain HTML-escapable characters (the otpauth_url's '&'; a user's
+// display_name/email), so the legacy default-escaping json.Encoder output is NOT
+// byte-identical to huma's escape-disabled Body marshaler — then return this
+// empty output so huma adds no body of its own.
+type mfaEmptyOutput struct{}
+
+// messageOutput / countOutput / regenerateOutput are huma Body outputs for the
+// three routes whose responses contain no '&'/'<'/'>' and therefore marshal
+// byte-identically through huma (which disables HTML escaping). Returning a Body
+// keeps huma's response model (status + body) consistent with the wire.
+type messageOutput struct {
+	Body mfaMessageResponse
+}
+
+type countOutput struct {
+	Body backupCodesCountResponse
+}
+
+type regenerateOutput struct {
+	Body regenerateResponse
+}
+
+// reqRespFromCtx recovers the *http.Request and http.ResponseWriter stashed by
+// StashHTTPHuma. It is used by setup and verify, the two routes wired with
+// StashHTTPHuma; both are always present there and the guard keeps it safe.
+func reqRespFromCtx(ctx context.Context) (*http.Request, http.ResponseWriter, error) {
+	r := middleware.HTTPRequestFromContext(ctx)
+	w := middleware.HTTPResponseFromContext(ctx)
+	if r == nil || w == nil {
+		return nil, nil, huma.Error500InternalServerError("request unavailable")
+	}
+	return r, w, nil
+}
+
 const (
 	backupCodeCount = 10
 	backupCodeBytes = 8 // 16 hex chars
 )
 
-type errorBody struct {
-	Error errorPayload `json:"error"`
-}
-
-type errorPayload struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-}
-
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeError(w http.ResponseWriter, status int, code, message string) {
-	writeJSON(w, status, errorBody{Error: errorPayload{Code: code, Message: message}})
 }
 
 func decodeJSON(r *http.Request, v any) error {
@@ -125,26 +155,26 @@ func renderQRDataURL(otpauthURL string) string {
 	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
 }
 
-func (p *mfaPlugin) handleSetup(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := middleware.AuthUserFromContext(r.Context())
+func (p *mfaPlugin) handleSetup(host plugin.PluginHost) func(context.Context, *mfaInput) (*mfaEmptyOutput, error) {
+	return func(ctx context.Context, _ *mfaInput) (*mfaEmptyOutput, error) {
+		au, ok := middleware.AuthUserFromContext(ctx)
 		if !ok || au == nil {
-			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "not authenticated")
-			return
+			return nil, huma.Error401Unauthorized("not authenticated")
 		}
-		ctx := r.Context()
+		_, w, err := reqRespFromCtx(ctx)
+		if err != nil {
+			return nil, err
+		}
 		repoRef := host.Repo()
 
 		// If the user already has a TOTP record, wipe it (and any
 		// backup codes) before issuing a new one. Setup is the
 		// "start over" entry-point.
 		if _, err := repoRef.DeleteTOTPForUser(ctx, au.User.ID, nil); err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to reset prior totp")
-			return
+			return nil, huma.Error500InternalServerError("unable to reset prior totp")
 		}
 		if _, err := repoRef.DeleteAllBackupCodesForUser(ctx, au.User.ID); err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to reset prior backup codes")
-			return
+			return nil, huma.Error500InternalServerError("unable to reset prior backup codes")
 		}
 
 		key, err := totp.Generate(totp.GenerateOpts{
@@ -152,14 +182,12 @@ func (p *mfaPlugin) handleSetup(host plugin.PluginHost) http.HandlerFunc {
 			AccountName: au.User.Email,
 		})
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to generate totp")
-			return
+			return nil, huma.Error500InternalServerError("unable to generate totp")
 		}
 		secret := key.Secret()
 		enc, err := encryptSecret(p.cfg.EncryptionKey, secret)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to encrypt totp secret")
-			return
+			return nil, huma.Error500InternalServerError("unable to encrypt totp secret")
 		}
 
 		now := time.Now().UTC()
@@ -170,14 +198,12 @@ func (p *mfaPlugin) handleSetup(host plugin.PluginHost) http.HandlerFunc {
 			Verified:        false,
 			CreatedAt:       now,
 		}); err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to persist totp")
-			return
+			return nil, huma.Error500InternalServerError("unable to persist totp")
 		}
 
 		plain, hashes, err := generateBackupCodes(backupCodeCount)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to generate backup codes")
-			return
+			return nil, huma.Error500InternalServerError("unable to generate backup codes")
 		}
 		for _, h := range hashes {
 			if err := repoRef.CreateBackupCode(ctx, domain.NewBackupCode{
@@ -187,8 +213,7 @@ func (p *mfaPlugin) handleSetup(host plugin.PluginHost) http.HandlerFunc {
 				Used:      false,
 				CreatedAt: now,
 			}); err != nil {
-				writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to persist backup codes")
-				return
+				return nil, huma.Error500InternalServerError("unable to persist backup codes")
 			}
 		}
 
@@ -198,6 +223,7 @@ func (p *mfaPlugin) handleSetup(host plugin.PluginHost) http.HandlerFunc {
 			QRCode:      renderQRDataURL(key.URL()),
 			BackupCodes: plain,
 		})
+		return &mfaEmptyOutput{}, nil
 	}
 }
 
@@ -211,71 +237,66 @@ type mfaMessageResponse struct {
 	Message string `json:"message"`
 }
 
-func (p *mfaPlugin) handleConfirm(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := middleware.AuthUserFromContext(r.Context())
+func (p *mfaPlugin) handleConfirm(host plugin.PluginHost) func(context.Context, *mfaInput) (*messageOutput, error) {
+	return func(ctx context.Context, _ *mfaInput) (*messageOutput, error) {
+		au, ok := middleware.AuthUserFromContext(ctx)
 		if !ok || au == nil {
-			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "not authenticated")
-			return
+			return nil, huma.Error401Unauthorized("not authenticated")
+		}
+		// StashHTTPHuma stashed the request so we can run the strict decoder
+		// (DisallowUnknownFields) that keeps a malformed body a 400 — a huma
+		// Body input would surface 422 instead.
+		r := middleware.HTTPRequestFromContext(ctx)
+		if r == nil {
+			return nil, huma.Error500InternalServerError("request unavailable")
 		}
 		var req confirmRequest
 		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
-			return
+			return nil, huma.Error400BadRequest(err.Error())
 		}
 		req.Code = strings.TrimSpace(req.Code)
 
-		ctx := r.Context()
 		repoRef := host.Repo()
 
 		unverified := false
 		row, err := repoRef.GetTOTPByUserID(ctx, au.User.ID, &unverified)
 		if err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				writeError(w, http.StatusBadRequest, "NO_PENDING_TOTP", "no unverified totp setup exists for this user")
-				return
+				return nil, huma.Error400BadRequest("no unverified totp setup exists for this user")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to load totp")
-			return
+			return nil, huma.Error500InternalServerError("unable to load totp")
 		}
 
 		secret, err := decryptSecret(p.cfg.EncryptionKey, row.EncryptedSecret)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to decrypt totp secret")
-			return
+			return nil, huma.Error500InternalServerError("unable to decrypt totp secret")
 		}
 		if !totp.Validate(req.Code, secret) {
-			writeError(w, http.StatusUnauthorized, "INVALID_MFA", "invalid mfa code")
-			return
+			return nil, huma.Error401Unauthorized("invalid mfa code")
 		}
 		if err := repoRef.MarkTOTPVerified(ctx, row.ID); err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to mark totp verified")
-			return
+			return nil, huma.Error500InternalServerError("unable to mark totp verified")
 		}
-		writeJSON(w, http.StatusOK, mfaMessageResponse{Message: "TOTP activated."})
+		return &messageOutput{Body: mfaMessageResponse{Message: "TOTP activated."}}, nil
 	}
 }
 
 // --- DELETE /totp --------------------------------------------------------
 
-func (p *mfaPlugin) handleDelete(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := middleware.AuthUserFromContext(r.Context())
+func (p *mfaPlugin) handleDelete(host plugin.PluginHost) func(context.Context, *mfaInput) (*messageOutput, error) {
+	return func(ctx context.Context, _ *mfaInput) (*messageOutput, error) {
+		au, ok := middleware.AuthUserFromContext(ctx)
 		if !ok || au == nil {
-			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "not authenticated")
-			return
+			return nil, huma.Error401Unauthorized("not authenticated")
 		}
-		ctx := r.Context()
 		repoRef := host.Repo()
 		if _, err := repoRef.DeleteTOTPForUser(ctx, au.User.ID, nil); err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to delete totp")
-			return
+			return nil, huma.Error500InternalServerError("unable to delete totp")
 		}
 		if _, err := repoRef.DeleteAllBackupCodesForUser(ctx, au.User.ID); err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to delete backup codes")
-			return
+			return nil, huma.Error500InternalServerError("unable to delete backup codes")
 		}
-		writeJSON(w, http.StatusOK, mfaMessageResponse{Message: "TOTP removed."})
+		return &messageOutput{Body: mfaMessageResponse{Message: "TOTP removed."}}, nil
 	}
 }
 
@@ -285,19 +306,17 @@ type backupCodesCountResponse struct {
 	Remaining int `json:"remaining"`
 }
 
-func (p *mfaPlugin) handleBackupCodesCount(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := middleware.AuthUserFromContext(r.Context())
+func (p *mfaPlugin) handleBackupCodesCount(host plugin.PluginHost) func(context.Context, *mfaInput) (*countOutput, error) {
+	return func(ctx context.Context, _ *mfaInput) (*countOutput, error) {
+		au, ok := middleware.AuthUserFromContext(ctx)
 		if !ok || au == nil {
-			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "not authenticated")
-			return
+			return nil, huma.Error401Unauthorized("not authenticated")
 		}
-		codes, err := host.Repo().GetUnusedBackupCodesByUserID(r.Context(), au.User.ID)
+		codes, err := host.Repo().GetUnusedBackupCodesByUserID(ctx, au.User.ID)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to list backup codes")
-			return
+			return nil, huma.Error500InternalServerError("unable to list backup codes")
 		}
-		writeJSON(w, http.StatusOK, backupCodesCountResponse{Remaining: len(codes)})
+		return &countOutput{Body: backupCodesCountResponse{Remaining: len(codes)}}, nil
 	}
 }
 
@@ -307,24 +326,20 @@ type regenerateResponse struct {
 	BackupCodes []string `json:"backup_codes"`
 }
 
-func (p *mfaPlugin) handleRegenerateBackupCodes(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := middleware.AuthUserFromContext(r.Context())
+func (p *mfaPlugin) handleRegenerateBackupCodes(host plugin.PluginHost) func(context.Context, *mfaInput) (*regenerateOutput, error) {
+	return func(ctx context.Context, _ *mfaInput) (*regenerateOutput, error) {
+		au, ok := middleware.AuthUserFromContext(ctx)
 		if !ok || au == nil {
-			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "not authenticated")
-			return
+			return nil, huma.Error401Unauthorized("not authenticated")
 		}
-		ctx := r.Context()
 		repoRef := host.Repo()
 
 		if _, err := repoRef.DeleteAllBackupCodesForUser(ctx, au.User.ID); err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to clear backup codes")
-			return
+			return nil, huma.Error500InternalServerError("unable to clear backup codes")
 		}
 		plain, hashes, err := generateBackupCodes(backupCodeCount)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to generate backup codes")
-			return
+			return nil, huma.Error500InternalServerError("unable to generate backup codes")
 		}
 		now := time.Now().UTC()
 		for _, h := range hashes {
@@ -335,11 +350,10 @@ func (p *mfaPlugin) handleRegenerateBackupCodes(host plugin.PluginHost) http.Han
 				Used:      false,
 				CreatedAt: now,
 			}); err != nil {
-				writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to persist backup codes")
-				return
+				return nil, huma.Error500InternalServerError("unable to persist backup codes")
 			}
 		}
-		writeJSON(w, http.StatusOK, regenerateResponse{BackupCodes: plain})
+		return &regenerateOutput{Body: regenerateResponse{BackupCodes: plain}}, nil
 	}
 }
 
@@ -363,52 +377,47 @@ type verifyUser struct {
 	Role          string  `json:"role"`
 }
 
-func (p *mfaPlugin) handleVerify(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+func (p *mfaPlugin) handleVerify(host plugin.PluginHost) func(context.Context, *mfaInput) (*mfaEmptyOutput, error) {
+	return func(ctx context.Context, _ *mfaInput) (*mfaEmptyOutput, error) {
+		r, w, err := reqRespFromCtx(ctx)
+		if err != nil {
+			return nil, err
+		}
 		var req verifyRequest
 		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
-			return
+			return nil, huma.Error400BadRequest(err.Error())
 		}
 		req.PendingSessionID = strings.TrimSpace(req.PendingSessionID)
 		req.Code = strings.TrimSpace(req.Code)
 		if req.PendingSessionID == "" || req.Code == "" {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "pending_session_id and code are required")
-			return
+			return nil, huma.Error400BadRequest("pending_session_id and code are required")
 		}
 
-		ctx := r.Context()
 		repoRef := host.Repo()
 
 		ch, err := repoRef.ConsumeChallenge(ctx, pendingSessionKeyPrefix+req.PendingSessionID)
 		if err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				writeError(w, http.StatusUnauthorized, "INVALID_PENDING_SESSION", "pending session not found or expired")
-				return
+				return nil, huma.Error401Unauthorized("pending session not found or expired")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to consume pending session")
-			return
+			return nil, huma.Error500InternalServerError("unable to consume pending session")
 		}
 		if ch == nil || ch.Value == "" {
-			writeError(w, http.StatusUnauthorized, "INVALID_PENDING_SESSION", "pending session not found or expired")
-			return
+			return nil, huma.Error401Unauthorized("pending session not found or expired")
 		}
 		userID := ch.Value
 
 		ok, err := p.verifyCode(ctx, repoRef, userID, req.Code)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to verify mfa code")
-			return
+			return nil, huma.Error500InternalServerError("unable to verify mfa code")
 		}
 		if !ok {
-			writeError(w, http.StatusUnauthorized, "INVALID_MFA", "invalid mfa code")
-			return
+			return nil, huma.Error401Unauthorized("invalid mfa code")
 		}
 
 		raw, _, err := auth.IssueSession(ctx, repoRef, userID, middleware.RequestIP(r), requestUA(r), host.SessionTTL())
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to issue session")
-			return
+			return nil, huma.Error500InternalServerError("unable to issue session")
 		}
 		http.SetCookie(w, auth.SessionCookie(
 			cookieOptionsFromHost(host, r, int(host.SessionTTL().Seconds())),
@@ -423,6 +432,7 @@ func (p *mfaPlugin) handleVerify(host plugin.PluginHost) http.HandlerFunc {
 			resp.User.Role = u.Role
 		}
 		writeJSON(w, http.StatusOK, resp)
+		return &mfaEmptyOutput{}, nil
 	}
 }
 

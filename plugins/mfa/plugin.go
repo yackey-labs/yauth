@@ -58,7 +58,7 @@ type mfaPlugin struct {
 
 func (p *mfaPlugin) Name() string { return "mfa" }
 
-func (p *mfaPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux, prefix string) {
+func (p *mfaPlugin) Routes(host plugin.PluginHost, mux plugin.Router, prefix string) {
 	mw := host.Middleware()
 
 	host.RegisterEventHandler(&loginEventHandler{

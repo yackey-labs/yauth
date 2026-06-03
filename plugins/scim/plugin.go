@@ -84,7 +84,7 @@ func (p *scimPlugin) Name() string { return "scim" }
 // RequireAuth middleware because SCIM does its own auth (Authorization:
 // Bearer) and surfaces SCIM-shaped error JSON. The shape is
 // incompatible with yauth-go's normal {"error":"..."} envelope.
-func (p *scimPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux, prefix string) {
+func (p *scimPlugin) Routes(host plugin.PluginHost, mux plugin.Router, prefix string) {
 	base := prefix + "/api/scim/v2/organizations/{org_id}"
 
 	// Users

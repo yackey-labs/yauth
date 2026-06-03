@@ -203,7 +203,7 @@ func (p *oauth2Plugin) Name() string { return "oauth2-server" }
 // Routes implements plugin.Plugin. It mounts the admin client CRUD,
 // authorize/consent, token, introspect, revoke, and device-flow
 // endpoints described in the package doc.
-func (p *oauth2Plugin) Routes(host plugin.PluginHost, mux *http.ServeMux, prefix string) {
+func (p *oauth2Plugin) Routes(host plugin.PluginHost, mux plugin.Router, prefix string) {
 	mw := host.Middleware()
 
 	// OIDC Back-Channel Logout: react to logout/suspend/ban events by notifying

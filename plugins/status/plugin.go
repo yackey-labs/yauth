@@ -32,7 +32,7 @@ func New() plugin.Plugin { return &statusPlugin{} }
 func (p *statusPlugin) Name() string { return "status" }
 
 // Routes implements plugin.Plugin.
-func (p *statusPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux, prefix string) {
+func (p *statusPlugin) Routes(host plugin.PluginHost, mux plugin.Router, prefix string) {
 	mw := host.Middleware()
 	mux.Handle("GET "+prefix+"/status", mw.RequireAdmin(http.HandlerFunc(p.handleStatus(host))))
 	// /config is public — the SPA needs it before login (signups/email-verify

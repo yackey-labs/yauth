@@ -115,7 +115,7 @@ func MustNew(cfg Config) plugin.Plugin {
 func (p *oauthPlugin) Name() string { return "oauth" }
 
 // Routes implements plugin.Plugin.
-func (p *oauthPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux, prefix string) {
+func (p *oauthPlugin) Routes(host plugin.PluginHost, mux plugin.Router, prefix string) {
 	mw := host.Middleware()
 
 	mux.Handle("GET "+prefix+"/oauth/{provider}/authorize", http.HandlerFunc(p.handleAuthorize(host)))

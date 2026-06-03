@@ -128,7 +128,7 @@ func (p *lockoutPlugin) Name() string { return "lockout" }
 
 // Routes implements plugin.Plugin. Registers the events.Handler with the
 // host (so login attempts are intercepted) and mounts the unlock routes.
-func (p *lockoutPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux, prefix string) {
+func (p *lockoutPlugin) Routes(host plugin.PluginHost, mux plugin.Router, prefix string) {
 	host.RegisterEventHandler(&loginEventHandler{cfg: p.cfg, host: host})
 
 	mw := host.Middleware()

@@ -118,6 +118,22 @@ type JWTSigner interface {
 	PublicJWKS() ([]byte, error)
 }
 
+// Router is the subset of *http.ServeMux that plugins use to register their
+// handlers inside Routes. It is an interface (rather than the concrete
+// *http.ServeMux) so the root yauth package can pass a passive recording
+// wrapper that observes every (method, path) registration before delegating
+// to the real mux. The real *http.ServeMux satisfies this interface, so
+// production behavior is unchanged. See yauth.RegisteredRoutes / the
+// openapi route-level spec-drift guard.
+//
+// The two methods are exactly the ones plugins call (Handle / HandleFunc with
+// the Go 1.22 "METHOD /path" pattern syntax). If a future plugin needs another
+// ServeMux method inside Routes, add it here and to the recording wrapper.
+type Router interface {
+	Handle(pattern string, handler http.Handler)
+	HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request))
+}
+
 // Plugin extends yauth with new routes mounted under a prefix.
 // Implementations should register handlers via the Go 1.22 ServeMux pattern API.
 //
@@ -127,7 +143,7 @@ type JWTSigner interface {
 // prefix via http.StripPrefix).
 type Plugin interface {
 	Name() string
-	Routes(host PluginHost, mux *http.ServeMux, prefix string)
+	Routes(host PluginHost, mux Router, prefix string)
 }
 
 // ShutdownAware is an optional interface plugins implement when they own

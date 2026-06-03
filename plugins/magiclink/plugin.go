@@ -61,7 +61,7 @@ func New(cfg Config) plugin.Plugin {
 func (p *magicLinkPlugin) Name() string { return "magic-link" }
 
 // Routes implements plugin.Plugin.
-func (p *magicLinkPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux, prefix string) {
+func (p *magicLinkPlugin) Routes(host plugin.PluginHost, mux plugin.Router, prefix string) {
 	mux.Handle("POST "+prefix+"/magic-link/send", http.HandlerFunc(p.handleSend(host)))
 	mux.Handle("POST "+prefix+"/magic-link/verify", http.HandlerFunc(p.handleVerify(host)))
 }

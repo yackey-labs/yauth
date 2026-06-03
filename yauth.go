@@ -15,6 +15,7 @@ package yauth
 import (
 	"context"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/yackey-labs/yauth-go/events"
@@ -40,6 +41,57 @@ type YAuth struct {
 	authResolvers []plugin.AuthResolver
 	jwtSigner     plugin.JWTSigner
 	jwtSecret     []byte
+
+	// recordedRoutes holds every (method, path) a plugin registered during
+	// Build, captured by the passive recordingRouter wrapper. Exposed via
+	// RegisteredRoutes for the route-level openapi spec-drift guard. Purely
+	// observational — it does not affect routing.
+	recordedRoutes []RouteInfo
+}
+
+// RouteInfo is a single observed route registration: the HTTP method and
+// the path pattern (Go 1.22 ServeMux syntax, e.g. "/admin/users/{id}").
+type RouteInfo struct {
+	Method string
+	Path   string
+}
+
+// recordingRouter is a passive plugin.Router that records every Handle /
+// HandleFunc registration as a RouteInfo before delegating to the real
+// *http.ServeMux. It splits the Go 1.22 "METHOD /path" pattern into method
+// and path; a pattern with no leading method (none of the plugins do this,
+// but ServeMux allows it) records an empty Method. Recording is append-only
+// and side-effect-free with respect to routing.
+type recordingRouter struct {
+	mux *http.ServeMux
+	out *[]RouteInfo
+}
+
+func (r *recordingRouter) record(pattern string) {
+	method, path := "", pattern
+	if i := strings.IndexByte(pattern, ' '); i >= 0 {
+		method, path = pattern[:i], strings.TrimSpace(pattern[i+1:])
+	}
+	*r.out = append(*r.out, RouteInfo{Method: method, Path: path})
+}
+
+func (r *recordingRouter) Handle(pattern string, handler http.Handler) {
+	r.record(pattern)
+	r.mux.Handle(pattern, handler)
+}
+
+func (r *recordingRouter) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
+	r.record(pattern)
+	r.mux.HandleFunc(pattern, handler)
+}
+
+// RegisteredRoutes returns every route every plugin registered during Build,
+// in registration order. Used by the openapi route-level spec-drift guard to
+// compare the served route set against openapi.Build()'s operations.
+func (y *YAuth) RegisteredRoutes() []RouteInfo {
+	out := make([]RouteInfo, len(y.recordedRoutes))
+	copy(out, y.recordedRoutes)
+	return out
 }
 
 // YAuthBuilder accumulates plugins before producing a YAuth via Build.
@@ -157,8 +209,9 @@ func (b *YAuthBuilder) Build() (*YAuth, error) {
 		jwtSecret:        b.jwtSecret,
 	}
 
+	rec := &recordingRouter{mux: mux, out: &ya.recordedRoutes}
 	for _, p := range b.plugins {
-		p.Routes(ya, mux, "")
+		p.Routes(ya, rec, "")
 	}
 
 	return ya, nil

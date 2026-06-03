@@ -42,7 +42,7 @@ func New() plugin.Plugin { return &adminPlugin{} }
 func (p *adminPlugin) Name() string { return "admin" }
 
 // Routes implements plugin.Plugin.
-func (p *adminPlugin) Routes(host plugin.PluginHost, mux *http.ServeMux, prefix string) {
+func (p *adminPlugin) Routes(host plugin.PluginHost, mux plugin.Router, prefix string) {
 	mw := host.Middleware()
 
 	mux.Handle("GET "+prefix+"/admin/users", mw.RequireAdmin(http.HandlerFunc(p.handleListUsers(host))))

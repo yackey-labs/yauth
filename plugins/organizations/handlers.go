@@ -1,6 +1,7 @@
 package organizations
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/google/uuid"
 
 	"github.com/yackey-labs/yauth-go/auth"
@@ -119,25 +121,34 @@ type acceptInvitationRequest struct {
 	Token string `json:"token"`
 }
 
-// --- Error envelope (mirrors apikey/oauth plugins) ---
+// --- huma transport helpers ---
+//
+// The organizations plugin is huma-native: every route is a typed operation
+// guarded by authGuards (StashHTTPHuma + RequireAuthHuma). Authorization is
+// enforced in-handler by requireOrgAdmin / requireOrgMember (org-admins /
+// org-members, NOT global admins — RequireAdminHuma would wrongly lock them
+// out). Errors are native RFC 9457 problem+json, preserving the SAME status
+// codes the legacy writeError calls produced (the custom {"error":{code,
+// message}} envelope is dropped in favour of the fleet-wide problem+json shape).
 
-type errorBody struct {
-	Error errorPayload `json:"error"`
+// authGuards is the per-operation middleware chain shared by every route: stash
+// the raw request/writer (so decodeJSON / RequestIP / cookie writes keep working
+// off the underlying *http.Request) then require an authenticated identity.
+func authGuards(api huma.API, mw *middleware.Middleware) huma.Middlewares {
+	return huma.Middlewares{
+		middleware.StashHTTPHuma(api),
+		middleware.RequireAuthHuma(api, mw),
+	}
 }
 
-type errorPayload struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeError(w http.ResponseWriter, status int, code, message string) {
-	writeJSON(w, status, errorBody{Error: errorPayload{Code: code, Message: message}})
+// reqFromCtx returns the *http.Request stashed by StashHTTPHuma. On a guarded
+// route it is always present; the nil guard keeps the helper safe.
+func reqFromCtx(ctx context.Context) (*http.Request, error) {
+	r := middleware.HTTPRequestFromContext(ctx)
+	if r == nil {
+		return nil, huma.Error500InternalServerError("request unavailable")
+	}
+	return r, nil
 }
 
 func decodeJSON(r *http.Request, v any) error {
@@ -171,59 +182,82 @@ func hashInvitationToken(raw string) string {
 // permission helpers (auth.RoleAtLeast) implement the comparison so the
 // owner role automatically passes every admin gate.
 //
-// Returns the membership row or writes a 403/500 and returns false.
-func requireOrgAdmin(w http.ResponseWriter, r *http.Request, host plugin.PluginHost, orgID, userID string) (*domain.Membership, bool) {
-	m, err := host.Repo().GetMembershipByOrgUser(r.Context(), orgID, userID)
+// Returns the membership row or a huma error (403/500).
+func requireOrgAdmin(ctx context.Context, host plugin.PluginHost, orgID, userID string) (*domain.Membership, error) {
+	m, err := host.Repo().GetMembershipByOrgUser(ctx, orgID, userID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "membership lookup failed")
-		return nil, false
+		return nil, huma.Error500InternalServerError("membership lookup failed")
 	}
 	if m == nil {
-		writeError(w, http.StatusForbidden, "FORBIDDEN", "not a member of this organization")
-		return nil, false
+		return nil, huma.Error403Forbidden("not a member of this organization")
 	}
 	if !auth.RoleAtLeast(m.Role, auth.RoleAdmin) {
-		writeError(w, http.StatusForbidden, "FORBIDDEN", "organization admin role required")
-		return nil, false
+		return nil, huma.Error403Forbidden("organization admin role required")
 	}
-	return m, true
+	return m, nil
 }
 
 // requireOrgMember is the weaker check used for read endpoints.
-func requireOrgMember(w http.ResponseWriter, r *http.Request, host plugin.PluginHost, orgID, userID string) (*domain.Membership, bool) {
-	m, err := host.Repo().GetMembershipByOrgUser(r.Context(), orgID, userID)
+func requireOrgMember(ctx context.Context, host plugin.PluginHost, orgID, userID string) (*domain.Membership, error) {
+	m, err := host.Repo().GetMembershipByOrgUser(ctx, orgID, userID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "membership lookup failed")
-		return nil, false
+		return nil, huma.Error500InternalServerError("membership lookup failed")
 	}
 	if m == nil {
-		writeError(w, http.StatusForbidden, "FORBIDDEN", "not a member of this organization")
-		return nil, false
+		return nil, huma.Error403Forbidden("not a member of this organization")
 	}
-	return m, true
+	return m, nil
 }
 
-func authUser(w http.ResponseWriter, r *http.Request) (*domain.AuthUser, bool) {
-	au, ok := middleware.AuthUserFromContext(r.Context())
+// authUser returns the AuthUser injected onto the operation context by
+// RequireAuthHuma, or a 401 error if somehow missing (cannot happen on a
+// guarded route).
+func authUser(ctx context.Context) (*domain.AuthUser, error) {
+	au, ok := middleware.AuthUserFromContext(ctx)
 	if !ok || au == nil {
-		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "not authenticated")
-		return nil, false
+		return nil, huma.Error401Unauthorized("not authenticated")
 	}
-	return au, true
+	return au, nil
+}
+
+// orgIDInput is the typed path-parameter input for routes scoped to a single
+// org. The path param is named "id" to match the legacy r.PathValue("id").
+type orgIDInput struct {
+	ID string `path:"id" doc:"Organization ID"`
+}
+
+// organizationOutput wraps a single organizationJSON body.
+type organizationOutput struct {
+	Body organizationJSON
 }
 
 // --- GET /organizations ---
 
-func (p *orgsPlugin) handleList(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := authUser(w, r)
-		if !ok {
-			return
-		}
-		orgs, err := host.Repo().ListOrganizationsForUser(r.Context(), au.User.ID)
+// listOrganizationsResponse mirrors the legacy {"organizations":[...]} wrapper.
+type listOrganizationsResponse struct {
+	Organizations []organizationJSON `json:"organizations"`
+}
+
+func (p *orgsPlugin) registerList(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	type output struct {
+		Body listOrganizationsResponse
+	}
+	huma.Register(api, huma.Operation{
+		OperationID: "organizations-list",
+		Method:      http.MethodGet,
+		Path:        prefix + "/organizations",
+		Summary:     "List the caller's organizations",
+		Tags:        []string{"organizations"},
+		Security:    []map[string][]string{{"sessionCookie": {}}},
+		Middlewares: authGuards(api, mw),
+	}, func(ctx context.Context, _ *struct{}) (*output, error) {
+		au, err := authUser(ctx)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "list organizations failed")
-			return
+			return nil, err
+		}
+		orgs, err := host.Repo().ListOrganizationsForUser(ctx, au.User.ID)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("list organizations failed")
 		}
 		out := make([]organizationJSON, 0, len(orgs))
 		for _, o := range orgs {
@@ -232,34 +266,44 @@ func (p *orgsPlugin) handleList(host plugin.PluginHost) http.HandlerFunc {
 			}
 			out = append(out, toOrgJSON(*o))
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"organizations": out})
-	}
+		return &output{Body: listOrganizationsResponse{Organizations: out}}, nil
+	})
 }
 
 // --- POST /organizations ---
 
-func (p *orgsPlugin) handleCreate(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := authUser(w, r)
-		if !ok {
-			return
+func (p *orgsPlugin) registerCreate(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID:   "organizations-create",
+		Method:        http.MethodPost,
+		Path:          prefix + "/organizations",
+		Summary:       "Create an organization (caller becomes owner)",
+		Tags:          []string{"organizations"},
+		Security:      []map[string][]string{{"sessionCookie": {}}},
+		DefaultStatus: http.StatusCreated,
+		Middlewares:   authGuards(api, mw),
+	}, func(ctx context.Context, _ *struct{}) (*organizationOutput, error) {
+		r, err := reqFromCtx(ctx)
+		if err != nil {
+			return nil, err
+		}
+		au, err := authUser(ctx)
+		if err != nil {
+			return nil, err
 		}
 		var req createOrgRequest
 		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid json body")
-			return
+			return nil, huma.Error400BadRequest("invalid json body")
 		}
 		if strings.TrimSpace(req.Name) == "" {
-			writeError(w, http.StatusBadRequest, "BAD_REQUEST", "name is required")
-			return
+			return nil, huma.Error400BadRequest("name is required")
 		}
 		if strings.TrimSpace(req.Slug) == "" {
-			writeError(w, http.StatusBadRequest, "BAD_REQUEST", "slug is required")
-			return
+			return nil, huma.Error400BadRequest("slug is required")
 		}
 
 		now := time.Now().UTC()
-		org, err := host.Repo().CreateOrganization(r.Context(), domain.NewOrganization{
+		org, err := host.Repo().CreateOrganization(ctx, domain.NewOrganization{
 			ID:          uuid.NewString(),
 			Name:        req.Name,
 			Slug:        req.Slug,
@@ -269,18 +313,16 @@ func (p *orgsPlugin) handleCreate(host plugin.PluginHost) http.HandlerFunc {
 		})
 		if err != nil {
 			if errors.Is(err, yautherr.ErrConflict) {
-				writeError(w, http.StatusConflict, "CONFLICT", "slug already in use")
-				return
+				return nil, huma.Error409Conflict("slug already in use")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "create organization failed")
-			return
+			return nil, huma.Error500InternalServerError("create organization failed")
 		}
 
 		// Creator becomes owner (yauth #88 port). Prior behavior
 		// was "creator becomes admin"; the upgrade is invisible to
 		// callers since owner is strictly a superset of admin under
 		// the default permission catalogue.
-		if _, err := host.Repo().CreateMembership(r.Context(), domain.NewMembership{
+		if _, err := host.Repo().CreateMembership(ctx, domain.NewMembership{
 			ID:             uuid.NewString(),
 			OrganizationID: org.ID,
 			UserID:         au.User.ID,
@@ -293,37 +335,42 @@ func (p *orgsPlugin) handleCreate(host plugin.PluginHost) http.HandlerFunc {
 			// Best-effort rollback of the org create on membership
 			// failure. Worst case the org stays orphaned and the
 			// admin can re-attempt; surfacing this as 500 is enough.
-			_ = host.Repo().DeleteOrganization(r.Context(), org.ID)
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "create owner membership failed")
-			return
+			_ = host.Repo().DeleteOrganization(ctx, org.ID)
+			return nil, huma.Error500InternalServerError("create owner membership failed")
 		}
-		writeJSON(w, http.StatusCreated, toOrgJSON(org))
-	}
+		return &organizationOutput{Body: toOrgJSON(org)}, nil
+	})
 }
 
 // --- GET /organizations/{id} ---
 
-func (p *orgsPlugin) handleGet(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := authUser(w, r)
-		if !ok {
-			return
+func (p *orgsPlugin) registerGet(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "organizations-get",
+		Method:      http.MethodGet,
+		Path:        prefix + "/organizations/{id}",
+		Summary:     "Fetch a single organization",
+		Tags:        []string{"organizations"},
+		Security:    []map[string][]string{{"sessionCookie": {}}},
+		Middlewares: authGuards(api, mw),
+	}, func(ctx context.Context, in *orgIDInput) (*organizationOutput, error) {
+		au, err := authUser(ctx)
+		if err != nil {
+			return nil, err
 		}
-		id := r.PathValue("id")
-		if _, ok := requireOrgMember(w, r, host, id, au.User.ID); !ok {
-			return
+		id := in.ID
+		if _, err := requireOrgMember(ctx, host, id, au.User.ID); err != nil {
+			return nil, err
 		}
-		org, err := host.Repo().GetOrganizationByID(r.Context(), id)
+		org, err := host.Repo().GetOrganizationByID(ctx, id)
 		if err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "NOT_FOUND", "organization not found")
-				return
+				return nil, huma.Error404NotFound("organization not found")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "lookup failed")
-			return
+			return nil, huma.Error500InternalServerError("lookup failed")
 		}
-		writeJSON(w, http.StatusOK, toOrgJSON(*org))
-	}
+		return &organizationOutput{Body: toOrgJSON(*org)}, nil
+	})
 }
 
 // --- PATCH /organizations/{id} ---
@@ -339,20 +386,31 @@ func rawMessageNull(b json.RawMessage) bool {
 	return s == "null"
 }
 
-func (p *orgsPlugin) handleUpdate(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := authUser(w, r)
-		if !ok {
-			return
+func (p *orgsPlugin) registerUpdate(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "organizations-update",
+		Method:      http.MethodPatch,
+		Path:        prefix + "/organizations/{id}",
+		Summary:     "Update an organization (partial)",
+		Tags:        []string{"organizations"},
+		Security:    []map[string][]string{{"sessionCookie": {}}},
+		Middlewares: authGuards(api, mw),
+	}, func(ctx context.Context, in *orgIDInput) (*organizationOutput, error) {
+		r, err := reqFromCtx(ctx)
+		if err != nil {
+			return nil, err
 		}
-		id := r.PathValue("id")
-		if _, ok := requireOrgAdmin(w, r, host, id, au.User.ID); !ok {
-			return
+		au, err := authUser(ctx)
+		if err != nil {
+			return nil, err
+		}
+		id := in.ID
+		if _, err := requireOrgAdmin(ctx, host, id, au.User.ID); err != nil {
+			return nil, err
 		}
 		var req updateOrgRequest
 		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid json body")
-			return
+			return nil, huma.Error400BadRequest("invalid json body")
 		}
 
 		changes := domain.UpdateOrganization{
@@ -366,8 +424,7 @@ func (p *orgsPlugin) handleUpdate(host plugin.PluginHost) http.HandlerFunc {
 			} else {
 				var s string
 				if err := json.Unmarshal(req.DisplayName, &s); err != nil {
-					writeError(w, http.StatusBadRequest, "BAD_REQUEST", "display_name must be string or null")
-					return
+					return nil, huma.Error400BadRequest("display_name must be string or null")
 				}
 				ptr := &s
 				changes.DisplayName = &ptr
@@ -380,67 +437,89 @@ func (p *orgsPlugin) handleUpdate(host plugin.PluginHost) http.HandlerFunc {
 			} else {
 				var s string
 				if err := json.Unmarshal(req.AvatarURL, &s); err != nil {
-					writeError(w, http.StatusBadRequest, "BAD_REQUEST", "avatar_url must be string or null")
-					return
+					return nil, huma.Error400BadRequest("avatar_url must be string or null")
 				}
 				ptr := &s
 				changes.AvatarURL = &ptr
 			}
 		}
 
-		updated, err := host.Repo().UpdateOrganization(r.Context(), id, changes)
+		updated, err := host.Repo().UpdateOrganization(ctx, id, changes)
 		if err != nil {
 			if errors.Is(err, yautherr.ErrConflict) {
-				writeError(w, http.StatusConflict, "CONFLICT", "slug already in use")
-				return
+				return nil, huma.Error409Conflict("slug already in use")
 			}
 			if errors.Is(err, yautherr.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "NOT_FOUND", "organization not found")
-				return
+				return nil, huma.Error404NotFound("organization not found")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "update failed")
-			return
+			return nil, huma.Error500InternalServerError("update failed")
 		}
-		writeJSON(w, http.StatusOK, toOrgJSON(updated))
-	}
+		return &organizationOutput{Body: toOrgJSON(updated)}, nil
+	})
 }
 
 // --- DELETE /organizations/{id} ---
 
-func (p *orgsPlugin) handleDelete(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := authUser(w, r)
-		if !ok {
-			return
+// orgEmptyOutput carries no body; DefaultStatus drives the 204.
+type orgEmptyOutput struct{}
+
+func (p *orgsPlugin) registerDelete(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID:   "organizations-delete",
+		Method:        http.MethodDelete,
+		Path:          prefix + "/organizations/{id}",
+		Summary:       "Delete an organization (cascade)",
+		Tags:          []string{"organizations"},
+		Security:      []map[string][]string{{"sessionCookie": {}}},
+		DefaultStatus: http.StatusNoContent,
+		Middlewares:   authGuards(api, mw),
+	}, func(ctx context.Context, in *orgIDInput) (*orgEmptyOutput, error) {
+		au, err := authUser(ctx)
+		if err != nil {
+			return nil, err
 		}
-		id := r.PathValue("id")
-		if _, ok := requireOrgAdmin(w, r, host, id, au.User.ID); !ok {
-			return
+		id := in.ID
+		if _, err := requireOrgAdmin(ctx, host, id, au.User.ID); err != nil {
+			return nil, err
 		}
-		if err := host.Repo().DeleteOrganization(r.Context(), id); err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "delete failed")
-			return
+		if err := host.Repo().DeleteOrganization(ctx, id); err != nil {
+			return nil, huma.Error500InternalServerError("delete failed")
 		}
-		w.WriteHeader(http.StatusNoContent)
-	}
+		return &orgEmptyOutput{}, nil
+	})
 }
 
 // --- GET /organizations/{id}/members ---
 
-func (p *orgsPlugin) handleListMembers(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := authUser(w, r)
-		if !ok {
-			return
-		}
-		id := r.PathValue("id")
-		if _, ok := requireOrgMember(w, r, host, id, au.User.ID); !ok {
-			return
-		}
-		ms, err := host.Repo().ListMembershipsByOrg(r.Context(), id)
+// listMembersResponse mirrors the legacy {"members":[...]} wrapper.
+type listMembersResponse struct {
+	Members []membershipJSON `json:"members"`
+}
+
+func (p *orgsPlugin) registerListMembers(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	type output struct {
+		Body listMembersResponse
+	}
+	huma.Register(api, huma.Operation{
+		OperationID: "organizations-list-members",
+		Method:      http.MethodGet,
+		Path:        prefix + "/organizations/{id}/members",
+		Summary:     "List organization members",
+		Tags:        []string{"organizations"},
+		Security:    []map[string][]string{{"sessionCookie": {}}},
+		Middlewares: authGuards(api, mw),
+	}, func(ctx context.Context, in *orgIDInput) (*output, error) {
+		au, err := authUser(ctx)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "list members failed")
-			return
+			return nil, err
+		}
+		id := in.ID
+		if _, err := requireOrgMember(ctx, host, id, au.User.ID); err != nil {
+			return nil, err
+		}
+		ms, err := host.Repo().ListMembershipsByOrg(ctx, id)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("list members failed")
 		}
 		out := make([]membershipJSON, 0, len(ms))
 		for _, m := range ms {
@@ -449,30 +528,44 @@ func (p *orgsPlugin) handleListMembers(host plugin.PluginHost) http.HandlerFunc 
 			}
 			out = append(out, toMembershipJSON(*m))
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"members": out})
-	}
+		return &output{Body: listMembersResponse{Members: out}}, nil
+	})
 }
 
 // --- POST /organizations/{id}/invitations ---
 
-func (p *orgsPlugin) handleCreateInvitation(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := authUser(w, r)
-		if !ok {
-			return
+func (p *orgsPlugin) registerCreateInvitation(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	type output struct {
+		Body createInvitationResponse
+	}
+	huma.Register(api, huma.Operation{
+		OperationID:   "organizations-create-invitation",
+		Method:        http.MethodPost,
+		Path:          prefix + "/organizations/{id}/invitations",
+		Summary:       "Create an invitation",
+		Tags:          []string{"organizations"},
+		Security:      []map[string][]string{{"sessionCookie": {}}},
+		DefaultStatus: http.StatusCreated,
+		Middlewares:   authGuards(api, mw),
+	}, func(ctx context.Context, in *orgIDInput) (*output, error) {
+		r, err := reqFromCtx(ctx)
+		if err != nil {
+			return nil, err
 		}
-		id := r.PathValue("id")
-		if _, ok := requireOrgAdmin(w, r, host, id, au.User.ID); !ok {
-			return
+		au, err := authUser(ctx)
+		if err != nil {
+			return nil, err
+		}
+		id := in.ID
+		if _, err := requireOrgAdmin(ctx, host, id, au.User.ID); err != nil {
+			return nil, err
 		}
 		var req createInvitationRequest
 		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid json body")
-			return
+			return nil, huma.Error400BadRequest("invalid json body")
 		}
 		if strings.TrimSpace(req.Email) == "" {
-			writeError(w, http.StatusBadRequest, "BAD_REQUEST", "email is required")
-			return
+			return nil, huma.Error400BadRequest("email is required")
 		}
 		role := p.cfg.DefaultInviteRole
 		if req.Role != nil && *req.Role != "" {
@@ -480,11 +573,10 @@ func (p *orgsPlugin) handleCreateInvitation(host plugin.PluginHost) http.Handler
 		}
 		token, tokenHash, err := generateInvitationToken()
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "token generation failed")
-			return
+			return nil, huma.Error500InternalServerError("token generation failed")
 		}
 		now := time.Now().UTC()
-		inv, err := host.Repo().CreateInvitation(r.Context(), domain.NewInvitation{
+		inv, err := host.Repo().CreateInvitation(ctx, domain.NewInvitation{
 			ID:              uuid.NewString(),
 			OrganizationID:  id,
 			Email:           req.Email,
@@ -496,66 +588,73 @@ func (p *orgsPlugin) handleCreateInvitation(host plugin.PluginHost) http.Handler
 		})
 		if err != nil {
 			if errors.Is(err, yautherr.ErrConflict) {
-				writeError(w, http.StatusConflict, "CONFLICT", "invitation already exists")
-				return
+				return nil, huma.Error409Conflict("invitation already exists")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "create invitation failed")
-			return
+			return nil, huma.Error500InternalServerError("create invitation failed")
 		}
-		writeJSON(w, http.StatusCreated, createInvitationResponse{
+		return &output{Body: createInvitationResponse{
 			Invitation: toInvitationJSON(inv),
 			Token:      token,
-		})
-	}
+		}}, nil
+	})
 }
 
 // --- POST /invitations/accept ---
 
-func (p *orgsPlugin) handleAcceptInvitation(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := authUser(w, r)
-		if !ok {
-			return
+func (p *orgsPlugin) registerAcceptInvitation(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	type output struct {
+		Body membershipJSON
+	}
+	huma.Register(api, huma.Operation{
+		OperationID:   "organizations-accept-invitation",
+		Method:        http.MethodPost,
+		Path:          prefix + "/invitations/accept",
+		Summary:       "Accept an invitation by token",
+		Tags:          []string{"organizations"},
+		Security:      []map[string][]string{{"sessionCookie": {}}},
+		DefaultStatus: http.StatusCreated,
+		Middlewares:   authGuards(api, mw),
+	}, func(ctx context.Context, _ *struct{}) (*output, error) {
+		r, err := reqFromCtx(ctx)
+		if err != nil {
+			return nil, err
+		}
+		au, err := authUser(ctx)
+		if err != nil {
+			return nil, err
 		}
 		var req acceptInvitationRequest
 		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid json body")
-			return
+			return nil, huma.Error400BadRequest("invalid json body")
 		}
 		if strings.TrimSpace(req.Token) == "" {
-			writeError(w, http.StatusBadRequest, "BAD_REQUEST", "token is required")
-			return
+			return nil, huma.Error400BadRequest("token is required")
 		}
-		inv, err := host.Repo().GetInvitationByTokenHash(r.Context(), hashInvitationToken(req.Token))
+		inv, err := host.Repo().GetInvitationByTokenHash(ctx, hashInvitationToken(req.Token))
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "invitation lookup failed")
-			return
+			return nil, huma.Error500InternalServerError("invitation lookup failed")
 		}
 		if inv == nil {
-			writeError(w, http.StatusNotFound, "NOT_FOUND", "invitation not found or expired")
-			return
+			return nil, huma.Error404NotFound("invitation not found or expired")
 		}
 		// Email check is case-insensitive — IdP capitalization
 		// quirks should not block accept.
 		if !strings.EqualFold(inv.Email, au.User.Email) {
-			writeError(w, http.StatusForbidden, "FORBIDDEN", "invitation email does not match authenticated user")
-			return
+			return nil, huma.Error403Forbidden("invitation email does not match authenticated user")
 		}
 
 		now := time.Now().UTC()
-		if _, err := host.Repo().MarkInvitationAccepted(r.Context(), inv.ID, now); err != nil {
+		if _, err := host.Repo().MarkInvitationAccepted(ctx, inv.ID, now); err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
 				// Race: someone else accepted between lookup and
 				// mark. Treat as 404 to match single-shot
 				// semantics.
-				writeError(w, http.StatusNotFound, "NOT_FOUND", "invitation already accepted")
-				return
+				return nil, huma.Error404NotFound("invitation already accepted")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "accept invitation failed")
-			return
+			return nil, huma.Error500InternalServerError("accept invitation failed")
 		}
 		invitedAt := inv.CreatedAt
-		mem, err := host.Repo().CreateMembership(r.Context(), domain.NewMembership{
+		mem, err := host.Repo().CreateMembership(ctx, domain.NewMembership{
 			ID:             uuid.NewString(),
 			OrganizationID: inv.OrganizationID,
 			UserID:         au.User.ID,
@@ -568,12 +667,10 @@ func (p *orgsPlugin) handleAcceptInvitation(host plugin.PluginHost) http.Handler
 		})
 		if err != nil {
 			if errors.Is(err, yautherr.ErrConflict) {
-				writeError(w, http.StatusConflict, "CONFLICT", "already a member of this organization")
-				return
+				return nil, huma.Error409Conflict("already a member of this organization")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "create membership failed")
-			return
+			return nil, huma.Error500InternalServerError("create membership failed")
 		}
-		writeJSON(w, http.StatusCreated, toMembershipJSON(mem))
-	}
+		return &output{Body: toMembershipJSON(mem)}, nil
+	})
 }

@@ -22,11 +22,15 @@
 package organizations
 
 import (
+	"context"
 	"errors"
 	"net/http"
 
+	"github.com/danielgtaylor/huma/v2"
+
 	"github.com/yackey-labs/yauth-go/auth"
 	"github.com/yackey-labs/yauth-go/domain"
+	"github.com/yackey-labs/yauth-go/middleware"
 	"github.com/yackey-labs/yauth-go/plugin"
 	"github.com/yackey-labs/yauth-go/yautherr"
 )
@@ -48,11 +52,22 @@ type activeOrgResponse struct {
 // Returns the caller's active org id (nil when none) and the full
 // list of memberships. Idempotent; safe to poll. Useful for client
 // UIs that need to render the switcher dropdown.
-func (p *orgsPlugin) handleGetActiveOrg(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := authUser(w, r)
-		if !ok {
-			return
+func (p *orgsPlugin) registerGetActiveOrg(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	type output struct {
+		Body activeOrgResponse
+	}
+	huma.Register(api, huma.Operation{
+		OperationID: "organizations-get-active-org",
+		Method:      http.MethodGet,
+		Path:        prefix + "/sessions/active-org",
+		Summary:     "Read the caller's active organization",
+		Tags:        []string{"organizations"},
+		Security:    []map[string][]string{{"sessionCookie": {}}},
+		Middlewares: authGuards(api, mw),
+	}, func(ctx context.Context, _ *struct{}) (*output, error) {
+		au, err := authUser(ctx)
+		if err != nil {
+			return nil, err
 		}
 		// Prefer the live session row (cookie path) over whatever
 		// the resolver injected. Bearer callers have an empty
@@ -65,17 +80,16 @@ func (p *orgsPlugin) handleGetActiveOrg(host plugin.PluginHost) http.HandlerFunc
 			id := *au.ActiveOrgID
 			current = &id
 		}
-		resolved, role, all, err := auth.ResolveActiveOrg(r.Context(), host.Repo(), au.User.ID, current)
+		resolved, role, all, err := auth.ResolveActiveOrg(ctx, host.Repo(), au.User.ID, current)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "resolve active org failed")
-			return
+			return nil, huma.Error500InternalServerError("resolve active org failed")
 		}
-		writeJSON(w, http.StatusOK, activeOrgResponse{
+		return &output{Body: activeOrgResponse{
 			ActiveOrgID: resolved,
 			Role:        role,
 			Orgs:        all,
-		})
-	}
+		}}, nil
+	})
 }
 
 // --- POST /sessions/active-org ---
@@ -87,62 +101,70 @@ func (p *orgsPlugin) handleGetActiveOrg(host plugin.PluginHost) http.HandlerFunc
 // Cookie callers: the session row is updated in place. Bearer
 // callers: nothing is persisted — the response carries the new
 // active-org info and the client should mint a fresh JWT via /token.
-func (p *orgsPlugin) handleSetActiveOrg(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := authUser(w, r)
-		if !ok {
-			return
+func (p *orgsPlugin) registerSetActiveOrg(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	type output struct {
+		Body activeOrgResponse
+	}
+	huma.Register(api, huma.Operation{
+		OperationID: "organizations-set-active-org",
+		Method:      http.MethodPost,
+		Path:        prefix + "/sessions/active-org",
+		Summary:     "Switch the caller's active organization",
+		Tags:        []string{"organizations"},
+		Security:    []map[string][]string{{"sessionCookie": {}}},
+		Middlewares: authGuards(api, mw),
+	}, func(ctx context.Context, _ *struct{}) (*output, error) {
+		r, err := reqFromCtx(ctx)
+		if err != nil {
+			return nil, err
+		}
+		au, err := authUser(ctx)
+		if err != nil {
+			return nil, err
 		}
 		var req setActiveOrgRequest
 		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid json body")
-			return
+			return nil, huma.Error400BadRequest("invalid json body")
 		}
 		if req.OrganizationID == "" {
-			writeError(w, http.StatusBadRequest, "BAD_REQUEST", "organization_id is required")
-			return
+			return nil, huma.Error400BadRequest("organization_id is required")
 		}
 
 		// Cross-tenant isolation: caller must be an active member of
 		// the target org. Non-membership and suspended status both
 		// fail 403 — there is no leak between the two states.
-		m, err := host.Repo().GetMembershipByOrgUser(r.Context(), req.OrganizationID, au.User.ID)
+		m, err := host.Repo().GetMembershipByOrgUser(ctx, req.OrganizationID, au.User.ID)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "membership lookup failed")
-			return
+			return nil, huma.Error500InternalServerError("membership lookup failed")
 		}
 		if m == nil || m.Status != domain.MembershipActive {
-			writeError(w, http.StatusForbidden, "FORBIDDEN", "not an active member of target organization")
-			return
+			return nil, huma.Error403Forbidden("not an active member of target organization")
 		}
 
 		// Cookie path: persist on the session row.
 		if au.Session.ID != "" {
 			id := req.OrganizationID
-			if err := host.Repo().SetSessionActiveOrg(r.Context(), au.Session.ID, &id); err != nil {
+			if err := host.Repo().SetSessionActiveOrg(ctx, au.Session.ID, &id); err != nil {
 				if errors.Is(err, yautherr.ErrNotFound) {
-					writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "session no longer exists")
-					return
+					return nil, huma.Error401Unauthorized("session no longer exists")
 				}
-				writeError(w, http.StatusInternalServerError, "INTERNAL", "persist active org failed")
-				return
+				return nil, huma.Error500InternalServerError("persist active org failed")
 			}
 		}
 
 		// Resolve the post-switch payload so the response carries
 		// the canonical org list + the caller's role in the new org.
 		id := req.OrganizationID
-		resolved, role, all, err := auth.ResolveActiveOrg(r.Context(), host.Repo(), au.User.ID, &id)
+		resolved, role, all, err := auth.ResolveActiveOrg(ctx, host.Repo(), au.User.ID, &id)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "resolve active org failed")
-			return
+			return nil, huma.Error500InternalServerError("resolve active org failed")
 		}
-		writeJSON(w, http.StatusOK, activeOrgResponse{
+		return &output{Body: activeOrgResponse{
 			ActiveOrgID: resolved,
 			Role:        role,
 			Orgs:        all,
-		})
-	}
+		}}, nil
+	})
 }
 
 // --- DELETE /sessions/active-org ---
@@ -150,33 +172,41 @@ func (p *orgsPlugin) handleSetActiveOrg(host plugin.PluginHost) http.HandlerFunc
 // Clears the caller's active org. Cookie callers update the session
 // row; bearer callers get a payload with active_org_id=null and
 // should re-mint their JWT to drop the "org" claim.
-func (p *orgsPlugin) handleClearActiveOrg(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := authUser(w, r)
-		if !ok {
-			return
+func (p *orgsPlugin) registerClearActiveOrg(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	type output struct {
+		Body activeOrgResponse
+	}
+	huma.Register(api, huma.Operation{
+		OperationID: "organizations-clear-active-org",
+		Method:      http.MethodDelete,
+		Path:        prefix + "/sessions/active-org",
+		Summary:     "Clear the caller's active organization",
+		Tags:        []string{"organizations"},
+		Security:    []map[string][]string{{"sessionCookie": {}}},
+		Middlewares: authGuards(api, mw),
+	}, func(ctx context.Context, _ *struct{}) (*output, error) {
+		au, err := authUser(ctx)
+		if err != nil {
+			return nil, err
 		}
 		if au.Session.ID != "" {
-			if err := host.Repo().SetSessionActiveOrg(r.Context(), au.Session.ID, nil); err != nil {
+			if err := host.Repo().SetSessionActiveOrg(ctx, au.Session.ID, nil); err != nil {
 				if errors.Is(err, yautherr.ErrNotFound) {
-					writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "session no longer exists")
-					return
+					return nil, huma.Error401Unauthorized("session no longer exists")
 				}
-				writeError(w, http.StatusInternalServerError, "INTERNAL", "clear active org failed")
-				return
+				return nil, huma.Error500InternalServerError("clear active org failed")
 			}
 		}
 		// Refresh the membership list so the client can pick a new
 		// one without re-fetching.
-		_, _, all, err := auth.ResolveActiveOrg(r.Context(), host.Repo(), au.User.ID, nil)
+		_, _, all, err := auth.ResolveActiveOrg(ctx, host.Repo(), au.User.ID, nil)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "resolve active org failed")
-			return
+			return nil, huma.Error500InternalServerError("resolve active org failed")
 		}
-		writeJSON(w, http.StatusOK, activeOrgResponse{
+		return &output{Body: activeOrgResponse{
 			ActiveOrgID: nil,
 			Role:        nil,
 			Orgs:        all,
-		})
-	}
+		}}, nil
+	})
 }

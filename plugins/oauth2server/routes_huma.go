@@ -1,0 +1,268 @@
+package oauth2server
+
+import (
+	"context"
+	"net/http"
+
+	"github.com/danielgtaylor/huma/v2"
+
+	"github.com/yackey-labs/yauth-go/middleware"
+	"github.com/yackey-labs/yauth-go/plugin"
+)
+
+// This file carries the huma-native transport for the oauth2server plugin.
+//
+// EVERY route in this plugin is migrated from mux.Handle to huma.Register, but
+// the migration is INTENTIONALLY transport-only: not a single byte of the
+// ported handlers' request parsing or response writing changes. The OAuth2 /
+// OIDC wire endpoints (token, authorize, introspect, revoke, device,
+// end_session, DCR) emit RFC 6749 / 7662 / 8628 / 7591 bodies — RFC 6749 error
+// shapes ({"error":...,"error_description":...}, NOT RFC 9457 problem+json),
+// the exact Cache-Control: no-store / Pragma / WWW-Authenticate headers, the
+// 302 redirects, and the end_session HTML — and those MUST stay byte-identical.
+//
+// To guarantee that, the handlers keep writing the FULL response to the raw
+// http.ResponseWriter, and every operation returns oauth2StreamOutput whose
+// Body is a func(huma.Context). huma special-cases a func(huma.Context) body:
+// it invokes it and returns WITHOUT setting any status or writing any body of
+// its own (huma.go transformAndWrite path), so huma never re-marshals, never
+// re-statuses, and never problem+json-wraps the OAuth2 wire bytes. The stashed
+// writer (via StashHTTPHuma) and huma's BodyWriter() are the SAME
+// http.ResponseWriter, so the handler-written bytes are the response.
+//
+// Auth bridge: the legacy mw.RequireAuth/RequireAdmin wrappers injected the
+// resolved AuthUser into the *request* context, and the ported handlers read it
+// via middleware.AuthUserFromContext(r.Context()). The huma middlewares
+// (RequireAuthHuma/RequireAdminHuma) instead inject it onto the huma operation
+// context (huma.WithValue), which descends from r.Context(). We therefore
+// rebuild the request on the operation ctx (r = r.WithContext(ctx)) before
+// invoking the handler, so its r.Context() reads recover the AuthUser AND every
+// original request-context value. This is the "thread ctx" the migration wants.
+
+// oauth2StreamOutput is the shared output for every oauth2server operation. Its
+// Body is a func(huma.Context): huma invokes it and returns, so the ported
+// handler owns the entire response (status, headers, body) byte-for-byte. No
+// response schema is registered for a func body, so none of the plugin's
+// JSON shapes (clientJSON, tokenResponse, oauthError, ...) enter huma's global
+// type registry — there is nothing to collide with another plugin.
+type oauth2StreamOutput struct {
+	Body func(huma.Context)
+}
+
+// oauth2IDInput is the typed input for routes carrying a {id} path parameter
+// (the OAuth2 client_id). Declaring it lets huma document/validate the path
+// param; the ported handler still reads it via r.PathValue("id"), so behaviour
+// is unchanged. It carries NO Body field, so huma never consumes the request
+// body the handlers parse with their own strict decoder.
+type oauth2IDInput struct {
+	ID string `path:"id"`
+}
+
+// oauth2IDGIDInput is the input for DELETE /oauth2/clients/{id}/groups/{gid}.
+type oauth2IDGIDInput struct {
+	ID  string `path:"id"`
+	GID string `path:"gid"`
+}
+
+// oauth2IDAIDInput is the input for DELETE /oauth2/clients/{id}/roles/{aid}.
+type oauth2IDAIDInput struct {
+	ID  string `path:"id"`
+	AID string `path:"aid"`
+}
+
+// stream wraps a legacy http.HandlerFunc as a huma operation handler. It
+// recovers the stashed *http.Request / http.ResponseWriter, rebuilds the
+// request on the operation ctx (so AuthUserFromContext and other ctx values
+// resolve through r.Context()), and defers the actual write to huma via a
+// func(huma.Context) body — keeping the response byte-identical.
+func stream(h http.HandlerFunc) func(context.Context, *struct{}) (*oauth2StreamOutput, error) {
+	return func(ctx context.Context, _ *struct{}) (*oauth2StreamOutput, error) {
+		r := middleware.HTTPRequestFromContext(ctx)
+		w := middleware.HTTPResponseFromContext(ctx)
+		if r == nil || w == nil {
+			return nil, huma.Error500InternalServerError("request/response unavailable")
+		}
+		r = r.WithContext(ctx)
+		return &oauth2StreamOutput{Body: func(huma.Context) { h(w, r) }}, nil
+	}
+}
+
+// streamID is the variant of stream for operations with a typed {id} path
+// input. Behaviour is identical; only the input shape differs so huma can
+// document the path parameter.
+func streamID(h http.HandlerFunc) func(context.Context, *oauth2IDInput) (*oauth2StreamOutput, error) {
+	return func(ctx context.Context, _ *oauth2IDInput) (*oauth2StreamOutput, error) {
+		r := middleware.HTTPRequestFromContext(ctx)
+		w := middleware.HTTPResponseFromContext(ctx)
+		if r == nil || w == nil {
+			return nil, huma.Error500InternalServerError("request/response unavailable")
+		}
+		r = r.WithContext(ctx)
+		return &oauth2StreamOutput{Body: func(huma.Context) { h(w, r) }}, nil
+	}
+}
+
+// streamIDGID is the variant for the {id}+{gid} group-unassign route.
+func streamIDGID(h http.HandlerFunc) func(context.Context, *oauth2IDGIDInput) (*oauth2StreamOutput, error) {
+	return func(ctx context.Context, _ *oauth2IDGIDInput) (*oauth2StreamOutput, error) {
+		r := middleware.HTTPRequestFromContext(ctx)
+		w := middleware.HTTPResponseFromContext(ctx)
+		if r == nil || w == nil {
+			return nil, huma.Error500InternalServerError("request/response unavailable")
+		}
+		r = r.WithContext(ctx)
+		return &oauth2StreamOutput{Body: func(huma.Context) { h(w, r) }}, nil
+	}
+}
+
+// streamIDAID is the variant for the {id}+{aid} role-unassign route.
+func streamIDAID(h http.HandlerFunc) func(context.Context, *oauth2IDAIDInput) (*oauth2StreamOutput, error) {
+	return func(ctx context.Context, _ *oauth2IDAIDInput) (*oauth2StreamOutput, error) {
+		r := middleware.HTTPRequestFromContext(ctx)
+		w := middleware.HTTPResponseFromContext(ctx)
+		if r == nil || w == nil {
+			return nil, huma.Error500InternalServerError("request/response unavailable")
+		}
+		r = r.WithContext(ctx)
+		return &oauth2StreamOutput{Body: func(huma.Context) { h(w, r) }}, nil
+	}
+}
+
+// stashOnly is the per-operation middleware chain for public wire endpoints
+// (token, introspect, revoke, device/code, metadata, end_session, DCR): just
+// stash the raw request/writer so the ported handler keeps byte-identical
+// parsing and response writing. It never short-circuits, mirroring the legacy
+// un-gated mux registration.
+func stashOnly(api huma.API) huma.Middlewares {
+	return huma.Middlewares{middleware.StashHTTPHuma(api)}
+}
+
+// authGuards is the chain for the session-gated wire routes (/authorize,
+// /oauth2/consent, /oauth/device verify): stash, then require a logged-in user
+// — the SAME identity rule as the legacy mw.RequireAuth wrapper. The resolved
+// AuthUser rides the operation ctx and is recovered by the ported handler via
+// AuthUserFromContext(r.Context()) thanks to the r.WithContext(ctx) bridge.
+func authGuards(api huma.API, mw *middleware.Middleware) huma.Middlewares {
+	return huma.Middlewares{
+		middleware.StashHTTPHuma(api),
+		middleware.RequireAuthHuma(api, mw),
+	}
+}
+
+// adminGuards is the chain for the admin client-management routes: stash, then
+// require an admin identity — the SAME rule as the legacy mw.RequireAdmin
+// wrapper (the gate-failure body becomes RFC 9457 problem+json, consistent with
+// every other migrated plugin; the handlers' own OAuth2-shaped bodies are
+// unaffected).
+func adminGuards(api huma.API, mw *middleware.Middleware) huma.Middlewares {
+	return huma.Middlewares{
+		middleware.StashHTTPHuma(api),
+		middleware.RequireAdminHuma(api, mw),
+	}
+}
+
+// registerRoutes wires every oauth2server route as a huma.Register operation.
+// It is the single replacement for the former block of mux.Handle calls. Routes
+// are grouped exactly as before: admin client CRUD, client group/role
+// assignments, RFC 8414 metadata, authorize/consent, end_session, token/
+// introspect/revoke, device flow, and (opt-in) DCR.
+func (p *oauth2Plugin) registerRoutes(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	admin := adminGuards(api, mw)
+	authed := authGuards(api, mw)
+	public := stashOnly(api)
+
+	tag := []string{"oauth2"}
+	sessionSec := []map[string][]string{{"sessionCookie": {}}}
+	publicSec := []map[string][]string{}
+
+	reg := func(opID, method, path, summary string, sec []map[string][]string, mws huma.Middlewares, h http.HandlerFunc) {
+		huma.Register(api, huma.Operation{
+			OperationID: opID,
+			Method:      method,
+			Path:        prefix + path,
+			Summary:     summary,
+			Tags:        tag,
+			Security:    sec,
+			Middlewares: mws,
+		}, stream(h))
+	}
+	// regID registers a route whose path carries a single {id} parameter.
+	regID := func(opID, method, path, summary string, sec []map[string][]string, mws huma.Middlewares, h http.HandlerFunc) {
+		huma.Register(api, huma.Operation{
+			OperationID: opID,
+			Method:      method,
+			Path:        prefix + path,
+			Summary:     summary,
+			Tags:        tag,
+			Security:    sec,
+			Middlewares: mws,
+		}, streamID(h))
+	}
+
+	// --- admin client CRUD ---
+	reg("oauth2-list-clients", http.MethodGet, "/oauth2/clients", "List OAuth2 clients", sessionSec, admin, p.handleListClients(host))
+	reg("oauth2-create-client", http.MethodPost, "/oauth2/clients", "Register an OAuth2 client", sessionSec, admin, p.handleCreateClient(host))
+	regID("oauth2-get-client", http.MethodGet, "/oauth2/clients/{id}", "Fetch an OAuth2 client", sessionSec, admin, p.handleGetClient(host))
+	regID("oauth2-patch-client", http.MethodPatch, "/oauth2/clients/{id}", "Update an OAuth2 client", sessionSec, admin, p.handlePatchClient(host))
+	regID("oauth2-delete-client", http.MethodDelete, "/oauth2/clients/{id}", "Ban (soft-delete) an OAuth2 client", sessionSec, admin, p.handleDeleteClient(host))
+	regID("oauth2-ban-client", http.MethodPost, "/oauth2/clients/{id}/ban", "Ban an OAuth2 client", sessionSec, admin, p.handleBanClient(host))
+	regID("oauth2-unban-client", http.MethodPost, "/oauth2/clients/{id}/unban", "Unban an OAuth2 client", sessionSec, admin, p.handleUnbanClient(host))
+	regID("oauth2-rotate-public-key", http.MethodPost, "/oauth2/clients/{id}/rotate-public-key", "Rotate an OAuth2 client's public key", sessionSec, admin, p.handleRotatePublicKey(host))
+
+	// --- application group assignments ---
+	regID("oauth2-list-client-groups", http.MethodGet, "/oauth2/clients/{id}/groups", "List groups assigned to an OAuth2 client", sessionSec, admin, p.handleListClientGroups(host))
+	regID("oauth2-assign-client-group", http.MethodPost, "/oauth2/clients/{id}/groups", "Assign a group to an OAuth2 client", sessionSec, admin, p.handleAssignClientGroup(host))
+	huma.Register(api, huma.Operation{
+		OperationID: "oauth2-unassign-client-group",
+		Method:      http.MethodDelete,
+		Path:        prefix + "/oauth2/clients/{id}/groups/{gid}",
+		Summary:     "Unassign a group from an OAuth2 client",
+		Tags:        tag,
+		Security:    sessionSec,
+		Middlewares: admin,
+	}, streamIDGID(p.handleUnassignClientGroup(host)))
+
+	// --- application (client) roles ---
+	regID("oauth2-list-client-roles", http.MethodGet, "/oauth2/clients/{id}/roles", "List roles for an OAuth2 client", sessionSec, admin, p.handleListClientRoles(host))
+	regID("oauth2-assign-client-role", http.MethodPost, "/oauth2/clients/{id}/roles", "Assign a role on an OAuth2 client", sessionSec, admin, p.handleAssignClientRole(host))
+	huma.Register(api, huma.Operation{
+		OperationID: "oauth2-unassign-client-role",
+		Method:      http.MethodDelete,
+		Path:        prefix + "/oauth2/clients/{id}/roles/{aid}",
+		Summary:     "Unassign a role from an OAuth2 client",
+		Tags:        tag,
+		Security:    sessionSec,
+		Middlewares: admin,
+	}, streamIDAID(p.handleUnassignClientRole(host)))
+
+	// --- RFC 8414 authorization server metadata (public) ---
+	reg("oauth2-authorization-server-metadata", http.MethodGet, "/.well-known/oauth-authorization-server", "OAuth2 authorization server metadata (RFC 8414)", publicSec, public, p.handleAuthServerMetadata(host))
+
+	// --- authorization-code + consent (session-gated) ---
+	reg("oauth2-authorize", http.MethodGet, "/oauth/authorize", "OAuth2 authorization endpoint", sessionSec, authed, p.handleAuthorize(host))
+	reg("oauth2-authorize-post", http.MethodPost, "/oauth/authorize", "OAuth2 authorization endpoint (POST)", sessionSec, authed, p.handleAuthorize(host))
+	reg("oauth2-consent", http.MethodPost, "/oauth2/consent", "Approve or deny a pending authorization request", sessionSec, authed, p.handleConsent(host))
+
+	// --- OIDC RP-Initiated Logout (end_session) — public, browser-facing ---
+	reg("oauth2-end-session", http.MethodGet, "/oauth/end_session", "OIDC RP-Initiated Logout", publicSec, public, p.handleEndSession(host))
+	reg("oauth2-end-session-post", http.MethodPost, "/oauth/end_session", "OIDC RP-Initiated Logout (POST)", publicSec, public, p.handleEndSession(host))
+
+	// --- token / introspect / revoke (public wire endpoints) ---
+	reg("oauth2-token", http.MethodPost, "/oauth/token", "OAuth2 token endpoint", publicSec, public, p.handleToken(host))
+	reg("oauth2-introspect", http.MethodPost, "/oauth/introspect", "OAuth2 token introspection (RFC 7662)", publicSec, public, p.handleIntrospect(host))
+	reg("oauth2-revoke", http.MethodPost, "/oauth/revoke", "OAuth2 token revocation (RFC 7009)", publicSec, public, p.handleRevoke(host))
+
+	// --- device flow ---
+	reg("oauth2-device-authorize", http.MethodPost, "/oauth/device/code", "OAuth2 device authorization (RFC 8628)", publicSec, public, p.handleDeviceAuth(host))
+	reg("oauth2-device-verify", http.MethodPost, "/oauth/device", "Approve a device authorization", sessionSec, authed, p.handleDeviceVerify(host))
+	reg("oauth2-device-verify-get", http.MethodGet, "/oauth/device", "Device verification page", sessionSec, authed, p.handleDeviceVerify(host))
+
+	// --- RFC 7591 dynamic client registration (opt-in, self-gating) ---
+	// The handler enforces its own split policy (anonymous loopback public
+	// clients vs admin-gated otherwise) and writes the RFC 7591 §3.2.2 JSON
+	// error body, so it runs with stashOnly (NO RequireAdmin wrapper) exactly
+	// like the legacy un-wrapped mux registration.
+	if p.cfg.DCREnabled {
+		reg("oauth2-dcr-register", http.MethodPost, "/oauth/register", "Dynamic client registration (RFC 7591)", publicSec, public, p.handleDCRRegister(host, prefix))
+	}
+}

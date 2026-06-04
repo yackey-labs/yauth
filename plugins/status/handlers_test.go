@@ -14,24 +14,16 @@ import (
 	"github.com/yackey-labs/yauth/auth"
 	"github.com/yackey-labs/yauth/domain"
 	"github.com/yackey-labs/yauth/plugins/status"
-	"github.com/yackey-labs/yauth/repo/gormrepo"
+	"github.com/yackey-labs/yauth/repo/memrepo"
 )
 
 // newTestServer builds a YAuth instance with the status plugin registered
 // alongside two named placeholder plugins so PluginNames() returns a
 // stable, predictable list.
-func newTestServer(t *testing.T) (*httptest.Server, *gormrepo.Repo, func()) {
+func newTestServer(t *testing.T) (*httptest.Server, *memrepo.Repo, func()) {
 	t.Helper()
 
-	dsn := "file:" + uuid.NewString() + "?mode=memory&cache=shared&_pragma=foreign_keys(1)"
-	db, err := gormrepo.OpenSQLite(dsn)
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if err := gormrepo.Migrate(context.Background(), db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	r := gormrepo.New(db)
+	r := memrepo.New()
 
 	ya, err := yauth.New(r, yauth.NewDefaultConfig()).
 		WithPlugin(status.New()).
@@ -48,7 +40,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *gormrepo.Repo, func()) {
 
 // seedSession creates a user with the supplied role, issues a session for
 // them, and returns the raw cookie value.
-func seedSession(t *testing.T, r *gormrepo.Repo, role string) string {
+func seedSession(t *testing.T, r *memrepo.Repo, role string) string {
 	t.Helper()
 	ctx := context.Background()
 	now := time.Now().UTC()

@@ -9,28 +9,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
-
 	yauth "github.com/yackey-labs/yauth"
 	"github.com/yackey-labs/yauth/domain"
 	"github.com/yackey-labs/yauth/plugins/bearer"
 	"github.com/yackey-labs/yauth/plugins/oauth2server"
-	"github.com/yackey-labs/yauth/repo/gormrepo"
+	"github.com/yackey-labs/yauth/repo/memrepo"
 )
 
 // newSweepHarness builds a yauth instance with DCR + the stale-client sweep
 // enabled (short interval for the test). Returns the server + repo.
-func newSweepHarness(t *testing.T, ttl, interval time.Duration) (*httptest.Server, *gormrepo.Repo) {
+func newSweepHarness(t *testing.T, ttl, interval time.Duration) (*httptest.Server, *memrepo.Repo) {
 	t.Helper()
-	dsn := "file:" + uuid.NewString() + "?mode=memory&cache=shared&_pragma=foreign_keys(1)"
-	db, err := gormrepo.OpenSQLite(dsn)
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if err := gormrepo.Migrate(context.Background(), db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	r := gormrepo.New(db)
+	r := memrepo.New()
 	ya, err := yauth.New(r, yauth.NewDefaultConfig()).
 		WithJWTSecret([]byte("test-only-jwt-secret-please-change-32b")).
 		WithPlugin(bearer.New(bearer.Config{})).

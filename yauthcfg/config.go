@@ -427,8 +427,8 @@ func Default() *Config {
 	allowSignups := true
 	return &Config{
 		Database: DatabaseConfig{
-			Driver: "sqlite",
-			DSN:    "file:yauth.db?_pragma=foreign_keys(1)",
+			Driver: "pgx",
+			DSN:    "postgres://postgres:postgres@localhost:5432/yauth?sslmode=disable",
 		},
 		Server: ServerConfig{
 			Addr:         ":3000",

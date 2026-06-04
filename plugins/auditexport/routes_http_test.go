@@ -16,7 +16,7 @@ import (
 	"github.com/yackey-labs/yauth/auth"
 	"github.com/yackey-labs/yauth/domain"
 	"github.com/yackey-labs/yauth/plugins/auditexport"
-	"github.com/yackey-labs/yauth/repo/gormrepo"
+	"github.com/yackey-labs/yauth/repo/memrepo"
 )
 
 // routeEnv stands up the auditexport plugin behind the full yauth router so the
@@ -26,21 +26,13 @@ import (
 // NOT 422 on a missing {org_id} path param.
 type routeEnv struct {
 	srv  *httptest.Server
-	repo *gormrepo.Repo
+	repo *memrepo.Repo
 	stop func()
 }
 
 func newRouteEnv(t *testing.T) *routeEnv {
 	t.Helper()
-	dsn := "file:" + uuid.NewString() + "?mode=memory&cache=shared&_pragma=foreign_keys(1)"
-	db, err := gormrepo.OpenSQLite(dsn)
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if err := gormrepo.Migrate(context.Background(), db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	r := gormrepo.New(db)
+	r := memrepo.New()
 
 	ya, err := yauth.New(r, yauth.NewDefaultConfig()).
 		WithPlugin(auditexport.New(auditexport.Config{})).

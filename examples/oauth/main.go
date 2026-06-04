@@ -24,7 +24,7 @@ import (
 	yauth "github.com/yackey-labs/yauth"
 	"github.com/yackey-labs/yauth/plugins/emailpassword"
 	"github.com/yackey-labs/yauth/plugins/oauth"
-	"github.com/yackey-labs/yauth/repo/gormrepo"
+	"github.com/yackey-labs/yauth/repo/memrepo"
 )
 
 // fakeProvider is an in-process OAuth provider mock. It implements
@@ -87,15 +87,7 @@ func main() {
 	const addr = ":3000"
 	const baseURL = "http://localhost" + addr
 
-	dsn := "file::memory:?cache=shared&_pragma=foreign_keys(1)"
-	db, err := gormrepo.OpenSQLite(dsn)
-	if err != nil {
-		log.Fatalf("open sqlite: %v", err)
-	}
-	if err := gormrepo.Migrate(context.Background(), db); err != nil {
-		log.Fatalf("migrate: %v", err)
-	}
-	repoRef := gormrepo.New(db)
+	repoRef := memrepo.New()
 
 	prov := &fakeProvider{
 		cfg: &oauth2.Config{

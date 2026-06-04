@@ -1,7 +1,7 @@
 // Command admin-example is a runnable demonstration of the status +
 // admin plugins.
 //
-// It opens an in-memory SQLite database, runs migrations, seeds a single
+// It opens an in-memory repository, seeds a single
 // admin user via direct repo.CreateUser (so you don't need to register
 // then PATCH the role), builds a YAuth instance with the email-password,
 // status, and admin plugins, and serves it under /api/auth/* on :3000.
@@ -40,7 +40,7 @@ import (
 	"github.com/yackey-labs/yauth/plugins/admin"
 	"github.com/yackey-labs/yauth/plugins/emailpassword"
 	"github.com/yackey-labs/yauth/plugins/status"
-	"github.com/yackey-labs/yauth/repo/gormrepo"
+	"github.com/yackey-labs/yauth/repo/memrepo"
 	"github.com/yackey-labs/yauth/yautherr"
 )
 
@@ -50,15 +50,7 @@ const (
 )
 
 func main() {
-	dsn := "file::memory:?cache=shared&_pragma=foreign_keys(1)"
-	db, err := gormrepo.OpenSQLite(dsn)
-	if err != nil {
-		log.Fatalf("open sqlite: %v", err)
-	}
-	if err := gormrepo.Migrate(context.Background(), db); err != nil {
-		log.Fatalf("migrate: %v", err)
-	}
-	repo := gormrepo.New(db)
+	repo := memrepo.New()
 
 	if err := seedAdmin(context.Background(), repo); err != nil {
 		log.Fatalf("seed admin: %v", err)
@@ -93,7 +85,7 @@ func main() {
 // seedAdmin creates the demo admin user via direct repo writes, bypassing
 // any plugin handlers. It is idempotent — re-running the example reuses
 // the existing admin row.
-func seedAdmin(ctx context.Context, repo *gormrepo.Repo) error {
+func seedAdmin(ctx context.Context, repo *memrepo.Repo) error {
 	if existing, err := repo.GetUserByEmail(ctx, adminEmail); err == nil && existing != nil {
 		return nil
 	} else if err != nil && !errors.Is(err, yautherr.ErrNotFound) {

@@ -142,7 +142,7 @@ type Repo struct {
 	// lowercased canonical domain string to the row id. This is the
 	// app-wide UNIQUE(domain) index from yauth #90 — duplicate-domain
 	// inserts surface as ErrConflict here in the in-memory shape, and
-	// as a unique-violation in gormrepo.
+	// as a unique-violation in pgxrepo.
 	orgDomains       map[string]*domain.OrganizationDomain
 	orgDomainNameIdx map[string]string
 

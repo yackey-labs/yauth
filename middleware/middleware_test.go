@@ -17,7 +17,7 @@ import (
 )
 
 // fakeRepo is a minimal in-memory implementation of repo.Repository used
-// to drive the middleware tests without dragging in gormrepo (which would
+// to drive the middleware tests without dragging in a concrete repo (which would
 // transitively import the root yauth package and form a cycle through
 // middleware itself).
 type fakeRepo struct {

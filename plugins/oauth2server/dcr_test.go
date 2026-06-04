@@ -17,14 +17,14 @@ import (
 	"github.com/yackey-labs/yauth/domain"
 	"github.com/yackey-labs/yauth/plugins/bearer"
 	"github.com/yackey-labs/yauth/plugins/oauth2server"
-	"github.com/yackey-labs/yauth/repo/gormrepo"
+	"github.com/yackey-labs/yauth/repo/memrepo"
 )
 
 // dcrHarness wires up a yauth instance with the oauth2server plugin
 // configured for the dynamic-client-registration tests.
 type dcrHarness struct {
 	srv       *httptest.Server
-	repo      *gormrepo.Repo
+	repo      *memrepo.Repo
 	jwtSecret []byte
 }
 
@@ -45,15 +45,7 @@ func newDCRHarnessFull(t *testing.T, dcrEnabled bool, allowConfidential bool) *d
 // requires an admin.
 func newDCRHarnessCustom(t *testing.T, dcrEnabled, allowConfidential, requireAdminForLoopback bool) *dcrHarness {
 	t.Helper()
-	dsn := "file:" + uuid.NewString() + "?mode=memory&cache=shared&_pragma=foreign_keys(1)"
-	db, err := gormrepo.OpenSQLite(dsn)
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if err := gormrepo.Migrate(context.Background(), db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	r := gormrepo.New(db)
+	r := memrepo.New()
 
 	jwtSecret := []byte("test-only-jwt-secret-please-change-32b")
 	cfg := oauth2server.Config{

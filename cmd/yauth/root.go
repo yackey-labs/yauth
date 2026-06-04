@@ -12,8 +12,8 @@ import (
 func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "yauth",
-		Short:         "yauth-go operational CLI",
-		Long:          "Operational CLI for yauth-go. Production users run `yauth migrate` as a one-shot Job; the library never auto-migrates at app startup.",
+		Short:         "yauth operational CLI",
+		Long:          "Operational CLI for yauth. Production users run `yauth migrate` as a one-shot Job; the library never auto-migrates at app startup.",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
@@ -23,7 +23,6 @@ func newRootCmd() *cobra.Command {
 		newMigrateCmd(),
 		newCheckCmd(),
 		newGenSecretsCmd(),
-		newDumpSchemaCmd(),
 		newGenKeysCmd(),
 		newVersionCmd(),
 	)

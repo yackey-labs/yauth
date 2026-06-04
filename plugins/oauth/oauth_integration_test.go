@@ -20,7 +20,7 @@ import (
 	"github.com/yackey-labs/yauth/plugins/emailpassword"
 	"github.com/yackey-labs/yauth/plugins/oauth"
 	"github.com/yackey-labs/yauth/repo"
-	"github.com/yackey-labs/yauth/repo/gormrepo"
+	"github.com/yackey-labs/yauth/repo/memrepo"
 )
 
 // fakeProvider is a Provider that talks to a local httptest server which
@@ -125,14 +125,7 @@ func newStackWithRedirects(t *testing.T, info oauth.UserInfo, allowed []string) 
 		info: info,
 	}
 
-	db, err := gormrepo.OpenSQLite("file::memory:?cache=shared&_pragma=foreign_keys(1)")
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if err := gormrepo.Migrate(context.Background(), db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	repo := gormrepo.New(db)
+	repo := memrepo.New()
 
 	var key [32]byte
 	for i := range key {

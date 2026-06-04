@@ -156,7 +156,7 @@ func TestResolver_ExpiredKey_RecognizedExpired(t *testing.T) {
 
 	// Plant an expired key for this user. The fake's GetAPIKeyByPrefix
 	// already filters expired keys to ErrNotFound — that's the realistic
-	// production behavior for the GORM repo too — so the resolver returns
+	// production behavior for the SQL repo too — so the resolver returns
 	// ErrUnauthorized rather than ErrTokenExpired in that path. To exercise
 	// the explicit expiry branch, override GetAPIKeyByPrefix by inserting
 	// a key whose ExpiresAt is in the future, then advance to the past via

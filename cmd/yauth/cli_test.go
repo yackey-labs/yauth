@@ -71,23 +71,18 @@ func TestStatusReadsConfig(t *testing.T) {
 }
 
 func TestMigrateAndCheckRoundTrip(t *testing.T) {
+	// pgx is the only SQL backend, so this round-trip needs a real Postgres.
+	// CI's test-postgres job provides DATABASE_URL; otherwise skip.
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("set DATABASE_URL (Postgres) to run the migrate/check round-trip")
+	}
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "yauth.yaml")
-	dbPath := filepath.Join(dir, "yauth.db")
 
-	body := []byte(`database:
-  driver: sqlite
-  dsn: "file:` + dbPath + `?_pragma=foreign_keys(1)"
-plugins:
-  email_password:
-    enabled: true
-`)
+	body := []byte("database:\n  driver: pgx\n  dsn: \"" + dsn + "\"\nplugins:\n  email_password:\n    enabled: true\n")
 	if err := os.WriteFile(cfgPath, body, 0o600); err != nil {
 		t.Fatal(err)
-	}
-
-	if _, _, err := runCmd(t, "check", "-c", cfgPath); err == nil {
-		t.Fatal("check before migrate should fail")
 	}
 
 	out, _, err := runCmd(t, "migrate", "-c", cfgPath)
@@ -158,26 +153,7 @@ func TestVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("version: %v", err)
 	}
-	if !strings.Contains(out, "yauth-go") {
+	if !strings.Contains(out, "yauth") {
 		t.Errorf("version output unexpected: %q", out)
-	}
-}
-
-func TestDumpSchema(t *testing.T) {
-	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "yauth.yaml")
-	if _, _, err := runCmd(t, "init", "-o", cfgPath); err != nil {
-		t.Fatal(err)
-	}
-	outPath := filepath.Join(dir, "schema.sql")
-	if _, _, err := runCmd(t, "dump-schema", "-c", cfgPath, "-o", outPath); err != nil {
-		t.Fatalf("dump-schema: %v", err)
-	}
-	body, err := os.ReadFile(outPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(body), "yauth_users") {
-		t.Errorf("schema.sql missing yauth_users; got:\n%s", body)
 	}
 }

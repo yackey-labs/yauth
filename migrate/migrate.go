@@ -1,8 +1,10 @@
-// Package migrate provides goose-based database migrations for yauth-go.
+// Package migrate provides goose-based database migrations for yauth.
+//
+// Postgres (pgx) is the only supported dialect.
 //
 // # Standalone usage
 //
-//	migrate.Run(ctx, db, "pgx")  // or "postgres", "mysql", "sqlite"
+//	migrate.Run(ctx, db, "pgx")
 //
 // # Integrating into your own migration pipeline
 //
@@ -32,13 +34,12 @@ import (
 	"github.com/pressly/goose/v3"
 )
 
-//go:embed postgres mysql sqlite
+//go:embed postgres
 var migrationFS embed.FS
 
-// MigrationFS is the embedded SQL migration files for all supported
-// dialects (subdirectories: postgres, mysql, sqlite). Callers that want to
-// merge yauth migrations with their own can pass this to
-// [goose.NewProvider] directly.
+// MigrationFS is the embedded Postgres SQL migration files (subdirectory:
+// postgres). Callers that want to merge yauth migrations with their own can
+// pass this to [goose.NewProvider] directly.
 var MigrationFS fs.FS = migrationFS
 
 // VersionTable is the goose version-tracking table yauth uses. It is
@@ -68,7 +69,7 @@ func NewProvider(db *sql.DB, driver string) (*goose.Provider, error) {
 }
 
 // Run applies all pending up-migrations for the given driver against db.
-// driver must be one of "postgres", "pgx", "mysql", or "sqlite".
+// driver must be "pgx" (or its alias "postgres").
 //
 // For integration with an existing goose pipeline use [NewProvider] instead.
 func Run(ctx context.Context, db *sql.DB, driver string) error {
@@ -110,11 +111,7 @@ func dialectAndDir(driver string) (dialect, dir string, err error) {
 	switch driver {
 	case "postgres", "pgx":
 		return "postgres", "postgres", nil
-	case "mysql":
-		return "mysql", "mysql", nil
-	case "sqlite":
-		return "sqlite3", "sqlite", nil
 	default:
-		return "", "", fmt.Errorf("migrate: unsupported driver %q", driver)
+		return "", "", fmt.Errorf("migrate: unsupported driver %q (only pgx/postgres)", driver)
 	}
 }

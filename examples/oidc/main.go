@@ -23,7 +23,6 @@
 package main
 
 import (
-	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -38,7 +37,7 @@ import (
 	"github.com/yackey-labs/yauth/plugins/bearer"
 	"github.com/yackey-labs/yauth/plugins/emailpassword"
 	"github.com/yackey-labs/yauth/plugins/oidc"
-	"github.com/yackey-labs/yauth/repo/gormrepo"
+	"github.com/yackey-labs/yauth/repo/memrepo"
 )
 
 const (
@@ -91,16 +90,7 @@ func main() {
 		log.Fatalf("ensure rsa keys: %v", err)
 	}
 
-	dsn := "file::memory:?cache=shared&_pragma=foreign_keys(1)"
-	db, err := gormrepo.OpenSQLite(dsn)
-	if err != nil {
-		log.Fatalf("open sqlite: %v", err)
-	}
-	if err := gormrepo.Migrate(context.Background(), db); err != nil {
-		log.Fatalf("migrate: %v", err)
-	}
-
-	r := gormrepo.New(db)
+	r := memrepo.New()
 
 	asym, err := asymjwt.New(asymjwt.Config{
 		KeyType:        "RS256",

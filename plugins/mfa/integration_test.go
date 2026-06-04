@@ -2,7 +2,6 @@ package mfa_test
 
 import (
 	"bytes"
-	"context"
 	"crypto/rand"
 	"encoding/json"
 	"io"
@@ -17,7 +16,7 @@ import (
 	yauth "github.com/yackey-labs/yauth"
 	"github.com/yackey-labs/yauth/plugins/emailpassword"
 	"github.com/yackey-labs/yauth/plugins/mfa"
-	"github.com/yackey-labs/yauth/repo/gormrepo"
+	"github.com/yackey-labs/yauth/repo/memrepo"
 )
 
 type testEnv struct {
@@ -28,15 +27,7 @@ type testEnv struct {
 func newTestEnv(t *testing.T) (*testEnv, func()) {
 	t.Helper()
 
-	dsn := "file:" + t.Name() + "?mode=memory&cache=shared&_pragma=foreign_keys(1)"
-	db, err := gormrepo.OpenSQLite(dsn)
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if err := gormrepo.Migrate(context.Background(), db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	repo := gormrepo.New(db)
+	repo := memrepo.New()
 
 	var key [32]byte
 	if _, err := rand.Read(key[:]); err != nil {

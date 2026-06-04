@@ -27,7 +27,7 @@ import (
 
 // Suite runs the conformance harness against a single backend.
 type Suite struct {
-	// Name identifies the backend in test output (e.g. "memrepo", "gorm-sqlite").
+	// Name identifies the backend in test output (e.g. "memrepo", "pgxrepo").
 	Name string
 	// New returns a fresh, empty repo.Repository for one test case.
 	New func(t *testing.T) repo.Repository

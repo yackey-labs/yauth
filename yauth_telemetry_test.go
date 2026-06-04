@@ -13,7 +13,7 @@ import (
 
 	yauth "github.com/yackey-labs/yauth"
 	"github.com/yackey-labs/yauth/plugins/emailpassword"
-	"github.com/yackey-labs/yauth/repo/gormrepo"
+	"github.com/yackey-labs/yauth/repo/memrepo"
 	"github.com/yackey-labs/yauth/telemetry"
 )
 
@@ -33,15 +33,7 @@ func serverSpanCount(t *testing.T, configure func(*yauth.YAuthBuilder) *yauth.YA
 		otel.SetTracerProvider(prev)
 	})
 
-	db, err := gormrepo.OpenSQLite("file::memory:?cache=shared&_pragma=foreign_keys(1)")
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if err := gormrepo.Migrate(context.Background(), db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-
-	b := yauth.New(gormrepo.New(db), yauth.NewDefaultConfig()).
+	b := yauth.New(memrepo.New(), yauth.NewDefaultConfig()).
 		WithPlugin(emailpassword.New(emailpassword.Config{HIBPCheck: false, HIBPCheckSet: true})).
 		WithTelemetry(telemetry.DefaultConfig())
 	ya, err := configure(b).Build()

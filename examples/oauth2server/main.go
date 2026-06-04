@@ -2,7 +2,7 @@
 // oauth2-server plugin alongside email-password and bearer.
 //
 // On startup it:
-//   - opens an in-memory SQLite database and runs migrations,
+//   - opens an in-memory repository,
 //   - registers a confidential demo client with grant_types
 //     authorization_code + refresh_token + client_credentials and
 //     redirect_uri http://localhost:3000/callback,
@@ -33,19 +33,11 @@ import (
 	"github.com/yackey-labs/yauth/plugins/bearer"
 	"github.com/yackey-labs/yauth/plugins/emailpassword"
 	"github.com/yackey-labs/yauth/plugins/oauth2server"
-	"github.com/yackey-labs/yauth/repo/gormrepo"
+	"github.com/yackey-labs/yauth/repo/memrepo"
 )
 
 func main() {
-	dsn := "file::memory:?cache=shared&_pragma=foreign_keys(1)"
-	db, err := gormrepo.OpenSQLite(dsn)
-	if err != nil {
-		log.Fatalf("open sqlite: %v", err)
-	}
-	if err := gormrepo.Migrate(context.Background(), db); err != nil {
-		log.Fatalf("migrate: %v", err)
-	}
-	r := gormrepo.New(db)
+	r := memrepo.New()
 
 	jwtSecret := []byte("dev-only-jwt-secret-change-me-please-32b")
 
@@ -113,7 +105,7 @@ func main() {
 	}
 }
 
-func registerDemoClient(ctx context.Context, r *gormrepo.Repo) (string, string) {
+func registerDemoClient(ctx context.Context, r *memrepo.Repo) (string, string) {
 	clientID := mustHex(16)
 	rawSecret := mustHex(24)
 	hash, err := auth.HashPassword(rawSecret)

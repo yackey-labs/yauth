@@ -14,20 +14,13 @@ import (
 
 	yauth "github.com/yackey-labs/yauth"
 	"github.com/yackey-labs/yauth/plugins/emailpassword"
-	"github.com/yackey-labs/yauth/repo/gormrepo"
+	"github.com/yackey-labs/yauth/repo/memrepo"
 )
 
 func newTestServer(t *testing.T) (*httptest.Server, func()) {
 	t.Helper()
 
-	db, err := gormrepo.OpenSQLite("file::memory:?cache=shared&_pragma=foreign_keys(1)")
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if err := gormrepo.Migrate(context.Background(), db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	repo := gormrepo.New(db)
+	repo := memrepo.New()
 
 	ya, err := yauth.New(repo, yauth.NewDefaultConfig()).
 		WithPlugin(emailpassword.New(emailpassword.Config{
@@ -277,14 +270,7 @@ func (m *captureMailer) lastReset() (capturedMail, bool) {
 func newTestServerWithMailer(t *testing.T, mailer emailpassword.Mailer) (*httptest.Server, func()) {
 	t.Helper()
 
-	db, err := gormrepo.OpenSQLite("file::memory:?cache=shared&_pragma=foreign_keys(1)")
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if err := gormrepo.Migrate(context.Background(), db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	repo := gormrepo.New(db)
+	repo := memrepo.New()
 
 	ya, err := yauth.New(repo, yauth.NewDefaultConfig()).
 		WithPlugin(emailpassword.New(emailpassword.Config{
@@ -564,15 +550,7 @@ func TestRegister_DuplicateEmail_DoesNotLeak(t *testing.T) {
 func newTestServerWithConfig(t *testing.T, customize func(c *yauth.YAuthConfig)) (*httptest.Server, func()) {
 	t.Helper()
 
-	dsn := "file:" + t.Name() + "?mode=memory&cache=private&_pragma=foreign_keys(1)"
-	db, err := gormrepo.OpenSQLite(dsn)
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if err := gormrepo.Migrate(context.Background(), db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	repo := gormrepo.New(db)
+	repo := memrepo.New()
 
 	cfg := yauth.NewDefaultConfig()
 	if customize != nil {

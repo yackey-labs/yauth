@@ -1,32 +1,21 @@
 package emailpassword_test
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
-	"github.com/google/uuid"
-
 	yauth "github.com/yackey-labs/yauth"
 	"github.com/yackey-labs/yauth/auth/passwordpolicy"
 	"github.com/yackey-labs/yauth/plugins/emailpassword"
-	"github.com/yackey-labs/yauth/repo/gormrepo"
+	"github.com/yackey-labs/yauth/repo/memrepo"
 )
 
 // TestRegister_PolicyRejectsWeakPassword exercises the password policy
 // path on /register: a password missing required complexity classes
 // must produce a 400 + WEAK_PASSWORD response.
 func TestRegister_PolicyRejectsWeakPassword(t *testing.T) {
-	dsn := "file:" + uuid.NewString() + "?mode=memory&cache=shared&_pragma=foreign_keys(1)"
-	db, err := gormrepo.OpenSQLite(dsn)
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if err := gormrepo.Migrate(context.Background(), db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	repoRef := gormrepo.New(db)
+	repoRef := memrepo.New()
 
 	ya, err := yauth.New(repoRef, yauth.NewDefaultConfig()).
 		WithPlugin(emailpassword.New(emailpassword.Config{

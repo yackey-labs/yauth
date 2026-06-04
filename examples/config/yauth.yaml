@@ -3,9 +3,8 @@
 # `yauth migrate -c yauth.yaml` as a one-shot Job before rolling out
 # app replicas. Concurrent AutoMigrate across replicas races.
 database:
-  driver: sqlite
-  dsn: "file:yauth.db?_pragma=foreign_keys(1)"
-  auto_migrate: false
+  driver: memory
+  auto_migrate: true
 
 server:
   addr: ":3000"

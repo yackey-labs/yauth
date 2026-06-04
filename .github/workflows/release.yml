@@ -7,10 +7,13 @@ name: Release npm packages
 # npm packages and the server release at the same version. workflow_dispatch
 # is provided for the first publish under this repo.
 #
-# Publishing uses npm OIDC **trusted publishing** — there is no NPM_TOKEN.
-# The trusted-publisher config on npm is pinned to repo `yackey-labs/yauth`,
-# workflow `release.yml`, no environment. Do not rename this file or add an
-# `environment:` without updating the npm config.
+# Auth: a one-time NPM_TOKEN (secrets.NPM_TOKEN) bootstrap. The repo rename
+# broke OIDC trusted publishing — the published 0.14.0 provenance points at a
+# commit now in yauth-rs, so npm can't validate the trusted-publisher source.
+# This publish re-anchors provenance to THIS repo; afterwards set up the
+# trusted publisher (repo `yackey-labs/yauth`, workflow `release.yml`, no
+# environment) and drop NODE_AUTH_TOKEN to revert to pure OIDC. Keep this file
+# named release.yml so it matches the npm trusted-publisher config.
 
 on:
   push:
@@ -45,20 +48,10 @@ jobs:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
 
-      # npm OIDC trusted publishing needs npm >= 11.5.1; the bundled npm is
-      # older. pnpm's own publish (9.15.4) has no OIDC support, so we publish
-      # with npm.
-      - name: Upgrade npm (trusted-publishing support)
+      # Recent npm for provenance attestation (and future OIDC publishing).
+      # We publish with npm, not pnpm (pnpm 9.15.4 lacks provenance/OIDC).
+      - name: Upgrade npm
         run: npm install -g npm@latest
-
-      # setup-node's registry-url writes `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}`.
-      # With no token set, that EMPTY value still counts — npm uses it and
-      # attempts (failing) token auth instead of OIDC. Strip the line, keeping
-      # the registry/scope config, so npm's OIDC trusted-publishing engages.
-      - name: Strip empty _authToken so OIDC engages
-        run: |
-          sed -i '/_authToken/d' "$NPM_CONFIG_USERCONFIG"
-          echo "npmrc ($NPM_CONFIG_USERCONFIG):"; cat "$NPM_CONFIG_USERCONFIG"
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -78,28 +71,22 @@ jobs:
       - name: Build packages
         run: pnpm run build
 
-      # Publish each package from its directory (npm's OIDC trusted-publishing
-      # detection needs the package context). workspace:* deps are substituted
-      # in-place with the concrete version first so consumers get a real range.
-      - name: Publish to npm (OIDC trusted publishing + provenance)
+      # Publish each package from its directory with token auth; --provenance
+      # still attests the build via id-token, re-anchoring provenance to this
+      # repo. workspace:* deps are substituted in-place with the concrete
+      # version first so consumers get a real range.
+      - name: Publish to npm (token auth + provenance)
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
-          # NODE_AUTH_TOKEN lingers in the env (setup-node). Even empty, npm
-          # uses it and skips OIDC — unset it so OIDC engages.
-          unset NODE_AUTH_TOKEN || true
-          echo "npm version: $(npm --version)"
-          if [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
-            echo "OIDC id-token: available"
-          else
-            echo "OIDC id-token: MISSING (id-token:write not effective)"
-          fi
           VER=$(node -p "require('./packages/shared/package.json').version")
           echo "publishing version: $VER"
           for p in shared client ui-vue; do
             sed -i "s/\"workspace:\*\"/\"$VER\"/g" "packages/$p/package.json"
           done
-          # Verbose on the first publish to surface the OIDC handshake if it
-          # still fails.
-          ( cd packages/shared && npm publish --provenance --access public --loglevel verbose )
-          ( cd packages/client && npm publish --provenance --access public )
-          ( cd packages/ui-vue && npm publish --provenance --access public )
+          for p in shared client ui-vue; do
+            echo "::group::npm publish $p"
+            ( cd "packages/$p" && npm publish --provenance --access public )
+            echo "::endgroup::"
+          done

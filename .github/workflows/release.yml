@@ -40,13 +40,10 @@ jobs:
         with:
           version: 9.15.4
 
-      # IMPORTANT: do NOT use setup-node's `registry-url:` — it writes an
-      # `_authToken=${NODE_AUTH_TOKEN}` line that makes npm attempt (empty)
-      # token auth and never fall through to OIDC. We need the registry
-      # configured WITHOUT any token so npm's OIDC trusted-publishing engages.
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
 
       # npm OIDC trusted publishing needs npm >= 11.5.1; the bundled npm is
       # older. pnpm's own publish (9.15.4) has no OIDC support, so we publish
@@ -54,12 +51,14 @@ jobs:
       - name: Upgrade npm (trusted-publishing support)
         run: npm install -g npm@latest
 
-      # Configure the registry with NO auth token. npm's OIDC handshake needs
-      # the registry configured but must not find a token (or it uses that).
-      - name: Configure npm registry (token-free, for OIDC)
+      # setup-node's registry-url writes `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}`.
+      # With no token set, that EMPTY value still counts — npm uses it and
+      # attempts (failing) token auth instead of OIDC. Strip the line, keeping
+      # the registry/scope config, so npm's OIDC trusted-publishing engages.
+      - name: Strip empty _authToken so OIDC engages
         run: |
-          printf 'registry=https://registry.npmjs.org/\n@yackey-labs:registry=https://registry.npmjs.org/\n' > "$HOME/.npmrc"
-          echo "user .npmrc:"; cat "$HOME/.npmrc"
+          sed -i '/_authToken/d' "$NPM_CONFIG_USERCONFIG"
+          echo "npmrc ($NPM_CONFIG_USERCONFIG):"; cat "$NPM_CONFIG_USERCONFIG"
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

@@ -24,26 +24,15 @@ import (
 // for HMAC-SHA256 and short enough to copy/paste.
 const secretBytes = 32
 
-// reqFromCtx returns the *http.Request stashed by StashHTTPHuma. On a route in
-// this plugin's StashHTTPHuma chain it is always present; the nil guard keeps
-// the helper safe.
+// reqFromCtx returns the *http.Request stashed by StashHTTPHuma. On the
+// list/deliveries routes (which keep the StashHTTPHuma bridge for lenient
+// pagination) it is always present; the nil guard keeps the helper safe.
 func reqFromCtx(ctx context.Context) (*http.Request, error) {
 	r := middleware.HTTPRequestFromContext(ctx)
 	if r == nil {
 		return nil, huma.Error500InternalServerError("request unavailable")
 	}
 	return r, nil
-}
-
-// decodeJSON parses r.Body into v with a 1 MiB cap and strict
-// (DisallowUnknownFields) decoding so the migrated create/update handlers keep
-// byte-identical request parsing — a malformed or unknown field still yields a
-// 400, exactly as the legacy net/http handler did.
-func decodeJSON(r *http.Request, v any) error {
-	r.Body = http.MaxBytesReader(nil, r.Body, 1<<20)
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	return dec.Decode(v)
 }
 
 // generateSecret returns a hex-encoded random secret of secretBytes
@@ -101,8 +90,10 @@ func webhookSecurity() []map[string][]string {
 	return []map[string][]string{{"sessionCookie": {}}}
 }
 
-// webhookGuards is the per-operation middleware chain shared by every webhooks
-// route: stash the raw request/writer, then require an admin identity.
+// webhookGuards is the per-operation middleware chain for the list/deliveries
+// routes: stash the raw request/writer (so paginationFromQuery keeps its lenient
+// ?page=/?per_page= parsing), then require an admin identity. The write-ops use
+// a native typed Body and only need RequireAdminHuma, so they don't use this.
 func webhookGuards(api huma.API, mw *middleware.Middleware) huma.Middlewares {
 	return huma.Middlewares{
 		middleware.StashHTTPHuma(api),
@@ -203,7 +194,16 @@ type createWebhookRequest struct {
 	// Secret is the HMAC signing secret. When omitted a fresh random
 	// secret is generated; the operator must capture the response in
 	// either case because it is not retrievable later.
-	Secret string `json:"secret,omitempty"`
+	Secret string   `json:"secret,omitempty"`
+	_      struct{} `json:"-" additionalProperties:"false"`
+}
+
+// webhookCreateInput is the huma-native request: a typed JSON body. huma parses
+// + validates it (and rejects unknown/malformed fields via
+// additionalProperties:false → 422), so the request schema auto-derives — no
+// StashHTTPHuma bridge.
+type webhookCreateInput struct {
+	Body createWebhookRequest
 }
 
 type webhookCreateOutput struct {
@@ -211,11 +211,10 @@ type webhookCreateOutput struct {
 }
 
 // registerCreate wires POST /webhooks as a huma-native operation guarded by
-// RequireAdminHuma. It pairs with StashHTTPHuma and reuses the strict decodeJSON
-// (DisallowUnknownFields, 1 MiB cap) on the stashed request so the request body
-// parsing — including the 400 on unknown/malformed fields — stays
-// byte-identical to the legacy handler. The input struct carries NO huma Body
-// field, so huma never consumes the body itself.
+// RequireAdminHuma. The request body is a native huma typed Body, so huma parses
+// + validates it and the OpenAPI request schema auto-derives;
+// additionalProperties:false rejects unknown fields (422). The url/events
+// presence checks stay manual 400s (business validation, not schema).
 func (p *webhooksPlugin) registerCreate(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
 	huma.Register(api, huma.Operation{
 		OperationID:   "webhook-create",
@@ -225,16 +224,9 @@ func (p *webhooksPlugin) registerCreate(host plugin.PluginHost, api huma.API, mw
 		Tags:          []string{"webhooks"},
 		Security:      webhookSecurity(),
 		DefaultStatus: http.StatusCreated,
-		Middlewares:   webhookGuards(api, mw),
-	}, func(ctx context.Context, _ *struct{}) (*webhookCreateOutput, error) {
-		r, err := reqFromCtx(ctx)
-		if err != nil {
-			return nil, err
-		}
-		var req createWebhookRequest
-		if err := decodeJSON(r, &req); err != nil {
-			return nil, huma.Error400BadRequest(err.Error())
-		}
+		Middlewares:   huma.Middlewares{middleware.RequireAdminHuma(api, mw)},
+	}, func(ctx context.Context, in *webhookCreateInput) (*webhookCreateOutput, error) {
+		req := in.Body
 		if req.URL == "" {
 			return nil, huma.Error400BadRequest("url is required")
 		}
@@ -341,7 +333,17 @@ type updateWebhookRequest struct {
 	// Secret, when non-empty, replaces the webhook's HMAC secret. Send
 	// an empty string to keep the existing secret. (The legacy
 	// `rotate_secret: true` boolean is no longer accepted.)
-	Secret *string `json:"secret"`
+	Secret *string  `json:"secret"`
+	_      struct{} `json:"-" additionalProperties:"false"`
+}
+
+// webhookUpdateInput is the huma-native request for PATCH/PUT /webhooks/{id}: a
+// native path param plus a typed JSON body. huma parses + validates the body
+// (rejecting unknown/malformed fields via additionalProperties:false → 422), so
+// the request schema auto-derives — no StashHTTPHuma bridge.
+type webhookUpdateInput struct {
+	ID   string `path:"id" doc:"Webhook id"`
+	Body updateWebhookRequest
 }
 
 type webhookUpdateOutput struct {
@@ -349,8 +351,9 @@ type webhookUpdateOutput struct {
 }
 
 // registerUpdate wires PATCH (and, with a distinct OperationID, its PUT alias —
-// Rust parity) for /webhooks/{id}. Like create it pairs with StashHTTPHuma and
-// reuses the strict decodeJSON so request-body parsing stays byte-identical.
+// Rust parity) for /webhooks/{id}. The request body is a native huma typed Body,
+// so huma parses + validates it and the request schema auto-derives;
+// additionalProperties:false rejects unknown fields (422).
 func (p *webhooksPlugin) registerUpdate(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix, method, operationID string) {
 	huma.Register(api, huma.Operation{
 		OperationID: operationID,
@@ -359,16 +362,9 @@ func (p *webhooksPlugin) registerUpdate(host plugin.PluginHost, api huma.API, mw
 		Summary:     "Update url/events/active and optionally rotate the secret",
 		Tags:        []string{"webhooks"},
 		Security:    webhookSecurity(),
-		Middlewares: webhookGuards(api, mw),
-	}, func(ctx context.Context, in *idInput) (*webhookUpdateOutput, error) {
-		r, err := reqFromCtx(ctx)
-		if err != nil {
-			return nil, err
-		}
-		var req updateWebhookRequest
-		if err := decodeJSON(r, &req); err != nil {
-			return nil, huma.Error400BadRequest(err.Error())
-		}
+		Middlewares: huma.Middlewares{middleware.RequireAdminHuma(api, mw)},
+	}, func(ctx context.Context, in *webhookUpdateInput) (*webhookUpdateOutput, error) {
+		req := in.Body
 
 		now := time.Now().UTC()
 		changes := domain.UpdateWebhook{UpdatedAt: &now}

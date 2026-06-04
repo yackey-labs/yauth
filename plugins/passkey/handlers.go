@@ -60,12 +60,6 @@ func reqRespFromCtx(ctx context.Context) (*http.Request, http.ResponseWriter, er
 	return r, w, nil
 }
 
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
 func cookieOptionsFromHost(host plugin.PluginHost, r *http.Request, maxAge int) auth.CookieOptions {
 	sameSite := "Lax"
 	switch host.CookieSameSite() {
@@ -516,22 +510,32 @@ type passkeyJSON struct {
 	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
 }
 
-// listResponse wraps GET /passkeys with pagination metadata so clients
-// can adopt paging without a breaking change.
-type listResponse struct {
+// passkeyListResponse wraps GET /passkeys with pagination metadata so clients
+// can adopt paging without a breaking change. (Prefixed to avoid colliding with
+// other plugins' list types in huma's global schema registry.)
+type passkeyListResponse struct {
 	Items   []passkeyJSON `json:"items"`
 	Total   int64         `json:"total"`
 	Page    int           `json:"page"`
 	PerPage int           `json:"per_page"`
 }
 
-func (p *passkeyPlugin) handleList(host plugin.PluginHost) func(context.Context, *passkeyInput) (*emptyOutput, error) {
-	return func(ctx context.Context, _ *passkeyInput) (*emptyOutput, error) {
+// passkeyListOutput gives the list route a typed huma Output so the response
+// schema auto-derives (the client generates a typed return instead of void).
+type passkeyListOutput struct {
+	Body passkeyListResponse
+}
+
+func (p *passkeyPlugin) handleList(host plugin.PluginHost) func(context.Context, *passkeyInput) (*passkeyListOutput, error) {
+	return func(ctx context.Context, _ *passkeyInput) (*passkeyListOutput, error) {
 		au, ok := middleware.AuthUserFromContext(ctx)
 		if !ok || au == nil {
 			return nil, huma.Error401Unauthorized("not authenticated")
 		}
-		r, w, err := reqRespFromCtx(ctx)
+		// StashHTTPHuma is retained for the lenient paginationFromQuery (bad
+		// ?page/?per_page degrade to defaults rather than 422); the response is
+		// now a typed Output, so the writer is unused.
+		r, _, err := reqRespFromCtx(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -561,13 +565,12 @@ func (p *passkeyPlugin) handleList(host plugin.PluginHost) func(context.Context,
 				LastUsedAt: row.LastUsedAt,
 			}
 		}
-		writeJSON(w, http.StatusOK, listResponse{
+		return &passkeyListOutput{Body: passkeyListResponse{
 			Items:   out,
 			Total:   total,
 			Page:    page,
 			PerPage: perPage,
-		})
-		return &emptyOutput{}, nil
+		}}, nil
 	}
 }
 

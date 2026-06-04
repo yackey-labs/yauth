@@ -65,24 +65,19 @@ func (p *mfaPlugin) Name() string { return "mfa" }
 // shared huma.API. The mux is retained in the signature for parity with the
 // plugin interface but is no longer used.
 //
-// Middleware wiring is per-route, following the rule "StashHTTPHuma only when a
-// route needs raw *http.Request / http.ResponseWriter access":
+// Every write-op uses a native huma typed Body (request schemas auto-derive;
+// unknown fields → 422) and a typed Body output (huma marshals the response).
+// Middleware is per-route, following the rule "StashHTTPHuma only when a route
+// needs raw *http.Request / http.ResponseWriter access":
 //
-//   - setup  — RequireAuthHuma + StashHTTPHuma: its response carries an
-//     otpauth_url containing '&', which the legacy handler emits HTML-escaped
-//     ('&'). huma's Body marshaler disables HTML escaping, so to stay
-//     byte-identical the handler writes the body itself onto the stashed writer.
-//   - confirm — RequireAuthHuma + StashHTTPHuma: needs the raw request for the
-//     strict decodeJSON (DisallowUnknownFields) that keeps a malformed body a
-//     400 (a huma Body input would yield 422). Its success body is a fixed
-//     string with no special chars, returned via huma Body.
-//   - delete / backup-codes count / regenerate — RequireAuthHuma only: no body
-//     to decode, no cookie to write, and their responses contain no '&'/'<'/'>'
-//     so huma's Body marshaler is byte-identical. They return typed Body outputs.
-//   - verify — StashHTTPHuma only (unauthenticated; gated by the pending-session
-//     id): needs the raw request to decode the body and read RequestIP/UA, the
-//     writer to set the session cookie, and manual writeJSON because the user's
-//     display_name/email may contain HTML-escapable characters.
+//   - setup / confirm / delete / backup-codes count / regenerate —
+//     RequireAuthHuma only: no cookie to write and no need for the raw request,
+//     so they are fully huma-native (typed Body in, typed Body out). The user is
+//     recovered via AuthUserFromContext.
+//   - verify — RequireAuthHuma is NOT applied (public: gated by the
+//     pending-session id) but StashHTTPHuma IS: it needs the raw request to read
+//     RequestIP / User-Agent and the writer to set the session cookie. The
+//     request body and response are still native huma typed Body.
 func (p *mfaPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.API, prefix string) {
 	mw := host.Middleware()
 
@@ -92,10 +87,6 @@ func (p *mfaPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.A
 		pendingSessionTTL: pendingSessionTTL,
 	})
 
-	authStashMw := huma.Middlewares{
-		middleware.StashHTTPHuma(api),
-		middleware.RequireAuthHuma(api, mw),
-	}
 	authMw := huma.Middlewares{
 		middleware.RequireAuthHuma(api, mw),
 	}
@@ -113,7 +104,7 @@ func (p *mfaPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.A
 		Description: "Create (or reset) an unverified TOTP secret and a fresh set of backup codes.",
 		Tags:        []string{"mfa"},
 		Security:    sec,
-		Middlewares: authStashMw,
+		Middlewares: authMw,
 	}, p.handleSetup(host))
 
 	huma.Register(api, huma.Operation{
@@ -124,7 +115,7 @@ func (p *mfaPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.A
 		Description: "Validate a TOTP code against the pending secret and mark it verified.",
 		Tags:        []string{"mfa"},
 		Security:    sec,
-		Middlewares: authStashMw,
+		Middlewares: authMw,
 	}, p.handleConfirm(host))
 
 	huma.Register(api, huma.Operation{

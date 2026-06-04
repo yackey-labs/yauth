@@ -7,7 +7,6 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -28,65 +27,20 @@ import (
 	"github.com/yackey-labs/yauth-go/yautherr"
 )
 
-// mfaInput is the shared zero-field input for MFA operations. Request bodies
-// are decoded manually from the *http.Request stashed by StashHTTPHuma (strict
-// DisallowUnknownFields decode → byte-identical INVALID_REQUEST errors), so the
-// huma input struct carries no Body field and huma never consumes the body.
-type mfaInput struct{}
-
-// mfaEmptyOutput carries no body. The setup and verify handlers write their
-// success response directly onto the stashed http.ResponseWriter — their bodies
-// contain HTML-escapable characters (the otpauth_url's '&'; a user's
-// display_name/email), so the legacy default-escaping json.Encoder output is NOT
-// byte-identical to huma's escape-disabled Body marshaler — then return this
-// empty output so huma adds no body of its own.
-type mfaEmptyOutput struct{}
-
-// messageOutput / countOutput / regenerateOutput are huma Body outputs for the
-// three routes whose responses contain no '&'/'<'/'>' and therefore marshal
-// byte-identically through huma (which disables HTML escaping). Returning a Body
-// keeps huma's response model (status + body) consistent with the wire.
-type messageOutput struct {
-	Body mfaMessageResponse
-}
-
-type countOutput struct {
-	Body backupCodesCountResponse
-}
-
-type regenerateOutput struct {
-	Body regenerateResponse
-}
-
-// reqRespFromCtx recovers the *http.Request and http.ResponseWriter stashed by
-// StashHTTPHuma. It is used by setup and verify, the two routes wired with
-// StashHTTPHuma; both are always present there and the guard keeps it safe.
-func reqRespFromCtx(ctx context.Context) (*http.Request, http.ResponseWriter, error) {
-	r := middleware.HTTPRequestFromContext(ctx)
-	w := middleware.HTTPResponseFromContext(ctx)
-	if r == nil || w == nil {
-		return nil, nil, huma.Error500InternalServerError("request unavailable")
-	}
-	return r, w, nil
-}
+// The MFA operations are huma-native: request bodies are typed Body fields so
+// huma parses + validates them (rejecting unknown fields via
+// additionalProperties:false → 422) and the request schemas auto-derive.
+// Responses are typed Body outputs that huma marshals — the otpauth_url and a
+// user's display_name/email may contain '&'/'<'/'>', which huma emits unescaped
+// (vs the legacy json.Encoder's HTML escaping), but that is semantically
+// identical to a JSON client and the spec is hand-maintained in openapi/, so the
+// difference is immaterial. Only /verify retains StashHTTPHuma — it needs the
+// raw *http.Request (RequestIP / User-Agent) and http.ResponseWriter (Set-Cookie).
 
 const (
 	backupCodeCount = 10
 	backupCodeBytes = 8 // 16 hex chars
 )
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func decodeJSON(r *http.Request, v any) error {
-	r.Body = http.MaxBytesReader(nil, r.Body, 1<<20)
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	return dec.Decode(v)
-}
 
 func cookieOptionsFromHost(host plugin.PluginHost, r *http.Request, maxAge int) auth.CookieOptions {
 	sameSite := "Lax"
@@ -133,14 +87,19 @@ func hashBackupCode(code string) string {
 
 // --- POST /totp/setup ----------------------------------------------------
 
-// setupResponse returns the TOTP shared secret + a data-URL-encoded QR
+// mfaSetupResponse returns the TOTP shared secret + a data-URL-encoded QR
 // image alongside the raw otpauth URL. CLI/mobile clients render the
 // pre-baked QR; web clients can use either field.
-type setupResponse struct {
+type mfaSetupResponse struct {
 	Secret      string   `json:"secret"`
 	OTPAuthURL  string   `json:"otpauth_url"`
 	QRCode      string   `json:"qr_code"`
 	BackupCodes []string `json:"backup_codes"`
+}
+
+// mfaSetupOutput wraps mfaSetupResponse so huma marshals the success body.
+type mfaSetupOutput struct {
+	Body mfaSetupResponse
 }
 
 // renderQRDataURL turns an otpauth URL into a `data:image/png;base64,…`
@@ -155,15 +114,11 @@ func renderQRDataURL(otpauthURL string) string {
 	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
 }
 
-func (p *mfaPlugin) handleSetup(host plugin.PluginHost) func(context.Context, *mfaInput) (*mfaEmptyOutput, error) {
-	return func(ctx context.Context, _ *mfaInput) (*mfaEmptyOutput, error) {
+func (p *mfaPlugin) handleSetup(host plugin.PluginHost) func(context.Context, *struct{}) (*mfaSetupOutput, error) {
+	return func(ctx context.Context, _ *struct{}) (*mfaSetupOutput, error) {
 		au, ok := middleware.AuthUserFromContext(ctx)
 		if !ok || au == nil {
 			return nil, huma.Error401Unauthorized("not authenticated")
-		}
-		_, w, err := reqRespFromCtx(ctx)
-		if err != nil {
-			return nil, err
 		}
 		repoRef := host.Repo()
 
@@ -217,44 +172,46 @@ func (p *mfaPlugin) handleSetup(host plugin.PluginHost) func(context.Context, *m
 			}
 		}
 
-		writeJSON(w, http.StatusOK, setupResponse{
+		return &mfaSetupOutput{Body: mfaSetupResponse{
 			Secret:      secret,
 			OTPAuthURL:  key.URL(),
 			QRCode:      renderQRDataURL(key.URL()),
 			BackupCodes: plain,
-		})
-		return &mfaEmptyOutput{}, nil
+		}}, nil
 	}
 }
 
 // --- POST /totp/confirm --------------------------------------------------
 
-type confirmRequest struct {
-	Code string `json:"code"`
+type mfaConfirmRequest struct {
+	Code string   `json:"code"`
+	_    struct{} `json:"-" additionalProperties:"false"`
+}
+
+// mfaConfirmInput is the huma-native request: a typed JSON body. huma parses +
+// validates it (and rejects unknown fields → 422), so the request schema
+// auto-derives without the StashHTTPHuma bridge.
+type mfaConfirmInput struct {
+	Body mfaConfirmRequest
 }
 
 type mfaMessageResponse struct {
 	Message string `json:"message"`
 }
 
-func (p *mfaPlugin) handleConfirm(host plugin.PluginHost) func(context.Context, *mfaInput) (*messageOutput, error) {
-	return func(ctx context.Context, _ *mfaInput) (*messageOutput, error) {
+// messageOutput is a huma Body output for the routes whose responses are a
+// fixed message string.
+type messageOutput struct {
+	Body mfaMessageResponse
+}
+
+func (p *mfaPlugin) handleConfirm(host plugin.PluginHost) func(context.Context, *mfaConfirmInput) (*messageOutput, error) {
+	return func(ctx context.Context, in *mfaConfirmInput) (*messageOutput, error) {
 		au, ok := middleware.AuthUserFromContext(ctx)
 		if !ok || au == nil {
 			return nil, huma.Error401Unauthorized("not authenticated")
 		}
-		// StashHTTPHuma stashed the request so we can run the strict decoder
-		// (DisallowUnknownFields) that keeps a malformed body a 400 — a huma
-		// Body input would surface 422 instead.
-		r := middleware.HTTPRequestFromContext(ctx)
-		if r == nil {
-			return nil, huma.Error500InternalServerError("request unavailable")
-		}
-		var req confirmRequest
-		if err := decodeJSON(r, &req); err != nil {
-			return nil, huma.Error400BadRequest(err.Error())
-		}
-		req.Code = strings.TrimSpace(req.Code)
+		code := strings.TrimSpace(in.Body.Code)
 
 		repoRef := host.Repo()
 
@@ -271,7 +228,7 @@ func (p *mfaPlugin) handleConfirm(host plugin.PluginHost) func(context.Context, 
 		if err != nil {
 			return nil, huma.Error500InternalServerError("unable to decrypt totp secret")
 		}
-		if !totp.Validate(req.Code, secret) {
+		if !totp.Validate(code, secret) {
 			return nil, huma.Error401Unauthorized("invalid mfa code")
 		}
 		if err := repoRef.MarkTOTPVerified(ctx, row.ID); err != nil {
@@ -283,8 +240,8 @@ func (p *mfaPlugin) handleConfirm(host plugin.PluginHost) func(context.Context, 
 
 // --- DELETE /totp --------------------------------------------------------
 
-func (p *mfaPlugin) handleDelete(host plugin.PluginHost) func(context.Context, *mfaInput) (*messageOutput, error) {
-	return func(ctx context.Context, _ *mfaInput) (*messageOutput, error) {
+func (p *mfaPlugin) handleDelete(host plugin.PluginHost) func(context.Context, *struct{}) (*messageOutput, error) {
+	return func(ctx context.Context, _ *struct{}) (*messageOutput, error) {
 		au, ok := middleware.AuthUserFromContext(ctx)
 		if !ok || au == nil {
 			return nil, huma.Error401Unauthorized("not authenticated")
@@ -302,12 +259,17 @@ func (p *mfaPlugin) handleDelete(host plugin.PluginHost) func(context.Context, *
 
 // --- GET /backup-codes (count of unused) ---------------------------------
 
-type backupCodesCountResponse struct {
+type mfaBackupCodesCountResponse struct {
 	Remaining int `json:"remaining"`
 }
 
-func (p *mfaPlugin) handleBackupCodesCount(host plugin.PluginHost) func(context.Context, *mfaInput) (*countOutput, error) {
-	return func(ctx context.Context, _ *mfaInput) (*countOutput, error) {
+// countOutput is a huma Body output carrying the unused-backup-code count.
+type countOutput struct {
+	Body mfaBackupCodesCountResponse
+}
+
+func (p *mfaPlugin) handleBackupCodesCount(host plugin.PluginHost) func(context.Context, *struct{}) (*countOutput, error) {
+	return func(ctx context.Context, _ *struct{}) (*countOutput, error) {
 		au, ok := middleware.AuthUserFromContext(ctx)
 		if !ok || au == nil {
 			return nil, huma.Error401Unauthorized("not authenticated")
@@ -316,18 +278,23 @@ func (p *mfaPlugin) handleBackupCodesCount(host plugin.PluginHost) func(context.
 		if err != nil {
 			return nil, huma.Error500InternalServerError("unable to list backup codes")
 		}
-		return &countOutput{Body: backupCodesCountResponse{Remaining: len(codes)}}, nil
+		return &countOutput{Body: mfaBackupCodesCountResponse{Remaining: len(codes)}}, nil
 	}
 }
 
 // --- POST /backup-codes/regenerate ---------------------------------------
 
-type regenerateResponse struct {
+type mfaRegenerateResponse struct {
 	BackupCodes []string `json:"backup_codes"`
 }
 
-func (p *mfaPlugin) handleRegenerateBackupCodes(host plugin.PluginHost) func(context.Context, *mfaInput) (*regenerateOutput, error) {
-	return func(ctx context.Context, _ *mfaInput) (*regenerateOutput, error) {
+// regenerateOutput is a huma Body output carrying the freshly issued codes.
+type regenerateOutput struct {
+	Body mfaRegenerateResponse
+}
+
+func (p *mfaPlugin) handleRegenerateBackupCodes(host plugin.PluginHost) func(context.Context, *struct{}) (*regenerateOutput, error) {
+	return func(ctx context.Context, _ *struct{}) (*regenerateOutput, error) {
 		au, ok := middleware.AuthUserFromContext(ctx)
 		if !ok || au == nil {
 			return nil, huma.Error401Unauthorized("not authenticated")
@@ -353,23 +320,33 @@ func (p *mfaPlugin) handleRegenerateBackupCodes(host plugin.PluginHost) func(con
 				return nil, huma.Error500InternalServerError("unable to persist backup codes")
 			}
 		}
-		return &regenerateOutput{Body: regenerateResponse{BackupCodes: plain}}, nil
+		return &regenerateOutput{Body: mfaRegenerateResponse{BackupCodes: plain}}, nil
 	}
 }
 
 // --- POST /verify --------------------------------------------------------
 
-type verifyRequest struct {
-	PendingSessionID string `json:"pending_session_id"`
-	Code             string `json:"code"`
+type mfaVerifyRequest struct {
+	PendingSessionID string   `json:"pending_session_id"`
+	Code             string   `json:"code"`
+	_                struct{} `json:"-" additionalProperties:"false"`
 }
 
-// verifyResponse wraps the verified user under `user`.
-type verifyResponse struct {
-	User verifyUser `json:"user"`
+// mfaVerifyInput is the huma-native request body for /verify. huma parses +
+// validates it (unknown fields → 422). /verify still pairs with StashHTTPHuma
+// because it needs the raw *http.Request (RequestIP / User-Agent) and the
+// http.ResponseWriter (to set the session cookie); the response body itself is a
+// typed huma Body output.
+type mfaVerifyInput struct {
+	Body mfaVerifyRequest
 }
 
-type verifyUser struct {
+// mfaVerifyResponse wraps the verified user under `user`.
+type mfaVerifyResponse struct {
+	User mfaVerifyUser `json:"user"`
+}
+
+type mfaVerifyUser struct {
 	ID            string  `json:"id"`
 	Email         string  `json:"email"`
 	DisplayName   *string `json:"display_name,omitempty"`
@@ -377,25 +354,28 @@ type verifyUser struct {
 	Role          string  `json:"role"`
 }
 
-func (p *mfaPlugin) handleVerify(host plugin.PluginHost) func(context.Context, *mfaInput) (*mfaEmptyOutput, error) {
-	return func(ctx context.Context, _ *mfaInput) (*mfaEmptyOutput, error) {
-		r, w, err := reqRespFromCtx(ctx)
-		if err != nil {
-			return nil, err
+// mfaVerifyOutput wraps mfaVerifyResponse so huma marshals the success body after
+// the handler sets the session cookie on the stashed writer.
+type mfaVerifyOutput struct {
+	Body mfaVerifyResponse
+}
+
+func (p *mfaPlugin) handleVerify(host plugin.PluginHost) func(context.Context, *mfaVerifyInput) (*mfaVerifyOutput, error) {
+	return func(ctx context.Context, in *mfaVerifyInput) (*mfaVerifyOutput, error) {
+		r := middleware.HTTPRequestFromContext(ctx)
+		w := middleware.HTTPResponseFromContext(ctx)
+		if r == nil || w == nil {
+			return nil, huma.Error500InternalServerError("request unavailable")
 		}
-		var req verifyRequest
-		if err := decodeJSON(r, &req); err != nil {
-			return nil, huma.Error400BadRequest(err.Error())
-		}
-		req.PendingSessionID = strings.TrimSpace(req.PendingSessionID)
-		req.Code = strings.TrimSpace(req.Code)
-		if req.PendingSessionID == "" || req.Code == "" {
+		pendingSessionID := strings.TrimSpace(in.Body.PendingSessionID)
+		code := strings.TrimSpace(in.Body.Code)
+		if pendingSessionID == "" || code == "" {
 			return nil, huma.Error400BadRequest("pending_session_id and code are required")
 		}
 
 		repoRef := host.Repo()
 
-		ch, err := repoRef.ConsumeChallenge(ctx, pendingSessionKeyPrefix+req.PendingSessionID)
+		ch, err := repoRef.ConsumeChallenge(ctx, pendingSessionKeyPrefix+pendingSessionID)
 		if err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
 				return nil, huma.Error401Unauthorized("pending session not found or expired")
@@ -407,7 +387,7 @@ func (p *mfaPlugin) handleVerify(host plugin.PluginHost) func(context.Context, *
 		}
 		userID := ch.Value
 
-		ok, err := p.verifyCode(ctx, repoRef, userID, req.Code)
+		ok, err := p.verifyCode(ctx, repoRef, userID, code)
 		if err != nil {
 			return nil, huma.Error500InternalServerError("unable to verify mfa code")
 		}
@@ -424,15 +404,14 @@ func (p *mfaPlugin) handleVerify(host plugin.PluginHost) func(context.Context, *
 			raw,
 		))
 
-		resp := verifyResponse{User: verifyUser{ID: userID}}
+		resp := mfaVerifyResponse{User: mfaVerifyUser{ID: userID}}
 		if u, err := repoRef.GetUserByID(ctx, userID); err == nil && u != nil {
 			resp.User.Email = u.Email
 			resp.User.DisplayName = u.DisplayName
 			resp.User.EmailVerified = u.EmailVerified
 			resp.User.Role = u.Role
 		}
-		writeJSON(w, http.StatusOK, resp)
-		return &mfaEmptyOutput{}, nil
+		return &mfaVerifyOutput{Body: resp}, nil
 	}
 }
 

@@ -71,15 +71,15 @@ jobs:
       - name: Build packages
         run: pnpm run build
 
-      # Publish each package from its directory with token auth; --provenance
-      # still attests the build via id-token, re-anchoring provenance to this
-      # repo. workspace:* deps are substituted in-place with the concrete
-      # version first so consumers get a real range.
-      - name: Publish to npm (token auth + provenance)
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # Publish each package from its directory via OIDC trusted publishing.
+      # --provenance attests the build via id-token. workspace:* deps are
+      # substituted in-place with the concrete version first.
+      - name: Publish to npm (OIDC trusted publishing + provenance)
         run: |
           set -euo pipefail
+          # setup-node leaves an empty NODE_AUTH_TOKEN in the env; even empty it
+          # blocks OIDC, so unset it to let trusted publishing engage.
+          unset NODE_AUTH_TOKEN || true
           VER=$(node -p "require('./packages/shared/package.json').version")
           echo "publishing version: $VER"
           for p in shared client ui-vue; do

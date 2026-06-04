@@ -100,6 +100,7 @@ type auditCreateDestinationRequest struct {
 	Kind           string            `json:"kind"`
 	Format         string            `json:"format,omitempty"`
 	Config         map[string]string `json:"config"`
+	_              struct{}          `json:"-" additionalProperties:"false"`
 }
 
 type auditUpdateDestinationRequest struct {
@@ -107,11 +108,13 @@ type auditUpdateDestinationRequest struct {
 	Status *string           `json:"status,omitempty"`
 	Format *string           `json:"format,omitempty"`
 	Config map[string]string `json:"config,omitempty"`
+	_      struct{}          `json:"-" additionalProperties:"false"`
 }
 
 type auditReplayRequest struct {
 	AuditLogIDs    []string `json:"audit_log_ids"`
 	DestinationIDs []string `json:"destination_ids"`
+	_              struct{} `json:"-" additionalProperties:"false"`
 }
 
 type auditReplayResponse struct {
@@ -130,21 +133,11 @@ type auditOutboxEntryResponse struct {
 	CreatedAt     time.Time  `json:"created_at"`
 }
 
-// decodeJSON parses r.Body into v, enforcing a 1 MiB body cap and rejecting
-// unknown fields. Migrated handlers call it on the *http.Request stashed onto
-// the operation ctx by StashHTTPHuma — the input structs carry NO huma Body
-// field, so huma never consumes the body and this strict decoder stays
-// byte-identical (and same 400 semantics) to the legacy net/http handlers.
-func decodeJSON(r *http.Request, v any) error {
-	r.Body = http.MaxBytesReader(nil, r.Body, 1<<20)
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	return dec.Decode(v)
-}
-
-// reqFromCtx returns the *http.Request stashed by StashHTTPHuma. On any route
-// in this plugin's guard chain it is always present; the nil guard keeps the
-// helper safe.
+// reqFromCtx returns the *http.Request stashed by StashHTTPHuma. The read-path
+// handlers (list, outbox) still rely on it for lenient query-param parsing; the
+// write ops now take a native huma typed Body instead. On any route in this
+// plugin's guard chain it is always present; the nil guard keeps the helper
+// safe.
 func reqFromCtx(ctx context.Context) (*http.Request, error) {
 	r := middleware.HTTPRequestFromContext(ctx)
 	if r == nil {
@@ -212,6 +205,16 @@ func auditGuards(api huma.API, mw *middleware.Middleware) huma.Middlewares {
 	}
 }
 
+// auditAdminGuards is the chain for the write ops that have been converted to a
+// native huma typed Body. They no longer need the stashed *http.Request (huma
+// parses the body for them), so only RequireAdminHuma remains — which still
+// injects the resolved admin onto the operation ctx for actor attribution.
+func auditAdminGuards(api huma.API, mw *middleware.Middleware) huma.Middlewares {
+	return huma.Middlewares{
+		middleware.RequireAdminHuma(api, mw),
+	}
+}
+
 // --- huma operations ------------------------------------------------------
 //
 // Input types carry ONLY the path parameters their route actually has: a
@@ -227,10 +230,18 @@ type auditDestinationOutput struct {
 }
 
 // POST /audit/destinations  and  POST /organizations/{org_id}/audit/destinations
-type auditCreateInput struct{}
+//
+// The request body is a native huma typed Body, so huma parses + validates it
+// and the OpenAPI request schema auto-derives; additionalProperties:false
+// rejects unknown fields (422). The org-scoped variant adds the {org_id} path
+// param alongside the shared Body.
+type auditCreateInput struct {
+	Body auditCreateDestinationRequest
+}
 
 type auditOrgCreateInput struct {
 	OrgID string `path:"org_id" doc:"Organization ID"`
+	Body  auditCreateDestinationRequest
 }
 
 func (p *plugin) registerCreate(api huma.API, mw *middleware.Middleware, prefix, path, operationID string, orgScoped bool) {
@@ -242,29 +253,21 @@ func (p *plugin) registerCreate(api huma.API, mw *middleware.Middleware, prefix,
 		Tags:          []string{"audit-export"},
 		Security:      []map[string][]string{{"sessionCookie": {}}},
 		DefaultStatus: http.StatusCreated,
-		Middlewares:   auditGuards(api, mw),
+		Middlewares:   auditAdminGuards(api, mw),
 	}
 	if orgScoped {
 		huma.Register(api, op, func(ctx context.Context, in *auditOrgCreateInput) (*auditDestinationOutput, error) {
 			orgID := in.OrgID
-			return p.createDo(ctx, &orgID)
+			return p.createDo(ctx, &orgID, in.Body)
 		})
 		return
 	}
-	huma.Register(api, op, func(ctx context.Context, _ *auditCreateInput) (*auditDestinationOutput, error) {
-		return p.createDo(ctx, nil)
+	huma.Register(api, op, func(ctx context.Context, in *auditCreateInput) (*auditDestinationOutput, error) {
+		return p.createDo(ctx, nil, in.Body)
 	})
 }
 
-func (p *plugin) createDo(ctx context.Context, scopeOrgID *string) (*auditDestinationOutput, error) {
-	r, err := reqFromCtx(ctx)
-	if err != nil {
-		return nil, err
-	}
-	var req auditCreateDestinationRequest
-	if err := decodeJSON(r, &req); err != nil {
-		return nil, huma.Error400BadRequest(err.Error())
-	}
+func (p *plugin) createDo(ctx context.Context, scopeOrgID *string, req auditCreateDestinationRequest) (*auditDestinationOutput, error) {
 	if strings.TrimSpace(req.Name) == "" {
 		return nil, huma.Error400BadRequest("name required")
 	}
@@ -395,6 +398,22 @@ type auditOrgIDInput struct {
 	ID    string `path:"id" doc:"Destination ID"`
 }
 
+// auditUpdateInput / auditOrgUpdateInput carry the native typed Body for the
+// PATCH/PUT update ops. The PATCH and PUT routes reuse the same input type but
+// register under distinct OperationIDs; the request schema auto-derives for
+// each. The org-scoped variant adds {org_id} (ignored by the handler, which is
+// keyed solely by {id}) so huma doesn't 422 the org-scoped paths.
+type auditUpdateInput struct {
+	ID   string `path:"id" doc:"Destination ID"`
+	Body auditUpdateDestinationRequest
+}
+
+type auditOrgUpdateInput struct {
+	OrgID string `path:"org_id" doc:"Organization ID"`
+	ID    string `path:"id" doc:"Destination ID"`
+	Body  auditUpdateDestinationRequest
+}
+
 // PATCH/PUT /audit/destinations/{id}  and the org-scoped variants.
 func (p *plugin) registerUpdate(api huma.API, mw *middleware.Middleware, prefix, path, method, operationID string, orgScoped bool) {
 	op := huma.Operation{
@@ -404,30 +423,22 @@ func (p *plugin) registerUpdate(api huma.API, mw *middleware.Middleware, prefix,
 		Summary:     "Update an audit export destination",
 		Tags:        []string{"audit-export"},
 		Security:    []map[string][]string{{"sessionCookie": {}}},
-		Middlewares: auditGuards(api, mw),
+		Middlewares: auditAdminGuards(api, mw),
 	}
 	if orgScoped {
-		huma.Register(api, op, func(ctx context.Context, in *auditOrgIDInput) (*auditDestinationOutput, error) {
-			return p.updateDo(ctx, in.ID)
+		huma.Register(api, op, func(ctx context.Context, in *auditOrgUpdateInput) (*auditDestinationOutput, error) {
+			return p.updateDo(ctx, in.ID, in.Body)
 		})
 		return
 	}
-	huma.Register(api, op, func(ctx context.Context, in *auditIDInput) (*auditDestinationOutput, error) {
-		return p.updateDo(ctx, in.ID)
+	huma.Register(api, op, func(ctx context.Context, in *auditUpdateInput) (*auditDestinationOutput, error) {
+		return p.updateDo(ctx, in.ID, in.Body)
 	})
 }
 
-func (p *plugin) updateDo(ctx context.Context, id string) (*auditDestinationOutput, error) {
-	r, err := reqFromCtx(ctx)
-	if err != nil {
-		return nil, err
-	}
+func (p *plugin) updateDo(ctx context.Context, id string, req auditUpdateDestinationRequest) (*auditDestinationOutput, error) {
 	if _, err := p.store.GetDestination(id); err != nil {
 		return nil, huma.Error404NotFound("destination not found")
-	}
-	var req auditUpdateDestinationRequest
-	if err := decodeJSON(r, &req); err != nil {
-		return nil, huma.Error400BadRequest(err.Error())
 	}
 	changes := domain.UpdateAuditExportDestination{
 		Name: req.Name,
@@ -551,6 +562,11 @@ type auditReplayOutput struct {
 	Body auditReplayResponse
 }
 
+// auditReplayInput is the native huma typed Body for the replay op.
+type auditReplayInput struct {
+	Body auditReplayRequest
+}
+
 func (p *plugin) registerReplay(api huma.API, mw *middleware.Middleware, prefix string) {
 	huma.Register(api, huma.Operation{
 		OperationID: "auditExport-replay",
@@ -559,16 +575,9 @@ func (p *plugin) registerReplay(api huma.API, mw *middleware.Middleware, prefix 
 		Summary:     "Re-enqueue audit log entries for a set of destinations",
 		Tags:        []string{"audit-export"},
 		Security:    []map[string][]string{{"sessionCookie": {}}},
-		Middlewares: auditGuards(api, mw),
-	}, func(ctx context.Context, _ *struct{}) (*auditReplayOutput, error) {
-		r, err := reqFromCtx(ctx)
-		if err != nil {
-			return nil, err
-		}
-		var req auditReplayRequest
-		if err := decodeJSON(r, &req); err != nil {
-			return nil, huma.Error400BadRequest(err.Error())
-		}
+		Middlewares: auditAdminGuards(api, mw),
+	}, func(ctx context.Context, in *auditReplayInput) (*auditReplayOutput, error) {
+		req := in.Body
 		if len(req.AuditLogIDs) == 0 || len(req.DestinationIDs) == 0 {
 			return nil, huma.Error400BadRequest("audit_log_ids and destination_ids must be non-empty")
 		}

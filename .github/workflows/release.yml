@@ -1,0 +1,72 @@
+name: Release npm packages
+
+# Publishes the TypeScript client + UI packages (clients/packages/*) to npm.
+#
+# Versioning is unified with the Go module: a single `vX.Y.Z` tag triggers
+# BOTH this workflow (npm) and goreleaser.yml (Go binaries + Docker), so the
+# npm packages and the server release at the same version. workflow_dispatch
+# is provided for the first publish under this repo.
+#
+# Publishing uses npm OIDC **trusted publishing** — there is no NPM_TOKEN.
+# The trusted-publisher config on npm is pinned to repo `yackey-labs/yauth`,
+# workflow `release.yml`, no environment. Do not rename this file or add an
+# `environment:` without updating the npm config.
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # required for npm OIDC trusted publishing + provenance
+
+concurrency:
+  group: release-npm-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish npm packages
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clients
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+
+      # npm OIDC trusted publishing needs a recent npm; setup-node pins an
+      # older one. Upgrade so `npm publish` performs the OIDC handshake.
+      - name: Upgrade npm (trusted-publishing support)
+        run: npm install -g npm@latest
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Set package versions from tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "Publishing npm packages at $VERSION"
+          pnpm -r exec -- npm version "$VERSION" --no-git-tag-version --allow-same-version
+
+      # Regenerate the client from the committed spec so the published artifact
+      # always matches this commit's openapi.json.
+      - name: Generate client
+        run: pnpm run generate
+
+      - name: Build packages
+        run: pnpm run build
+
+      - name: Publish to npm (OIDC trusted publishing + provenance)
+        run: pnpm -r publish --access public --no-git-checks --provenance

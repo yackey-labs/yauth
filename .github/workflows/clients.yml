@@ -1,0 +1,51 @@
+name: Clients (TS/Vue)
+
+# Lints, type-checks, builds and tests the TypeScript client + Vue UI packages
+# under clients/, and verifies the generated client is in sync with the Go
+# server's committed openapi.json (generate:check).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'clients/**'
+      - 'openapi.json'
+      - '.github/workflows/clients.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'clients/**'
+      - 'openapi.json'
+      - '.github/workflows/clients.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  clients:
+    name: lint + typecheck + build + test + generate:check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clients
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Lint
+        run: pnpm run lint
+      - name: Typecheck
+        run: pnpm run typecheck
+      - name: Build
+        run: pnpm run build
+      - name: Test
+        run: pnpm run test
+      # Regenerate from the committed spec and fail if the client drifted.
+      - name: generate:check
+        run: pnpm run generate:check

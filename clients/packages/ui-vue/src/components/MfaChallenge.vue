@@ -1,0 +1,85 @@
+<script setup lang="ts">
+import type { AuthUser } from "@yackey-labs/yauth-shared";
+import { ref } from "vue";
+import { useYAuth } from "../provider";
+
+const props = defineProps<{
+	pendingSessionId: string;
+	onSuccess?: (user: AuthUser) => void;
+	onError?: (error: Error) => void;
+}>();
+
+const { client } = useYAuth();
+const code = ref("");
+const error = ref<string | null>(null);
+const loading = ref(false);
+
+const handleSubmit = async (e: Event) => {
+	e.preventDefault();
+	error.value = null;
+	loading.value = true;
+
+	if (!client.mfa) {
+		error.value = "MFA is not available.";
+		loading.value = false;
+		return;
+	}
+	try {
+		await client.mfa.verify({
+			pending_session_id: props.pendingSessionId,
+			code: code.value,
+		});
+		const session = await client.getSession();
+		props.onSuccess?.(session.user as unknown as AuthUser);
+	} catch (err) {
+		const e = err instanceof Error ? err : new Error(String(err));
+		error.value = e.message;
+		props.onError?.(e);
+	} finally {
+		loading.value = false;
+	}
+};
+</script>
+
+<template>
+	<form class="space-y-4" @submit="handleSubmit">
+		<div
+			v-if="error"
+			class="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive"
+		>
+			{{ error }}
+		</div>
+
+		<p class="text-sm text-muted-foreground">
+			Enter the code from your authenticator app, or use a backup code.
+		</p>
+
+		<div class="space-y-2">
+			<label
+				class="text-sm font-medium leading-none"
+				for="yauth-mfa-challenge-code"
+			>
+				Verification code
+			</label>
+			<input
+				id="yauth-mfa-challenge-code"
+				v-model="code"
+				class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 md:text-sm"
+				name="code"
+				type="text"
+				inputmode="numeric"
+				autocomplete="one-time-code"
+				required
+				:disabled="loading"
+			/>
+		</div>
+
+		<button
+			class="inline-flex h-9 w-full cursor-pointer items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+			type="submit"
+			:disabled="loading"
+		>
+			{{ loading ? "Verifying..." : "Verify" }}
+		</button>
+	</form>
+</template>

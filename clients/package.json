@@ -1,0 +1,31 @@
+{
+  "name": "yauth-clients",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vp run -r build",
+    "lint": "vp lint",
+    "lint:fix": "vp lint --fix && vp fmt --write",
+    "format": "vp fmt --write",
+    "typecheck": "vp run -r typecheck",
+    "test": "vp run -r test",
+    "validate": "vp run lint:fix && vp run typecheck && vp run build",
+    "validate:ci": "vp run lint && vp run typecheck && vp run build && vp run generate:check",
+    "generate": "node scripts/prepare-spec.mjs && vp exec orval",
+    "generate:check": "node scripts/prepare-spec.mjs && vp exec orval && git diff --exit-code openapi.json packages/client/src/generated.ts",
+    "clean": "rm -rf node_modules packages/*/node_modules packages/*/dist"
+  },
+  "devDependencies": {
+    "@faker-js/faker": "^10.4.0",
+    "@vitejs/plugin-vue": "^5.2.0",
+    "msw": "^2.13.2",
+    "orval": "^8.7.0",
+    "typescript": "^5.9.3",
+    "vite-plus": "^0.1.20",
+    "vitest": "^4.0.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@9.15.4"
+}

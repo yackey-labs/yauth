@@ -46,3 +46,8 @@ packages/*/node_modules/
 # Beads / Dolt files (added by bd init)
 .dolt/
 .beads-credential-key
+
+# JS client workspace (clients/)
+clients/**/node_modules/
+clients/**/dist/
+clients/node_modules/

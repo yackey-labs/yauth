@@ -160,12 +160,13 @@ func (p *webhooksPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api h
 
 	// Every management route is huma-native: a typed operation guarded by
 	// RequireAdminHuma (the same admin identity logic as the legacy
-	// mw.RequireAdmin wrapper). The list/create/update/deliveries routes
-	// additionally pair with StashHTTPHuma so the ported handlers keep
-	// byte-identical request parsing — the lenient ?page=/?per_page= query
-	// precedence on the GET lists and the strict DisallowUnknownFields body
-	// decode on create/update. The mux is retained in the signature for plugins
-	// that still register raw net/http routes; webhooks no longer uses it.
+	// mw.RequireAdmin wrapper). Create/update carry a native typed Body, so
+	// huma parses + validates the request and the OpenAPI request schema
+	// auto-derives; additionalProperties:false rejects unknown fields (422).
+	// Only the list/deliveries routes still pair with StashHTTPHuma, and solely
+	// to keep the lenient ?page=/?per_page= query precedence (bad values degrade
+	// to defaults rather than 422). The mux is retained in the signature for
+	// plugins that still register raw net/http routes; webhooks no longer uses it.
 	p.registerList(host, api, mw, prefix)
 	p.registerCreate(host, api, mw, prefix)
 	p.registerGet(host, api, mw, prefix)

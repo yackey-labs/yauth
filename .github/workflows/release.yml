@@ -40,13 +40,17 @@ jobs:
         with:
           version: 9.15.4
 
+      # NOTE: no `registry-url:` — it writes an `_authToken=${NODE_AUTH_TOKEN}`
+      # .npmrc that pre-empts npm's OIDC trusted-publishing flow. npm defaults
+      # to registry.npmjs.org and engages OIDC when no token is configured.
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-          registry-url: 'https://registry.npmjs.org'
 
-      # npm OIDC trusted publishing needs a recent npm; setup-node pins an
-      # older one. Upgrade so `npm publish` performs the OIDC handshake.
+      # npm OIDC trusted publishing needs npm >= 11.5.1; the bundled npm is
+      # older. pnpm's own publish (9.15.4) does NOT perform the OIDC handshake,
+      # so we pack with pnpm (to substitute workspace:* deps) and publish each
+      # tarball with npm, which does.
       - name: Upgrade npm (trusted-publishing support)
         run: npm install -g npm@latest
 
@@ -68,5 +72,19 @@ jobs:
       - name: Build packages
         run: pnpm run build
 
+      # pnpm pack substitutes workspace:* deps with the concrete version in each
+      # tarball; npm publish then does the OIDC trusted-publishing handshake +
+      # provenance attestation (repository field already points at this repo).
       - name: Publish to npm (OIDC trusted publishing + provenance)
-        run: pnpm -r publish --access public --no-git-checks --provenance
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/tgz"
+          for p in shared client ui-vue; do
+            ( cd "packages/$p" && pnpm pack --pack-destination "$RUNNER_TEMP/tgz" )
+          done
+          for p in shared client ui-vue; do
+            tgz=$(ls "$RUNNER_TEMP"/tgz/yackey-labs-yauth-"$p"-*.tgz)
+            echo "::group::npm publish $tgz"
+            npm publish "$tgz" --provenance --access public
+            echo "::endgroup::"
+          done

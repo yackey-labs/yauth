@@ -43,10 +43,13 @@
 package scim
 
 import (
-	"github.com/danielgtaylor/huma/v2"
-
+	"bytes"
+	"context"
 	"net/http"
 
+	"github.com/danielgtaylor/huma/v2"
+
+	"github.com/yackey-labs/yauth-go/middleware"
 	"github.com/yackey-labs/yauth-go/plugin"
 )
 
@@ -82,33 +85,134 @@ func New(cfg Config) plugin.Plugin {
 // Name implements plugin.Plugin.
 func (p *scimPlugin) Name() string { return "scim" }
 
-// Routes implements plugin.Plugin. SCIM routes are mounted WITHOUT the
-// RequireAuth middleware because SCIM does its own auth (Authorization:
-// Bearer) and surfaces SCIM-shaped error JSON. The shape is
-// incompatible with yauth-go's normal {"error":"..."} envelope.
+// Routes implements plugin.Plugin. Every SCIM route is now huma-native: a
+// huma.Register operation owns the (method, path) so the route is recorded
+// and huma-served, but its handler delegates to the UNCHANGED legacy
+// http.HandlerFunc (run against a capturing writer) and re-emits the captured
+// status, Content-Type, and raw body bytes verbatim. This preserves the SCIM
+// 2.0 wire contract EXACTLY — application/scim+json content type, SCIM
+// resource/list schemas, and the RFC 7644 §3.12 SCIM error envelope (NOT
+// huma's RFC 9457 problem+json). SCIM does its OWN org-scoped API-key auth
+// inside each legacy handler (Authorization: Bearer), so the routes carry no
+// RequireAuth middleware — only StashHTTPHuma to expose the raw request/writer
+// to the bridge. The path itself still registers on the ServeMux with the
+// {org_id}/{user_id}/{group_id} wildcards (via humago), so the legacy
+// handlers' r.PathValue / r.URL.Query / r.Body reads keep working unchanged.
 func (p *scimPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.API, prefix string) {
 	base := prefix + "/api/scim/v2/organizations/{org_id}"
 
 	// Users
-	mux.Handle("POST "+base+"/Users", p.handleCreateUser(host))
-	mux.Handle("GET "+base+"/Users", p.handleListUsers(host))
-	mux.Handle("GET "+base+"/Users/{user_id}", p.handleGetUser(host))
-	mux.Handle("PUT "+base+"/Users/{user_id}", p.handlePutUser(host))
-	mux.Handle("PATCH "+base+"/Users/{user_id}", p.handlePatchUser(host))
-	mux.Handle("DELETE "+base+"/Users/{user_id}", p.handleDeleteUser(host))
+	scimRegister[scimOrgInput](api, "scimCreateUser", http.MethodPost, base+"/Users", p.handleCreateUser(host))
+	scimRegister[scimOrgInput](api, "scimListUsers", http.MethodGet, base+"/Users", p.handleListUsers(host))
+	scimRegister[scimUserInput](api, "scimGetUser", http.MethodGet, base+"/Users/{user_id}", p.handleGetUser(host))
+	scimRegister[scimUserInput](api, "scimPutUser", http.MethodPut, base+"/Users/{user_id}", p.handlePutUser(host))
+	scimRegister[scimUserInput](api, "scimPatchUser", http.MethodPatch, base+"/Users/{user_id}", p.handlePatchUser(host))
+	scimRegister[scimUserInput](api, "scimDeleteUser", http.MethodDelete, base+"/Users/{user_id}", p.handleDeleteUser(host))
 
 	// Groups
-	mux.Handle("POST "+base+"/Groups", p.handleCreateGroup(host))
-	mux.Handle("GET "+base+"/Groups", p.handleListGroups(host))
-	mux.Handle("GET "+base+"/Groups/{group_id}", p.handleGetGroup(host))
-	mux.Handle("PUT "+base+"/Groups/{group_id}", p.handlePutGroup(host))
-	mux.Handle("PATCH "+base+"/Groups/{group_id}", p.handlePatchGroup(host))
-	mux.Handle("DELETE "+base+"/Groups/{group_id}", p.handleDeleteGroup(host))
+	scimRegister[scimOrgInput](api, "scimCreateGroup", http.MethodPost, base+"/Groups", p.handleCreateGroup(host))
+	scimRegister[scimOrgInput](api, "scimListGroups", http.MethodGet, base+"/Groups", p.handleListGroups(host))
+	scimRegister[scimGroupInput](api, "scimGetGroup", http.MethodGet, base+"/Groups/{group_id}", p.handleGetGroup(host))
+	scimRegister[scimGroupInput](api, "scimPutGroup", http.MethodPut, base+"/Groups/{group_id}", p.handlePutGroup(host))
+	scimRegister[scimGroupInput](api, "scimPatchGroup", http.MethodPatch, base+"/Groups/{group_id}", p.handlePatchGroup(host))
+	scimRegister[scimGroupInput](api, "scimDeleteGroup", http.MethodDelete, base+"/Groups/{group_id}", p.handleDeleteGroup(host))
 
 	// Discovery / meta. No PATCH / POST; the spec is read-only.
-	mux.HandleFunc("GET "+base+"/ServiceProviderConfig", p.handleServiceProviderConfig(host))
-	mux.HandleFunc("GET "+base+"/Schemas", p.handleSchemas(host))
-	mux.HandleFunc("GET "+base+"/ResourceTypes", p.handleResourceTypes(host))
+	scimRegister[scimOrgInput](api, "scimServiceProviderConfig", http.MethodGet, base+"/ServiceProviderConfig", p.handleServiceProviderConfig(host))
+	scimRegister[scimOrgInput](api, "scimSchemas", http.MethodGet, base+"/Schemas", p.handleSchemas(host))
+	scimRegister[scimOrgInput](api, "scimResourceTypes", http.MethodGet, base+"/ResourceTypes", p.handleResourceTypes(host))
+}
+
+// The three SCIM path shapes each get their OWN input struct declaring EXACTLY
+// the {params} present in that path — huma treats every declared path field as
+// required and rejects a request (422) whose path omits one, so a single
+// all-params struct would 422 the org-only routes. The handler ignores these
+// fields entirely (it reads r.PathValue off the stashed raw request); they
+// exist only so huma will path-bind and register the route. They never reach
+// the published spec: openapi.json is produced by the hand-written openapi/
+// package (openapi.Build), not from these huma operations.
+//
+// scimOrgInput: routes under .../organizations/{org_id} with no further id.
+type scimOrgInput struct {
+	OrgID string `path:"org_id"`
+}
+
+// scimUserInput: routes under .../{org_id}/Users/{user_id}.
+type scimUserInput struct {
+	OrgID  string `path:"org_id"`
+	UserID string `path:"user_id"`
+}
+
+// scimGroupInput: routes under .../{org_id}/Groups/{group_id}.
+type scimGroupInput struct {
+	OrgID   string `path:"org_id"`
+	GroupID string `path:"group_id"`
+}
+
+// scimRawOutput is the byte-faithful SCIM response envelope huma writes. The
+// legacy handler's full response (status, Content-Type, body bytes) is captured
+// and copied verbatim onto these fields so huma performs a single write that is
+// byte-identical to the legacy writeScimJSON / writeScimError / writeScimNoContent
+// output — application/scim+json content type and SCIM-shaped bodies/errors
+// intact. The []byte body lets the 204 DELETE branch emit a bodyless response.
+type scimRawOutput struct {
+	Status      int
+	ContentType string `header:"Content-Type"`
+	Body        []byte
+}
+
+// scimCapture is a minimal capturing http.ResponseWriter. The legacy SCIM
+// handlers write their status, Content-Type header, and body into it exactly as
+// they would to a live writer; the bridge then re-emits the captured values
+// through huma. It records only what SCIM responses use (Content-Type +
+// status + body) — sufficient for byte-faithful replay.
+type scimCapture struct {
+	header http.Header
+	status int
+	buf    bytes.Buffer
+}
+
+func newScimCapture() *scimCapture {
+	return &scimCapture{header: make(http.Header), status: http.StatusOK}
+}
+
+func (c *scimCapture) Header() http.Header         { return c.header }
+func (c *scimCapture) WriteHeader(status int)      { c.status = status }
+func (c *scimCapture) Write(b []byte) (int, error) { return c.buf.Write(b) }
+
+// register wires one SCIM route as a huma operation that delegates to the
+// unchanged legacy handler. The operation is intentionally minimal: it owns the
+// (method, path) for routing + recording, but its body/error wire format comes
+// entirely from the legacy handler's bytes. Security/Tags are left to the
+// hand-written openapi/ spec — these huma operations never surface in
+// openapi.json.
+// scimRegister wires one SCIM route as a huma operation that delegates to the
+// unchanged legacy handler. It is generic over the path-input struct In so each
+// route declares exactly its own path params. The operation owns the
+// (method, path) for routing + recording, but its body/error wire format comes
+// entirely from the legacy handler's captured bytes.
+func scimRegister[In any](api huma.API, operationID, method, path string, h http.HandlerFunc) {
+	huma.Register(api, huma.Operation{
+		OperationID: operationID,
+		Method:      method,
+		Path:        path,
+		Tags:        []string{"scim"},
+		Middlewares: huma.Middlewares{middleware.StashHTTPHuma(api)},
+	}, func(ctx context.Context, _ *In) (*scimRawOutput, error) {
+		r := middleware.HTTPRequestFromContext(ctx)
+		if r == nil {
+			return nil, huma.Error500InternalServerError("request unavailable")
+		}
+		// Run the legacy handler against a capturing writer, threading the
+		// operation ctx (so cancellation/values propagate) onto the request.
+		cap := newScimCapture()
+		h(cap, r.WithContext(ctx))
+		return &scimRawOutput{
+			Status:      cap.status,
+			ContentType: cap.header.Get("Content-Type"),
+			Body:        cap.buf.Bytes(),
+		}, nil
+	})
 }
 
 // handleServiceProviderConfig serves the SCIM ServiceProviderConfig.

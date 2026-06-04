@@ -2,7 +2,6 @@ package bearer
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -37,33 +36,16 @@ type tokenOutput struct {
 // DefaultStatus — matching the legacy handleRevoke's w.WriteHeader(204).
 type emptyOutput struct{}
 
-// decodeJSON parses r.Body into v, enforcing a 1 MiB body cap and rejecting
-// unknown fields. The huma input structs carry NO Body field, so huma never
-// consumes the request body and this strict decoder stays byte-identical to the
-// pre-migration net/http handlers (preserving the INVALID_REQUEST decode
-// semantics surfaced as huma 400s below).
-func decodeJSON(r *http.Request, v any) error {
-	r.Body = http.MaxBytesReader(nil, r.Body, 1<<20)
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	return dec.Decode(v)
-}
-
-// reqFromCtx returns the *http.Request stashed by StashHTTPHuma. On a bearer
-// route it is always present; the nil guard keeps the helper safe.
-func reqFromCtx(ctx context.Context) (*http.Request, error) {
-	r := middleware.HTTPRequestFromContext(ctx)
-	if r == nil {
-		return nil, huma.Error500InternalServerError("request unavailable")
-	}
-	return r, nil
-}
-
 // --- POST /token -------------------------------------------------------
 
-type tokenRequest struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
+type bearerTokenRequest struct {
+	// Email and Password are omitempty so huma does NOT mark them
+	// required: an empty/missing field must reach the manual presence
+	// check below, which returns a business 400 ("email and password are
+	// required") — preserving the pre-migration behaviour exactly. A
+	// missing-required-field huma error would surface as a 422 instead.
+	Email    string `json:"email,omitempty"`
+	Password string `json:"password,omitempty"`
 	// Scope is an optional space-delimited list of scopes the caller is
 	// requesting on the issued access token. Today the bearer plugin
 	// stores claims only — scope is recorded for parity with the Rust
@@ -74,12 +56,20 @@ type tokenRequest struct {
 	// org id and the caller's role in it. Returns 403 FORBIDDEN when the
 	// user is not an active member of the org. When omitted, the existing
 	// auto-select behaviour (SelectDefaultActiveOrg) is preserved. yauth #44.
-	Org string `json:"org,omitempty"`
+	Org string   `json:"org,omitempty"`
+	_   struct{} `json:"-" additionalProperties:"false"`
+}
+
+// bearerTokenInput is the huma-native request: a typed JSON body. huma parses +
+// validates it (and rejects unknown fields via additionalProperties:false →
+// 422), so a malformed/unknown body no longer needs the old strict decoder.
+type bearerTokenInput struct {
+	Body bearerTokenRequest
 }
 
 // registerToken wires POST {prefix}/token as a huma-native operation. It is
-// public (Security: none) — the legacy route had no auth wrapper. StashHTTPHuma
-// threads the raw request so the strict decodeJSON body parse is preserved.
+// public (Security: none) — the legacy route had no auth wrapper. The request
+// body is a native huma typed Body, so huma parses + validates it directly.
 func (p *bearerPlugin) registerToken(host plugin.PluginHost, api huma.API, prefix string) {
 	huma.Register(api, huma.Operation{
 		OperationID: "bearer-issue-token",
@@ -88,16 +78,8 @@ func (p *bearerPlugin) registerToken(host plugin.PluginHost, api huma.API, prefi
 		Summary:     "Exchange email+password for an access+refresh token pair",
 		Tags:        []string{"bearer"},
 		Security:    []map[string][]string{}, // explicitly public
-		Middlewares: stashOnly(api),
-	}, func(ctx context.Context, _ *struct{}) (*tokenOutput, error) {
-		r, err := reqFromCtx(ctx)
-		if err != nil {
-			return nil, err
-		}
-		var req tokenRequest
-		if err := decodeJSON(r, &req); err != nil {
-			return nil, huma.Error400BadRequest(err.Error())
-		}
+	}, func(ctx context.Context, in *bearerTokenInput) (*tokenOutput, error) {
+		req := in.Body
 		req.Email = strings.TrimSpace(strings.ToLower(req.Email))
 		if req.Email == "" || req.Password == "" {
 			return nil, huma.Error400BadRequest("email and password are required")
@@ -159,13 +141,21 @@ func (p *bearerPlugin) registerToken(host plugin.PluginHost, api huma.API, prefi
 
 // --- POST /token/refresh ----------------------------------------------
 
-type refreshRequest struct {
-	RefreshToken string `json:"refresh_token"`
+type bearerRefreshRequest struct {
+	// RefreshToken is omitempty so a missing value reaches the manual
+	// presence check (business 400), not huma's required-field 422.
+	RefreshToken string   `json:"refresh_token,omitempty"`
+	_            struct{} `json:"-" additionalProperties:"false"`
+}
+
+// bearerRefreshInput is the huma-native typed JSON body for /token/refresh.
+type bearerRefreshInput struct {
+	Body bearerRefreshRequest
 }
 
 // registerRefresh wires POST {prefix}/token/refresh. Public (Security: none),
 // like the route it replaces. Rotation and reuse-detection side effects are
-// preserved exactly.
+// preserved exactly. The request body is a native huma typed Body.
 func (p *bearerPlugin) registerRefresh(host plugin.PluginHost, api huma.API, prefix string) {
 	huma.Register(api, huma.Operation{
 		OperationID: "bearer-refresh",
@@ -175,16 +165,8 @@ func (p *bearerPlugin) registerRefresh(host plugin.PluginHost, api huma.API, pre
 		Description: "Reuse of a previously rotated refresh token revokes the entire family.",
 		Tags:        []string{"bearer"},
 		Security:    []map[string][]string{}, // explicitly public
-		Middlewares: stashOnly(api),
-	}, func(ctx context.Context, _ *struct{}) (*tokenOutput, error) {
-		r, err := reqFromCtx(ctx)
-		if err != nil {
-			return nil, err
-		}
-		var req refreshRequest
-		if err := decodeJSON(r, &req); err != nil {
-			return nil, huma.Error400BadRequest(err.Error())
-		}
+	}, func(ctx context.Context, in *bearerRefreshInput) (*tokenOutput, error) {
+		req := in.Body
 		if req.RefreshToken == "" {
 			return nil, huma.Error400BadRequest("refresh_token is required")
 		}
@@ -237,15 +219,23 @@ func (p *bearerPlugin) registerRefresh(host plugin.PluginHost, api huma.API, pre
 
 // --- POST /token/revoke ----------------------------------------------
 
-type revokeRequest struct {
-	RefreshToken string `json:"refresh_token"`
+type bearerRevokeRequest struct {
+	// RefreshToken is omitempty so a missing value reaches the manual
+	// presence check (business 400), not huma's required-field 422.
+	RefreshToken string   `json:"refresh_token,omitempty"`
+	_            struct{} `json:"-" additionalProperties:"false"`
+}
+
+// bearerRevokeInput is the huma-native typed JSON body for /token/revoke.
+type bearerRevokeInput struct {
+	Body bearerRevokeRequest
 }
 
 // registerRevoke wires POST {prefix}/token/revoke. RequireAuthHuma applies the
 // SAME identity gate as the legacy mw.RequireAuth wrapper; the resolved
 // AuthUser is recovered from the operation context via AuthUserFromContext.
 // Returns 204 on success (RFC 7009: revocation of an unknown token is
-// idempotent and also 204).
+// idempotent and also 204). The request body is a native huma typed Body.
 func (p *bearerPlugin) registerRevoke(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
 	huma.Register(api, huma.Operation{
 		OperationID: "bearer-revoke",
@@ -260,22 +250,14 @@ func (p *bearerPlugin) registerRevoke(host plugin.PluginHost, api huma.API, mw *
 		},
 		DefaultStatus: http.StatusNoContent,
 		Middlewares: huma.Middlewares{
-			middleware.StashHTTPHuma(api),
 			middleware.RequireAuthHuma(api, mw),
 		},
-	}, func(ctx context.Context, _ *struct{}) (*emptyOutput, error) {
+	}, func(ctx context.Context, in *bearerRevokeInput) (*emptyOutput, error) {
 		au, ok := middleware.AuthUserFromContext(ctx)
 		if !ok || au == nil {
 			return nil, huma.Error401Unauthorized("not authenticated")
 		}
-		r, err := reqFromCtx(ctx)
-		if err != nil {
-			return nil, err
-		}
-		var req revokeRequest
-		if err := decodeJSON(r, &req); err != nil {
-			return nil, huma.Error400BadRequest(err.Error())
-		}
+		req := in.Body
 		if req.RefreshToken == "" {
 			return nil, huma.Error400BadRequest("refresh_token is required")
 		}

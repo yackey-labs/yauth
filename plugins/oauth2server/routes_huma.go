@@ -58,6 +58,10 @@ type oauth2IDInput struct {
 	ID string `path:"id"`
 }
 
+// oauth2EmptyOutput carries no body; converted admin write-ops that returned a
+// bare 204 (assign group / assign role) use it with DefaultStatus 204.
+type oauth2EmptyOutput struct{}
+
 // oauth2IDGIDInput is the input for DELETE /oauth2/clients/{id}/groups/{gid}.
 type oauth2IDGIDInput struct {
 	ID  string `path:"id"`
@@ -161,6 +165,27 @@ func adminGuards(api huma.API, mw *middleware.Middleware) huma.Middlewares {
 	}
 }
 
+// adminGuardsNative is the admin chain for the CONVERTED JSON admin/CRUD
+// write-ops (client create/patch, group/role assignment). These read a native
+// huma typed Body, so they need NO StashHTTPHuma bridge — only the admin gate.
+// RequireAdminHuma injects the AuthUser on the operation ctx, recoverable via
+// AuthUserFromContext(ctx) directly. Same admin rule as adminGuards.
+func adminGuardsNative(api huma.API, mw *middleware.Middleware) huma.Middlewares {
+	return huma.Middlewares{
+		middleware.RequireAdminHuma(api, mw),
+	}
+}
+
+// authGuardsNative is the session chain for the CONVERTED /oauth2/consent
+// route: a native typed Body, so no StashHTTPHuma — only the logged-in-user
+// gate (a regular end-user, NOT an admin). RequireAuthHuma injects the
+// AuthUser, recoverable via AuthUserFromContext(ctx).
+func authGuardsNative(api huma.API, mw *middleware.Middleware) huma.Middlewares {
+	return huma.Middlewares{
+		middleware.RequireAuthHuma(api, mw),
+	}
+}
+
 // registerRoutes wires every oauth2server route as a huma.Register operation.
 // It is the single replacement for the former block of mux.Handle calls. Routes
 // are grouped exactly as before: admin client CRUD, client group/role
@@ -168,6 +193,8 @@ func adminGuards(api huma.API, mw *middleware.Middleware) huma.Middlewares {
 // introspect/revoke, device flow, and (opt-in) DCR.
 func (p *oauth2Plugin) registerRoutes(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
 	admin := adminGuards(api, mw)
+	adminNative := adminGuardsNative(api, mw)
+	authedNative := authGuardsNative(api, mw)
 	authed := authGuards(api, mw)
 	public := stashOnly(api)
 
@@ -201,9 +228,30 @@ func (p *oauth2Plugin) registerRoutes(host plugin.PluginHost, api huma.API, mw *
 
 	// --- admin client CRUD ---
 	reg("oauth2-list-clients", http.MethodGet, "/oauth2/clients", "List OAuth2 clients", sessionSec, admin, p.handleListClients(host))
-	reg("oauth2-create-client", http.MethodPost, "/oauth2/clients", "Register an OAuth2 client", sessionSec, admin, p.handleCreateClient(host))
+	// CONVERTED: native typed Body (auto-derived request schema), 201 via
+	// DefaultStatus, admin-gated (no StashHTTPHuma bridge). Unknown/malformed
+	// JSON → 422; business errors keep status as problem+json.
+	huma.Register(api, huma.Operation{
+		OperationID:   "oauth2-create-client",
+		Method:        http.MethodPost,
+		Path:          prefix + "/oauth2/clients",
+		Summary:       "Register an OAuth2 client",
+		Tags:          tag,
+		Security:      sessionSec,
+		DefaultStatus: http.StatusCreated,
+		Middlewares:   adminNative,
+	}, p.handleCreateClient(host))
 	regID("oauth2-get-client", http.MethodGet, "/oauth2/clients/{id}", "Fetch an OAuth2 client", sessionSec, admin, p.handleGetClient(host))
-	regID("oauth2-patch-client", http.MethodPatch, "/oauth2/clients/{id}", "Update an OAuth2 client", sessionSec, admin, p.handlePatchClient(host))
+	// CONVERTED: native typed Body + {id} path param, admin-gated.
+	huma.Register(api, huma.Operation{
+		OperationID: "oauth2-patch-client",
+		Method:      http.MethodPatch,
+		Path:        prefix + "/oauth2/clients/{id}",
+		Summary:     "Update an OAuth2 client",
+		Tags:        tag,
+		Security:    sessionSec,
+		Middlewares: adminNative,
+	}, p.handlePatchClient(host))
 	regID("oauth2-delete-client", http.MethodDelete, "/oauth2/clients/{id}", "Ban (soft-delete) an OAuth2 client", sessionSec, admin, p.handleDeleteClient(host))
 	regID("oauth2-ban-client", http.MethodPost, "/oauth2/clients/{id}/ban", "Ban an OAuth2 client", sessionSec, admin, p.handleBanClient(host))
 	regID("oauth2-unban-client", http.MethodPost, "/oauth2/clients/{id}/unban", "Unban an OAuth2 client", sessionSec, admin, p.handleUnbanClient(host))
@@ -211,7 +259,17 @@ func (p *oauth2Plugin) registerRoutes(host plugin.PluginHost, api huma.API, mw *
 
 	// --- application group assignments ---
 	regID("oauth2-list-client-groups", http.MethodGet, "/oauth2/clients/{id}/groups", "List groups assigned to an OAuth2 client", sessionSec, admin, p.handleListClientGroups(host))
-	regID("oauth2-assign-client-group", http.MethodPost, "/oauth2/clients/{id}/groups", "Assign a group to an OAuth2 client", sessionSec, admin, p.handleAssignClientGroup(host))
+	// CONVERTED: native typed Body + {id} path param, admin-gated, 204 success.
+	huma.Register(api, huma.Operation{
+		OperationID:   "oauth2-assign-client-group",
+		Method:        http.MethodPost,
+		Path:          prefix + "/oauth2/clients/{id}/groups",
+		Summary:       "Assign a group to an OAuth2 client",
+		Tags:          tag,
+		Security:      sessionSec,
+		DefaultStatus: http.StatusNoContent,
+		Middlewares:   adminNative,
+	}, p.handleAssignClientGroup(host))
 	huma.Register(api, huma.Operation{
 		OperationID: "oauth2-unassign-client-group",
 		Method:      http.MethodDelete,
@@ -224,7 +282,17 @@ func (p *oauth2Plugin) registerRoutes(host plugin.PluginHost, api huma.API, mw *
 
 	// --- application (client) roles ---
 	regID("oauth2-list-client-roles", http.MethodGet, "/oauth2/clients/{id}/roles", "List roles for an OAuth2 client", sessionSec, admin, p.handleListClientRoles(host))
-	regID("oauth2-assign-client-role", http.MethodPost, "/oauth2/clients/{id}/roles", "Assign a role on an OAuth2 client", sessionSec, admin, p.handleAssignClientRole(host))
+	// CONVERTED: native typed Body + {id} path param, admin-gated, 204 success.
+	huma.Register(api, huma.Operation{
+		OperationID:   "oauth2-assign-client-role",
+		Method:        http.MethodPost,
+		Path:          prefix + "/oauth2/clients/{id}/roles",
+		Summary:       "Assign a role on an OAuth2 client",
+		Tags:          tag,
+		Security:      sessionSec,
+		DefaultStatus: http.StatusNoContent,
+		Middlewares:   adminNative,
+	}, p.handleAssignClientRole(host))
 	huma.Register(api, huma.Operation{
 		OperationID: "oauth2-unassign-client-role",
 		Method:      http.MethodDelete,
@@ -241,7 +309,19 @@ func (p *oauth2Plugin) registerRoutes(host plugin.PluginHost, api huma.API, mw *
 	// --- authorization-code + consent (session-gated) ---
 	reg("oauth2-authorize", http.MethodGet, "/oauth/authorize", "OAuth2 authorization endpoint", sessionSec, authed, p.handleAuthorize(host))
 	reg("oauth2-authorize-post", http.MethodPost, "/oauth/authorize", "OAuth2 authorization endpoint (POST)", sessionSec, authed, p.handleAuthorize(host))
-	reg("oauth2-consent", http.MethodPost, "/oauth2/consent", "Approve or deny a pending authorization request", sessionSec, authed, p.handleConsent(host))
+	// CONVERTED: /oauth2/consent is the console-side JSON route (NOT the RFC
+	// 302 /oauth/authorize redirect). Native typed Body, session-gated for a
+	// regular end-user (RequireAuthHuma, NOT admin). 200 {redirect_url} on both
+	// approve and deny; CSRF / request_id / user-mismatch checks preserved.
+	huma.Register(api, huma.Operation{
+		OperationID: "oauth2-consent",
+		Method:      http.MethodPost,
+		Path:        prefix + "/oauth2/consent",
+		Summary:     "Approve or deny a pending authorization request",
+		Tags:        tag,
+		Security:    sessionSec,
+		Middlewares: authedNative,
+	}, p.handleConsent(host))
 
 	// --- OIDC RP-Initiated Logout (end_session) — public, browser-facing ---
 	reg("oauth2-end-session", http.MethodGet, "/oauth/end_session", "OIDC RP-Initiated Logout", publicSec, public, p.handleEndSession(host))

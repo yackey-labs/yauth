@@ -1,10 +1,12 @@
 package oauth2server
 
 import (
-	"encoding/json"
+	"context"
 	"errors"
 	"net/http"
 	"time"
+
+	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/yackey-labs/yauth-go/domain"
 	"github.com/yackey-labs/yauth-go/plugin"
@@ -33,7 +35,18 @@ func toClientGroupJSON(g domain.Group) clientGroupJSON {
 }
 
 type assignGroupRequest struct {
-	GroupID string `json:"group_id"`
+	// group_id is omitempty so huma treats it as optional: the original
+	// handler validated a missing/empty group_id as a 400 business error.
+	// Marking it required would turn that 400 into a parse-time 422.
+	GroupID string   `json:"group_id,omitempty"`
+	_       struct{} `json:"-" additionalProperties:"false"`
+}
+
+// assignGroupInput is the native huma request for POST
+// /oauth2/clients/{id}/groups: the {id} path param plus the typed body.
+type assignGroupInput struct {
+	ID   string `path:"id"`
+	Body assignGroupRequest
 }
 
 func (p *oauth2Plugin) handleListClientGroups(host plugin.PluginHost) http.HandlerFunc {
@@ -56,32 +69,29 @@ func (p *oauth2Plugin) handleListClientGroups(host plugin.PluginHost) http.Handl
 	}
 }
 
-func (p *oauth2Plugin) handleAssignClientGroup(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		clientID := r.PathValue("id")
-		if _, err := host.Repo().GetOAuth2ClientByClientID(r.Context(), clientID); err != nil {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "client not found"})
-			return
+// handleAssignClientGroup assigns a group to a client. Native huma handler:
+// typed Body (additionalProperties:false → 422 on unknown/malformed JSON).
+// Business errors keep their legacy status as problem+json: missing group_id →
+// 400, client/group not found → 404, repo failures → 500. Success → 204.
+func (p *oauth2Plugin) handleAssignClientGroup(host plugin.PluginHost) func(context.Context, *assignGroupInput) (*oauth2EmptyOutput, error) {
+	return func(ctx context.Context, in *assignGroupInput) (*oauth2EmptyOutput, error) {
+		clientID := in.ID
+		if _, err := host.Repo().GetOAuth2ClientByClientID(ctx, clientID); err != nil {
+			return nil, huma.Error404NotFound("client not found")
 		}
-		var req assignGroupRequest
-		r.Body = http.MaxBytesReader(nil, r.Body, 1<<20)
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.GroupID == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "group_id is required"})
-			return
+		if in.Body.GroupID == "" {
+			return nil, huma.Error400BadRequest("group_id is required")
 		}
-		if _, err := host.Repo().GetGroupByID(r.Context(), req.GroupID); err != nil {
+		if _, err := host.Repo().GetGroupByID(ctx, in.Body.GroupID); err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				writeJSON(w, http.StatusNotFound, map[string]string{"error": "group not found"})
-				return
+				return nil, huma.Error404NotFound("group not found")
 			}
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "group lookup failed"})
-			return
+			return nil, huma.Error500InternalServerError("group lookup failed")
 		}
-		if err := host.Repo().AssignClientGroup(r.Context(), clientID, req.GroupID, time.Now().UTC()); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unable to assign group"})
-			return
+		if err := host.Repo().AssignClientGroup(ctx, clientID, in.Body.GroupID, time.Now().UTC()); err != nil {
+			return nil, huma.Error500InternalServerError("unable to assign group")
 		}
-		w.WriteHeader(http.StatusNoContent)
+		return &oauth2EmptyOutput{}, nil
 	}
 }
 

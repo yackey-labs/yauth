@@ -2,7 +2,6 @@ package oauth2server
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
@@ -10,6 +9,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/google/uuid"
 
 	"github.com/yackey-labs/yauth-go/auth"
@@ -185,29 +185,49 @@ func (p *oauth2Plugin) handleAuthorize(host plugin.PluginHost) http.HandlerFunc 
 	}
 }
 
-// consentRequest is the body for POST /oauth2/consent.
+// consentRequest is the body for POST /oauth2/consent. It is a native huma
+// typed Body (additionalProperties:false → 422 on unknown/malformed JSON).
 type consentRequest struct {
-	RequestID string `json:"request_id"`
-	CSRFToken string `json:"csrf_token"`
-	Approved  bool   `json:"approved"`
+	// All fields are omitempty so huma treats them as optional: the original
+	// handler accepted any/missing values and validated by hand (request_id
+	// not found / csrf mismatch / user mismatch → 400 business errors).
+	// Marking any required would turn those 400s into a parse-time 422.
+	RequestID string   `json:"request_id,omitempty"`
+	CSRFToken string   `json:"csrf_token,omitempty"`
+	Approved  bool     `json:"approved,omitempty"`
+	_         struct{} `json:"-" additionalProperties:"false"`
+}
+
+// consentInput is the native huma request wrapper for POST /oauth2/consent.
+type consentInput struct {
+	Body consentRequest
+}
+
+// consentOutput wraps authorizeRedirect — the {redirect_url} body the console
+// SPA reads and follows (this is the /oauth2/consent console route, NOT the
+// RFC 302 redirect of /oauth/authorize).
+type consentOutput struct {
+	Body authorizeRedirect
 }
 
 // handleConsent finalizes a pending /authorize request. On approval it
 // persists Consent (so future requests skip the prompt) and mints the
 // authorization code; on denial it builds an access_denied redirect.
-func (p *oauth2Plugin) handleConsent(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, _ := middleware.AuthUserFromContext(r.Context())
+//
+// Native huma handler: typed Body (additionalProperties:false → 422 on
+// unknown/malformed JSON). The CSRF / request_id / user-mismatch security
+// checks are preserved byte-for-byte; only transport (body parse + error
+// emission) changes. Business errors map to problem+json keeping their legacy
+// status (access_denied/invalid_request → 400, server_error → 500). The
+// approve AND deny paths both return a 200 {redirect_url} body for the SPA to
+// follow — never an error.
+func (p *oauth2Plugin) handleConsent(host plugin.PluginHost) func(context.Context, *consentInput) (*consentOutput, error) {
+	return func(ctx context.Context, in *consentInput) (*consentOutput, error) {
+		au, _ := middleware.AuthUserFromContext(ctx)
 		if au == nil {
-			writeOAuthError(w, "access_denied", "authentication required")
-			return
+			return nil, huma.Error400BadRequest("authentication required")
 		}
-		var req consentRequest
-		r.Body = http.MaxBytesReader(nil, r.Body, 1<<20)
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeOAuthError(w, "invalid_request", err.Error())
-			return
-		}
+		req := in.Body
 
 		p.pendingMu.Lock()
 		pending, ok := p.pending[req.RequestID]
@@ -217,39 +237,33 @@ func (p *oauth2Plugin) handleConsent(host plugin.PluginHost) http.HandlerFunc {
 		p.pendingMu.Unlock()
 
 		if !ok || pending == nil {
-			writeOAuthError(w, "invalid_request", "request_id not found or expired")
-			return
+			return nil, huma.Error400BadRequest("request_id not found or expired")
 		}
 		if !constantTimeStringEq(pending.CSRFToken, req.CSRFToken) {
-			writeOAuthError(w, "invalid_request", "csrf token mismatch")
-			return
+			return nil, huma.Error400BadRequest("csrf token mismatch")
 		}
 		if pending.UserID != au.User.ID {
-			writeOAuthError(w, "invalid_request", "user mismatch")
-			return
+			return nil, huma.Error400BadRequest("user mismatch")
 		}
 
 		if !req.Approved {
 			redirect := buildErrorRedirect(pending.RedirectURI, "access_denied", "user denied consent", pending.State)
-			writeJSON(w, http.StatusOK, authorizeRedirect{RedirectURL: redirect})
-			return
+			return &consentOutput{Body: authorizeRedirect{RedirectURL: redirect}}, nil
 		}
 
-		client, err := host.Repo().GetOAuth2ClientByClientID(r.Context(), pending.ClientID)
+		client, err := host.Repo().GetOAuth2ClientByClientID(ctx, pending.ClientID)
 		if err != nil {
-			writeOAuthError(w, "invalid_request", "client not found")
-			return
+			return nil, huma.Error400BadRequest("client not found")
 		}
 
 		// Persist consent so subsequent /authorize calls skip the prompt.
-		_ = persistConsent(r.Context(), host, au.User.ID, pending.ClientID, pending.Scopes)
+		_ = persistConsent(ctx, host, au.User.ID, pending.ClientID, pending.Scopes)
 
-		_, redirect, err := p.mintAuthCode(r.Context(), host, au.User.ID, client, pending.RedirectURI, pending.Scopes, pending.CodeChallenge, pending.CodeChallengeMethod, pending.Nonce, pending.State)
+		_, redirect, err := p.mintAuthCode(ctx, host, au.User.ID, client, pending.RedirectURI, pending.Scopes, pending.CodeChallenge, pending.CodeChallengeMethod, pending.Nonce, pending.State)
 		if err != nil {
-			writeOAuthError(w, "server_error", err.Error())
-			return
+			return nil, huma.Error500InternalServerError(err.Error())
 		}
-		writeJSON(w, http.StatusOK, authorizeRedirect{RedirectURL: redirect})
+		return &consentOutput{Body: authorizeRedirect{RedirectURL: redirect}}, nil
 	}
 }
 

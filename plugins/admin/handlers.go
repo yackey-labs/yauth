@@ -61,19 +61,6 @@ func toUserJSON(u domain.User) userJSON {
 	}
 }
 
-// decodeJSON parses r.Body into v, enforcing a 1 MiB body cap. Migrated
-// handlers call it on the *http.Request stashed onto the operation context by
-// StashHTTPHuma — the admin input structs carry NO huma Body field, so huma
-// never consumes the body and this strict decoder (DisallowUnknownFields,
-// preserved INVALID_REQUEST error semantics) stays byte-identical to the
-// legacy net/http handlers.
-func decodeJSON(r *http.Request, v any) error {
-	r.Body = http.MaxBytesReader(nil, r.Body, 1<<20)
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	return dec.Decode(v)
-}
-
 // parseLimitOffset reads ?limit and ?offset, applying the plugin's
 // default and hard cap. Negative values are coerced to defaults; values
 // above maxLimit are clamped to maxLimit.
@@ -195,14 +182,23 @@ func (p *adminPlugin) registerListUsers(host plugin.PluginHost, api huma.API, mw
 
 // --- PATCH/PUT /admin/users/{id} -----------------------------------------
 
-type patchUserRequest struct {
-	DisplayName   *string `json:"display_name,omitempty"`
-	Role          *string `json:"role,omitempty"`
-	EmailVerified *bool   `json:"email_verified,omitempty"`
+type adminPatchUserRequest struct {
+	DisplayName   *string  `json:"display_name,omitempty"`
+	Role          *string  `json:"role,omitempty"`
+	EmailVerified *bool    `json:"email_verified,omitempty"`
+	_             struct{} `json:"-" additionalProperties:"false"`
 }
 
 type idInput struct {
 	ID string `path:"id" doc:"User ID"`
+}
+
+// patchUserInput is the huma-native request: a typed JSON body plus the path
+// param. huma parses + validates the body (unknown fields → 422) and the
+// request schema auto-derives — no StashHTTPHuma bridge.
+type patchUserInput struct {
+	ID   string `path:"id" doc:"User ID"`
+	Body adminPatchUserRequest
 }
 
 type userOutput struct {
@@ -219,16 +215,9 @@ func (p *adminPlugin) registerPatchUser(host plugin.PluginHost, api huma.API, mw
 		Summary:     "Update a user (partial)",
 		Tags:        []string{"admin"},
 		Security:    []map[string][]string{{"sessionCookie": {}}},
-		Middlewares: adminGuards(api, mw),
-	}, func(ctx context.Context, in *idInput) (*userOutput, error) {
-		r, err := reqFromCtx(ctx)
-		if err != nil {
-			return nil, err
-		}
-		var req patchUserRequest
-		if err := decodeJSON(r, &req); err != nil {
-			return nil, huma.Error400BadRequest(err.Error())
-		}
+		Middlewares: adminGuardsNoStash(api, mw),
+	}, func(ctx context.Context, in *patchUserInput) (*userOutput, error) {
+		req := in.Body
 		now := time.Now().UTC()
 
 		changes := domain.UpdateUser{UpdatedAt: &now}
@@ -256,9 +245,21 @@ func (p *adminPlugin) registerPatchUser(host plugin.PluginHost, api huma.API, mw
 
 // --- POST /admin/users/{id}/ban ------------------------------------------
 
-type banRequest struct {
-	Reason string     `json:"reason"`
+type adminBanRequest struct {
+	// Reason carries omitempty so huma does NOT mark it schema-required: an
+	// absent/empty reason must reach the handler's business-rule check (400
+	// "reason is required"), not huma's 422 field validation.
+	Reason string     `json:"reason,omitempty"`
 	Until  *time.Time `json:"until,omitempty"`
+	_      struct{}   `json:"-" additionalProperties:"false"`
+}
+
+// banInput carries the native JSON body plus the path param. The body
+// auto-derives; StashHTTPHuma is kept (adminGuards) only so the handler can read
+// RequestIP for the audit row and Emit.
+type banInput struct {
+	ID   string `path:"id" doc:"User ID"`
+	Body adminBanRequest
 }
 
 func (p *adminPlugin) registerBanUser(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
@@ -270,15 +271,12 @@ func (p *adminPlugin) registerBanUser(host plugin.PluginHost, api huma.API, mw *
 		Tags:        []string{"admin"},
 		Security:    []map[string][]string{{"sessionCookie": {}}},
 		Middlewares: adminGuards(api, mw),
-	}, func(ctx context.Context, in *idInput) (*userOutput, error) {
+	}, func(ctx context.Context, in *banInput) (*userOutput, error) {
 		r, err := reqFromCtx(ctx)
 		if err != nil {
 			return nil, err
 		}
-		var req banRequest
-		if err := decodeJSON(r, &req); err != nil {
-			return nil, huma.Error400BadRequest(err.Error())
-		}
+		req := in.Body
 		if strings.TrimSpace(req.Reason) == "" {
 			return nil, huma.Error400BadRequest("reason is required")
 		}
@@ -400,8 +398,18 @@ func (p *adminPlugin) registerUnbanUser(host plugin.PluginHost, api huma.API, mw
 
 // --- POST /admin/users/{id}/suspend & /unsuspend (offboarding) -----------
 
-type suspendRequest struct {
-	Reason string `json:"reason,omitempty"`
+type adminSuspendRequest struct {
+	Reason string   `json:"reason,omitempty"`
+	_      struct{} `json:"-" additionalProperties:"false"`
+}
+
+// suspendInput carries an OPTIONAL native JSON body (pointer Body → huma treats
+// the body as not-required, preserving the lenient "absent body is fine"
+// contract) plus the path param. StashHTTPHuma is kept (adminGuards) for
+// RequestIP on the audit row + Emit.
+type suspendInput struct {
+	ID   string `path:"id" doc:"User ID"`
+	Body *adminSuspendRequest
 }
 
 // registerSuspendUser globally deactivates a user (offboarding) and instantly
@@ -416,20 +424,23 @@ func (p *adminPlugin) registerSuspendUser(host plugin.PluginHost, api huma.API, 
 		Tags:        []string{"admin"},
 		Security:    []map[string][]string{{"sessionCookie": {}}},
 		Middlewares: adminGuards(api, mw),
-	}, func(ctx context.Context, in *idInput) (*userOutput, error) {
+	}, func(ctx context.Context, in *suspendInput) (*userOutput, error) {
 		r, err := reqFromCtx(ctx)
 		if err != nil {
 			return nil, err
 		}
-		var req suspendRequest
-		// Lenient: a malformed/absent body is swallowed (reason is optional).
-		_ = decodeJSON(r, &req)
+		// Lenient: an absent body is fine (reason is optional). huma already
+		// validated any body that was sent.
+		var reason string
+		if in.Body != nil {
+			reason = in.Body.Reason
+		}
 		id := in.ID
 		now := time.Now().UTC()
 		nowPtr := &now
 		suspendedPP := &nowPtr
 		var reasonPtr *string
-		if s := strings.TrimSpace(req.Reason); s != "" {
+		if s := strings.TrimSpace(reason); s != "" {
 			reasonPtr = &s
 		}
 		reasonPP := &reasonPtr
@@ -449,7 +460,7 @@ func (p *adminPlugin) registerSuspendUser(host plugin.PluginHost, api huma.API, 
 		_, _ = host.Repo().DeleteUserSessions(ctx, id)
 		_, _ = host.Repo().RevokeAllUserRefreshTokens(ctx, id)
 
-		meta, _ := json.Marshal(map[string]any{"admin_id": actorIDFromContext(ctx), "reason": req.Reason})
+		meta, _ := json.Marshal(map[string]any{"admin_id": actorIDFromContext(ctx), "reason": reason})
 		_ = host.Repo().LogAuditEvent(ctx, domain.NewAuditLog{
 			ID: newID(), UserID: &u.ID, EventType: "admin.suspend", Metadata: meta,
 			IPAddress: middleware.RequestIP(r), CreatedAt: now,
@@ -507,9 +518,18 @@ func (p *adminPlugin) registerUnsuspendUser(host plugin.PluginHost, api huma.API
 
 // --- POST /admin/users/{id}/schedule-start (staged onboarding) -----------
 
-type scheduleStartRequest struct {
+type adminScheduleStartRequest struct {
 	// ActivatesAt is the scheduled start. Null/absent clears it (active now).
 	ActivatesAt *time.Time `json:"activates_at"`
+	_           struct{}   `json:"-" additionalProperties:"false"`
+}
+
+// scheduleStartInput is the huma-native request: a typed JSON body plus the path
+// param. huma parses + validates the body and the request schema auto-derives —
+// no StashHTTPHuma bridge.
+type scheduleStartInput struct {
+	ID   string `path:"id" doc:"User ID"`
+	Body adminScheduleStartRequest
 }
 
 func (p *adminPlugin) registerScheduleStart(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
@@ -520,16 +540,9 @@ func (p *adminPlugin) registerScheduleStart(host plugin.PluginHost, api huma.API
 		Summary:     "Set/clear staged activation (activates_at)",
 		Tags:        []string{"admin"},
 		Security:    []map[string][]string{{"sessionCookie": {}}},
-		Middlewares: adminGuards(api, mw),
-	}, func(ctx context.Context, in *idInput) (*userOutput, error) {
-		r, err := reqFromCtx(ctx)
-		if err != nil {
-			return nil, err
-		}
-		var req scheduleStartRequest
-		if err := decodeJSON(r, &req); err != nil {
-			return nil, huma.Error400BadRequest(err.Error())
-		}
+		Middlewares: adminGuardsNoStash(api, mw),
+	}, func(ctx context.Context, in *scheduleStartInput) (*userOutput, error) {
+		req := in.Body
 		id := in.ID
 		now := time.Now().UTC()
 		var at *time.Time
@@ -650,8 +663,18 @@ func (p *adminPlugin) registerDeleteUserSessions(host plugin.PluginHost, api hum
 
 // --- DELETE /admin/users/{id} --------------------------------------------
 
-type deleteUserRequest struct {
-	Reason string `json:"reason"`
+type adminDeleteUserRequest struct {
+	Reason string   `json:"reason"`
+	_      struct{} `json:"-" additionalProperties:"false"`
+}
+
+// deleteUserInput carries an OPTIONAL native JSON body (pointer Body → not
+// required, so an absent body still deletes — e.g. the self-delete path that
+// 409s before ever needing a reason) plus the path param. StashHTTPHuma is kept
+// (adminGuards) for RequestIP on the audit row.
+type deleteUserInput struct {
+	ID   string `path:"id" doc:"User ID"`
+	Body *adminDeleteUserRequest
 }
 
 // emptyOutput carries no body and lets the operation drive a 204 via
@@ -668,7 +691,7 @@ func (p *adminPlugin) registerDeleteUser(host plugin.PluginHost, api huma.API, m
 		Security:      []map[string][]string{{"sessionCookie": {}}},
 		DefaultStatus: http.StatusNoContent,
 		Middlewares:   adminGuards(api, mw),
-	}, func(ctx context.Context, in *idInput) (*emptyOutput, error) {
+	}, func(ctx context.Context, in *deleteUserInput) (*emptyOutput, error) {
 		r, err := reqFromCtx(ctx)
 		if err != nil {
 			return nil, err
@@ -681,13 +704,11 @@ func (p *adminPlugin) registerDeleteUser(host plugin.PluginHost, api huma.API, m
 			return nil, huma.Error409Conflict("admins cannot delete their own account")
 		}
 
-		// Body is optional but accepted for an audit-log reason. An empty
-		// or missing body is fine; we only reject malformed JSON.
-		var req deleteUserRequest
-		if r.ContentLength != 0 {
-			if err := decodeJSON(r, &req); err != nil {
-				return nil, huma.Error400BadRequest(err.Error())
-			}
+		// Body is optional but accepted for an audit-log reason. An absent body
+		// is fine (pointer Body → not required); huma validated any body sent.
+		var reason string
+		if in.Body != nil {
+			reason = in.Body.Reason
 		}
 
 		if err := host.Repo().DeleteUser(ctx, id); err != nil {
@@ -702,7 +723,7 @@ func (p *adminPlugin) registerDeleteUser(host plugin.PluginHost, api huma.API, m
 		meta, _ := json.Marshal(map[string]any{
 			"admin_id":     actorID,
 			"deleted_user": id,
-			"reason":       req.Reason,
+			"reason":       reason,
 		})
 		_ = host.Repo().LogAuditEvent(ctx, domain.NewAuditLog{
 			ID:        newID(),

@@ -84,6 +84,9 @@ jobs:
       - name: Publish to npm (OIDC trusted publishing + provenance)
         run: |
           set -euo pipefail
+          # NODE_AUTH_TOKEN lingers in the env (setup-node). Even empty, npm
+          # uses it and skips OIDC — unset it so OIDC engages.
+          unset NODE_AUTH_TOKEN || true
           echo "npm version: $(npm --version)"
           if [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
             echo "OIDC id-token: available"
@@ -95,8 +98,8 @@ jobs:
           for p in shared client ui-vue; do
             sed -i "s/\"workspace:\*\"/\"$VER\"/g" "packages/$p/package.json"
           done
-          for p in shared client ui-vue; do
-            echo "::group::npm publish $p"
-            ( cd "packages/$p" && npm publish --provenance --access public )
-            echo "::endgroup::"
-          done
+          # Verbose on the first publish to surface the OIDC handshake if it
+          # still fails.
+          ( cd packages/shared && npm publish --provenance --access public --loglevel verbose )
+          ( cd packages/client && npm publish --provenance --access public )
+          ( cd packages/ui-vue && npm publish --provenance --access public )

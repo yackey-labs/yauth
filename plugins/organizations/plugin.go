@@ -42,10 +42,9 @@
 package organizations
 
 import (
-	"github.com/danielgtaylor/huma/v2"
-
-	"net/http"
 	"time"
+
+	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/yackey-labs/yauth-go/auth"
 	"github.com/yackey-labs/yauth-go/plugin"
@@ -127,74 +126,69 @@ func New(cfg Config) plugin.Plugin {
 // Name implements plugin.Plugin.
 func (p *orgsPlugin) Name() string { return "organizations" }
 
-// Routes implements plugin.Plugin.
-func (p *orgsPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.API, prefix string) {
+// Routes implements plugin.Plugin. Every route is huma-native: a typed
+// operation guarded by authGuards (StashHTTPHuma + RequireAuthHuma).
+// Authorization (org-membership / org-admin role) is enforced in-handler by
+// requireOrgMember / requireOrgAdmin — these are org-scoped roles, NOT global
+// admin, so RequireAdminHuma is deliberately not used. The mux is retained in
+// the signature for plugins that still register raw net/http routes;
+// organizations no longer uses it (the route set is unchanged — huma.Register
+// flows through the same recording router, so the spec-drift guard still sees
+// every (method, path)).
+func (p *orgsPlugin) Routes(host plugin.PluginHost, _ plugin.Router, api huma.API, prefix string) {
 	mw := host.Middleware()
 
-	mux.Handle("GET "+prefix+"/organizations", mw.RequireAuth(http.HandlerFunc(p.handleList(host))))
-	mux.Handle("POST "+prefix+"/organizations", mw.RequireAuth(http.HandlerFunc(p.handleCreate(host))))
-	mux.Handle("GET "+prefix+"/organizations/{id}", mw.RequireAuth(http.HandlerFunc(p.handleGet(host))))
-	mux.Handle("PATCH "+prefix+"/organizations/{id}", mw.RequireAuth(http.HandlerFunc(p.handleUpdate(host))))
-	mux.Handle("DELETE "+prefix+"/organizations/{id}", mw.RequireAuth(http.HandlerFunc(p.handleDelete(host))))
-	mux.Handle("GET "+prefix+"/organizations/{id}/members", mw.RequireAuth(http.HandlerFunc(p.handleListMembers(host))))
-	mux.Handle("POST "+prefix+"/organizations/{id}/invitations", mw.RequireAuth(http.HandlerFunc(p.handleCreateInvitation(host))))
-	mux.Handle("POST "+prefix+"/invitations/accept", mw.RequireAuth(http.HandlerFunc(p.handleAcceptInvitation(host))))
+	p.registerList(host, api, mw, prefix)
+	p.registerCreate(host, api, mw, prefix)
+	p.registerGet(host, api, mw, prefix)
+	p.registerUpdate(host, api, mw, prefix)
+	p.registerDelete(host, api, mw, prefix)
+	p.registerListMembers(host, api, mw, prefix)
+	p.registerCreateInvitation(host, api, mw, prefix)
+	p.registerAcceptInvitation(host, api, mw, prefix)
 
-	// RBAC routes (yauth #88 port). Mounted unconditionally — the
-	// plugin already gates membership-bearing routes behind
-	// RequireAuth + membership lookups; the RBAC helpers reuse those.
-	mux.Handle("POST "+prefix+"/organizations/{id}/members/{user_id}/role", mw.RequireAuth(http.HandlerFunc(p.handleChangeMemberRole(host))))
-	mux.Handle("DELETE "+prefix+"/organizations/{id}/members/{user_id}", mw.RequireAuth(http.HandlerFunc(p.handleRemoveMember(host))))
-	mux.Handle("POST "+prefix+"/organizations/{id}/transfer-ownership", mw.RequireAuth(http.HandlerFunc(p.handleTransferOwnership(host))))
-	mux.Handle("GET "+prefix+"/organizations/{id}/permissions", mw.RequireAuth(http.HandlerFunc(p.handleListPermissions(host))))
+	// RBAC routes (yauth #88 port).
+	p.registerChangeMemberRole(host, api, mw, prefix)
+	p.registerRemoveMember(host, api, mw, prefix)
+	p.registerTransferOwnership(host, api, mw, prefix)
+	p.registerListPermissions(host, api, mw, prefix)
 
-	// Active-org switcher routes (yauth #89 / Go #15). Mounted only
-	// when the plugin is registered — single-user / anonymous
-	// deployments that never register `organizations.New(...)` get
-	// none of these endpoints and AuthUser.ActiveOrgID stays nil.
-	mux.Handle("GET "+prefix+"/sessions/active-org", mw.RequireAuth(http.HandlerFunc(p.handleGetActiveOrg(host))))
-	mux.Handle("POST "+prefix+"/sessions/active-org", mw.RequireAuth(http.HandlerFunc(p.handleSetActiveOrg(host))))
-	mux.Handle("DELETE "+prefix+"/sessions/active-org", mw.RequireAuth(http.HandlerFunc(p.handleClearActiveOrg(host))))
+	// Active-org switcher routes (yauth #89 / Go #15).
+	p.registerGetActiveOrg(host, api, mw, prefix)
+	p.registerSetActiveOrg(host, api, mw, prefix)
+	p.registerClearActiveOrg(host, api, mw, prefix)
 
-	// Verified-domain routes (yauth #90 / Go #17). Admin-gated;
-	// only mounted when the organizations plugin is registered.
-	// Single-user / anonymous deployments never see them.
-	mux.Handle("POST "+prefix+"/organizations/{id}/domains", mw.RequireAuth(http.HandlerFunc(p.handleCreateOrgDomain(host))))
-	mux.Handle("GET "+prefix+"/organizations/{id}/domains", mw.RequireAuth(http.HandlerFunc(p.handleListOrgDomains(host))))
-	mux.Handle("POST "+prefix+"/organizations/{id}/domains/{did}/verify", mw.RequireAuth(http.HandlerFunc(p.handleVerifyOrgDomain(host))))
-	mux.Handle("DELETE "+prefix+"/organizations/{id}/domains/{did}", mw.RequireAuth(http.HandlerFunc(p.handleDeleteOrgDomain(host))))
-	mux.Handle("PATCH "+prefix+"/organizations/{id}/domains/{did}", mw.RequireAuth(http.HandlerFunc(p.handlePatchOrgDomain(host))))
+	// Verified-domain routes (yauth #90 / Go #17). Admin-gated.
+	p.registerCreateOrgDomain(host, api, mw, prefix)
+	p.registerListOrgDomains(host, api, mw, prefix)
+	p.registerVerifyOrgDomain(host, api, mw, prefix)
+	p.registerDeleteOrgDomain(host, api, mw, prefix)
+	p.registerPatchOrgDomain(host, api, mw, prefix)
 
 	// Org-scoped API key (service account) routes — yauth #91 /
-	// yauth-go #19. Admin-gated. Only mounted when the
-	// organizations plugin is registered; single-user / anonymous
-	// deployments never see them. The credential format is shared
-	// with the apikey plugin's user-scoped keys so the same
-	// X-Api-Key resolver authenticates both — the orgs plugin only
-	// adds management routes, not a second resolver.
-	mux.Handle("POST "+prefix+"/organizations/{id}/api-keys", mw.RequireAuth(http.HandlerFunc(p.handleCreateOrgAPIKey(host, p.cfg.APIKeyPrefix))))
-	mux.Handle("GET "+prefix+"/organizations/{id}/api-keys", mw.RequireAuth(http.HandlerFunc(p.handleListOrgAPIKeys(host))))
-	mux.Handle("DELETE "+prefix+"/organizations/{id}/api-keys/{key_id}", mw.RequireAuth(http.HandlerFunc(p.handleDeleteOrgAPIKey(host))))
-	mux.Handle("POST "+prefix+"/organizations/{id}/api-keys/{key_id}/rotate", mw.RequireAuth(http.HandlerFunc(p.handleRotateOrgAPIKey(host, p.cfg.APIKeyPrefix))))
-	mux.Handle("GET "+prefix+"/organizations/{id}/api-keys/{key_id}/usage", mw.RequireAuth(http.HandlerFunc(p.handleOrgAPIKeyUsage(host))))
+	// yauth-go #19. Admin-gated. The credential format is shared with the
+	// apikey plugin's user-scoped keys so the same X-Api-Key resolver
+	// authenticates both — the orgs plugin only adds management routes.
+	p.registerCreateOrgAPIKey(host, api, mw, prefix, p.cfg.APIKeyPrefix)
+	p.registerListOrgAPIKeys(host, api, mw, prefix)
+	p.registerDeleteOrgAPIKey(host, api, mw, prefix)
+	p.registerRotateOrgAPIKey(host, api, mw, prefix, p.cfg.APIKeyPrefix)
+	p.registerOrgAPIKeyUsage(host, api, mw, prefix)
 
 	// Groups (yauth-go #groups): org-scoped named user collections, the
 	// backing store for SCIM Groups and OAuth2 client access enforcement.
 	// Reads are member-gated; mutations are admin-gated.
-	mux.Handle("GET "+prefix+"/organizations/{id}/groups", mw.RequireAuth(http.HandlerFunc(p.handleListGroups(host))))
-	mux.Handle("POST "+prefix+"/organizations/{id}/groups", mw.RequireAuth(http.HandlerFunc(p.handleCreateGroup(host))))
-	mux.Handle("GET "+prefix+"/organizations/{id}/groups/{gid}", mw.RequireAuth(http.HandlerFunc(p.handleGetGroup(host))))
-	mux.Handle("PATCH "+prefix+"/organizations/{id}/groups/{gid}", mw.RequireAuth(http.HandlerFunc(p.handlePatchGroup(host))))
-	mux.Handle("DELETE "+prefix+"/organizations/{id}/groups/{gid}", mw.RequireAuth(http.HandlerFunc(p.handleDeleteGroup(host))))
-	mux.Handle("GET "+prefix+"/organizations/{id}/groups/{gid}/members", mw.RequireAuth(http.HandlerFunc(p.handleListGroupMembers(host))))
-	mux.Handle("POST "+prefix+"/organizations/{id}/groups/{gid}/members", mw.RequireAuth(http.HandlerFunc(p.handleAddGroupMember(host))))
-	mux.Handle("DELETE "+prefix+"/organizations/{id}/groups/{gid}/members/{user_id}", mw.RequireAuth(http.HandlerFunc(p.handleRemoveGroupMember(host))))
+	p.registerListGroups(host, api, mw, prefix)
+	p.registerCreateGroup(host, api, mw, prefix)
+	p.registerGetGroup(host, api, mw, prefix)
+	p.registerPatchGroup(host, api, mw, prefix)
+	p.registerDeleteGroup(host, api, mw, prefix)
+	p.registerListGroupMembers(host, api, mw, prefix)
+	p.registerAddGroupMember(host, api, mw, prefix)
+	p.registerRemoveGroupMember(host, api, mw, prefix)
 
 	// Per-org auth policy routes — yauth #92 / yauth-go #21. GET is
-	// member-gated (any active member can read the effective policy
-	// shape so the UI can render warnings about MFA / IP restrictions);
-	// PATCH is admin-gated. Only mounted when the organizations plugin
-	// is registered; single-user / anonymous deployments never see them.
-	mux.Handle("GET "+prefix+"/organizations/{id}/policy", mw.RequireAuth(http.HandlerFunc(p.handleGetOrgPolicy(host))))
-	mux.Handle("PATCH "+prefix+"/organizations/{id}/policy", mw.RequireAuth(http.HandlerFunc(p.handlePatchOrgPolicy(host))))
+	// member-gated; PATCH is admin-gated.
+	p.registerGetOrgPolicy(host, api, mw, prefix)
+	p.registerPatchOrgPolicy(host, api, mw, prefix)
 }

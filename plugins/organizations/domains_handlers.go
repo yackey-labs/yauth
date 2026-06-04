@@ -16,6 +16,7 @@
 package organizations
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
@@ -23,13 +24,22 @@ import (
 	"strings"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/google/uuid"
 
 	"github.com/yackey-labs/yauth-go/auth"
 	"github.com/yackey-labs/yauth-go/domain"
+	"github.com/yackey-labs/yauth-go/middleware"
 	"github.com/yackey-labs/yauth-go/plugin"
 	"github.com/yackey-labs/yauth-go/yautherr"
 )
+
+// orgDomainInput adds the domain id to the org-scoped path. The path params are
+// named "id" and "did" to match the legacy r.PathValue lookups.
+type orgDomainInput struct {
+	ID  string `path:"id" doc:"Organization ID"`
+	DID string `path:"did" doc:"Domain ID"`
+}
 
 // --- Wire shapes ---
 
@@ -111,50 +121,60 @@ func looksLikeDomain(s string) bool {
 // resolveDomainForOrg loads a domain row by id and verifies that the
 // row's OrganizationID matches the URL-supplied org id. Returns the row
 // or writes the appropriate error and returns false.
-func resolveDomainForOrg(w http.ResponseWriter, r *http.Request, host plugin.PluginHost, orgID, domainID string) (*domain.OrganizationDomain, bool) {
-	d, err := host.Repo().GetOrganizationDomainByID(r.Context(), domainID)
+func resolveDomainForOrg(ctx context.Context, host plugin.PluginHost, orgID, domainID string) (*domain.OrganizationDomain, error) {
+	d, err := host.Repo().GetOrganizationDomainByID(ctx, domainID)
 	if err != nil {
 		if errors.Is(err, yautherr.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "NOT_FOUND", "domain not found")
-			return nil, false
+			return nil, huma.Error404NotFound("domain not found")
 		}
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "domain lookup failed")
-		return nil, false
+		return nil, huma.Error500InternalServerError("domain lookup failed")
 	}
 	// Cross-tenant: a domain id from another org returns 404, never
 	// 403 — leaking "yes that id exists" is itself a small leak.
 	if d.OrganizationID != orgID {
-		writeError(w, http.StatusNotFound, "NOT_FOUND", "domain not found")
-		return nil, false
+		return nil, huma.Error404NotFound("domain not found")
 	}
-	return d, true
+	return d, nil
 }
 
 // --- POST /organizations/{id}/domains ---
 
-func (p *orgsPlugin) handleCreateOrgDomain(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := authUser(w, r)
-		if !ok {
-			return
+func (p *orgsPlugin) registerCreateOrgDomain(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	type output struct {
+		Body organizationDomainJSON
+	}
+	huma.Register(api, huma.Operation{
+		OperationID:   "organizations-create-domain",
+		Method:        http.MethodPost,
+		Path:          prefix + "/organizations/{id}/domains",
+		Summary:       "Claim a verified email domain",
+		Tags:          []string{"organizations"},
+		Security:      []map[string][]string{{"sessionCookie": {}}},
+		DefaultStatus: http.StatusCreated,
+		Middlewares:   authGuards(api, mw),
+	}, func(ctx context.Context, in *orgIDInput) (*output, error) {
+		r, err := reqFromCtx(ctx)
+		if err != nil {
+			return nil, err
 		}
-		orgID := r.PathValue("id")
-		if _, ok := requireOrgAdmin(w, r, host, orgID, au.User.ID); !ok {
-			return
+		au, err := authUser(ctx)
+		if err != nil {
+			return nil, err
+		}
+		orgID := in.ID
+		if _, err := requireOrgAdmin(ctx, host, orgID, au.User.ID); err != nil {
+			return nil, err
 		}
 		var req createDomainRequest
 		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid json body")
-			return
+			return nil, huma.Error400BadRequest("invalid json body")
 		}
 		if !looksLikeDomain(req.Domain) {
-			writeError(w, http.StatusBadRequest, "BAD_REQUEST", "domain is required and must contain a dot")
-			return
+			return nil, huma.Error400BadRequest("domain is required and must contain a dot")
 		}
 		token, err := generateDomainVerificationToken()
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "token generation failed")
-			return
+			return nil, huma.Error500InternalServerError("token generation failed")
 		}
 		// Apply secure defaults: auto_join=false, role=member,
 		// require_email_verified=true. Admin can override at create
@@ -173,7 +193,7 @@ func (p *orgsPlugin) handleCreateOrgDomain(host plugin.PluginHost) http.HandlerF
 		}
 
 		now := time.Now().UTC()
-		d, err := host.Repo().CreateOrganizationDomain(r.Context(), domain.NewOrganizationDomain{
+		d, err := host.Repo().CreateOrganizationDomain(ctx, domain.NewOrganizationDomain{
 			ID:                    uuid.NewString(),
 			OrganizationID:        orgID,
 			Domain:                req.Domain,
@@ -187,32 +207,45 @@ func (p *orgsPlugin) handleCreateOrgDomain(host plugin.PluginHost) http.HandlerF
 		})
 		if err != nil {
 			if errors.Is(err, yautherr.ErrConflict) {
-				writeError(w, http.StatusConflict, "CONFLICT", "domain already claimed")
-				return
+				return nil, huma.Error409Conflict("domain already claimed")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "create domain failed")
-			return
+			return nil, huma.Error500InternalServerError("create domain failed")
 		}
-		writeJSON(w, http.StatusCreated, toOrgDomainJSON(d))
-	}
+		return &output{Body: toOrgDomainJSON(d)}, nil
+	})
 }
 
 // --- GET /organizations/{id}/domains ---
 
-func (p *orgsPlugin) handleListOrgDomains(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := authUser(w, r)
-		if !ok {
-			return
-		}
-		orgID := r.PathValue("id")
-		if _, ok := requireOrgAdmin(w, r, host, orgID, au.User.ID); !ok {
-			return
-		}
-		rows, err := host.Repo().ListOrganizationDomainsByOrg(r.Context(), orgID)
+// listDomainsResponse mirrors the legacy {"domains":[...]} wrapper.
+type listDomainsResponse struct {
+	Domains []organizationDomainJSON `json:"domains"`
+}
+
+func (p *orgsPlugin) registerListOrgDomains(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	type output struct {
+		Body listDomainsResponse
+	}
+	huma.Register(api, huma.Operation{
+		OperationID: "organizations-list-domains",
+		Method:      http.MethodGet,
+		Path:        prefix + "/organizations/{id}/domains",
+		Summary:     "List claimed domains",
+		Tags:        []string{"organizations"},
+		Security:    []map[string][]string{{"sessionCookie": {}}},
+		Middlewares: authGuards(api, mw),
+	}, func(ctx context.Context, in *orgIDInput) (*output, error) {
+		au, err := authUser(ctx)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "list domains failed")
-			return
+			return nil, err
+		}
+		orgID := in.ID
+		if _, err := requireOrgAdmin(ctx, host, orgID, au.User.ID); err != nil {
+			return nil, err
+		}
+		rows, err := host.Repo().ListOrganizationDomainsByOrg(ctx, orgID)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("list domains failed")
 		}
 		out := make([]organizationDomainJSON, 0, len(rows))
 		for _, d := range rows {
@@ -221,8 +254,8 @@ func (p *orgsPlugin) handleListOrgDomains(host plugin.PluginHost) http.HandlerFu
 			}
 			out = append(out, toOrgDomainJSON(*d))
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"domains": out})
-	}
+		return &output{Body: listDomainsResponse{Domains: out}}, nil
+	})
 }
 
 // --- POST /organizations/{id}/domains/{did}/verify ---
@@ -241,22 +274,33 @@ func (p *orgsPlugin) txtResolver() auth.DomainTXTResolver {
 	return auth.DefaultDomainTXTResolver
 }
 
-func (p *orgsPlugin) handleVerifyOrgDomain(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := authUser(w, r)
-		if !ok {
-			return
+func (p *orgsPlugin) registerVerifyOrgDomain(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	type output struct {
+		Body organizationDomainJSON
+	}
+	huma.Register(api, huma.Operation{
+		OperationID: "organizations-verify-domain",
+		Method:      http.MethodPost,
+		Path:        prefix + "/organizations/{id}/domains/{did}/verify",
+		Summary:     "Trigger DNS verification of a domain",
+		Tags:        []string{"organizations"},
+		Security:    []map[string][]string{{"sessionCookie": {}}},
+		Middlewares: authGuards(api, mw),
+	}, func(ctx context.Context, in *orgDomainInput) (*output, error) {
+		au, err := authUser(ctx)
+		if err != nil {
+			return nil, err
 		}
-		orgID := r.PathValue("id")
-		if _, ok := requireOrgAdmin(w, r, host, orgID, au.User.ID); !ok {
-			return
+		orgID := in.ID
+		if _, err := requireOrgAdmin(ctx, host, orgID, au.User.ID); err != nil {
+			return nil, err
 		}
-		domainID := r.PathValue("did")
-		d, ok := resolveDomainForOrg(w, r, host, orgID, domainID)
-		if !ok {
-			return
+		domainID := in.DID
+		d, err := resolveDomainForOrg(ctx, host, orgID, domainID)
+		if err != nil {
+			return nil, err
 		}
-		matched, err := auth.VerifyDomainTXT(r.Context(), p.txtResolver(), d.Domain, d.VerificationToken)
+		matched, err := auth.VerifyDomainTXT(ctx, p.txtResolver(), d.Domain, d.VerificationToken)
 		now := time.Now().UTC()
 		// On DNS failure we record the attempt time but keep the
 		// status the row already had if it was previously verified —
@@ -279,78 +323,97 @@ func (p *orgsPlugin) handleVerifyOrgDomain(host plugin.PluginHost) http.HandlerF
 		default:
 			nextStatus = domain.DomainFailed
 		}
-		updated, setErr := host.Repo().SetOrganizationDomainVerification(r.Context(), d.ID, nextStatus, verifiedAt, now)
+		updated, setErr := host.Repo().SetOrganizationDomainVerification(ctx, d.ID, nextStatus, verifiedAt, now)
 		if setErr != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "persist verification failed")
-			return
+			return nil, huma.Error500InternalServerError("persist verification failed")
 		}
-		writeJSON(w, http.StatusOK, toOrgDomainJSON(updated))
-	}
+		return &output{Body: toOrgDomainJSON(updated)}, nil
+	})
 }
 
 // --- DELETE /organizations/{id}/domains/{did} ---
 
-func (p *orgsPlugin) handleDeleteOrgDomain(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := authUser(w, r)
-		if !ok {
-			return
+func (p *orgsPlugin) registerDeleteOrgDomain(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID:   "organizations-delete-domain",
+		Method:        http.MethodDelete,
+		Path:          prefix + "/organizations/{id}/domains/{did}",
+		Summary:       "Release a domain claim",
+		Tags:          []string{"organizations"},
+		Security:      []map[string][]string{{"sessionCookie": {}}},
+		DefaultStatus: http.StatusNoContent,
+		Middlewares:   authGuards(api, mw),
+	}, func(ctx context.Context, in *orgDomainInput) (*orgEmptyOutput, error) {
+		au, err := authUser(ctx)
+		if err != nil {
+			return nil, err
 		}
-		orgID := r.PathValue("id")
-		if _, ok := requireOrgAdmin(w, r, host, orgID, au.User.ID); !ok {
-			return
+		orgID := in.ID
+		if _, err := requireOrgAdmin(ctx, host, orgID, au.User.ID); err != nil {
+			return nil, err
 		}
-		domainID := r.PathValue("did")
+		domainID := in.DID
 		// The cross-tenant check happens here too — we explicitly
 		// 404 a delete for a domain that belongs to a different
 		// org. Without this, DELETE would silently succeed against
 		// any id (the repo Delete is idempotent).
-		if _, ok := resolveDomainForOrg(w, r, host, orgID, domainID); !ok {
-			return
+		if _, err := resolveDomainForOrg(ctx, host, orgID, domainID); err != nil {
+			return nil, err
 		}
-		if err := host.Repo().DeleteOrganizationDomain(r.Context(), domainID); err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "delete domain failed")
-			return
+		if err := host.Repo().DeleteOrganizationDomain(ctx, domainID); err != nil {
+			return nil, huma.Error500InternalServerError("delete domain failed")
 		}
-		w.WriteHeader(http.StatusNoContent)
-	}
+		return &orgEmptyOutput{}, nil
+	})
 }
 
 // --- PATCH /organizations/{id}/domains/{did} ---
 
-func (p *orgsPlugin) handlePatchOrgDomain(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := authUser(w, r)
-		if !ok {
-			return
+func (p *orgsPlugin) registerPatchOrgDomain(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	type output struct {
+		Body organizationDomainJSON
+	}
+	huma.Register(api, huma.Operation{
+		OperationID: "organizations-patch-domain",
+		Method:      http.MethodPatch,
+		Path:        prefix + "/organizations/{id}/domains/{did}",
+		Summary:     "Update a domain's auto-join settings",
+		Tags:        []string{"organizations"},
+		Security:    []map[string][]string{{"sessionCookie": {}}},
+		Middlewares: authGuards(api, mw),
+	}, func(ctx context.Context, in *orgDomainInput) (*output, error) {
+		r, err := reqFromCtx(ctx)
+		if err != nil {
+			return nil, err
 		}
-		orgID := r.PathValue("id")
-		if _, ok := requireOrgAdmin(w, r, host, orgID, au.User.ID); !ok {
-			return
+		au, err := authUser(ctx)
+		if err != nil {
+			return nil, err
 		}
-		domainID := r.PathValue("did")
-		if _, ok := resolveDomainForOrg(w, r, host, orgID, domainID); !ok {
-			return
+		orgID := in.ID
+		if _, err := requireOrgAdmin(ctx, host, orgID, au.User.ID); err != nil {
+			return nil, err
+		}
+		domainID := in.DID
+		if _, err := resolveDomainForOrg(ctx, host, orgID, domainID); err != nil {
+			return nil, err
 		}
 		var req patchDomainRequest
 		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid json body")
-			return
+			return nil, huma.Error400BadRequest("invalid json body")
 		}
 		changes := domain.UpdateOrganizationDomain{
 			AutoJoinOnSignup:      req.AutoJoinOnSignup,
 			DefaultRoleOnAutoJoin: req.DefaultRoleOnAutoJoin,
 			RequireEmailVerified:  req.RequireEmailVerified,
 		}
-		updated, err := host.Repo().UpdateOrganizationDomain(r.Context(), domainID, changes)
+		updated, err := host.Repo().UpdateOrganizationDomain(ctx, domainID, changes)
 		if err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "NOT_FOUND", "domain not found")
-				return
+				return nil, huma.Error404NotFound("domain not found")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "update domain failed")
-			return
+			return nil, huma.Error500InternalServerError("update domain failed")
 		}
-		writeJSON(w, http.StatusOK, toOrgDomainJSON(updated))
-	}
+		return &output{Body: toOrgDomainJSON(updated)}, nil
+	})
 }

@@ -12,8 +12,9 @@ generated TypeScript client, Vue 3 components, and SolidJS components.
 - **Full OAuth2 / OIDC provider** — authorization code + PKCE, device
   flow, client credentials; published JWKS for cross-trust-domain
   validation
-- **OpenAPI 3.1 spec out of the box** — code-first via [Huma](https://huma.rocks),
-  served at `/openapi.json` + a Stoplight Elements UI at `/docs`
+- **OpenAPI 3.1 spec out of the box** — code-first via [Huma](https://huma.rocks);
+  the spec is auto-derived from the live route registrations and published as a
+  generated, checked-in `openapi.json`
 - **TypeScript included** — auto-generated HTTP client (`orval`) plus
   pre-built Vue 3 and SolidJS components
 
@@ -35,7 +36,6 @@ import (
     "net/http"
 
     yauth "github.com/yackey-labs/yauth-go"
-    "github.com/yackey-labs/yauth-go/openapi"
     "github.com/yackey-labs/yauth-go/plugins/emailpassword"
     "github.com/yackey-labs/yauth-go/repo/gormrepo"
 )
@@ -52,7 +52,6 @@ func main() {
 
     mux := http.NewServeMux()
     mux.Handle("/api/auth/", http.StripPrefix("/api/auth", ya.Router()))
-    mux.Handle("/", openapi.YAuth(ya))           // /openapi.json + /docs
     log.Fatal(http.ListenAndServe(":3000", mux))
 }
 ```
@@ -921,33 +920,21 @@ The OpenAPI 3.1 spec for every yauth-go route is authored in
 [Huma](https://github.com/danielgtaylor/huma) primitives — code-first,
 the same philosophy as the Rust `utoipa` integration.
 
-Why Huma over schema-first generators (e.g. `ogen`)? The plugins are
-hand-written `net/http` handlers that already exist; rewriting every
-plugin to a schema-first request/response struct would change the
-runtime surface. Huma's primitive types (`*huma.OpenAPI`,
-`huma.Operation`, `huma.Schema`, `huma.Registry`) let us declare the
-spec by hand without touching plugin code, which is exactly the
-abstraction we needed.
+Every plugin registers its routes as huma operations (typed handlers,
+auto-derived request/response schemas). `YAuth.OpenAPI()` returns huma's
+auto-derived `*huma.OpenAPI` for the full route set — serving and spec come
+from the same registrations, so route-level drift is structurally impossible.
+
+The spec is published as a generated, checked-in `openapi.json` at the repo
+root. Regenerate it whenever a route or schema changes:
 
 ```bash
-go generate ./openapi/   # writes openapi.json at the repo root
+YAUTH_GEN_OPENAPI=1 go test -run TestGenerateOpenAPI .   # writes openapi.json
 ```
 
-`openapi.YAuth(ya)` returns an `http.Handler` that serves
-`/openapi.json` and a Stoplight Elements UI at `/docs`. Mount it
-alongside your main router:
-
-```go
-mux := http.NewServeMux()
-mux.Handle("/api/auth/", http.StripPrefix("/api/auth", ya.Router()))
-mux.Handle("/", openapi.YAuth(ya))
-```
-
-> **Note:** The `ya` argument is currently unused — the spec is fully
-> static and built at startup. The parameter exists so the API can later
-> embed runtime fields (e.g. loaded plugin names) without a breaking
-> change. If you prefer, `openapi.Handler()` is an identical no-arg
-> alternative.
+`TestOpenAPISpecUpToDate` (in the default `go test ./...` suite, and the
+`openapi-fresh` CI job) rebuilds the spec in memory and asserts byte-equality
+with the committed file, so a change that forgets to regenerate fails the build.
 
 ## TypeScript / Vue / SolidJS
 
@@ -977,10 +964,9 @@ npm install @yackey-labs/yauth-client @yackey-labs/yauth-ui-vue
 > + import { createYAuthClient } from "@yackey-labs/yauth-client";
 > ```
 
-CI guarantees yauth and yauth-go's `openapi.json` files are equivalent
-(see the `openapi-conformance` job and
-[`scripts/openapi-conformance.py`](scripts/openapi-conformance.py)) — any
-contract drift fails the build on both sides.
+The `openapi-fresh` CI job keeps yauth-go's checked-in `openapi.json` in sync
+with the live routes (regenerate-and-compare). The Rust backend is archived, so
+there is no longer a cross-language conformance gate.
 
 ### Wiring the Vue plugin
 
@@ -1093,10 +1079,9 @@ const { user } = useSession()
 - `plugins/`           — every plugin (one directory per name; `organizations/`, `scim/`, `auditexport/` are the enterprise additions)
 - `yautherr/`          — sentinel errors as a leaf package (avoids import cycles across sub-packages)
 - `telemetry/`         — OpenTelemetry init + HTTP middleware
-- `openapi/`           — hand-rolled Huma spec + `/docs` + `/openapi.json` handlers
+- `humaapi/`           — builds the huma.API plugins register onto; its auto-derived spec is the published `openapi.json`
 - `yauthcfg/`          — YAML/TOML + env config loader (supports `cache:` block for Redis)
 - `cmd/yauth/`         — operator CLI (cobra)
-- `cmd/openapigen/`    — `go generate` target for `openapi.json`
 - `examples/`          — runnable single-file demos per plugin (plus
   `examples/vue` — full SPA wired against the unified `@yackey-labs/yauth-*`
   npm packages)
@@ -1109,7 +1094,7 @@ go build ./...
 go test ./...
 go vet ./...
 gofmt -l .                    # report any unformatted files
-go generate ./openapi/        # regenerate openapi.json
+YAUTH_GEN_OPENAPI=1 go test -run TestGenerateOpenAPI .   # regenerate openapi.json
 
 # Lint (golangci-lint)
 brew install golangci-lint

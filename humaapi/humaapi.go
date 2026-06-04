@@ -1,18 +1,17 @@
-// Package humaapi constructs the huma.API that yauth-go plugins register
-// huma-native operations onto. During the net/http → huma migration the
-// published OpenAPI spec is still produced by the openapi/ package; this API
-// exists so migrated routes can use huma.Register (typed handlers, derived
-// schemas) while the legacy spec stays authoritative. Once every route is
-// migrated this API becomes the spec source and openapi/ is retired.
+// Package humaapi constructs the huma.API that yauth-go plugins register their
+// huma-native operations onto. Its auto-derived OpenAPI document (exposed via
+// YAuth.OpenAPI()) is the single source of truth for the published spec — the
+// committed openapi.json at the repo root is generated from it.
 //
 // The config is built bare on purpose — NOT via huma.DefaultConfig:
 //
 //   - No SchemaLinkTransformer: DefaultConfig injects a "$schema" field into
-//     every JSON response body, which would change the bytes migrated
-//     handlers emit and break wire-compat with the legacy handlers.
+//     every JSON response body, which would change the bytes handlers emit and
+//     break wire-compat with the handlers' hand-authored responses.
 //   - No OpenAPIPath/DocsPath/SchemasPath: DefaultConfig auto-registers
-//     /openapi.json, /docs, and /schemas/* onto the mux. We leave those empty
-//     so huma serves no spec routes — openapi/ owns /openapi.json this phase.
+//     /openapi.json, /docs, and /schemas/* onto the mux. We leave those empty so
+//     huma serves no spec routes — yauth-go publishes the spec as a generated,
+//     checked-in openapi.json rather than serving it live.
 package humaapi
 
 import (
@@ -25,13 +24,11 @@ import (
 // request validation (422), content negotiation (406), and any 401/403/404/500
 // returned via huma.Error*/huma.WriteErr — marshal as native RFC 9457
 // problem+json ({type,title,status,detail}) with an application/problem+json
-// content type. (yauth#129's shared TS client normalizes problem+json, and the
-// conformance gate treats error-shape differences as informational — #54.)
+// content type. (yauth#129's shared TS client normalizes problem+json.)
 //
-// The OpenAPI metadata mirrors openapi/spec.go: title "yauth-go", the three
-// security schemes (sessionCookie / bearer / apiKey), and the same tag set,
-// so that if/when this API replaces the legacy spec the document is
-// consistent.
+// The OpenAPI metadata sets title "yauth-go", the three security schemes
+// (sessionCookie / bearer / apiKey), and the tag set carried into the published
+// openapi.json.
 func New(mux humago.Mux) huma.API {
 	config := huma.Config{
 		OpenAPI: &huma.OpenAPI{

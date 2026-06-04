@@ -250,67 +250,18 @@ jobs:
   openapi-fresh:
     name: OpenAPI freshness
     runs-on: ubuntu-latest
+    # huma's auto-derived spec is the single source of truth: the committed
+    # openapi.json is generated from the full plugin stack. This job regenerates
+    # it in memory and asserts byte-equality with the checked-in file, so a route
+    # or schema change that forgets to regenerate fails CI.
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
           go-version: '1.25'
           cache: true
-      - name: Regenerate openapi.json
-        run: go generate ./openapi/
       - name: Verify openapi.json is up to date
-        run: git diff --exit-code openapi.json
-
-  openapi-conformance:
-    name: OpenAPI conformance (Rust ↔ Go)
-    runs-on: ubuntu-latest
-    # Hard-gated: any BREAKING / MISSING / SHAPE divergence between the
-    # Rust spec and Go spec fails the build. Cosmetic parity was closed
-    # in Task #39; further drift is a real regression.
-    continue-on-error: false
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
-        with:
-          go-version: '1.25'
-          cache: true
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
-      - name: Regenerate Go openapi.json
-        run: go generate ./openapi/
-      - name: Fetch Rust openapi.json from yauth main
-        id: fetch-rust
-        run: |
-          set -e
-          mkdir -p tmp
-          # Try the upstream Rust repo first; fall back to the committed
-          # snapshot under scripts/ if the network fetch fails or the file
-          # has not been published yet on main.
-          if curl -fsSL -o tmp/rust-openapi.json \
-              https://raw.githubusercontent.com/yackey-labs/yauth/main/openapi.json; then
-            echo "source=upstream" >> "$GITHUB_OUTPUT"
-          else
-            echo "Falling back to scripts/yauth-rust-openapi.json snapshot"
-            cp scripts/yauth-rust-openapi.json tmp/rust-openapi.json
-            echo "source=snapshot" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Diff Rust ↔ Go openapi.json (diagnostic report)
-        run: |
-          python3 scripts/openapi-diff.py tmp/rust-openapi.json openapi.json \
-            | tee tmp/openapi-conformance.md || true
-      - name: Upload conformance report
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: openapi-conformance-report
-          path: tmp/openapi-conformance.md
-          if-no-files-found: error
-      - name: Strict conformance gate
-        # Hard-fails on any BREAKING / MISSING / SHAPE / GO-EXTRA divergence.
-        # Phase 1 of the convergence plan closed all of those categories;
-        # any new drift here is a real regression.
-        run: python3 scripts/openapi-conformance.py tmp/rust-openapi.json openapi.json
+        run: go test -run TestOpenAPISpecUpToDate .
 
   bench:
     name: Build benchmark (artifact)

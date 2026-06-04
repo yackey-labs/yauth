@@ -133,9 +133,8 @@ func (p *scimPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.
 // required and rejects a request (422) whose path omits one, so a single
 // all-params struct would 422 the org-only routes. The handler ignores these
 // fields entirely (it reads r.PathValue off the stashed raw request); they
-// exist only so huma will path-bind and register the route. They never reach
-// the published spec: openapi.json is produced by the hand-written openapi/
-// package (openapi.Build), not from these huma operations.
+// exist only so huma will path-bind and register the route, and so the route
+// surfaces in huma's auto-derived openapi.json.
 //
 // scimOrgInput: routes under .../organizations/{org_id} with no further id.
 type scimOrgInput struct {
@@ -187,10 +186,9 @@ func (c *scimCapture) Write(b []byte) (int, error) { return c.buf.Write(b) }
 
 // register wires one SCIM route as a huma operation that delegates to the
 // unchanged legacy handler. The operation is intentionally minimal: it owns the
-// (method, path) for routing + recording, but its body/error wire format comes
-// entirely from the legacy handler's bytes. Security/Tags are left to the
-// hand-written openapi/ spec — these huma operations never surface in
-// openapi.json.
+// (method, path) for routing, but its body/error wire format comes
+// entirely from the legacy handler's bytes. The operation still surfaces in
+// huma's auto-derived openapi.json as a documented (method, path).
 // scimRegister wires one SCIM route as a huma operation that delegates to the
 // unchanged legacy handler. It is generic over the path-input struct In so each
 // route declares exactly its own path params. The operation owns the
@@ -284,9 +282,8 @@ func scimRegisterBody[In, Body any](api huma.API, operationID, method, path stri
 // attachScimSchema derives the JSON Schema for the SCIM body type Body and
 // installs it onto the just-registered operation's application/scim+json request
 // body, overriding the {type:string,format:binary} placeholder huma assigns to a
-// RawBody []byte. It mutates the in-memory OpenAPI operation in place; it has NO
-// effect on the published openapi.json (that is produced by the openapi/
-// package, not from these huma operations).
+// RawBody []byte. It mutates the in-memory OpenAPI operation in place, so the
+// real SCIM body schema surfaces in huma's auto-derived openapi.json.
 func attachScimSchema[Body any](api huma.API, method, path string) {
 	oapi := api.OpenAPI()
 	if oapi == nil || oapi.Paths == nil {

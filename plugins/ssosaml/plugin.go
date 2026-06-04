@@ -178,32 +178,51 @@ func MustNew(cfg Config) plugin.Plugin {
 // Name implements plugin.Plugin.
 func (p *ssoSAMLPlugin) Name() string { return "sso_saml" }
 
-// Routes implements plugin.Plugin. The plugin mounts admin CRUD
-// unconditionally — the organizations plugin owns the membership/admin
-// gates and the SsoConnection rows cascade with the org delete, so
-// mounting these routes in a deployment without the organizations
-// plugin is harmless (every route 403s on the membership lookup).
+// Routes implements plugin.Plugin. Every route is huma-native: a typed
+// operation registered via huma.Register (huma owns + records the route on the
+// shared mux). The plugin mounts admin CRUD unconditionally — the organizations
+// plugin owns the membership/admin gates and the SsoConnection rows cascade with
+// the org delete, so mounting these routes in a deployment without the
+// organizations plugin is harmless (every route 403s on the membership lookup).
+//
+// Two route families:
+//
+//   - org-scoped admin CRUD under /organizations/{id}/sso/saml/connections... —
+//     gated by RequireAuthHuma plus the inline requireOrgAdmin membership check
+//     (org-admin, NOT global-admin), clean typed JSON / RFC 9457 problem+json
+//     errors.
+//   - the SAML protocol + XML surface (metadata.xml, /sso/saml/login, /acs,
+//     /logout, /slo GET+POST) — binding-specific wire contracts (302 redirects
+//     carrying SAMLRequest/SAMLResponse/RelayState/SigAlg/Signature,
+//     redirect-binding signature verification, raw SP metadata XML, Set-Cookie,
+//     and the {"error":{code,message}} / text/plain error envelopes) written
+//     byte-identically through flowOutput + the stashed raw request/writer.
+//
+// The mux is retained in the signature for plugins that still register raw
+// net/http routes; ssosaml no longer uses it.
 func (p *ssoSAMLPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.API, prefix string) {
 	mw := host.Middleware()
 
 	// Admin CRUD (SAML-specific path; see package doc).
-	mux.Handle("POST "+prefix+"/organizations/{id}/sso/saml/connections", mw.RequireAuth(http.HandlerFunc(p.handleCreateConnection(host))))
-	mux.Handle("GET "+prefix+"/organizations/{id}/sso/saml/connections", mw.RequireAuth(http.HandlerFunc(p.handleListConnections(host))))
-	mux.Handle("GET "+prefix+"/organizations/{id}/sso/saml/connections/{cid}", mw.RequireAuth(http.HandlerFunc(p.handleGetConnection(host))))
-	mux.Handle("PATCH "+prefix+"/organizations/{id}/sso/saml/connections/{cid}", mw.RequireAuth(http.HandlerFunc(p.handleUpdateConnection(host))))
-	mux.Handle("DELETE "+prefix+"/organizations/{id}/sso/saml/connections/{cid}", mw.RequireAuth(http.HandlerFunc(p.handleDeleteConnection(host))))
+	p.registerCreateConnection(host, api, mw, prefix)
+	p.registerListConnections(host, api, mw, prefix)
+	p.registerGetConnection(host, api, mw, prefix)
+	p.registerUpdateConnection(host, api, mw, prefix)
+	p.registerDeleteConnection(host, api, mw, prefix)
 
 	// SP metadata export — public, unauthenticated (it's published
-	// IdP-side anyway, and every IdP admin needs to fetch it).
-	mux.Handle("GET "+prefix+"/organizations/{id}/sso/saml/connections/{cid}/metadata.xml", http.HandlerFunc(p.handleMetadataXML(host)))
+	// IdP-side anyway, and every IdP admin needs to fetch it). Emits raw
+	// application/samlmetadata+xml via flowOutput.
+	p.registerMetadataXML(host, api, prefix)
 
-	// User-facing login + ACS + SLO.
-	mux.Handle("GET "+prefix+"/sso/saml/login", http.HandlerFunc(p.handleSamlLogin(host)))
-	mux.Handle("POST "+prefix+"/sso/saml/acs", http.HandlerFunc(p.handleSamlACS(host)))
-	mux.Handle("GET "+prefix+"/sso/saml/logout", http.HandlerFunc(p.handleSamlLogout(host)))
+	// User-facing login + ACS + SLO (public SAML protocol routes).
+	p.registerSamlLogin(host, api, prefix)
+	p.registerSamlACS(host, api, prefix)
+	p.registerSamlLogout(host, api, prefix)
 	// IdP-initiated Single Logout (HTTP-Redirect binding is GET; some IdPs POST).
-	mux.Handle("GET "+prefix+"/sso/saml/slo", http.HandlerFunc(p.handleSamlSLO(host)))
-	mux.Handle("POST "+prefix+"/sso/saml/slo", http.HandlerFunc(p.handleSamlSLO(host)))
+	// GET and POST share one handler but need distinct OperationIDs.
+	p.registerSamlSLO(host, api, prefix, http.MethodGet, "ssosaml-slo-get")
+	p.registerSamlSLO(host, api, prefix, http.MethodPost, "ssosaml-slo-post")
 }
 
 // replay returns the lazily-initialized process-wide replay cache.

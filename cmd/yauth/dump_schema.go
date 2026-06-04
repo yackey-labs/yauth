@@ -8,8 +8,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/yackey-labs/yauth-go/repo/gormrepo"
-	"github.com/yackey-labs/yauth-go/yauthcfg"
+	"github.com/yackey-labs/yauth/repo/gormrepo"
+	"github.com/yackey-labs/yauth/yauthcfg"
 )
 
 func newDumpSchemaCmd() *cobra.Command {

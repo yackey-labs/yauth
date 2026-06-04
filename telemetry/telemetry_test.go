@@ -13,8 +13,8 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/yackey-labs/yauth-go/middleware"
-	"github.com/yackey-labs/yauth-go/telemetry"
+	"github.com/yackey-labs/yauth/middleware"
+	"github.com/yackey-labs/yauth/telemetry"
 )
 
 func TestInitNoop_HelpersDoNotPanic(t *testing.T) {

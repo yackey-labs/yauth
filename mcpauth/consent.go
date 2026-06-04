@@ -7,7 +7,7 @@ import (
 	"net/url"
 	"strings"
 
-	yauth "github.com/yackey-labs/yauth-go"
+	yauth "github.com/yackey-labs/yauth"
 )
 
 // ConsentConfig tunes the server-rendered consent page.

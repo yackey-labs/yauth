@@ -10,16 +10,16 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
-	"github.com/yackey-labs/yauth-go/auth/passwordpolicy"
-	yauthMigrate "github.com/yackey-labs/yauth-go/migrate"
-	"github.com/yackey-labs/yauth-go/plugins/emailpassword"
-	smtpmailer "github.com/yackey-labs/yauth-go/plugins/mailer/smtp"
-	yauthrepo "github.com/yackey-labs/yauth-go/repo"
-	"github.com/yackey-labs/yauth-go/repo/memrepo"
-	"github.com/yackey-labs/yauth-go/repo/pgxrepo"
-	"github.com/yackey-labs/yauth-go/repo/redisrepo"
-	"github.com/yackey-labs/yauth-go/telemetry"
-	"github.com/yackey-labs/yauth-go/yauthcfg"
+	"github.com/yackey-labs/yauth/auth/passwordpolicy"
+	yauthMigrate "github.com/yackey-labs/yauth/migrate"
+	"github.com/yackey-labs/yauth/plugins/emailpassword"
+	smtpmailer "github.com/yackey-labs/yauth/plugins/mailer/smtp"
+	yauthrepo "github.com/yackey-labs/yauth/repo"
+	"github.com/yackey-labs/yauth/repo/memrepo"
+	"github.com/yackey-labs/yauth/repo/pgxrepo"
+	"github.com/yackey-labs/yauth/repo/redisrepo"
+	"github.com/yackey-labs/yauth/telemetry"
+	"github.com/yackey-labs/yauth/yauthcfg"
 )
 
 // NewFromConfig builds a fully-wired *YAuth from a yauthcfg.Config.

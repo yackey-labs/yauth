@@ -21,7 +21,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/yackey-labs/yauth-go/auth"
+	"github.com/yackey-labs/yauth/auth"
 )
 
 // Sentinel errors returned (wrapped) by Policy.Check.

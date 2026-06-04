@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/yackey-labs/yauth-go/domain"
+	"github.com/yackey-labs/yauth/domain"
 )
 
 // strFromBytes packs raw JSON bytes into the *string column shape used by

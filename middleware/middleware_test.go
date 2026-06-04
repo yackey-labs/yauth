@@ -10,10 +10,10 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/yackey-labs/yauth-go/auth"
-	"github.com/yackey-labs/yauth-go/domain"
-	"github.com/yackey-labs/yauth-go/repo"
-	"github.com/yackey-labs/yauth-go/yautherr"
+	"github.com/yackey-labs/yauth/auth"
+	"github.com/yackey-labs/yauth/domain"
+	"github.com/yackey-labs/yauth/repo"
+	"github.com/yackey-labs/yauth/yautherr"
 )
 
 // fakeRepo is a minimal in-memory implementation of repo.Repository used
@@ -1041,6 +1041,7 @@ func (f *fakeRepo) UpsertOrganizationPolicy(_ context.Context, _ string, _ domai
 	return domain.OrganizationPolicy{}, yautherr.ErrNotFound
 }
 func (f *fakeRepo) DeleteOrganizationPolicy(_ context.Context, _ string) error { return nil }
+
 // SSO stubs (yauth #93 / yauth-go #23).
 func (f *fakeRepo) CreateSsoConnection(_ context.Context, _ domain.NewSsoConnection) (domain.SsoConnection, error) {
 	return domain.SsoConnection{}, yautherr.ErrNotFound

@@ -28,7 +28,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/yackey-labs/yauth-go/plugin"
+	"github.com/yackey-labs/yauth/plugin"
 )
 
 const (

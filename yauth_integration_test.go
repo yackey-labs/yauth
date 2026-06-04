@@ -12,9 +12,9 @@ import (
 	"sync"
 	"testing"
 
-	yauth "github.com/yackey-labs/yauth-go"
-	"github.com/yackey-labs/yauth-go/plugins/emailpassword"
-	"github.com/yackey-labs/yauth-go/repo/gormrepo"
+	yauth "github.com/yackey-labs/yauth"
+	"github.com/yackey-labs/yauth/plugins/emailpassword"
+	"github.com/yackey-labs/yauth/repo/gormrepo"
 )
 
 func newTestServer(t *testing.T) (*httptest.Server, func()) {

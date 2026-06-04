@@ -17,8 +17,8 @@ package middleware
 import (
 	"context"
 
-	"github.com/yackey-labs/yauth-go/auth"
-	"github.com/yackey-labs/yauth-go/domain"
+	"github.com/yackey-labs/yauth/auth"
+	"github.com/yackey-labs/yauth/domain"
 )
 
 // HydrateActiveOrg decorates au with active-org context using lookup.

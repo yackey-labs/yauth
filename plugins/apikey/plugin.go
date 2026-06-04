@@ -25,7 +25,7 @@ package apikey
 import (
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/yackey-labs/yauth-go/plugin"
+	"github.com/yackey-labs/yauth/plugin"
 )
 
 // defaultPrefix is the prefix-tag used when Config.Prefix is unset.

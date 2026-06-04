@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yackey-labs/yauth-go/domain"
-	"github.com/yackey-labs/yauth-go/repo"
-	"github.com/yackey-labs/yauth-go/yautherr"
+	"github.com/yackey-labs/yauth/domain"
+	"github.com/yackey-labs/yauth/repo"
+	"github.com/yackey-labs/yauth/yautherr"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )

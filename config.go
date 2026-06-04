@@ -65,12 +65,12 @@ type SessionBindingConfig struct {
 // RateLimitConfig holds per-operation max + window pairs. A zero Max
 // disables rate limiting for that operation.
 type RateLimitConfig struct {
-	Login           RateLimitRule
-	Register        RateLimitRule
-	ForgotPassword  RateLimitRule
-	MagicLinkSend   RateLimitRule
-	UnlockRequest   RateLimitRule
-	MFAVerify       RateLimitRule
+	Login          RateLimitRule
+	Register       RateLimitRule
+	ForgotPassword RateLimitRule
+	MagicLinkSend  RateLimitRule
+	UnlockRequest  RateLimitRule
+	MFAVerify      RateLimitRule
 }
 
 // RateLimitRule is one (max, window) pair. Max=0 means "no limit".

@@ -7,12 +7,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yackey-labs/yauth-go/domain"
-	"github.com/yackey-labs/yauth-go/events"
-	"github.com/yackey-labs/yauth-go/middleware"
-	"github.com/yackey-labs/yauth-go/plugin"
-	"github.com/yackey-labs/yauth-go/repo"
-	"github.com/yackey-labs/yauth-go/yautherr"
+	"github.com/yackey-labs/yauth/domain"
+	"github.com/yackey-labs/yauth/events"
+	"github.com/yackey-labs/yauth/middleware"
+	"github.com/yackey-labs/yauth/plugin"
+	"github.com/yackey-labs/yauth/repo"
+	"github.com/yackey-labs/yauth/yautherr"
 )
 
 // fakeRepo is a minimal in-memory repo.Repository for passkey tests. Only
@@ -610,6 +610,7 @@ func (f *fakeRepo) UpsertOrganizationPolicy(_ context.Context, _ string, _ domai
 	return domain.OrganizationPolicy{}, yautherr.ErrNotFound
 }
 func (f *fakeRepo) DeleteOrganizationPolicy(_ context.Context, _ string) error { return nil }
+
 // SSO stubs (yauth #93 / yauth-go #23).
 func (f *fakeRepo) CreateSsoConnection(_ context.Context, _ domain.NewSsoConnection) (domain.SsoConnection, error) {
 	return domain.SsoConnection{}, yautherr.ErrNotFound

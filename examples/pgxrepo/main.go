@@ -42,10 +42,10 @@ import (
 	"os"
 	"time"
 
-	yauth "github.com/yackey-labs/yauth-go"
-	"github.com/yackey-labs/yauth-go/migrate"
-	"github.com/yackey-labs/yauth-go/plugins/emailpassword"
-	"github.com/yackey-labs/yauth-go/repo/pgxrepo"
+	yauth "github.com/yackey-labs/yauth"
+	"github.com/yackey-labs/yauth/migrate"
+	"github.com/yackey-labs/yauth/plugins/emailpassword"
+	"github.com/yackey-labs/yauth/repo/pgxrepo"
 )
 
 func main() {

@@ -9,8 +9,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/yackey-labs/yauth-go/auth"
-	"github.com/yackey-labs/yauth-go/domain"
+	"github.com/yackey-labs/yauth/auth"
+	"github.com/yackey-labs/yauth/domain"
 )
 
 // seedRefreshToken inserts a refresh token for userID and returns its raw value

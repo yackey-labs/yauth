@@ -75,11 +75,11 @@ changelog:
 release:
   github:
     owner: yackey-labs
-    name: yauth-go
+    name: yauth
   draft: false
   prerelease: auto
   mode: replace
-  name_template: "yauth-go {{ .Tag }}"
+  name_template: "yauth {{ .Tag }}"
 
 dockers:
   - id: yauth-cli
@@ -96,7 +96,7 @@ dockers:
     goarch: amd64
     build_flag_templates:
       - "--platform=linux/amd64"
-      - "--label=org.opencontainers.image.source=https://github.com/yackey-labs/yauth-go"
+      - "--label=org.opencontainers.image.source=https://github.com/yackey-labs/yauth"
       - "--label=org.opencontainers.image.version={{ .Version }}"
       - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
       - "--label=org.opencontainers.image.created={{ .CommitDate }}"

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yackey-labs/yauth-go/domain"
+	"github.com/yackey-labs/yauth/domain"
 )
 
 // stubRateLimitRepo is a minimal RateLimitRepository test double. It

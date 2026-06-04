@@ -11,11 +11,11 @@ import (
 
 	"github.com/google/uuid"
 
-	yauth "github.com/yackey-labs/yauth-go"
-	"github.com/yackey-labs/yauth-go/domain"
-	"github.com/yackey-labs/yauth-go/plugins/bearer"
-	"github.com/yackey-labs/yauth-go/plugins/oauth2server"
-	"github.com/yackey-labs/yauth-go/repo/gormrepo"
+	yauth "github.com/yackey-labs/yauth"
+	"github.com/yackey-labs/yauth/domain"
+	"github.com/yackey-labs/yauth/plugins/bearer"
+	"github.com/yackey-labs/yauth/plugins/oauth2server"
+	"github.com/yackey-labs/yauth/repo/gormrepo"
 )
 
 // newSweepHarness builds a yauth instance with DCR + the stale-client sweep

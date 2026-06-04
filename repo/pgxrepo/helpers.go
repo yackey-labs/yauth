@@ -7,7 +7,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/yackey-labs/yauth-go/yautherr"
+	"github.com/yackey-labs/yauth/yautherr"
 )
 
 // ts converts a time.Time to pgtype.Timestamptz.
@@ -52,4 +52,3 @@ func isUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
-

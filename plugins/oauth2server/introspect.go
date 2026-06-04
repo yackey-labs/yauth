@@ -8,9 +8,9 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
-	"github.com/yackey-labs/yauth-go/auth"
-	"github.com/yackey-labs/yauth-go/plugin"
-	"github.com/yackey-labs/yauth-go/yautherr"
+	"github.com/yackey-labs/yauth/auth"
+	"github.com/yackey-labs/yauth/plugin"
+	"github.com/yackey-labs/yauth/yautherr"
 )
 
 // introspectionResponse is the RFC 7662 §2.2 response.

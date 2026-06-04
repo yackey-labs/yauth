@@ -14,7 +14,7 @@ import (
 	"golang.org/x/oauth2"
 	googleoauth "golang.org/x/oauth2/google"
 
-	"github.com/yackey-labs/yauth-go/plugins/oauth"
+	"github.com/yackey-labs/yauth/plugins/oauth"
 )
 
 // GoogleConfig configures a Google OAuth provider.

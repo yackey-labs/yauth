@@ -13,7 +13,7 @@
 package ssooidc
 
 import (
-	"github.com/yackey-labs/yauth-go/humaapi"
+	"github.com/yackey-labs/yauth/humaapi"
 
 	"bytes"
 	"context"
@@ -34,13 +34,13 @@ import (
 	"github.com/lestrrat-go/jwx/v2/jwa"
 	"github.com/lestrrat-go/jwx/v2/jwk"
 
-	"github.com/yackey-labs/yauth-go/auth"
-	"github.com/yackey-labs/yauth-go/domain"
-	"github.com/yackey-labs/yauth-go/events"
-	"github.com/yackey-labs/yauth-go/middleware"
-	"github.com/yackey-labs/yauth-go/plugin"
-	"github.com/yackey-labs/yauth-go/repo"
-	"github.com/yackey-labs/yauth-go/repo/memrepo"
+	"github.com/yackey-labs/yauth/auth"
+	"github.com/yackey-labs/yauth/domain"
+	"github.com/yackey-labs/yauth/events"
+	"github.com/yackey-labs/yauth/middleware"
+	"github.com/yackey-labs/yauth/plugin"
+	"github.com/yackey-labs/yauth/repo"
+	"github.com/yackey-labs/yauth/repo/memrepo"
 )
 
 // --- Fixture IdP -------------------------------------------------------

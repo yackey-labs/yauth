@@ -13,10 +13,10 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/yackey-labs/yauth-go/domain"
-	yauthrepo "github.com/yackey-labs/yauth-go/repo"
-	"github.com/yackey-labs/yauth-go/repo/pgxrepo/gen"
-	"github.com/yackey-labs/yauth-go/yautherr"
+	"github.com/yackey-labs/yauth/domain"
+	yauthrepo "github.com/yackey-labs/yauth/repo"
+	"github.com/yackey-labs/yauth/repo/pgxrepo/gen"
+	"github.com/yackey-labs/yauth/yautherr"
 )
 
 var _ yauthrepo.Repository = (*Repo)(nil)

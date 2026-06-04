@@ -13,9 +13,9 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/yackey-labs/yauth-go/events"
-	"github.com/yackey-labs/yauth-go/middleware"
-	"github.com/yackey-labs/yauth-go/repo"
+	"github.com/yackey-labs/yauth/events"
+	"github.com/yackey-labs/yauth/middleware"
+	"github.com/yackey-labs/yauth/repo"
 )
 
 // AuthResolver is an alternative identity-resolution path that plugins can

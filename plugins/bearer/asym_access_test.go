@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yackey-labs/yauth-go/domain"
-	"github.com/yackey-labs/yauth-go/plugins/asymjwt"
+	"github.com/yackey-labs/yauth/domain"
+	"github.com/yackey-labs/yauth/plugins/asymjwt"
 )
 
 // newTestSigner builds an in-memory RS256 asymjwt signer for tests.

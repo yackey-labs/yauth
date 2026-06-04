@@ -21,10 +21,10 @@ import (
 
 	"golang.org/x/oauth2"
 
-	yauth "github.com/yackey-labs/yauth-go"
-	"github.com/yackey-labs/yauth-go/plugins/emailpassword"
-	"github.com/yackey-labs/yauth-go/plugins/oauth"
-	"github.com/yackey-labs/yauth-go/repo/gormrepo"
+	yauth "github.com/yackey-labs/yauth"
+	"github.com/yackey-labs/yauth/plugins/emailpassword"
+	"github.com/yackey-labs/yauth/plugins/oauth"
+	"github.com/yackey-labs/yauth/repo/gormrepo"
 )
 
 // fakeProvider is an in-process OAuth provider mock. It implements

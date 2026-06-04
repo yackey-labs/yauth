@@ -28,9 +28,9 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/yackey-labs/yauth-go/middleware"
-	"github.com/yackey-labs/yauth-go/plugin"
-	"github.com/yackey-labs/yauth-go/yautherr"
+	"github.com/yackey-labs/yauth/middleware"
+	"github.com/yackey-labs/yauth/plugin"
+	"github.com/yackey-labs/yauth/yautherr"
 )
 
 // Pagination caps shared by every list endpoint exposed by this plugin.

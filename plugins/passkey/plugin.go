@@ -24,8 +24,8 @@ import (
 
 	"github.com/go-webauthn/webauthn/webauthn"
 
-	"github.com/yackey-labs/yauth-go/middleware"
-	"github.com/yackey-labs/yauth-go/plugin"
+	"github.com/yackey-labs/yauth/middleware"
+	"github.com/yackey-labs/yauth/plugin"
 )
 
 // Config tunes passkey behaviour.

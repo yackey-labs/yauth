@@ -7,7 +7,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
-	"github.com/yackey-labs/yauth-go/plugin"
+	"github.com/yackey-labs/yauth/plugin"
 )
 
 // accessClaims is the JWT body for an issued access token. yauth #89

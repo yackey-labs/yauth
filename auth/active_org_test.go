@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yackey-labs/yauth-go/domain"
+	"github.com/yackey-labs/yauth/domain"
 )
 
 // fakeLookup is a hand-rolled MembershipsLookup for the selection-rule

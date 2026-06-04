@@ -4,7 +4,7 @@
 // It exists as a separate package so the root yauth package never imports gorm.
 // Consumers that use a gorm driver opt in with a blank import:
 //
-//	import _ "github.com/yackey-labs/yauth-go/repo/gormrepo/gormbackend"
+//	import _ "github.com/yackey-labs/yauth/repo/gormrepo/gormbackend"
 //
 // A pgx-only consumer omits this import and links neither gorm nor the
 // mysql/sqlite drivers into its binary.
@@ -18,10 +18,10 @@ import (
 	"os"
 	"strings"
 
-	yauth "github.com/yackey-labs/yauth-go"
-	yauthrepo "github.com/yackey-labs/yauth-go/repo"
-	"github.com/yackey-labs/yauth-go/repo/gormrepo"
-	"github.com/yackey-labs/yauth-go/yauthcfg"
+	yauth "github.com/yackey-labs/yauth"
+	yauthrepo "github.com/yackey-labs/yauth/repo"
+	"github.com/yackey-labs/yauth/repo/gormrepo"
+	"github.com/yackey-labs/yauth/yauthcfg"
 	"gorm.io/gorm"
 )
 

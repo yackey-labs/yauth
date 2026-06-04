@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/yackey-labs/yauth-go/auth"
-	"github.com/yackey-labs/yauth-go/plugin"
-	"github.com/yackey-labs/yauth-go/yautherr"
+	"github.com/yackey-labs/yauth/auth"
+	"github.com/yackey-labs/yauth/plugin"
+	"github.com/yackey-labs/yauth/yautherr"
 )
 
 // handleRevoke is POST /oauth2/revoke (RFC 7009). Revocation is

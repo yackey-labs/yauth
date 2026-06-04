@@ -1,9 +1,9 @@
 package yauth
 
-import "github.com/yackey-labs/yauth-go/yautherr"
+import "github.com/yackey-labs/yauth/yautherr"
 
 // Sentinel errors returned across the yauth-go API. These are aliases for
-// the leaf package github.com/yackey-labs/yauth-go/yautherr so that
+// the leaf package github.com/yackey-labs/yauth/yautherr so that
 // sub-packages (middleware, plugins, repo backends) can compare against
 // the same errors without creating an import cycle through the root
 // package.

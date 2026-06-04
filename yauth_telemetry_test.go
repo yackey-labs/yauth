@@ -11,10 +11,10 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
 
-	yauth "github.com/yackey-labs/yauth-go"
-	"github.com/yackey-labs/yauth-go/plugins/emailpassword"
-	"github.com/yackey-labs/yauth-go/repo/gormrepo"
-	"github.com/yackey-labs/yauth-go/telemetry"
+	yauth "github.com/yackey-labs/yauth"
+	"github.com/yackey-labs/yauth/plugins/emailpassword"
+	"github.com/yackey-labs/yauth/repo/gormrepo"
+	"github.com/yackey-labs/yauth/telemetry"
 )
 
 // serverSpanCount drives one request through a YAuth built with the supplied

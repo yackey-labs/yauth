@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yackey-labs/yauth-go/domain"
+	"github.com/yackey-labs/yauth/domain"
 )
 
 // seedScimUser creates a user via the SCIM API and returns its id.

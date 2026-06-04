@@ -5,7 +5,7 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/yackey-labs/yauth-go/yautherr"
+	"github.com/yackey-labs/yauth/yautherr"
 )
 
 // ScimContentType is the content type IdPs expect on a SCIM response.

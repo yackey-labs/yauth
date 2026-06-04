@@ -11,9 +11,9 @@ import (
 
 	"github.com/google/uuid"
 
-	yauth "github.com/yackey-labs/yauth-go"
-	"github.com/yackey-labs/yauth-go/plugins/emailpassword"
-	"github.com/yackey-labs/yauth-go/repo/gormrepo"
+	yauth "github.com/yackey-labs/yauth"
+	"github.com/yackey-labs/yauth/plugins/emailpassword"
+	"github.com/yackey-labs/yauth/repo/gormrepo"
 )
 
 // findCookie returns the named cookie from a Set-Cookie response or nil.

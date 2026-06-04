@@ -83,7 +83,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yackey-labs/yauth-go/plugin"
+	"github.com/yackey-labs/yauth/plugin"
 )
 
 // Config tunes the ssosaml plugin.

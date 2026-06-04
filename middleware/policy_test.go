@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yackey-labs/yauth-go/domain"
-	"github.com/yackey-labs/yauth-go/middleware"
-	"github.com/yackey-labs/yauth-go/repo/memrepo"
+	"github.com/yackey-labs/yauth/domain"
+	"github.com/yackey-labs/yauth/middleware"
+	"github.com/yackey-labs/yauth/repo/memrepo"
 )
 
 // activeOrg returns a *string for ergonomic AuthUser construction.

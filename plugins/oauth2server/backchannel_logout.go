@@ -10,8 +10,8 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
-	"github.com/yackey-labs/yauth-go/events"
-	"github.com/yackey-labs/yauth-go/plugin"
+	"github.com/yackey-labs/yauth/events"
+	"github.com/yackey-labs/yauth/plugin"
 )
 
 // backchannelLogoutEvent is the OIDC Back-Channel Logout 1.0 event identifier

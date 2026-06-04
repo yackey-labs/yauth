@@ -5,8 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 
-	yauthrepo "github.com/yackey-labs/yauth-go/repo"
-	"github.com/yackey-labs/yauth-go/yauthcfg"
+	yauthrepo "github.com/yackey-labs/yauth/repo"
+	"github.com/yackey-labs/yauth/yauthcfg"
 )
 
 // Backend builds repositories and runs migrations for a family of database
@@ -21,7 +21,7 @@ import (
 //
 // Consumers opt into the gorm-backed drivers with a blank import:
 //
-//	import _ "github.com/yackey-labs/yauth-go/repo/gormrepo/gormbackend"
+//	import _ "github.com/yackey-labs/yauth/repo/gormrepo/gormbackend"
 type Backend interface {
 	// OpenRepository opens the database described by db and returns a ready
 	// Repository. Implementations must ping the connection, enable OTel
@@ -58,7 +58,7 @@ func lookupBackend(driver string) (Backend, error) {
 	b, ok := registeredBackends[driver]
 	if !ok {
 		return nil, fmt.Errorf("yauth: no backend registered for database driver %q — "+
-			"for sqlite|postgres|mysql add `import _ \"github.com/yackey-labs/yauth-go/repo/gormrepo/gormbackend\"`, "+
+			"for sqlite|postgres|mysql add `import _ \"github.com/yackey-labs/yauth/repo/gormrepo/gormbackend\"`, "+
 			"or set database.driver=pgx", driver)
 	}
 	return b, nil

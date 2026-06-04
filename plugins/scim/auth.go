@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yackey-labs/yauth-go/plugin"
-	"github.com/yackey-labs/yauth-go/yautherr"
+	"github.com/yackey-labs/yauth/plugin"
+	"github.com/yackey-labs/yauth/yautherr"
 )
 
 // scimPrincipal is what a SCIM handler runs as. It mirrors the Rust

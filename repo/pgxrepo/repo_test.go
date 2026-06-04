@@ -14,10 +14,10 @@ import (
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
 
-	yauthMigrate "github.com/yackey-labs/yauth-go/migrate"
-	"github.com/yackey-labs/yauth-go/repo"
-	"github.com/yackey-labs/yauth-go/repo/conformance"
-	"github.com/yackey-labs/yauth-go/repo/pgxrepo"
+	yauthMigrate "github.com/yackey-labs/yauth/migrate"
+	"github.com/yackey-labs/yauth/repo"
+	"github.com/yackey-labs/yauth/repo/conformance"
+	"github.com/yackey-labs/yauth/repo/pgxrepo"
 )
 
 var (

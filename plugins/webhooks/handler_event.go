@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/yackey-labs/yauth-go/events"
-	"github.com/yackey-labs/yauth-go/repo"
+	"github.com/yackey-labs/yauth/events"
+	"github.com/yackey-labs/yauth/repo"
 )
 
 // eventHandler bridges the events.Handler pipeline to the dispatcher:

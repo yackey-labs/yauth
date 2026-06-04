@@ -9,7 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/yackey-labs/yauth-go/domain"
+	"github.com/yackey-labs/yauth/domain"
 )
 
 // problemJSON is the native RFC 9457 problem+json error wire shape

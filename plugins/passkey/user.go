@@ -3,7 +3,7 @@ package passkey
 import (
 	"github.com/go-webauthn/webauthn/webauthn"
 
-	"github.com/yackey-labs/yauth-go/domain"
+	"github.com/yackey-labs/yauth/domain"
 )
 
 // passkeyUser adapts *domain.User + the user's stored credentials onto the

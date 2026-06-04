@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yackey-labs/yauth-go/domain"
+	"github.com/yackey-labs/yauth/domain"
 )
 
 // DispatchError is returned by Dispatcher.SendOne. Wrap the underlying

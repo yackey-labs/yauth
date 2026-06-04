@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/yackey-labs/yauth-go/domain"
+	"github.com/yackey-labs/yauth/domain"
 )
 
 // idTokenFor runs the full auth-code flow and returns the id_token for a client

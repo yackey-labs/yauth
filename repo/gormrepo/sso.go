@@ -14,8 +14,8 @@ import (
 
 	"gorm.io/gorm"
 
-	"github.com/yackey-labs/yauth-go/domain"
-	"github.com/yackey-labs/yauth-go/yautherr"
+	"github.com/yackey-labs/yauth/domain"
+	"github.com/yackey-labs/yauth/yautherr"
 )
 
 // SsoConnection mirrors yauth_sso_connections.

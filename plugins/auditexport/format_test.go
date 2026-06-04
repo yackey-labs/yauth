@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yackey-labs/yauth-go/domain"
+	"github.com/yackey-labs/yauth/domain"
 )
 
 func sampleAudit() *domain.AuditLog {

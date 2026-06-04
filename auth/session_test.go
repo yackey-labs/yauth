@@ -7,9 +7,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/yackey-labs/yauth-go/auth"
-	"github.com/yackey-labs/yauth-go/domain"
-	"github.com/yackey-labs/yauth-go/repo/memrepo"
+	"github.com/yackey-labs/yauth/auth"
+	"github.com/yackey-labs/yauth/domain"
+	"github.com/yackey-labs/yauth/repo/memrepo"
 )
 
 func TestIssueSessionWithPolicy_ClampsTTL(t *testing.T) {

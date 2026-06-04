@@ -8,10 +8,10 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/yackey-labs/yauth-go/auth"
-	"github.com/yackey-labs/yauth-go/domain"
-	"github.com/yackey-labs/yauth-go/repo/memrepo"
-	"github.com/yackey-labs/yauth-go/yautherr"
+	"github.com/yackey-labs/yauth/auth"
+	"github.com/yackey-labs/yauth/domain"
+	"github.com/yackey-labs/yauth/repo/memrepo"
+	"github.com/yackey-labs/yauth/yautherr"
 )
 
 func seedUserAndMembership(t *testing.T, r *memrepo.Repo, role string) (string, string) {

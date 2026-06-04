@@ -1,7 +1,7 @@
 package passkey
 
 import (
-	"github.com/yackey-labs/yauth-go/humaapi"
+	"github.com/yackey-labs/yauth/humaapi"
 
 	"bytes"
 	"context"
@@ -15,9 +15,9 @@ import (
 	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/google/uuid"
 
-	"github.com/yackey-labs/yauth-go/auth"
-	"github.com/yackey-labs/yauth-go/domain"
-	"github.com/yackey-labs/yauth-go/yautherr"
+	"github.com/yackey-labs/yauth/auth"
+	"github.com/yackey-labs/yauth/domain"
+	"github.com/yackey-labs/yauth/yautherr"
 )
 
 // --- adapter / round-trip unit tests -----------------------------------

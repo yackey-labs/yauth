@@ -19,12 +19,12 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/yackey-labs/yauth-go/events"
-	"github.com/yackey-labs/yauth-go/humaapi"
-	"github.com/yackey-labs/yauth-go/middleware"
-	"github.com/yackey-labs/yauth-go/plugin"
-	"github.com/yackey-labs/yauth-go/repo"
-	"github.com/yackey-labs/yauth-go/telemetry"
+	"github.com/yackey-labs/yauth/events"
+	"github.com/yackey-labs/yauth/humaapi"
+	"github.com/yackey-labs/yauth/middleware"
+	"github.com/yackey-labs/yauth/plugin"
+	"github.com/yackey-labs/yauth/repo"
+	"github.com/yackey-labs/yauth/telemetry"
 )
 
 // YAuth is a fully-built authentication stack. Construct it via the

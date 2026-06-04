@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	yauth "github.com/yackey-labs/yauth-go"
-	"github.com/yackey-labs/yauth-go/plugins/magiclink"
-	"github.com/yackey-labs/yauth-go/repo/gormrepo"
+	yauth "github.com/yackey-labs/yauth"
+	"github.com/yackey-labs/yauth/plugins/magiclink"
+	"github.com/yackey-labs/yauth/repo/gormrepo"
 )
 
 // captureMailer records (email, link) pairs in order so tests can assert

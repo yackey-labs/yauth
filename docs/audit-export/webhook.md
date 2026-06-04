@@ -14,14 +14,14 @@ User-Agent: yauth-audit-export/1
 
 ## Receiver verification
 
-Use `auditexport.VerifyHMACSignature` from `github.com/yackey-labs/yauth-go/plugins/auditexport`:
+Use `auditexport.VerifyHMACSignature` from `github.com/yackey-labs/yauth/plugins/auditexport`:
 
 ```go
 import (
     "errors"
     "time"
 
-    "github.com/yackey-labs/yauth-go/plugins/auditexport"
+    "github.com/yackey-labs/yauth/plugins/auditexport"
 )
 
 func verify(secret, header string, body []byte) error {

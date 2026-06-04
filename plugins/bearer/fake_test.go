@@ -5,12 +5,12 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/yackey-labs/yauth-go/domain"
-	"github.com/yackey-labs/yauth-go/events"
-	"github.com/yackey-labs/yauth-go/middleware"
-	"github.com/yackey-labs/yauth-go/plugin"
-	"github.com/yackey-labs/yauth-go/repo"
-	"github.com/yackey-labs/yauth-go/yautherr"
+	"github.com/yackey-labs/yauth/domain"
+	"github.com/yackey-labs/yauth/events"
+	"github.com/yackey-labs/yauth/middleware"
+	"github.com/yackey-labs/yauth/plugin"
+	"github.com/yackey-labs/yauth/repo"
+	"github.com/yackey-labs/yauth/yautherr"
 )
 
 // fakeRepo is a minimal in-memory repo.Repository for bearer tests. It

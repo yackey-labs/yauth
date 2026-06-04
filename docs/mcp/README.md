@@ -54,11 +54,11 @@ the root mux. That is the root cause of every "little issue" people hit. The
 import (
 	"net/http"
 
-	yauth "github.com/yackey-labs/yauth-go"
-	"github.com/yackey-labs/yauth-go/mcpauth"
-	"github.com/yackey-labs/yauth-go/plugins/bearer"
-	"github.com/yackey-labs/yauth-go/plugins/emailpassword"
-	"github.com/yackey-labs/yauth-go/plugins/oauth2server"
+	yauth "github.com/yackey-labs/yauth"
+	"github.com/yackey-labs/yauth/mcpauth"
+	"github.com/yackey-labs/yauth/plugins/bearer"
+	"github.com/yackey-labs/yauth/plugins/emailpassword"
+	"github.com/yackey-labs/yauth/plugins/oauth2server"
 )
 
 func newYAuth(repo /* repo.Repository */) (*yauth.YAuth, error) {

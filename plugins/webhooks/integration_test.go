@@ -16,11 +16,11 @@ import (
 	"testing"
 	"time"
 
-	yauth "github.com/yackey-labs/yauth-go"
-	"github.com/yackey-labs/yauth-go/domain"
-	"github.com/yackey-labs/yauth-go/plugins/emailpassword"
-	"github.com/yackey-labs/yauth-go/plugins/webhooks"
-	"github.com/yackey-labs/yauth-go/repo/gormrepo"
+	yauth "github.com/yackey-labs/yauth"
+	"github.com/yackey-labs/yauth/domain"
+	"github.com/yackey-labs/yauth/plugins/emailpassword"
+	"github.com/yackey-labs/yauth/plugins/webhooks"
+	"github.com/yackey-labs/yauth/repo/gormrepo"
 )
 
 // receiver is an httptest server that records every webhook delivery

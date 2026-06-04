@@ -9,8 +9,8 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/google/uuid"
 
-	"github.com/yackey-labs/yauth-go/domain"
-	"github.com/yackey-labs/yauth-go/plugin"
+	"github.com/yackey-labs/yauth/domain"
+	"github.com/yackey-labs/yauth/plugin"
 )
 
 // client_roles.go — per-application (client) roles. A role is a free-form label

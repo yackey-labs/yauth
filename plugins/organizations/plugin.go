@@ -46,8 +46,8 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/yackey-labs/yauth-go/auth"
-	"github.com/yackey-labs/yauth-go/plugin"
+	"github.com/yackey-labs/yauth/auth"
+	"github.com/yackey-labs/yauth/plugin"
 )
 
 // Plugin role constants. Mirror the auth/rbac built-in roles (yauth #88

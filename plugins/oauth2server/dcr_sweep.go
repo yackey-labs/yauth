@@ -8,8 +8,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/yackey-labs/yauth-go/domain"
-	"github.com/yackey-labs/yauth-go/plugin"
+	"github.com/yackey-labs/yauth/domain"
+	"github.com/yackey-labs/yauth/plugin"
 )
 
 // startStaleClientSweep launches the opt-in background sweep (guarded so it

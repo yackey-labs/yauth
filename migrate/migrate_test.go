@@ -10,7 +10,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "github.com/mattn/go-sqlite3"
 
-	"github.com/yackey-labs/yauth-go/migrate"
+	"github.com/yackey-labs/yauth/migrate"
 )
 
 func TestRun_SQLite(t *testing.T) {

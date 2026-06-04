@@ -16,11 +16,11 @@ import (
 
 	"golang.org/x/oauth2"
 
-	yauth "github.com/yackey-labs/yauth-go"
-	"github.com/yackey-labs/yauth-go/plugins/emailpassword"
-	"github.com/yackey-labs/yauth-go/plugins/oauth"
-	"github.com/yackey-labs/yauth-go/repo"
-	"github.com/yackey-labs/yauth-go/repo/gormrepo"
+	yauth "github.com/yackey-labs/yauth"
+	"github.com/yackey-labs/yauth/plugins/emailpassword"
+	"github.com/yackey-labs/yauth/plugins/oauth"
+	"github.com/yackey-labs/yauth/repo"
+	"github.com/yackey-labs/yauth/repo/gormrepo"
 )
 
 // fakeProvider is a Provider that talks to a local httptest server which

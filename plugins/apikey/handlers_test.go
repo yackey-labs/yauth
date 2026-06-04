@@ -1,7 +1,7 @@
 package apikey
 
 import (
-	"github.com/yackey-labs/yauth-go/humaapi"
+	"github.com/yackey-labs/yauth/humaapi"
 
 	"bytes"
 	"encoding/json"
@@ -12,8 +12,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/yackey-labs/yauth-go/domain"
-	"github.com/yackey-labs/yauth-go/middleware"
+	"github.com/yackey-labs/yauth/domain"
+	"github.com/yackey-labs/yauth/middleware"
 )
 
 // stubResolver authenticates every request as the supplied user. Used to

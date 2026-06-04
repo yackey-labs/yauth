@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -84,8 +83,9 @@ func stashGuards(api huma.API, mw *middleware.Middleware) huma.Middlewares {
 
 // rateLimitedGuards is the per-operation middleware chain for the six public
 // routes: the route's fixed-window rate limiter (outermost, preserving the
-// plain-text 429 on block) followed by StashHTTPHuma so the handler reuses the
-// strict body decoder, RequestIP, and cookie writes.
+// plain-text 429 on block) followed by StashHTTPHuma so the handlers that need
+// it can reach RequestIP and the cookie writer. The request body itself is a
+// huma-native typed Body (parsed/validated by huma), not a stashed decode.
 func rateLimitedGuards(rl func(http.Handler) http.Handler, api huma.API) huma.Middlewares {
 	return huma.Middlewares{
 		middleware.RateLimitHuma(rl),
@@ -130,9 +130,20 @@ func validEmail(s string) bool {
 // --- /register ----------------------------------------------------------
 
 type registerRequest struct {
-	Email       string  `json:"email"`
-	Password    string  `json:"password"`
-	DisplayName *string `json:"display_name,omitempty"`
+	Email       string   `json:"email,omitempty"`
+	Password    string   `json:"password,omitempty"`
+	DisplayName *string  `json:"display_name,omitempty"`
+	_           struct{} `json:"-" additionalProperties:"false"`
+}
+
+// registerInput is the huma-native request: a typed JSON body. huma parses +
+// validates it and rejects unknown fields (additionalProperties:false → 422),
+// so the spec auto-derives the request schema — no decodeJSON bridge. Every
+// field is omitempty so an absent field falls through to the plugin's own
+// validation (generic 400 / enumeration-safe handling) rather than huma's
+// pre-handler 422-required check.
+type registerInput struct {
+	Body registerRequest
 }
 
 // registerResponse mirrors the Rust shape: the freshly-created user plus
@@ -179,7 +190,8 @@ func pendingRegisterOutput() *registerOutput {
 }
 
 // registerRegister wires POST {prefix}/register as a public, rate-limited
-// huma-native operation. It REUSES the legacy strict body decode, signups
+// huma-native operation. The request body is a huma-native typed Body; it
+// REUSES the signups
 // gate, password complexity / HIBP checks, enumeration-resistant duplicate
 // handling, user+password+session creation, auto-join hook, and Set-Cookie;
 // only the transport changes. Errors are RFC 9457 problem+json; success bodies
@@ -194,7 +206,7 @@ func (p *emailPasswordPlugin) registerRegister(host plugin.PluginHost, api huma.
 		Security:      []map[string][]string{}, // explicitly public
 		DefaultStatus: http.StatusCreated,
 		Middlewares:   rateLimitedGuards(rl, api),
-	}, func(ctx context.Context, _ *struct{}) (*registerOutput, error) {
+	}, func(ctx context.Context, in *registerInput) (*registerOutput, error) {
 		r, err := reqFromCtx(ctx)
 		if err != nil {
 			return nil, err
@@ -207,10 +219,7 @@ func (p *emailPasswordPlugin) registerRegister(host plugin.PluginHost, api huma.
 		if !host.AllowSignups() {
 			return nil, huma.Error403Forbidden("public registration is disabled")
 		}
-		var req registerRequest
-		if err := decodeJSON(r, &req); err != nil {
-			return nil, huma.Error400BadRequest(err.Error())
-		}
+		req := in.Body
 		req.Email = strings.TrimSpace(strings.ToLower(req.Email))
 		if !validEmail(req.Email) {
 			return nil, huma.Error400BadRequest("email must contain '@'")
@@ -363,9 +372,19 @@ func (p *emailPasswordPlugin) registerRegister(host plugin.PluginHost, api huma.
 // --- /login -------------------------------------------------------------
 
 type loginRequest struct {
-	Email      string `json:"email"`
-	Password   string `json:"password"`
-	RememberMe bool   `json:"remember_me,omitempty"`
+	Email      string   `json:"email,omitempty"`
+	Password   string   `json:"password,omitempty"`
+	RememberMe bool     `json:"remember_me,omitempty"`
+	_          struct{} `json:"-" additionalProperties:"false"`
+}
+
+// loginInput is the huma-native request body for /login. huma parses +
+// validates it (unknown fields → 422). Every field is omitempty so a missing
+// email or password is NOT rejected pre-handler: it must fall through to the
+// constant-time DummyVerify path that mitigates user enumeration via timing.
+// /login still pairs with StashHTTPHuma (RequestIP / User-Agent / Set-Cookie).
+type loginInput struct {
+	Body loginRequest
 }
 
 // loginResponse is the union of the two legacy /login 200 bodies so a single
@@ -390,7 +409,8 @@ type loginOutput struct {
 }
 
 // registerLogin wires POST {prefix}/login as a public, rate-limited huma-native
-// operation. It REUSES the legacy strict body decode, the login-attempt /
+// operation. The request body is a huma-native typed Body; it REUSES the
+// login-attempt /
 // login-failed / login-succeeded event hooks (and their Block decisions), the
 // timing/enumeration mitigation (DummyVerify on user-not-found and no-password,
 // identical 401 detail), the ban/suspend/staged gates, the optional email-
@@ -406,7 +426,7 @@ func (p *emailPasswordPlugin) registerLogin(host plugin.PluginHost, api huma.API
 		Tags:        []string{"email-password"},
 		Security:    []map[string][]string{}, // explicitly public
 		Middlewares: rateLimitedGuards(rl, api),
-	}, func(ctx context.Context, _ *struct{}) (*loginOutput, error) {
+	}, func(ctx context.Context, in *loginInput) (*loginOutput, error) {
 		r, err := reqFromCtx(ctx)
 		if err != nil {
 			return nil, err
@@ -416,10 +436,7 @@ func (p *emailPasswordPlugin) registerLogin(host plugin.PluginHost, api huma.API
 			return nil, err
 		}
 
-		var req loginRequest
-		if err := decodeJSON(r, &req); err != nil {
-			return nil, huma.Error400BadRequest(err.Error())
-		}
+		req := in.Body
 		req.Email = strings.TrimSpace(strings.ToLower(req.Email))
 
 		repo := host.Repo()
@@ -696,8 +713,18 @@ func (p *emailPasswordPlugin) registerSession(host plugin.PluginHost, api huma.A
 // --- /change-password ---------------------------------------------------
 
 type changePasswordRequest struct {
-	CurrentPassword string `json:"current_password"`
-	NewPassword     string `json:"new_password"`
+	CurrentPassword string   `json:"current_password,omitempty"`
+	NewPassword     string   `json:"new_password,omitempty"`
+	_               struct{} `json:"-" additionalProperties:"false"`
+}
+
+// changePasswordInput is the huma-native request body. huma parses + validates
+// it (unknown fields → 422); both fields are omitempty so absence falls
+// through to business logic (complexity 400 / current-password 401) rather
+// than a pre-handler 422. The route keeps StashHTTPHuma for RequestIP and the
+// re-issued session cookie.
+type changePasswordInput struct {
+	Body changePasswordRequest
 }
 
 type changePasswordResponse struct {
@@ -710,8 +737,9 @@ type changePasswordOutput struct {
 }
 
 // registerChangePassword wires POST {prefix}/change-password as an
-// authenticated huma-native operation (RequireAuthHuma). It REUSES the legacy
-// strict body decode, current-password verification, reuse / history / HIBP
+// authenticated huma-native operation (RequireAuthHuma). The request body is a
+// huma-native typed Body; it REUSES the
+// current-password verification, reuse / history / HIBP
 // checks, password rotation, full session revocation + re-issue for the caller,
 // and the password-changed event; the new session cookie is written on the
 // stashed writer.
@@ -724,7 +752,7 @@ func (p *emailPasswordPlugin) registerChangePassword(host plugin.PluginHost, api
 		Tags:        []string{"email-password"},
 		Security:    []map[string][]string{{"sessionCookie": {}}},
 		Middlewares: stashGuards(api, mw),
-	}, func(ctx context.Context, _ *struct{}) (*changePasswordOutput, error) {
+	}, func(ctx context.Context, in *changePasswordInput) (*changePasswordOutput, error) {
 		r, err := reqFromCtx(ctx)
 		if err != nil {
 			return nil, err
@@ -739,10 +767,7 @@ func (p *emailPasswordPlugin) registerChangePassword(host plugin.PluginHost, api
 			return nil, huma.Error401Unauthorized("not authenticated")
 		}
 
-		var req changePasswordRequest
-		if err := decodeJSON(r, &req); err != nil {
-			return nil, huma.Error400BadRequest(err.Error())
-		}
+		req := in.Body
 		if err := p.validatePasswordComplexity(req.NewPassword); err != nil {
 			return nil, huma.Error400BadRequest(err.Error())
 		}
@@ -818,7 +843,16 @@ func (p *emailPasswordPlugin) registerChangePassword(host plugin.PluginHost, api
 // --- PATCH /me ---------------------------------------------------------
 
 type patchMeRequest struct {
-	DisplayName *string `json:"display_name,omitempty"`
+	DisplayName *string  `json:"display_name,omitempty"`
+	_           struct{} `json:"-" additionalProperties:"false"`
+}
+
+// patchMeInput is the huma-native request body. A value (non-pointer) Body
+// with an omitempty pointer field preserves the legacy semantics: an empty
+// body `{}` is a 200 no-op, an unknown field is a 422, and a present
+// display_name (including empty string → clear) updates the profile.
+type patchMeInput struct {
+	Body patchMeRequest
 }
 
 // patchMeOutput wraps sessionResponse; returns the default 200.
@@ -827,7 +861,8 @@ type patchMeOutput struct {
 }
 
 // registerPatchMe wires PATCH {prefix}/me as an authenticated huma-native
-// operation (RequireAuthHuma). It REUSES the legacy strict body decode and the
+// operation (RequireAuthHuma). The request body is a huma-native typed Body;
+// it REUSES the
 // display-name update (trim-to-nil clears it), and re-projects the updated user
 // through the same sessionResponse shape.
 func (p *emailPasswordPlugin) registerPatchMe(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
@@ -839,21 +874,13 @@ func (p *emailPasswordPlugin) registerPatchMe(host plugin.PluginHost, api huma.A
 		Tags:        []string{"email-password"},
 		Security:    []map[string][]string{{"sessionCookie": {}}},
 		Middlewares: stashGuards(api, mw),
-	}, func(ctx context.Context, _ *struct{}) (*patchMeOutput, error) {
-		r, err := reqFromCtx(ctx)
-		if err != nil {
-			return nil, err
-		}
-
+	}, func(ctx context.Context, in *patchMeInput) (*patchMeOutput, error) {
 		au, ok := middleware.AuthUserFromContext(ctx)
 		if !ok || au == nil {
 			return nil, huma.Error401Unauthorized("not authenticated")
 		}
 
-		var req patchMeRequest
-		if err := decodeJSON(r, &req); err != nil {
-			return nil, huma.Error400BadRequest(err.Error())
-		}
+		req := in.Body
 
 		changes := domain.UpdateUser{}
 		if req.DisplayName != nil {
@@ -879,18 +906,6 @@ func (p *emailPasswordPlugin) registerPatchMe(host plugin.PluginHost, api huma.A
 
 // --- helpers ------------------------------------------------------------
 
-// decodeJSON parses r.Body into v. It enforces a 1 MiB body cap and
-// returns a friendly error on malformed input.
-func decodeJSON(r *http.Request, v any) error {
-	r.Body = http.MaxBytesReader(nil, r.Body, 1<<20)
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(v); err != nil {
-		return err
-	}
-	return nil
-}
-
 func requestUA(r *http.Request) *string {
 	ua := r.UserAgent()
 	if ua == "" {
@@ -902,7 +917,16 @@ func requestUA(r *http.Request) *string {
 // --- /verify-email ------------------------------------------------------
 
 type verifyEmailRequest struct {
-	Token string `json:"token"`
+	Token string   `json:"token,omitempty"`
+	_     struct{} `json:"-" additionalProperties:"false"`
+}
+
+// verifyEmailInput is the huma-native request body. Token is omitempty so an
+// absent token falls through to the generic "token is required" 400 rather
+// than a pre-handler 422; unknown fields are rejected (422). The route keeps
+// StashHTTPHuma for RequestIP on the email-verified event.
+type verifyEmailInput struct {
+	Body verifyEmailRequest
 }
 
 type verifyEmailResponse struct {
@@ -915,7 +939,8 @@ type verifyEmailOutput struct {
 }
 
 // registerVerifyEmail wires POST {prefix}/verify-email as a public,
-// rate-limited huma-native operation. It REUSES the legacy strict body decode,
+// rate-limited huma-native operation. The request body is a huma-native typed
+// Body; it REUSES
 // token consumption, the email-verified flag update, the email-verified event,
 // and the JIT auto-join second chance; only the transport changes.
 func (p *emailPasswordPlugin) registerVerifyEmail(host plugin.PluginHost, api huma.API, prefix string, rl func(http.Handler) http.Handler) {
@@ -927,16 +952,13 @@ func (p *emailPasswordPlugin) registerVerifyEmail(host plugin.PluginHost, api hu
 		Tags:        []string{"email-password"},
 		Security:    []map[string][]string{}, // explicitly public
 		Middlewares: rateLimitedGuards(rl, api),
-	}, func(ctx context.Context, _ *struct{}) (*verifyEmailOutput, error) {
+	}, func(ctx context.Context, in *verifyEmailInput) (*verifyEmailOutput, error) {
 		r, err := reqFromCtx(ctx)
 		if err != nil {
 			return nil, err
 		}
 
-		var req verifyEmailRequest
-		if err := decodeJSON(r, &req); err != nil {
-			return nil, huma.Error400BadRequest(err.Error())
-		}
+		req := in.Body
 		raw := strings.TrimSpace(req.Token)
 		if raw == "" {
 			return nil, huma.Error400BadRequest("token is required")
@@ -1005,7 +1027,16 @@ func (p *emailPasswordPlugin) registerVerifyEmail(host plugin.PluginHost, api hu
 // --- /resend-verification -----------------------------------------------
 
 type resendVerificationRequest struct {
-	Email string `json:"email"`
+	Email string   `json:"email,omitempty"`
+	_     struct{} `json:"-" additionalProperties:"false"`
+}
+
+// resendVerificationInput is the huma-native request body. Email is omitempty
+// so a missing email reaches the validEmail check (generic 400) instead of a
+// pre-handler 422; unknown fields are rejected (422). Enumeration-safety is
+// unchanged: every account-state path still returns the same generic 200.
+type resendVerificationInput struct {
+	Body resendVerificationRequest
 }
 
 type resendVerificationResponse struct {
@@ -1033,16 +1064,8 @@ func (p *emailPasswordPlugin) registerResendVerification(host plugin.PluginHost,
 		Tags:        []string{"email-password"},
 		Security:    []map[string][]string{}, // explicitly public
 		Middlewares: rateLimitedGuards(rl, api),
-	}, func(ctx context.Context, _ *struct{}) (*resendVerificationOutput, error) {
-		r, err := reqFromCtx(ctx)
-		if err != nil {
-			return nil, err
-		}
-
-		var req resendVerificationRequest
-		if err := decodeJSON(r, &req); err != nil {
-			return nil, huma.Error400BadRequest(err.Error())
-		}
+	}, func(ctx context.Context, in *resendVerificationInput) (*resendVerificationOutput, error) {
+		req := in.Body
 		req.Email = strings.TrimSpace(strings.ToLower(req.Email))
 		if !validEmail(req.Email) {
 			return nil, huma.Error400BadRequest("email must contain '@'")
@@ -1070,7 +1093,16 @@ func (p *emailPasswordPlugin) registerResendVerification(host plugin.PluginHost,
 // --- /forgot-password ---------------------------------------------------
 
 type forgotPasswordRequest struct {
-	Email string `json:"email"`
+	Email string   `json:"email,omitempty"`
+	_     struct{} `json:"-" additionalProperties:"false"`
+}
+
+// forgotPasswordInput is the huma-native request body. Email is omitempty so a
+// missing email reaches the validEmail check (generic 400) instead of a
+// pre-handler 422; unknown fields are rejected (422). Enumeration-safety is
+// unchanged: every account-state path still returns the same generic 200.
+type forgotPasswordInput struct {
+	Body forgotPasswordRequest
 }
 
 type forgotPasswordResponse struct {
@@ -1085,7 +1117,8 @@ type forgotPasswordOutput struct {
 }
 
 // registerForgotPassword wires POST {prefix}/forgot-password as a public,
-// rate-limited huma-native operation. It REUSES the legacy strict body decode,
+// rate-limited huma-native operation. The request body is a huma-native typed
+// Body; it REUSES
 // reset-token issuance, and mailer dispatch — and the enumeration-safe
 // semantics: every success path (unknown email, token-gen failure, persistence
 // failure, mail failure) returns the same generic 200 body; only a malformed
@@ -1099,16 +1132,8 @@ func (p *emailPasswordPlugin) registerForgotPassword(host plugin.PluginHost, api
 		Tags:        []string{"email-password"},
 		Security:    []map[string][]string{}, // explicitly public
 		Middlewares: rateLimitedGuards(rl, api),
-	}, func(ctx context.Context, _ *struct{}) (*forgotPasswordOutput, error) {
-		r, err := reqFromCtx(ctx)
-		if err != nil {
-			return nil, err
-		}
-
-		var req forgotPasswordRequest
-		if err := decodeJSON(r, &req); err != nil {
-			return nil, huma.Error400BadRequest(err.Error())
-		}
+	}, func(ctx context.Context, in *forgotPasswordInput) (*forgotPasswordOutput, error) {
+		req := in.Body
 		req.Email = strings.TrimSpace(strings.ToLower(req.Email))
 		if !validEmail(req.Email) {
 			return nil, huma.Error400BadRequest("email must contain '@'")
@@ -1147,8 +1172,18 @@ func (p *emailPasswordPlugin) registerForgotPassword(host plugin.PluginHost, api
 // --- /reset-password ----------------------------------------------------
 
 type resetPasswordRequest struct {
-	Token    string `json:"token"`
-	Password string `json:"password"`
+	Token    string   `json:"token,omitempty"`
+	Password string   `json:"password,omitempty"`
+	_        struct{} `json:"-" additionalProperties:"false"`
+}
+
+// resetPasswordInput is the huma-native request body. Both fields are omitempty
+// so an absent token reaches the "token is required" 400 and an absent
+// password reaches the complexity 400 — neither becomes a pre-handler 422.
+// Unknown fields are rejected (422). The route keeps StashHTTPHuma for
+// RequestIP on the password-reset event.
+type resetPasswordInput struct {
+	Body resetPasswordRequest
 }
 
 type resetPasswordResponse struct {
@@ -1161,7 +1196,8 @@ type resetPasswordOutput struct {
 }
 
 // registerResetPassword wires POST {prefix}/reset-password as a public,
-// rate-limited huma-native operation. It REUSES the legacy strict body decode,
+// rate-limited huma-native operation. The request body is a huma-native typed
+// Body; it REUSES
 // token consumption, reuse / history / HIBP checks, password rotation, full
 // session revocation (the caller is unauthenticated, so no session survives),
 // and the password-reset event; only the transport changes.
@@ -1174,16 +1210,13 @@ func (p *emailPasswordPlugin) registerResetPassword(host plugin.PluginHost, api 
 		Tags:        []string{"email-password"},
 		Security:    []map[string][]string{}, // explicitly public
 		Middlewares: rateLimitedGuards(rl, api),
-	}, func(ctx context.Context, _ *struct{}) (*resetPasswordOutput, error) {
+	}, func(ctx context.Context, in *resetPasswordInput) (*resetPasswordOutput, error) {
 		r, err := reqFromCtx(ctx)
 		if err != nil {
 			return nil, err
 		}
 
-		var req resetPasswordRequest
-		if err := decodeJSON(r, &req); err != nil {
-			return nil, huma.Error400BadRequest(err.Error())
-		}
+		req := in.Body
 		raw := strings.TrimSpace(req.Token)
 		if raw == "" {
 			return nil, huma.Error400BadRequest("token is required")

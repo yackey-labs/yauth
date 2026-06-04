@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/yackey-labs/yauth-go/domain"
+	"github.com/yackey-labs/yauth-go/humaapi"
 	"github.com/yackey-labs/yauth-go/middleware"
 	"github.com/yackey-labs/yauth-go/plugin"
 	"github.com/yackey-labs/yauth-go/yautherr"
@@ -230,6 +231,7 @@ func (p *apiKeyPlugin) registerCreate(host plugin.PluginHost, api huma.API, mw *
 		Tags:          []string{"api-key"},
 		Security:      apiKeySecurity(),
 		DefaultStatus: http.StatusCreated,
+		RequestBody:   humaapi.ReqBody[createRequest](api),
 		Middlewares:   huma.Middlewares{middleware.StashHTTPHuma(api), middleware.RequireAuthHuma(api, mw)},
 	}, func(ctx context.Context, _ *struct{}) (*createOutput, error) {
 		au, ok := middleware.AuthUserFromContext(ctx)

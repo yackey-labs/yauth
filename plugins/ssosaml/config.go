@@ -56,6 +56,11 @@ type AttributeMappings struct {
 	// wins. Empty leaves the role at the connection's
 	// DefaultRoleOnJit.
 	GroupToRole map[string]string `json:"group_to_role,omitempty"`
+
+	// _ carries the additionalProperties:false marker so huma rejects
+	// unknown keys in the nested `attribute_mappings` block with a 422.
+	// json:"-" keeps it out of every (un)marshal path.
+	_ struct{} `json:"-" additionalProperties:"false"`
 }
 
 // DefaultAttributeMappings returns the WS-* defaults.
@@ -101,32 +106,44 @@ func (m AttributeMappings) merged() AttributeMappings {
 // SsoConnection.Config. The struct is the public/in-memory shape — what
 // gets persisted is a transparently transformed copy with SpPrivateKey
 // swapped for SpPrivateKeyEnc (base64 AES-256-GCM ciphertext).
+//
+// It is reused as the nested request-body type for the huma-native
+// connection CRUD (create/patch), so every field carries `,omitempty`:
+// huma treats a field WITHOUT omitempty as required, which would force
+// callers to send every field on a partial PATCH and break the secure-
+// defaults convention on create. omitempty only affects huma's required
+// derivation and JSON *marshaling* — it has no effect on unmarshaling, and
+// this struct is never marshaled to a response (responses go through
+// samlPublicConfig; persistence goes through persistedConfig). Business
+// validation (validate(), the merge logic) stays in the handlers, so the
+// real 400s are unchanged. additionalProperties:false rejects unknown keys
+// in the nested block (→ huma 422).
 type SamlConnectionConfig struct {
 	// IdpEntityID is the IdP's SAML entity ID
 	// (e.g. "urn:idp:acme:saml" or
 	// "https://sts.windows.net/<tenant-id>/").
-	IdpEntityID string `json:"idp_entity_id"`
+	IdpEntityID string `json:"idp_entity_id,omitempty"`
 	// IdpSsoURL is the IdP's SingleSignOnService HTTP-Redirect or
 	// HTTP-POST endpoint. yauth issues the AuthnRequest here.
-	IdpSsoURL string `json:"idp_sso_url"`
+	IdpSsoURL string `json:"idp_sso_url,omitempty"`
 	// IdpSloURL is the IdP's SingleLogoutService endpoint, optional.
 	// When empty, SP-initiated SLO is disabled for this connection.
 	IdpSloURL string `json:"idp_slo_url,omitempty"`
 	// IdpX509Cert is the IdP's signing certificate in PEM form. Used
 	// to verify XML signatures on assertions / responses. May contain
 	// multiple PEM blocks for key rollover (every cert is tried).
-	IdpX509Cert string `json:"idp_x509_cert"`
+	IdpX509Cert string `json:"idp_x509_cert,omitempty"`
 
 	// SpEntityID is yauth's own SAML entity ID for this connection.
 	// The default is the BaseURL + "/saml/metadata/<connection_id>"
 	// when empty — overridable per connection (some IdPs require a
 	// specific form). Sent in metadata.xml and AuthnRequest Issuer.
-	SpEntityID string `json:"sp_entity_id"`
+	SpEntityID string `json:"sp_entity_id,omitempty"`
 	// SpAcsURL is the Assertion Consumer Service URL the IdP POSTs
 	// the SAMLResponse to. Defaults to BaseURL + "/api/auth/sso/saml/acs"
 	// when empty. MUST match the SubjectConfirmationData/@Recipient
 	// on inbound assertions.
-	SpAcsURL string `json:"sp_acs_url"`
+	SpAcsURL string `json:"sp_acs_url,omitempty"`
 
 	// IdpInitiatedSsoAllowed permits unsolicited SAMLResponses
 	// (POSTed to ACS without an outstanding AuthnRequest from yauth).
@@ -139,11 +156,16 @@ type SamlConnectionConfig struct {
 	// itself carry a valid signature (vs. relying on the wrapping
 	// Response signature only). Default true. Disabling violates
 	// SAML profile best practice and is logged loudly.
-	AssertionSignedRequired bool `json:"assertion_signed_required"`
+	//
+	// omitempty here is for huma's optional-field derivation only; the
+	// create handler still applies the secure default (true) when the
+	// client omits BOTH signed-required flags, and the merge logic on
+	// PATCH preserves the current value when the block is partial.
+	AssertionSignedRequired bool `json:"assertion_signed_required,omitempty"`
 	// ResponseSignedRequired demands that the outer SAMLResponse
 	// carry a valid signature. Default true. Disabling violates
 	// SAML profile best practice.
-	ResponseSignedRequired bool `json:"response_signed_required"`
+	ResponseSignedRequired bool `json:"response_signed_required,omitempty"`
 
 	// WantEncryptedAssertions tells the IdP (via metadata.xml) that
 	// yauth wants the assertion encrypted. Default false; rare. When
@@ -171,7 +193,13 @@ type SamlConnectionConfig struct {
 	// AttributeMappings configures how SAML attribute statements are
 	// projected onto the JIT user record. Zero-value fields fall
 	// back to DefaultAttributeMappings.
-	AttributeMappings AttributeMappings `json:"attribute_mappings"`
+	AttributeMappings AttributeMappings `json:"attribute_mappings,omitempty"`
+
+	// _ carries the additionalProperties:false marker so huma rejects
+	// unknown keys in the nested `saml` block with a 422. json:"-" keeps
+	// it out of every (un)marshal path — storage (persistedConfig),
+	// responses (samlPublicConfig), and request decoding all ignore it.
+	_ struct{} `json:"-" additionalProperties:"false"`
 }
 
 // EntityIDForConnection returns the connection's effective entity ID,

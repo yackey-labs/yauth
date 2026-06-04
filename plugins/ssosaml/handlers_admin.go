@@ -18,7 +18,6 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"errors"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -71,33 +70,6 @@ func jsonFlow(status int, v any) *flowOutput {
 	}
 }
 
-// decodeJSON enforces a 1 MiB body cap before decoding to a target. It reads
-// the *http.Request stashed by StashHTTPHuma; the CRUD input structs carry NO
-// huma Body field, so huma never consumes the body and this decoder stays
-// byte-identical to the legacy net/http handlers (empty body tolerated).
-func decodeJSON(r *http.Request, dst any) error {
-	body := http.MaxBytesReader(nil, r.Body, 1<<20)
-	defer func() { _ = body.Close() }()
-	raw, err := io.ReadAll(body)
-	if err != nil {
-		return err
-	}
-	if len(raw) == 0 {
-		return nil
-	}
-	return json.Unmarshal(raw, dst)
-}
-
-// reqFromCtx returns the *http.Request stashed by StashHTTPHuma. On a route in
-// the CRUD chain it is always present; the nil guard keeps the helper safe.
-func reqFromCtx(ctx context.Context) (*http.Request, error) {
-	r := middleware.HTTPRequestFromContext(ctx)
-	if r == nil {
-		return nil, huma.Error500InternalServerError("request unavailable")
-	}
-	return r, nil
-}
-
 // authUserID returns the authenticated user's ID injected by RequireAuthHuma,
 // or a 401 error if somehow missing (cannot happen on a gated route).
 func authUserID(ctx context.Context) (string, error) {
@@ -126,12 +98,16 @@ func requireOrgAdmin(ctx context.Context, host plugin.PluginHost, orgID, userID 
 }
 
 // crudGuards is the per-operation middleware chain shared by every admin CRUD
-// route: stash the raw request/writer, then require an authenticated identity.
-// Org-admin authorization is enforced in-handler by requireOrgAdmin (org-admins,
-// not global admins — RequireAdminHuma would wrongly lock them out).
+// route: require an authenticated identity. Org-admin authorization is enforced
+// in-handler by requireOrgAdmin (org-admins, not global admins —
+// RequireAdminHuma would wrongly lock them out).
+//
+// No StashHTTPHuma: the CRUD write-ops (create/patch) now take a native huma
+// typed Body, so huma parses + validates the JSON itself and no handler reaches
+// for the raw *http.Request. (The SAML PROTOCOL + metadata.xml routes keep their
+// own flowGuards bridge — see handlers_login.go / the metadata.xml handler.)
 func crudGuards(api huma.API, mw *middleware.Middleware) huma.Middlewares {
 	return huma.Middlewares{
-		middleware.StashHTTPHuma(api),
 		middleware.RequireAuthHuma(api, mw),
 	}
 }
@@ -226,20 +202,49 @@ func toConnectionJSON(c domain.SsoConnection, baseURL string) samlConnectionJSON
 	return out
 }
 
-type createConnectionRequest struct {
-	Name                   string                `json:"name"`
-	Status                 string                `json:"status"`
-	JitProvisioningEnabled bool                  `json:"jit_provisioning_enabled"`
-	DefaultRoleOnJit       string                `json:"default_role_on_jit"`
-	SAML                   *SamlConnectionConfig `json:"saml"`
+// samlCreateConnectionRequest is the huma-native request body for POST
+// .../sso/saml/connections. Prefixed (saml*) so its huma schema name does
+// not collide with ssooidc's still-bridged createConnectionRequest in the
+// global registry. Every business-400 field carries omitempty so huma does
+// not force it required (the secure-default + required-name checks stay in
+// the handler); additionalProperties:false makes huma reject unknown keys
+// with a 422 instead of silently ignoring them.
+type samlCreateConnectionRequest struct {
+	Name                   string                `json:"name,omitempty"`
+	Status                 string                `json:"status,omitempty"`
+	JitProvisioningEnabled bool                  `json:"jit_provisioning_enabled,omitempty"`
+	DefaultRoleOnJit       string                `json:"default_role_on_jit,omitempty"`
+	SAML                   *SamlConnectionConfig `json:"saml,omitempty"`
+	_                      struct{}              `json:"-" additionalProperties:"false"`
 }
 
-type updateConnectionRequest struct {
-	Name                   *string               `json:"name"`
-	Status                 *string               `json:"status"`
-	JitProvisioningEnabled *bool                 `json:"jit_provisioning_enabled"`
-	DefaultRoleOnJit       *string               `json:"default_role_on_jit"`
-	SAML                   *SamlConnectionConfig `json:"saml"`
+// samlUpdateConnectionRequest is the huma-native request body for PATCH
+// .../sso/saml/connections/{cid}. Pointer fields stay optional (a nil
+// pointer means "leave unchanged"); omitempty keeps huma from marking them
+// required so a partial PATCH need only carry the changed fields.
+type samlUpdateConnectionRequest struct {
+	Name                   *string               `json:"name,omitempty"`
+	Status                 *string               `json:"status,omitempty"`
+	JitProvisioningEnabled *bool                 `json:"jit_provisioning_enabled,omitempty"`
+	DefaultRoleOnJit       *string               `json:"default_role_on_jit,omitempty"`
+	SAML                   *SamlConnectionConfig `json:"saml,omitempty"`
+	_                      struct{}              `json:"-" additionalProperties:"false"`
+}
+
+// samlCreateConnectionInput is the huma-native create input: a typed JSON
+// body that huma parses + validates before the handler runs (unknown keys →
+// 422), so no StashHTTPHuma bridge is needed.
+type samlCreateConnectionInput struct {
+	ID   string `path:"id" doc:"Organization ID"`
+	Body samlCreateConnectionRequest
+}
+
+// samlUpdateConnectionInput is the huma-native patch input: org+connection
+// path params plus a typed JSON body.
+type samlUpdateConnectionInput struct {
+	ID   string `path:"id" doc:"Organization ID"`
+	CID  string `path:"cid" doc:"SSO connection ID"`
+	Body samlUpdateConnectionRequest
 }
 
 // samlConnectionOutput wraps a single samlConnectionJSON body.
@@ -259,11 +264,7 @@ func (p *ssoSAMLPlugin) registerCreateConnection(host plugin.PluginHost, api hum
 		Security:      []map[string][]string{{"sessionCookie": {}}},
 		DefaultStatus: http.StatusCreated,
 		Middlewares:   crudGuards(api, mw),
-	}, func(ctx context.Context, in *samlOrgInput) (*samlConnectionOutput, error) {
-		r, err := reqFromCtx(ctx)
-		if err != nil {
-			return nil, err
-		}
+	}, func(ctx context.Context, in *samlCreateConnectionInput) (*samlConnectionOutput, error) {
 		uid, err := authUserID(ctx)
 		if err != nil {
 			return nil, err
@@ -272,10 +273,7 @@ func (p *ssoSAMLPlugin) registerCreateConnection(host plugin.PluginHost, api hum
 		if _, err := requireOrgAdmin(ctx, host, orgID, uid); err != nil {
 			return nil, err
 		}
-		var req createConnectionRequest
-		if err := decodeJSON(r, &req); err != nil {
-			return nil, huma.Error400BadRequest("invalid json body")
-		}
+		req := in.Body
 		if strings.TrimSpace(req.Name) == "" {
 			return nil, huma.Error400BadRequest("name is required")
 		}
@@ -418,11 +416,7 @@ func (p *ssoSAMLPlugin) registerUpdateConnection(host plugin.PluginHost, api hum
 		Tags:        []string{"organizations"},
 		Security:    []map[string][]string{{"sessionCookie": {}}},
 		Middlewares: crudGuards(api, mw),
-	}, func(ctx context.Context, in *samlConnInput) (*samlConnectionOutput, error) {
-		r, err := reqFromCtx(ctx)
-		if err != nil {
-			return nil, err
-		}
+	}, func(ctx context.Context, in *samlUpdateConnectionInput) (*samlConnectionOutput, error) {
 		uid, err := authUserID(ctx)
 		if err != nil {
 			return nil, err
@@ -443,10 +437,7 @@ func (p *ssoSAMLPlugin) registerUpdateConnection(host plugin.PluginHost, api hum
 			return nil, huma.Error404NotFound("sso connection not found")
 		}
 
-		var req updateConnectionRequest
-		if err := decodeJSON(r, &req); err != nil {
-			return nil, huma.Error400BadRequest("invalid json body")
-		}
+		req := in.Body
 
 		var changes domain.UpdateSsoConnection
 		if req.Name != nil {

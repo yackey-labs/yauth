@@ -19,6 +19,7 @@ import (
 	yauth "github.com/yackey-labs/yauth-go"
 	"github.com/yackey-labs/yauth-go/plugins/emailpassword"
 	"github.com/yackey-labs/yauth-go/plugins/oauth"
+	"github.com/yackey-labs/yauth-go/repo"
 	"github.com/yackey-labs/yauth-go/repo/gormrepo"
 )
 
@@ -90,9 +91,16 @@ type stack struct {
 	srv      *httptest.Server
 	client   *http.Client
 	provider *fakeProvider
+	repo     repo.Repository
 }
 
 func newStack(t *testing.T, info oauth.UserInfo) *stack {
+	return newStackWithRedirects(t, info, nil)
+}
+
+// newStackWithRedirects is newStack with an explicit AllowedRedirectURLs
+// allow-list, so tests can assert the post-callback redirect is honored.
+func newStackWithRedirects(t *testing.T, info oauth.UserInfo, allowed []string) *stack {
 	t.Helper()
 
 	provServer := newProviderServer(t)
@@ -131,9 +139,10 @@ func newStack(t *testing.T, info oauth.UserInfo) *stack {
 		key[i] = byte(i + 1)
 	}
 	op, err := oauth.New(oauth.Config{
-		EncryptionKey: key,
-		Providers:     []oauth.Provider{prov},
-		StateTTL:      5 * time.Minute,
+		EncryptionKey:       key,
+		Providers:           []oauth.Provider{prov},
+		StateTTL:            5 * time.Minute,
+		AllowedRedirectURLs: allowed,
 	})
 	if err != nil {
 		t.Fatalf("oauth.New: %v", err)
@@ -165,7 +174,7 @@ func newStack(t *testing.T, info oauth.UserInfo) *stack {
 		Jar:           jar,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error { return http.ErrUseLastResponse },
 	}
-	return &stack{srv: srv, client: cl, provider: prov}
+	return &stack{srv: srv, client: cl, provider: prov, repo: repo}
 }
 
 func drainBody(res *http.Response) string {
@@ -403,6 +412,130 @@ func TestOAuthFlow_LinksToExistingUserByEmail(t *testing.T) {
 		t.Fatalf("unlink: expected 204, got %d (%s)", res5.StatusCode, drainBody(res5))
 	}
 	res5.Body.Close()
+}
+
+// --- POST /link native typed Body --------------------------------------
+
+// registerAndLogin registers a fresh email/password user; the cookie jar
+// retains the session so subsequent requests on s.client are authenticated.
+func registerAndLogin(t *testing.T, s *stack, email string) {
+	t.Helper()
+	body := strings.NewReader(`{"email":"` + email + `","password":"correct horse battery staple"}`)
+	req, _ := http.NewRequest(http.MethodPost, s.srv.URL+"/api/auth/register", body)
+	req.Header.Set("Content-Type", "application/json")
+	res, err := s.client.Do(req)
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("register: %d (%s)", res.StatusCode, drainBody(res))
+	}
+}
+
+// postLink POSTs to /oauth/fake/link with the given raw request body
+// (rawBody==nil means "no body at all"), returning the response.
+func postLink(t *testing.T, s *stack, rawBody []byte) *http.Response {
+	t.Helper()
+	var rdr io.Reader
+	if rawBody != nil {
+		rdr = strings.NewReader(string(rawBody))
+	}
+	req, _ := http.NewRequest(http.MethodPost, s.srv.URL+"/api/auth/oauth/fake/link", rdr)
+	if rawBody != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	res, err := s.client.Do(req)
+	if err != nil {
+		t.Fatalf("link: %v", err)
+	}
+	return res
+}
+
+// TestOAuthLink_NativeBody exercises the native typed Body conversion of
+// POST /oauth/{provider}/link:
+//
+//   - a no-body POST succeeds (redirect_url has always been optional, so the
+//     Body is a pointer and a nil body is accepted);
+//   - a valid body POST succeeds — the redirect_url now arrives in the typed
+//     body (was a query param) and still flows through safeRedirect unchanged;
+//   - an unknown field is rejected with 422 (additionalProperties:false — the
+//     RFC-standard validation status that replaces the old strict-decode 400,
+//     matching the apikey conversion);
+//   - a syntactically-malformed JSON body is rejected by huma's parser with 400
+//     (huma returns 400 for an unparseable body and 422 only for schema
+//     validation — we assert both statuses to pin the contract).
+func TestOAuthLink_NativeBody(t *testing.T) {
+	s := newStackWithRedirects(t, oauth.UserInfo{
+		ProviderUserID: "link-remote-1",
+		Email:          "linker@example.com",
+		EmailVerified:  true,
+	}, nil)
+	registerAndLogin(t, s, "linker@example.com")
+
+	// 1) No body at all → 200 with an auth_url (optional pointer Body).
+	res := postLink(t, s, nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("link no-body: expected 200, got %d (%s)", res.StatusCode, drainBody(res))
+	}
+	var lr struct {
+		AuthURL string `json:"auth_url"`
+	}
+	_ = json.NewDecoder(res.Body).Decode(&lr)
+	res.Body.Close()
+	if lr.AuthURL == "" {
+		t.Fatalf("link no-body: empty auth_url")
+	}
+
+	// 2) Valid body with a host-relative redirect_url (always allowed by
+	//    safeRedirect) → 200. The provider account is not yet linked (the user
+	//    registered via email/password), so /link starts a fresh flow.
+	res = postLink(t, s, []byte(`{"redirect_url":"/after-link"}`))
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("link valid-body: expected 200, got %d (%s)", res.StatusCode, drainBody(res))
+	}
+	lr.AuthURL = ""
+	_ = json.NewDecoder(res.Body).Decode(&lr)
+	res.Body.Close()
+	if lr.AuthURL == "" {
+		t.Fatalf("link valid-body: empty auth_url")
+	}
+
+	// The body's redirect_url must actually be READ and persisted (this is the
+	// whole point of the query→body move): the minted state row carries the
+	// redirect in its RedirectURL payload. Pull the state token out of auth_url
+	// and consume the row to assert it round-tripped through safeRedirect.
+	authU, err := url.Parse(lr.AuthURL)
+	if err != nil {
+		t.Fatalf("parse auth_url: %v", err)
+	}
+	stateTok := authU.Query().Get("state")
+	if stateTok == "" {
+		t.Fatalf("auth_url missing state: %s", lr.AuthURL)
+	}
+	st, err := s.repo.ConsumeOAuthState(context.Background(), stateTok)
+	if err != nil || st == nil {
+		t.Fatalf("consume state: %v (st=%v)", err, st)
+	}
+	if st.RedirectURL == nil || !strings.Contains(*st.RedirectURL, "/after-link") {
+		t.Fatalf("state RedirectURL did not capture body redirect_url: %v", st.RedirectURL)
+	}
+
+	// 3) Unknown field → 422 (additionalProperties:false).
+	res = postLink(t, s, []byte(`{"redirect_url":"/x","bogus":true}`))
+	if res.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("link unknown-field: expected 422, got %d (%s)", res.StatusCode, drainBody(res))
+	}
+	res.Body.Close()
+
+	// 4) Syntactically-malformed JSON → 400 (huma's parser; 422 is reserved for
+	//    schema validation). The point is the body is now huma-validated at all,
+	//    which it was not under the StashHTTPHuma bridge.
+	res = postLink(t, s, []byte(`{"redirect_url":`))
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("link malformed-body: expected 400, got %d (%s)", res.StatusCode, drainBody(res))
+	}
+	res.Body.Close()
 }
 
 // --- construction validation ------------------------------------------

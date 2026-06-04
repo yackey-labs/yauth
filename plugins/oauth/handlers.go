@@ -34,10 +34,12 @@ func oauthGuards(api huma.API) huma.Middlewares {
 }
 
 // authedGuards is the per-operation middleware chain for the authenticated
-// routes (/accounts, /link, DELETE /{provider}): stash the raw request/writer,
-// then require a valid identity — the SAME rule as the legacy mw.RequireAuth
-// wrappers. Migrated handlers recover the AuthUser via the unchanged
-// middleware.AuthUserFromContext.
+// bridged routes (/accounts and DELETE /{provider}): stash the raw request/
+// writer, then require a valid identity — the SAME rule as the legacy
+// mw.RequireAuth wrappers. Migrated handlers recover the AuthUser via the
+// unchanged middleware.AuthUserFromContext. /link no longer uses this: it took
+// a native typed Body and needs neither the raw request nor the writer, so it
+// runs RequireAuthHuma alone (no StashHTTPHuma).
 func authedGuards(api huma.API, mw *middleware.Middleware) huma.Middlewares {
 	return huma.Middlewares{
 		middleware.StashHTTPHuma(api),
@@ -247,9 +249,34 @@ type linkOutput struct {
 	Body linkResponse
 }
 
+// linkRequest is the native huma JSON body for POST /oauth/{provider}/link.
+// The sole field is the optional post-callback redirect target, moved off the
+// query string and onto a typed body so huma parses + validates it (and rejects
+// unknown fields via additionalProperties:false → 422). It is still filtered
+// through safeRedirect, so the open-redirect mitigation is unchanged.
+type linkRequest struct {
+	RedirectURL string   `json:"redirect_url,omitempty" doc:"Optional URL to navigate to after callback."`
+	_           struct{} `json:"-" additionalProperties:"false"`
+}
+
+// linkInput is the huma-native request for the link flow: the {provider} path
+// param plus an OPTIONAL typed JSON body. The body is a pointer so a no-body
+// POST is accepted (redirect_url has always been optional); a present-but-
+// malformed or unknown-field body is rejected by huma with a native 422.
+type linkInput struct {
+	Provider string       `path:"provider" doc:"OAuth provider name"`
+	Body     *linkRequest `required:"false"`
+}
+
 // registerLink wires POST {prefix}/oauth/{provider}/link. It starts a linking
 // flow for an already-authed user, returning the provider authorization URL the
 // client should send the browser to. Gated by RequireAuthHuma.
+//
+// This is the one oauth write-op with a native typed Body: it needs neither the
+// raw request (redirect_url now arrives in the body) nor the writer (it returns
+// JSON, not a cookie/302), so it drops StashHTTPHuma and runs only
+// RequireAuthHuma. The redirect/callback flows keep the bridge — they parse
+// query/form/JSON, set cookies, and 302.
 func (p *oauthPlugin) registerLink(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
 	huma.Register(api, huma.Operation{
 		OperationID: "oauthLink",
@@ -258,12 +285,8 @@ func (p *oauthPlugin) registerLink(host plugin.PluginHost, api huma.API, mw *mid
 		Summary:     "Start linking an OAuth provider to the current account",
 		Tags:        []string{"oauth"},
 		Security:    []map[string][]string{{"sessionCookie": {}}},
-		Middlewares: authedGuards(api, mw),
-	}, func(ctx context.Context, in *providerInput) (*linkOutput, error) {
-		r, err := reqFromCtx(ctx)
-		if err != nil {
-			return nil, err
-		}
+		Middlewares: huma.Middlewares{middleware.RequireAuthHuma(api, mw)},
+	}, func(ctx context.Context, in *linkInput) (*linkOutput, error) {
 		au, ok := middleware.AuthUserFromContext(ctx)
 		if !ok || au == nil {
 			return nil, huma.Error401Unauthorized("not authenticated")
@@ -282,7 +305,11 @@ func (p *oauthPlugin) registerLink(host plugin.PluginHost, api huma.API, mw *mid
 			return nil, huma.Error500InternalServerError("unable to check existing link")
 		}
 
-		redirect := p.safeRedirect(r.URL.Query().Get("redirect_url"))
+		var rawRedirect string
+		if in.Body != nil {
+			rawRedirect = in.Body.RedirectURL
+		}
+		redirect := p.safeRedirect(rawRedirect)
 
 		state, err := generateState()
 		if err != nil {

@@ -40,22 +40,26 @@ jobs:
         with:
           version: 9.15.4
 
-      # registry-url configures the registry in .npmrc — npm's OIDC trusted-
-      # publishing exchange needs that registry context. Do NOT set
-      # NODE_AUTH_TOKEN: with no token configured and id-token:write present,
-      # npm (>= 11.5.1) performs the OIDC handshake instead. (pnpm publish has
-      # no OIDC support, which is why we publish with npm below.)
+      # IMPORTANT: do NOT use setup-node's `registry-url:` — it writes an
+      # `_authToken=${NODE_AUTH_TOKEN}` line that makes npm attempt (empty)
+      # token auth and never fall through to OIDC. We need the registry
+      # configured WITHOUT any token so npm's OIDC trusted-publishing engages.
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-          registry-url: 'https://registry.npmjs.org'
 
       # npm OIDC trusted publishing needs npm >= 11.5.1; the bundled npm is
-      # older. pnpm's own publish (9.15.4) does NOT perform the OIDC handshake,
-      # so we pack with pnpm (to substitute workspace:* deps) and publish each
-      # tarball with npm, which does.
+      # older. pnpm's own publish (9.15.4) has no OIDC support, so we publish
+      # with npm.
       - name: Upgrade npm (trusted-publishing support)
         run: npm install -g npm@latest
+
+      # Configure the registry with NO auth token. npm's OIDC handshake needs
+      # the registry configured but must not find a token (or it uses that).
+      - name: Configure npm registry (token-free, for OIDC)
+        run: |
+          printf 'registry=https://registry.npmjs.org/\n@yackey-labs:registry=https://registry.npmjs.org/\n' > "$HOME/.npmrc"
+          echo "user .npmrc:"; cat "$HOME/.npmrc"
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

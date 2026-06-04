@@ -85,23 +85,32 @@ func (m ClaimMappings) merged() ClaimMappings {
 type OidcConnectionConfig struct {
 	// DiscoveryURL is the OIDC discovery endpoint (RFC 8414 / OpenID
 	// Connect Discovery 1.0). Typically ends in
-	// "/.well-known/openid-configuration".
-	DiscoveryURL string `json:"discovery_url"`
+	// "/.well-known/openid-configuration". omitempty so it is optional in
+	// the huma request schema: create validates it via validate()
+	// (business 400) and PATCH merges only when present, so a required
+	// schema would wrongly 422 partial updates and create's own checks.
+	DiscoveryURL string `json:"discovery_url,omitempty"`
 	// ClientID is the IdP-assigned RP identifier. Sent on every
-	// authorization redirect and token exchange.
-	ClientID string `json:"client_id"`
+	// authorization redirect and token exchange. omitempty for the same
+	// partial-update / business-400 reason as DiscoveryURL.
+	ClientID string `json:"client_id,omitempty"`
 	// ClientSecret is the IdP-assigned RP secret. Stored encrypted
 	// at rest; the plaintext value is only held in memory during the
-	// codec round-trip.
-	ClientSecret string `json:"client_secret"`
+	// codec round-trip. omitempty for the same partial-update /
+	// business-400 reason as DiscoveryURL.
+	ClientSecret string `json:"client_secret,omitempty"`
 	// Scopes is the space-separated scope list sent on
 	// /authorize?scope=. Defaults to "openid email profile" when
 	// empty.
 	Scopes []string `json:"scopes,omitempty"`
 	// ClaimMappings configures how claims from the IdP id_token are
 	// projected onto the JIT user record. Zero-value fields fall
-	// back to DefaultClaimMappings.
-	ClaimMappings ClaimMappings `json:"claim_mappings"`
+	// back to DefaultClaimMappings. omitempty marks it optional in the
+	// huma-derived request schema so callers may omit the whole block
+	// and let the handler apply DefaultClaimMappings (the create/update
+	// handlers default an absent mapping) rather than huma 422ing on a
+	// missing required property.
+	ClaimMappings ClaimMappings `json:"claim_mappings,omitempty"`
 }
 
 // DefaultOidcScopes is the scope list applied when OidcConnectionConfig.Scopes

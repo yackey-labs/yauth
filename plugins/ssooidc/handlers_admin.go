@@ -6,18 +6,18 @@
 // tenant isolation lives in the gate; cross-org enumeration is
 // impossible because the gate runs before any sso_connections.Read.
 //
-// These routes are huma-native: each is a typed operation guarded by
-// RequireAuthHuma (authentication) plus the inline requireOrgAdmin
-// membership check (org-admin authorization, NOT global-admin). The raw
-// *http.Request is threaded onto the operation context by StashHTTPHuma so
-// the strict 1 MiB body decode is preserved byte-for-byte.
+// Read-only / no-body routes (list, get, delete, test) stay on the
+// StashHTTPHuma bridge via crudGuards. The JSON-body write-ops (create,
+// update) are fully huma-native: their request body is a typed huma Body, so
+// huma parses + validates it, the request schema auto-derives, and unknown or
+// malformed bodies are rejected with 422 (additionalProperties:false). Those
+// two ops drop StashHTTPHuma entirely and use ssoConnAuthGuards instead.
 package ssooidc
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -32,10 +32,11 @@ import (
 	"github.com/yackey-labs/yauth-go/yautherr"
 )
 
-// crudGuards is the per-operation middleware chain shared by every admin CRUD
-// route: stash the raw request/writer, then require an authenticated identity.
-// Org-admin authorization is enforced in-handler by requireOrgAdmin (these are
-// org-admins, not global admins — RequireAdminHuma would wrongly lock them out).
+// crudGuards is the middleware chain for the read-only / no-body CRUD routes
+// (list, get, delete, test): stash the raw request/writer, then require an
+// authenticated identity. Org-admin authorization is enforced in-handler by
+// requireOrgAdmin (these are org-admins, not global admins — RequireAdminHuma
+// would wrongly lock them out).
 func crudGuards(api huma.API, mw *middleware.Middleware) huma.Middlewares {
 	return huma.Middlewares{
 		middleware.StashHTTPHuma(api),
@@ -43,32 +44,15 @@ func crudGuards(api huma.API, mw *middleware.Middleware) huma.Middlewares {
 	}
 }
 
-// reqFromCtx returns the *http.Request stashed by StashHTTPHuma. On a route in
-// the CRUD chain it is always present; the nil guard keeps the helper safe.
-func reqFromCtx(ctx context.Context) (*http.Request, error) {
-	r := middleware.HTTPRequestFromContext(ctx)
-	if r == nil {
-		return nil, huma.Error500InternalServerError("request unavailable")
+// ssoConnAuthGuards is the middleware chain for the native-Body write-ops
+// (create, update): require an authenticated identity only. No StashHTTPHuma —
+// the request body is a native huma typed Body and nothing reads the raw
+// request, so the request schema auto-derives. Org-admin authorization is still
+// enforced in-handler by requireOrgAdmin.
+func ssoConnAuthGuards(api huma.API, mw *middleware.Middleware) huma.Middlewares {
+	return huma.Middlewares{
+		middleware.RequireAuthHuma(api, mw),
 	}
-	return r, nil
-}
-
-// decodeJSON enforces a 1 MiB body cap before decoding to a target. It reads
-// the *http.Request stashed by StashHTTPHuma; the CRUD input structs carry NO
-// huma Body field, so huma never consumes the body and this decoder stays
-// byte-identical to the legacy net/http handlers (empty body tolerated).
-func decodeJSON(r *http.Request, dst any) error {
-	body := http.MaxBytesReader(nil, r.Body, 1<<20)
-	defer func() { _ = body.Close() }()
-	raw, err := io.ReadAll(body)
-	if err != nil {
-		return err
-	}
-	if len(raw) == 0 {
-		// allow empty body for endpoints that accept "no changes"
-		return nil
-	}
-	return json.Unmarshal(raw, dst)
 }
 
 // requireOrgAdmin returns the gating membership row or a huma error (403/500).
@@ -164,21 +148,30 @@ func hasEncryptedSecret(raw []byte) bool {
 	return strings.TrimSpace(p.ClientSecretEnc) != ""
 }
 
+// createConnectionRequest carries omitempty on the business-validated fields so
+// absent/blank values reach the handler's own 400s ("name is required",
+// "oidc config block is required", kind/status/role parsing) rather than huma's
+// 422. additionalProperties:false rejects unknown fields with a native 422.
 type createConnectionRequest struct {
-	Name                   string                `json:"name"`
-	Kind                   string                `json:"kind"` // defaults to "oidc_client"
-	Status                 string                `json:"status"`
-	JitProvisioningEnabled bool                  `json:"jit_provisioning_enabled"`
-	DefaultRoleOnJit       string                `json:"default_role_on_jit"`
-	OIDC                   *OidcConnectionConfig `json:"oidc"`
+	Name                   string                `json:"name,omitempty"`
+	Kind                   string                `json:"kind,omitempty"` // defaults to "oidc_client"
+	Status                 string                `json:"status,omitempty"`
+	JitProvisioningEnabled bool                  `json:"jit_provisioning_enabled,omitempty"`
+	DefaultRoleOnJit       string                `json:"default_role_on_jit,omitempty"`
+	OIDC                   *OidcConnectionConfig `json:"oidc,omitempty"`
+	_                      struct{}              `json:"-" additionalProperties:"false"`
 }
 
+// updateConnectionRequest is a partial: every field is a pointer so absence is
+// distinguishable from a zero value, and the handler applies its own business
+// 400s. additionalProperties:false rejects unknown fields with a native 422.
 type updateConnectionRequest struct {
-	Name                   *string               `json:"name"`
-	Status                 *string               `json:"status"`
-	JitProvisioningEnabled *bool                 `json:"jit_provisioning_enabled"`
-	DefaultRoleOnJit       *string               `json:"default_role_on_jit"`
-	OIDC                   *OidcConnectionConfig `json:"oidc"`
+	Name                   *string               `json:"name,omitempty"`
+	Status                 *string               `json:"status,omitempty"`
+	JitProvisioningEnabled *bool                 `json:"jit_provisioning_enabled,omitempty"`
+	DefaultRoleOnJit       *string               `json:"default_role_on_jit,omitempty"`
+	OIDC                   *OidcConnectionConfig `json:"oidc,omitempty"`
+	_                      struct{}              `json:"-" additionalProperties:"false"`
 }
 
 // orgInput is the typed path-parameter input for routes scoped to a single org.
@@ -199,6 +192,14 @@ type connectionOutput struct {
 
 // --- POST /organizations/{id}/sso/connections --------------------------
 
+// createConnectionInput wraps the native JSON body plus the org path param.
+// huma parses + validates the body (unknown/malformed → 422); the request
+// schema auto-derives, so no StashHTTPHuma bridge is needed.
+type createConnectionInput struct {
+	ID   string `path:"id" doc:"Organization ID"`
+	Body createConnectionRequest
+}
+
 func (p *ssoOIDCPlugin) registerCreateConnection(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
 	type output struct {
 		Body connectionJSON
@@ -211,12 +212,8 @@ func (p *ssoOIDCPlugin) registerCreateConnection(host plugin.PluginHost, api hum
 		Tags:          []string{"organizations"},
 		Security:      []map[string][]string{{"sessionCookie": {}}},
 		DefaultStatus: http.StatusCreated,
-		Middlewares:   crudGuards(api, mw),
-	}, func(ctx context.Context, in *orgInput) (*output, error) {
-		r, err := reqFromCtx(ctx)
-		if err != nil {
-			return nil, err
-		}
+		Middlewares:   ssoConnAuthGuards(api, mw),
+	}, func(ctx context.Context, in *createConnectionInput) (*output, error) {
 		uid, err := authUserID(ctx)
 		if err != nil {
 			return nil, err
@@ -225,10 +222,7 @@ func (p *ssoOIDCPlugin) registerCreateConnection(host plugin.PluginHost, api hum
 		if _, err := requireOrgAdmin(ctx, host, orgID, uid); err != nil {
 			return nil, err
 		}
-		var req createConnectionRequest
-		if err := decodeJSON(r, &req); err != nil {
-			return nil, huma.Error400BadRequest("invalid json body")
-		}
+		req := in.Body
 		if strings.TrimSpace(req.Name) == "" {
 			return nil, huma.Error400BadRequest("name is required")
 		}
@@ -372,6 +366,15 @@ func (p *ssoOIDCPlugin) registerGetConnection(host plugin.PluginHost, api huma.A
 
 // --- PATCH /organizations/{id}/sso/connections/{cid} -------------------
 
+// updateConnectionInput wraps the native JSON body plus the org+connection path
+// params. huma parses + validates the body (unknown/malformed → 422); the
+// request schema auto-derives, so no StashHTTPHuma bridge is needed.
+type updateConnectionInput struct {
+	ID   string `path:"id" doc:"Organization ID"`
+	CID  string `path:"cid" doc:"SSO connection ID"`
+	Body updateConnectionRequest
+}
+
 func (p *ssoOIDCPlugin) registerUpdateConnection(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
 	huma.Register(api, huma.Operation{
 		OperationID: "ssooidc-update-connection",
@@ -380,12 +383,8 @@ func (p *ssoOIDCPlugin) registerUpdateConnection(host plugin.PluginHost, api hum
 		Summary:     "Update an SSO connection (partial)",
 		Tags:        []string{"organizations"},
 		Security:    []map[string][]string{{"sessionCookie": {}}},
-		Middlewares: crudGuards(api, mw),
-	}, func(ctx context.Context, in *connInput) (*connectionOutput, error) {
-		r, err := reqFromCtx(ctx)
-		if err != nil {
-			return nil, err
-		}
+		Middlewares: ssoConnAuthGuards(api, mw),
+	}, func(ctx context.Context, in *updateConnectionInput) (*connectionOutput, error) {
 		uid, err := authUserID(ctx)
 		if err != nil {
 			return nil, err
@@ -406,10 +405,7 @@ func (p *ssoOIDCPlugin) registerUpdateConnection(host plugin.PluginHost, api hum
 			return nil, huma.Error404NotFound("sso connection not found")
 		}
 
-		var req updateConnectionRequest
-		if err := decodeJSON(r, &req); err != nil {
-			return nil, huma.Error400BadRequest("invalid json body")
-		}
+		req := in.Body
 
 		var changes domain.UpdateSsoConnection
 		if req.Name != nil {

@@ -40,12 +40,15 @@ jobs:
         with:
           version: 9.15.4
 
-      # NOTE: no `registry-url:` — it writes an `_authToken=${NODE_AUTH_TOKEN}`
-      # .npmrc that pre-empts npm's OIDC trusted-publishing flow. npm defaults
-      # to registry.npmjs.org and engages OIDC when no token is configured.
+      # registry-url configures the registry in .npmrc — npm's OIDC trusted-
+      # publishing exchange needs that registry context. Do NOT set
+      # NODE_AUTH_TOKEN: with no token configured and id-token:write present,
+      # npm (>= 11.5.1) performs the OIDC handshake instead. (pnpm publish has
+      # no OIDC support, which is why we publish with npm below.)
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
 
       # npm OIDC trusted publishing needs npm >= 11.5.1; the bundled npm is
       # older. pnpm's own publish (9.15.4) does NOT perform the OIDC handshake,

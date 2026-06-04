@@ -11,11 +11,11 @@ import (
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 
-	"github.com/yackey-labs/yauth-go/repo"
-	"github.com/yackey-labs/yauth-go/repo/conformance"
-	"github.com/yackey-labs/yauth-go/repo/gormrepo"
-	"github.com/yackey-labs/yauth-go/repo/memrepo"
-	"github.com/yackey-labs/yauth-go/repo/redisrepo"
+	"github.com/yackey-labs/yauth/repo"
+	"github.com/yackey-labs/yauth/repo/conformance"
+	"github.com/yackey-labs/yauth/repo/gormrepo"
+	"github.com/yackey-labs/yauth/repo/memrepo"
+	"github.com/yackey-labs/yauth/repo/redisrepo"
 )
 
 func TestConformance(t *testing.T) {

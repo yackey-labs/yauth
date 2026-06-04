@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yackey-labs/yauth-go/auth"
-	"github.com/yackey-labs/yauth-go/domain"
+	"github.com/yackey-labs/yauth/auth"
+	"github.com/yackey-labs/yauth/domain"
 )
 
 func i64p(v int64) *int64 { return &v }

@@ -3,8 +3,8 @@ package bearer
 import (
 	"context"
 
-	"github.com/yackey-labs/yauth-go/auth"
-	"github.com/yackey-labs/yauth-go/plugin"
+	"github.com/yackey-labs/yauth/auth"
+	"github.com/yackey-labs/yauth/plugin"
 )
 
 // computeActiveOrgClaims pulls the user's default active org / role

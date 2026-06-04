@@ -1,7 +1,7 @@
 package organizations
 
 import (
-	"github.com/yackey-labs/yauth-go/humaapi"
+	"github.com/yackey-labs/yauth/humaapi"
 
 	"context"
 	"io"
@@ -12,9 +12,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/yackey-labs/yauth-go/domain"
-	"github.com/yackey-labs/yauth-go/repo"
-	"github.com/yackey-labs/yauth-go/repo/memrepo"
+	"github.com/yackey-labs/yauth/domain"
+	"github.com/yackey-labs/yauth/repo"
+	"github.com/yackey-labs/yauth/repo/memrepo"
 )
 
 // seedOrgAndMembership creates an organization plus an active

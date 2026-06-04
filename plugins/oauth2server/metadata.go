@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/yackey-labs/yauth-go/plugin"
+	"github.com/yackey-labs/yauth/plugin"
 )
 
 // authServerMetadata is the RFC 8414 §2 OAuth 2.0 Authorization Server

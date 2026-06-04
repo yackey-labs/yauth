@@ -23,8 +23,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/yackey-labs/yauth-go/domain"
-	"github.com/yackey-labs/yauth-go/yautherr"
+	"github.com/yackey-labs/yauth/domain"
+	"github.com/yackey-labs/yauth/yautherr"
 )
 
 // store holds destinations + outbox entries in memory. All operations

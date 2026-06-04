@@ -17,7 +17,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
 
-	"github.com/yackey-labs/yauth-go/yautherr"
+	"github.com/yackey-labs/yauth/yautherr"
 )
 
 // RequireAuthHuma returns a huma per-operation middleware that requires a

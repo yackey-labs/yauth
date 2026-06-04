@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/yackey-labs/yauth-go/auth"
+	"github.com/yackey-labs/yauth/auth"
 )
 
 func strictPolicy() Policy {

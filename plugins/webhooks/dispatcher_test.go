@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yackey-labs/yauth-go/events"
+	"github.com/yackey-labs/yauth/events"
 )
 
 func TestSignPayload_Deterministic(t *testing.T) {

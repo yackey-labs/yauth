@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/yackey-labs/yauth-go/domain"
-	pgxgen "github.com/yackey-labs/yauth-go/repo/pgxrepo/gen"
+	"github.com/yackey-labs/yauth/domain"
+	pgxgen "github.com/yackey-labs/yauth/repo/pgxrepo/gen"
 )
 
 func groupToDomain(m pgxgen.YauthGroup) domain.Group {

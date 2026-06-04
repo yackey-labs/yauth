@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/yackey-labs/yauth-go/domain"
+	"github.com/yackey-labs/yauth/domain"
 )
 
 func (*fakeRepo) ListConsentsByUserID(context.Context, string) ([]*domain.Consent, error) {

@@ -9,10 +9,10 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 
-	"github.com/yackey-labs/yauth-go/domain"
-	"github.com/yackey-labs/yauth-go/repo/memrepo"
-	"github.com/yackey-labs/yauth-go/repo/redisrepo"
-	"github.com/yackey-labs/yauth-go/yautherr"
+	"github.com/yackey-labs/yauth/domain"
+	"github.com/yackey-labs/yauth/repo/memrepo"
+	"github.com/yackey-labs/yauth/repo/redisrepo"
+	"github.com/yackey-labs/yauth/yautherr"
 )
 
 // newTestRepo wires miniredis + memrepo behind the redis decorator. Tests

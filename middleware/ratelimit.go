@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/yackey-labs/yauth-go/repo"
+	"github.com/yackey-labs/yauth/repo"
 )
 
 // RateLimit returns an http middleware that enforces a fixed-window rate

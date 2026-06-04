@@ -23,11 +23,11 @@ import (
 	"os"
 	"time"
 
-	yauth "github.com/yackey-labs/yauth-go"
-	"github.com/yackey-labs/yauth-go/middleware"
-	"github.com/yackey-labs/yauth-go/plugins/emailpassword"
-	"github.com/yackey-labs/yauth-go/repo/gormrepo"
-	"github.com/yackey-labs/yauth-go/telemetry"
+	yauth "github.com/yackey-labs/yauth"
+	"github.com/yackey-labs/yauth/middleware"
+	"github.com/yackey-labs/yauth/plugins/emailpassword"
+	"github.com/yackey-labs/yauth/repo/gormrepo"
+	"github.com/yackey-labs/yauth/telemetry"
 )
 
 func main() {

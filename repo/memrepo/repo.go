@@ -15,8 +15,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yackey-labs/yauth-go/domain"
-	"github.com/yackey-labs/yauth-go/repo"
+	"github.com/yackey-labs/yauth/domain"
+	"github.com/yackey-labs/yauth/repo"
 )
 
 var _ repo.Repository = (*Repo)(nil)

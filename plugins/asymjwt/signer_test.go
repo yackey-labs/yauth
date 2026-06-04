@@ -1,7 +1,7 @@
 package asymjwt_test
 
 import (
-	"github.com/yackey-labs/yauth-go/humaapi"
+	"github.com/yackey-labs/yauth/humaapi"
 
 	"context"
 	"crypto/ecdsa"
@@ -18,11 +18,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yackey-labs/yauth-go/events"
-	"github.com/yackey-labs/yauth-go/middleware"
-	"github.com/yackey-labs/yauth-go/plugin"
-	"github.com/yackey-labs/yauth-go/plugins/asymjwt"
-	"github.com/yackey-labs/yauth-go/repo"
+	"github.com/yackey-labs/yauth/events"
+	"github.com/yackey-labs/yauth/middleware"
+	"github.com/yackey-labs/yauth/plugin"
+	"github.com/yackey-labs/yauth/plugins/asymjwt"
+	"github.com/yackey-labs/yauth/repo"
 )
 
 // writeRSAKeys generates a fresh RSA-2048 keypair, writes the private

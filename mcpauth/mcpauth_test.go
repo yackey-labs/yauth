@@ -10,15 +10,15 @@ import (
 
 	"github.com/google/uuid"
 
-	yauth "github.com/yackey-labs/yauth-go"
-	"github.com/yackey-labs/yauth-go/auth"
-	"github.com/yackey-labs/yauth-go/domain"
-	"github.com/yackey-labs/yauth-go/mcpauth"
-	"github.com/yackey-labs/yauth-go/middleware"
-	"github.com/yackey-labs/yauth-go/plugins/bearer"
-	"github.com/yackey-labs/yauth-go/plugins/oauth2server"
-	"github.com/yackey-labs/yauth-go/plugins/oidc"
-	"github.com/yackey-labs/yauth-go/repo/memrepo"
+	yauth "github.com/yackey-labs/yauth"
+	"github.com/yackey-labs/yauth/auth"
+	"github.com/yackey-labs/yauth/domain"
+	"github.com/yackey-labs/yauth/mcpauth"
+	"github.com/yackey-labs/yauth/middleware"
+	"github.com/yackey-labs/yauth/plugins/bearer"
+	"github.com/yackey-labs/yauth/plugins/oauth2server"
+	"github.com/yackey-labs/yauth/plugins/oidc"
+	"github.com/yackey-labs/yauth/repo/memrepo"
 )
 
 // testServer builds a yauth with the oauth2server plugin mounted under

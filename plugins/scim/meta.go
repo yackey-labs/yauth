@@ -19,13 +19,13 @@ func serviceProviderConfig() map[string]any {
 		"name":             "OAuth Bearer Token",
 		"description":      "Org-scoped API key (RFC 6750 §2.1)",
 		"specUri":          "https://tools.ietf.org/html/rfc6750",
-		"documentationUri": "https://github.com/yackey-labs/yauth-go/blob/main/docs/scim/README.md",
+		"documentationUri": "https://github.com/yackey-labs/yauth/blob/main/docs/scim/README.md",
 		"type":             "oauthbearertoken",
 		"primary":          true,
 	}
 	return map[string]any{
 		"schemas":          []string{ServiceProviderConfigSchema},
-		"documentationUri": "https://github.com/yackey-labs/yauth-go/blob/main/docs/scim/README.md",
+		"documentationUri": "https://github.com/yackey-labs/yauth/blob/main/docs/scim/README.md",
 		"patch":            map[string]any{"supported": true},
 		"bulk": map[string]any{
 			"supported":      false,

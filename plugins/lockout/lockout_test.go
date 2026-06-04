@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	yauth "github.com/yackey-labs/yauth-go"
-	"github.com/yackey-labs/yauth-go/plugins/emailpassword"
-	"github.com/yackey-labs/yauth-go/plugins/lockout"
-	"github.com/yackey-labs/yauth-go/repo/gormrepo"
+	yauth "github.com/yackey-labs/yauth"
+	"github.com/yackey-labs/yauth/plugins/emailpassword"
+	"github.com/yackey-labs/yauth/plugins/lockout"
+	"github.com/yackey-labs/yauth/repo/gormrepo"
 )
 
 type captureMailer struct {

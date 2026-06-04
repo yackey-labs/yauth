@@ -5,7 +5,7 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
-	"github.com/yackey-labs/yauth-go/yauthcfg"
+	"github.com/yackey-labs/yauth/yauthcfg"
 )
 
 func newInitCmd() *cobra.Command {

@@ -21,9 +21,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/yackey-labs/yauth-go/auth/hibp"
-	"github.com/yackey-labs/yauth-go/auth/passwordpolicy"
-	"github.com/yackey-labs/yauth-go/plugin"
+	"github.com/yackey-labs/yauth/auth/hibp"
+	"github.com/yackey-labs/yauth/auth/passwordpolicy"
+	"github.com/yackey-labs/yauth/plugin"
 )
 
 // Config tunes plugin behaviour. Zero value yields safe defaults.

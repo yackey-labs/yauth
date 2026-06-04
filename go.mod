@@ -1,4 +1,4 @@
-module github.com/yackey-labs/yauth-go
+module github.com/yackey-labs/yauth
 
 go 1.25.7
 

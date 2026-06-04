@@ -11,7 +11,7 @@ import (
 
 	"golang.org/x/oauth2"
 
-	"github.com/yackey-labs/yauth-go/plugins/oauth"
+	"github.com/yackey-labs/yauth/plugins/oauth"
 )
 
 // OIDCConfig configures a generic OpenID Connect provider.

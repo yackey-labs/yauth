@@ -7,8 +7,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/yackey-labs/yauth-go/domain"
-	"github.com/yackey-labs/yauth-go/repo"
+	"github.com/yackey-labs/yauth/domain"
+	"github.com/yackey-labs/yauth/repo"
 )
 
 // IssueSession generates a fresh session token, persists a session row whose

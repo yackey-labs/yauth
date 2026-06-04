@@ -56,8 +56,8 @@ import (
 	"net/http/httptest"
 	"strings"
 
-	yauth "github.com/yackey-labs/yauth-go"
-	"github.com/yackey-labs/yauth-go/middleware"
+	yauth "github.com/yackey-labs/yauth"
+	"github.com/yackey-labs/yauth/middleware"
 )
 
 // Config describes how the yauth authorization server is exposed so mcpauth can

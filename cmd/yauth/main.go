@@ -10,7 +10,7 @@ import (
 
 	// Register the gorm-backed drivers (sqlite, postgres, mysql) so the CLI
 	// can migrate/check any configured driver. pgx is built into the root pkg.
-	_ "github.com/yackey-labs/yauth-go/repo/gormrepo/gormbackend"
+	_ "github.com/yackey-labs/yauth/repo/gormrepo/gormbackend"
 )
 
 func main() {

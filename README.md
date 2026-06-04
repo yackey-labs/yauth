@@ -1,4 +1,4 @@
-# yauth-go
+# yauth
 
 Modular, plugin-based authentication library for Go (`net/http`) with a
 generated TypeScript client, Vue 3 components, and SolidJS components.
@@ -23,7 +23,7 @@ generated TypeScript client, Vue 3 components, and SolidJS components.
 No external database needed. SQLite + email/password ships first.
 
 ```bash
-go get github.com/yackey-labs/yauth-go@latest
+go get github.com/yackey-labs/yauth@latest
 go mod tidy   # pulls transitive deps for the openapi subpackage (Huma)
 ```
 
@@ -35,9 +35,9 @@ import (
     "log"
     "net/http"
 
-    yauth "github.com/yackey-labs/yauth-go"
-    "github.com/yackey-labs/yauth-go/plugins/emailpassword"
-    "github.com/yackey-labs/yauth-go/repo/gormrepo"
+    yauth "github.com/yackey-labs/yauth"
+    "github.com/yackey-labs/yauth/plugins/emailpassword"
+    "github.com/yackey-labs/yauth/repo/gormrepo"
 )
 
 func main() {
@@ -182,7 +182,7 @@ func profileHandler(w http.ResponseWriter, r *http.Request) {
 
 `RequireAuth` returns `401` for unauthenticated requests; `RequireAdmin`
 returns `403` for non-admin users. Import `middleware` from
-`github.com/yackey-labs/yauth-go/middleware`.
+`github.com/yackey-labs/yauth/middleware`.
 
 **Event system** — every authentication operation emits an
 `events.AuthEvent` (`UserRegistered`, `LoginAttempt`, `LoginSucceeded`,
@@ -211,9 +211,9 @@ import (
     "log"
     "net/http"
 
-    yauth "github.com/yackey-labs/yauth-go"
-    "github.com/yackey-labs/yauth-go/plugins/emailpassword"
-    "github.com/yackey-labs/yauth-go/repo/memrepo"
+    yauth "github.com/yackey-labs/yauth"
+    "github.com/yackey-labs/yauth/plugins/emailpassword"
+    "github.com/yackey-labs/yauth/repo/memrepo"
 )
 
 func main() {
@@ -241,8 +241,8 @@ the single entry point:
 
 ```go
 import (
-    "github.com/yackey-labs/yauth-go/migrate"
-    "github.com/yackey-labs/yauth-go/repo/pgxrepo"
+    "github.com/yackey-labs/yauth/migrate"
+    "github.com/yackey-labs/yauth/repo/pgxrepo"
 )
 
 pool, _ := pgxrepo.Open(ctx, dsn)
@@ -259,10 +259,10 @@ import (
     "context"
     "time"
 
-    yauth "github.com/yackey-labs/yauth-go"
-    "github.com/yackey-labs/yauth-go/migrate"
-    "github.com/yackey-labs/yauth-go/plugins/emailpassword"
-    "github.com/yackey-labs/yauth-go/repo/pgxrepo"
+    yauth "github.com/yackey-labs/yauth"
+    "github.com/yackey-labs/yauth/migrate"
+    "github.com/yackey-labs/yauth/plugins/emailpassword"
+    "github.com/yackey-labs/yauth/repo/pgxrepo"
 )
 
 ctx := context.Background()
@@ -340,7 +340,7 @@ database:
 > registers the gorm backend:
 >
 > ```go
-> import _ "github.com/yackey-labs/yauth-go/repo/gormrepo/gormbackend"
+> import _ "github.com/yackey-labs/yauth/repo/gormrepo/gormbackend"
 > ```
 >
 > Without it, those drivers fail fast with an actionable "no backend registered"
@@ -365,7 +365,7 @@ database:
 **Integrating yauth migrations with your own goose pipeline:**
 
 ```go
-import "github.com/yackey-labs/yauth-go/migrate"
+import "github.com/yackey-labs/yauth/migrate"
 
 // Your app's provider (uses default goose_db_version table)
 appProvider, _ := goose.NewProvider(goose.DialectPostgres, db, appMigrationsFS)
@@ -723,7 +723,7 @@ The `yauth` CLI (`cmd/yauth`) is the operator-facing companion, mirroring
 `cargo-yauth`:
 
 ```bash
-go install github.com/yackey-labs/yauth-go/cmd/yauth@latest
+go install github.com/yackey-labs/yauth/cmd/yauth@latest
 
 yauth init               # scaffold yauth.yaml
 yauth migrate up         # run goose migrations (pgx) or GORM AutoMigrate (others)
@@ -745,7 +745,7 @@ Multiple replicas racing through DDL will corrupt the schema. Set
 ### `yauth migrate` CLI
 
 ```bash
-go install github.com/yackey-labs/yauth-go/cmd/yauth@latest
+go install github.com/yackey-labs/yauth/cmd/yauth@latest
 yauth migrate -c yauth.yaml   # reads database.dsn from yauth.yaml
 ```
 
@@ -757,7 +757,7 @@ non-default paths: `yauth migrate -c /etc/yauth/prod.yaml`.
 ```yaml
 - name: Migrate database
   run: |
-    go install github.com/yackey-labs/yauth-go/cmd/yauth@latest
+    go install github.com/yackey-labs/yauth/cmd/yauth@latest
     yauth migrate -c config/yauth.yaml
   env:
     DATABASE_URL: ${{ secrets.DATABASE_URL }}

@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yackey-labs/yauth-go/domain"
-	yauth "github.com/yackey-labs/yauth-go/yautherr"
+	"github.com/yackey-labs/yauth/domain"
+	yauth "github.com/yackey-labs/yauth/yautherr"
 )
 
 func TestRepoSmoke(t *testing.T) {

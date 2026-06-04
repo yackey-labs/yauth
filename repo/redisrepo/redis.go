@@ -29,13 +29,13 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
-	"github.com/yackey-labs/yauth-go/repo"
+	"github.com/yackey-labs/yauth/repo"
 )
 
 // Default tunables for Options.
 const (
-	DefaultKeyPrefix       = "yauth:"
-	DefaultDefaultTTL      = 60 * time.Second
+	DefaultKeyPrefix        = "yauth:"
+	DefaultDefaultTTL       = 60 * time.Second
 	DefaultNegativeCacheTTL = 60 * time.Second
 )
 

@@ -1,7 +1,7 @@
 package ssosaml
 
 import (
-	"github.com/yackey-labs/yauth-go/humaapi"
+	"github.com/yackey-labs/yauth/humaapi"
 
 	"bytes"
 	"compress/flate"
@@ -19,9 +19,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/yackey-labs/yauth-go/auth"
-	"github.com/yackey-labs/yauth-go/domain"
-	"github.com/yackey-labs/yauth-go/repo/memrepo"
+	"github.com/yackey-labs/yauth/auth"
+	"github.com/yackey-labs/yauth/domain"
+	"github.com/yackey-labs/yauth/repo/memrepo"
 )
 
 // signedRedirectLogoutRequest builds a SAML HTTP-Redirect-binding LogoutRequest

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yackey-labs/yauth-go/domain"
+	"github.com/yackey-labs/yauth/domain"
 )
 
 // RenderedEvent is a wire-ready event body. ContentType is consumed by

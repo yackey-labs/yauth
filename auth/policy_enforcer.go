@@ -26,7 +26,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yackey-labs/yauth-go/domain"
+	"github.com/yackey-labs/yauth/domain"
 )
 
 // AuthMethod constants used by per-org allow-lists. These are

@@ -3,7 +3,7 @@ package yauth
 import (
 	"context"
 
-	"github.com/yackey-labs/yauth-go/plugin"
+	"github.com/yackey-labs/yauth/plugin"
 )
 
 // Shutdown drains every registered plugin that implements

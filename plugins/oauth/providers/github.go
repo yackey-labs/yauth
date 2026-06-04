@@ -12,7 +12,7 @@ import (
 	"golang.org/x/oauth2"
 	githuboauth "golang.org/x/oauth2/github"
 
-	"github.com/yackey-labs/yauth-go/plugins/oauth"
+	"github.com/yackey-labs/yauth/plugins/oauth"
 )
 
 // GitHubConfig configures a GitHub OAuth provider.

@@ -4,8 +4,8 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
-	yauth "github.com/yackey-labs/yauth-go"
-	"github.com/yackey-labs/yauth-go/yauthcfg"
+	yauth "github.com/yackey-labs/yauth"
+	"github.com/yackey-labs/yauth/yauthcfg"
 )
 
 func newMigrateCmd() *cobra.Command {

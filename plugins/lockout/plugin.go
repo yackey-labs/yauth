@@ -131,12 +131,12 @@ func (p *lockoutPlugin) Name() string { return "lockout" }
 // host (so login attempts are intercepted) and mounts the unlock routes as
 // huma-native typed operations.
 //
-// The two public POST routes (account/unlock, account/request-unlock) parse a
-// JSON body with the strict DisallowUnknownFields + 1 MiB-cap decoder, so they
-// pair StashHTTPHuma with the existing decodeJSON helper to stay byte-identical
-// to the legacy handlers; they carry Security:[] (public). The two admin routes
-// (force-unlock, lockout/state) are gated by RequireAdminHuma — force-unlock
-// recovers its {id} via a typed path input, and lockout/state takes no input.
+// The two public POST routes (account/unlock, account/request-unlock) take a
+// native huma typed Body, so huma parses + validates the JSON and the request
+// schema auto-derives (unknown fields / malformed body → 422); they carry
+// Security:[] (public). The two admin routes (force-unlock, lockout/state) are
+// gated by RequireAdminHuma — force-unlock recovers its {id} via a typed path
+// input, and lockout/state takes no input.
 //
 // The mux is retained in the signature for plugins that still register raw
 // net/http routes; lockout no longer uses it.

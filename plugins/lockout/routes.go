@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -24,30 +23,6 @@ import (
 )
 
 const unlockTokenBytes = 32
-
-// decodeJSON parses r.Body into v, enforcing a 1 MiB body cap with strict
-// DisallowUnknownFields semantics. The two body-parsing routes call it on the
-// *http.Request stashed onto the operation context by StashHTTPHuma — the
-// input structs carry NO huma Body field, so huma never consumes the body and
-// this decoder stays byte-identical to the legacy net/http handlers (including
-// the INVALID_REQUEST error message produced from err.Error()).
-func decodeJSON(r *http.Request, v any) error {
-	r.Body = http.MaxBytesReader(nil, r.Body, 1<<20)
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	return dec.Decode(v)
-}
-
-// reqFromCtx returns the *http.Request stashed by StashHTTPHuma. On a route in
-// a chain that stashes it the request is always present; the nil guard keeps
-// the helper safe.
-func reqFromCtx(ctx context.Context) (*http.Request, error) {
-	r := middleware.HTTPRequestFromContext(ctx)
-	if r == nil {
-		return nil, huma.Error500InternalServerError("request unavailable")
-	}
-	return r, nil
-}
 
 func validEmail(s string) bool {
 	s = strings.TrimSpace(s)
@@ -81,8 +56,17 @@ func buildLink(base, raw string) string {
 
 // --- POST /account/unlock (public) ---------------------------------------
 
-type unlockRequest struct {
-	Token string `json:"token"`
+type lockoutUnlockRequest struct {
+	Token string   `json:"token"`
+	_     struct{} `json:"-" additionalProperties:"false"`
+}
+
+// lockoutUnlockInput is the huma-native request: a typed JSON body. huma
+// parses + validates it (rejecting unknown fields via
+// additionalProperties:false → 422), so the request schema auto-derives — no
+// StashHTTPHuma bridge.
+type lockoutUnlockInput struct {
+	Body lockoutUnlockRequest
 }
 
 type unlockResponse struct {
@@ -96,10 +80,10 @@ type unlockOutput struct {
 const unlockMessage = "Account unlocked."
 
 // registerUnlock wires POST {prefix}/account/unlock as a huma-native public
-// operation. StashHTTPHuma threads the raw request so the strict decodeJSON
-// (DisallowUnknownFields, 1 MiB cap) and the trim/required-token checks stay
-// byte-identical to the legacy handler. Errors are RFC 9457 problem+json
-// (400 on a bad body/missing token, 401 on an invalid token).
+// operation. The request body is a native huma typed Body, so huma parses +
+// validates it (unknown fields / malformed body → 422) and the request schema
+// auto-derives. The trim/required-token check (empty token → 400) and the
+// invalid-token 401 stay exactly as before.
 func (p *lockoutPlugin) registerUnlock(host plugin.PluginHost, api huma.API, prefix string) {
 	huma.Register(api, huma.Operation{
 		OperationID: "lockout-unlock",
@@ -108,17 +92,8 @@ func (p *lockoutPlugin) registerUnlock(host plugin.PluginHost, api huma.API, pre
 		Summary:     "Consume an unlock token to clear an account lock",
 		Tags:        []string{"lockout"},
 		Security:    []map[string][]string{}, // explicitly public
-		Middlewares: huma.Middlewares{middleware.StashHTTPHuma(api)},
-	}, func(ctx context.Context, _ *struct{}) (*unlockOutput, error) {
-		r, err := reqFromCtx(ctx)
-		if err != nil {
-			return nil, err
-		}
-		var req unlockRequest
-		if err := decodeJSON(r, &req); err != nil {
-			return nil, huma.Error400BadRequest(err.Error())
-		}
-		raw := strings.TrimSpace(req.Token)
+	}, func(ctx context.Context, in *lockoutUnlockInput) (*unlockOutput, error) {
+		raw := strings.TrimSpace(in.Body.Token)
 		if raw == "" {
 			return nil, huma.Error400BadRequest("token is required")
 		}
@@ -145,8 +120,16 @@ func (p *lockoutPlugin) registerUnlock(host plugin.PluginHost, api huma.API, pre
 
 // --- POST /account/request-unlock (public) -------------------------------
 
-type unlockRequestRequest struct {
-	Email string `json:"email"`
+type lockoutUnlockReqRequest struct {
+	Email string   `json:"email"`
+	_     struct{} `json:"-" additionalProperties:"false"`
+}
+
+// lockoutUnlockReqInput is the huma-native request: a typed JSON body. huma
+// parses + validates it (unknown fields / malformed body → 422); the request
+// schema auto-derives — no StashHTTPHuma bridge.
+type lockoutUnlockReqInput struct {
+	Body lockoutUnlockReqRequest
 }
 
 type unlockRequestResponse struct {
@@ -160,11 +143,11 @@ type unlockRequestOutput struct {
 const unlockRequestMessage = "If the email exists, an unlock link has been sent."
 
 // registerUnlockRequest wires POST {prefix}/account/request-unlock as a
-// huma-native public operation. It always responds 200 for an existing-or-
-// unknown email (enumeration resistance) and only 400 on a malformed body or
-// an email without '@'. StashHTTPHuma threads the raw request for the strict
-// decode; the body-shaped success/error semantics are byte-identical to the
-// legacy handler.
+// huma-native public operation. The request body is a native huma typed Body,
+// so huma parses + validates it (unknown fields / malformed body → 422). It
+// always responds 200 for an existing-or-unknown email (enumeration
+// resistance) and only 400 on an email without '@'; the body-shaped
+// success/error semantics are otherwise unchanged.
 func (p *lockoutPlugin) registerUnlockRequest(host plugin.PluginHost, api huma.API, prefix string) {
 	huma.Register(api, huma.Operation{
 		OperationID: "lockout-unlock-request",
@@ -174,16 +157,8 @@ func (p *lockoutPlugin) registerUnlockRequest(host plugin.PluginHost, api huma.A
 		Description: "Always responds 200 to prevent user enumeration.",
 		Tags:        []string{"lockout"},
 		Security:    []map[string][]string{}, // explicitly public
-		Middlewares: huma.Middlewares{middleware.StashHTTPHuma(api)},
-	}, func(ctx context.Context, _ *struct{}) (*unlockRequestOutput, error) {
-		r, err := reqFromCtx(ctx)
-		if err != nil {
-			return nil, err
-		}
-		var req unlockRequestRequest
-		if err := decodeJSON(r, &req); err != nil {
-			return nil, huma.Error400BadRequest(err.Error())
-		}
+	}, func(ctx context.Context, in *lockoutUnlockReqInput) (*unlockRequestOutput, error) {
+		req := in.Body
 		req.Email = strings.TrimSpace(strings.ToLower(req.Email))
 		if !validEmail(req.Email) {
 			return nil, huma.Error400BadRequest("email must contain '@'")

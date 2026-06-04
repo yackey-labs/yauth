@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -37,23 +36,20 @@ const (
 
 // --- response shapes ----------------------------------------------------
 
-// emptyOutput carries no body. Handlers wired with StashHTTPHuma write their
-// success response directly onto the stashed http.ResponseWriter — their bodies
-// carry WebAuthn options (*protocol.CredentialCreation / *CredentialAssertion)
-// or a user record whose fields may contain HTML-escapable characters, so the
-// legacy default-escaping json.Encoder output (with its "charset=utf-8" content
-// type) is NOT byte-identical to huma's escape-disabled Body marshaler — then
-// return this empty output so huma adds no body of its own. The delete route
-// reuses it to drive a 204 via DefaultStatus.
+// emptyOutput carries no body. The delete route returns it to drive a 204 via
+// DefaultStatus; the list route (still wired with StashHTTPHuma) writes its
+// success response directly onto the stashed http.ResponseWriter and returns
+// this so huma adds no body of its own.
 type emptyOutput struct{}
 
-// passkeyInput is the zero-field input for the StashHTTPHuma routes: bodies are
-// decoded manually from the stashed *http.Request (strict DisallowUnknownFields
-// decode → byte-identical 400 errors), so huma never consumes the body.
+// passkeyInput is the zero-field input for the no-body routes: register/begin
+// (RequireAuth, no request body) and list (a GET whose pagination is parsed
+// from the stashed *http.Request). huma never consumes a body for either.
 type passkeyInput struct{}
 
 // reqRespFromCtx recovers the *http.Request and http.ResponseWriter stashed by
-// StashHTTPHuma. Used by the routes wired with StashHTTPHuma; both are always
+// StashHTTPHuma. Used by login/finish (which sets a session cookie on the
+// writer) and list (which writes its paginated body directly); both are always
 // present there and the guard keeps it safe.
 func reqRespFromCtx(ctx context.Context) (*http.Request, http.ResponseWriter, error) {
 	r := middleware.HTTPRequestFromContext(ctx)
@@ -68,13 +64,6 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
-}
-
-func decodeJSON(r *http.Request, v any) error {
-	r.Body = http.MaxBytesReader(nil, r.Body, 1<<20)
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	return dec.Decode(v)
 }
 
 func cookieOptionsFromHost(host plugin.PluginHost, r *http.Request, maxAge int) auth.CookieOptions {
@@ -115,23 +104,27 @@ func loadCredentialsForUser(ctx context.Context, r repo.Repository, userID strin
 
 // --- /passkeys/register/begin -------------------------------------------
 
-// registerBeginResponse mirrors the Rust spec: returns the WebAuthn
+// passkeyRegisterBeginResponse mirrors the Rust spec: returns the WebAuthn
 // CredentialCreation options at the top level, with a challenge_id used
 // to correlate with the matching /finish call.
-type registerBeginResponse struct {
+type passkeyRegisterBeginResponse struct {
 	ChallengeID string                       `json:"challenge_id"`
 	Options     *protocol.CredentialCreation `json:"options"`
 }
 
-func (p *passkeyPlugin) handleRegisterBegin(host plugin.PluginHost) func(context.Context, *passkeyInput) (*emptyOutput, error) {
-	return func(ctx context.Context, _ *passkeyInput) (*emptyOutput, error) {
+// passkeyRegisterBeginOutput is the huma-native typed output. The WebAuthn
+// options contain '&'/'<'/'>' in some fields; huma's escape-disabled Body
+// marshaler is semantically identical to the legacy escaping encoder, so a
+// native Output is safe here (no Set-Cookie forces the raw writer).
+type passkeyRegisterBeginOutput struct {
+	Body passkeyRegisterBeginResponse
+}
+
+func (p *passkeyPlugin) handleRegisterBegin(host plugin.PluginHost) func(context.Context, *passkeyInput) (*passkeyRegisterBeginOutput, error) {
+	return func(ctx context.Context, _ *passkeyInput) (*passkeyRegisterBeginOutput, error) {
 		au, ok := middleware.AuthUserFromContext(ctx)
 		if !ok || au == nil {
 			return nil, huma.Error401Unauthorized("not authenticated")
-		}
-		_, w, err := reqRespFromCtx(ctx)
-		if err != nil {
-			return nil, err
 		}
 		repoRef := host.Repo()
 
@@ -155,39 +148,46 @@ func (p *passkeyPlugin) handleRegisterBegin(host plugin.PluginHost) func(context
 			return nil, huma.Error500InternalServerError("unable to store challenge")
 		}
 
-		writeJSON(w, http.StatusOK, registerBeginResponse{ChallengeID: reqID, Options: options})
-		return &emptyOutput{}, nil
+		return &passkeyRegisterBeginOutput{Body: passkeyRegisterBeginResponse{ChallengeID: reqID, Options: options}}, nil
 	}
 }
 
 // --- /passkeys/register/finish ------------------------------------------
 
-type registerFinishRequest struct {
-	ChallengeID string          `json:"challenge_id"`
+// passkeyRegisterFinishRequest is the native huma Body for register/finish.
+// challenge_id and credential are validated to a business-400 below, so they
+// carry omitempty (a missing field must reach that check, not a huma 422); the
+// sentinel rejects unknown fields with a 422. Credential is json.RawMessage so
+// the inner attestation JSON object binds verbatim (huma schemas it as an open
+// schema, no base64 coercion).
+type passkeyRegisterFinishRequest struct {
+	ChallengeID string          `json:"challenge_id,omitempty"`
 	Name        string          `json:"name,omitempty"`
-	Credential  json.RawMessage `json:"credential"`
+	Credential  json.RawMessage `json:"credential,omitempty"`
+	_           struct{}        `json:"-" additionalProperties:"false"`
 }
 
-type registerFinishResponse struct {
+type passkeyRegisterFinishInput struct {
+	Body passkeyRegisterFinishRequest
+}
+
+type passkeyRegisterFinishResponse struct {
 	ID        string    `json:"id"`
 	Name      string    `json:"name"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
-func (p *passkeyPlugin) handleRegisterFinish(host plugin.PluginHost) func(context.Context, *passkeyInput) (*emptyOutput, error) {
-	return func(ctx context.Context, _ *passkeyInput) (*emptyOutput, error) {
+type passkeyRegisterFinishOutput struct {
+	Body passkeyRegisterFinishResponse
+}
+
+func (p *passkeyPlugin) handleRegisterFinish(host plugin.PluginHost) func(context.Context, *passkeyRegisterFinishInput) (*passkeyRegisterFinishOutput, error) {
+	return func(ctx context.Context, in *passkeyRegisterFinishInput) (*passkeyRegisterFinishOutput, error) {
 		au, ok := middleware.AuthUserFromContext(ctx)
 		if !ok || au == nil {
 			return nil, huma.Error401Unauthorized("not authenticated")
 		}
-		r, w, err := reqRespFromCtx(ctx)
-		if err != nil {
-			return nil, err
-		}
-		var req registerFinishRequest
-		if err := decodeJSON(r, &req); err != nil {
-			return nil, huma.Error400BadRequest(err.Error())
-		}
+		req := in.Body
 		if req.ChallengeID == "" || len(req.Credential) == 0 {
 			return nil, huma.Error400BadRequest("challenge_id and credential are required")
 		}
@@ -247,49 +247,53 @@ func (p *passkeyPlugin) handleRegisterFinish(host plugin.PluginHost) func(contex
 			return nil, huma.Error500InternalServerError("unable to store credential")
 		}
 
-		writeJSON(w, http.StatusCreated, registerFinishResponse{
+		return &passkeyRegisterFinishOutput{Body: passkeyRegisterFinishResponse{
 			ID:        credID,
 			Name:      name,
 			CreatedAt: now,
-		})
-		return &emptyOutput{}, nil
+		}}, nil
 	}
 }
 
 // --- /passkey/login/begin -----------------------------------------------
 
-type loginBeginRequest struct {
-	Email string `json:"email,omitempty"`
+type passkeyLoginBeginRequest struct {
+	Email string   `json:"email,omitempty"`
+	_     struct{} `json:"-" additionalProperties:"false"`
 }
 
-type loginBeginResponse struct {
+// passkeyLoginBeginInput is the native huma input. Body is a POINTER so a
+// missing/empty request body is allowed (huma leaves it nil) — the discoverable
+// flow posts no body. A non-pointer Body would 422 on an empty body.
+type passkeyLoginBeginInput struct {
+	Body *passkeyLoginBeginRequest
+}
+
+type passkeyLoginBeginResponse struct {
 	ChallengeID string                        `json:"challenge_id"`
 	Options     *protocol.CredentialAssertion `json:"options"`
 }
 
-func (p *passkeyPlugin) handleLoginBegin(host plugin.PluginHost) func(context.Context, *passkeyInput) (*emptyOutput, error) {
-	return func(ctx context.Context, _ *passkeyInput) (*emptyOutput, error) {
-		r, w, err := reqRespFromCtx(ctx)
-		if err != nil {
-			return nil, err
-		}
-		var req loginBeginRequest
-		// Body is optional; allow empty body for the discoverable flow.
-		if r.ContentLength != 0 {
-			if err := decodeJSON(r, &req); err != nil && !errors.Is(err, io.EOF) {
-				return nil, huma.Error400BadRequest(err.Error())
-			}
-		}
+type passkeyLoginBeginOutput struct {
+	Body passkeyLoginBeginResponse
+}
+
+func (p *passkeyPlugin) handleLoginBegin(host plugin.PluginHost) func(context.Context, *passkeyLoginBeginInput) (*passkeyLoginBeginOutput, error) {
+	return func(ctx context.Context, in *passkeyLoginBeginInput) (*passkeyLoginBeginOutput, error) {
 		repoRef := host.Repo()
-		req.Email = strings.TrimSpace(strings.ToLower(req.Email))
+		var email string
+		if in.Body != nil {
+			email = strings.TrimSpace(strings.ToLower(in.Body.Email))
+		}
 
 		var (
 			options *protocol.CredentialAssertion
 			sess    *webauthn.SessionData
+			err     error
 		)
 
-		if req.Email != "" {
-			user, lookupErr := repoRef.GetUserByEmail(ctx, req.Email)
+		if email != "" {
+			user, lookupErr := repoRef.GetUserByEmail(ctx, email)
 			if lookupErr != nil && !errors.Is(lookupErr, yautherr.ErrNotFound) {
 				return nil, huma.Error500InternalServerError("unable to look up user")
 			}
@@ -320,25 +324,40 @@ func (p *passkeyPlugin) handleLoginBegin(host plugin.PluginHost) func(context.Co
 			return nil, huma.Error500InternalServerError("unable to store challenge")
 		}
 
-		writeJSON(w, http.StatusOK, loginBeginResponse{ChallengeID: reqID, Options: options})
-		return &emptyOutput{}, nil
+		return &passkeyLoginBeginOutput{Body: passkeyLoginBeginResponse{ChallengeID: reqID, Options: options}}, nil
 	}
 }
 
 // --- /passkey/login/finish ----------------------------------------------
 
-type loginFinishRequest struct {
-	ChallengeID string          `json:"challenge_id"`
-	Credential  json.RawMessage `json:"credential"`
+// passkeyLoginFinishRequest is the native huma Body. challenge_id and
+// credential are validated to a business-400 below, so they carry omitempty (a
+// missing field must reach that check, not a huma 422); the sentinel rejects
+// unknown fields with a 422. Credential is json.RawMessage so the inner
+// assertion JSON object binds verbatim.
+type passkeyLoginFinishRequest struct {
+	ChallengeID string          `json:"challenge_id,omitempty"`
+	Credential  json.RawMessage `json:"credential,omitempty"`
+	_           struct{}        `json:"-" additionalProperties:"false"`
 }
 
-// loginFinishResponse wraps the authenticated user under `user`. The
-// session cookie is set in the response headers.
-type loginFinishResponse struct {
-	User loginFinishUser `json:"user"`
+type passkeyLoginFinishInput struct {
+	Body passkeyLoginFinishRequest
 }
 
-type loginFinishUser struct {
+// passkeyLoginFinishResponse wraps the authenticated user under `user`. The
+// session cookie is set on the stashed response writer.
+type passkeyLoginFinishResponse struct {
+	User passkeyLoginFinishUser `json:"user"`
+}
+
+// passkeyLoginFinishOutput wraps the response body so huma marshals it after the
+// handler sets the session cookie on the stashed writer.
+type passkeyLoginFinishOutput struct {
+	Body passkeyLoginFinishResponse
+}
+
+type passkeyLoginFinishUser struct {
 	ID            string  `json:"id"`
 	Email         string  `json:"email"`
 	DisplayName   *string `json:"display_name,omitempty"`
@@ -346,9 +365,9 @@ type loginFinishUser struct {
 	Role          string  `json:"role"`
 }
 
-func toLoginFinishResponse(u domain.User) loginFinishResponse {
-	return loginFinishResponse{
-		User: loginFinishUser{
+func toLoginFinishResponse(u domain.User) passkeyLoginFinishResponse {
+	return passkeyLoginFinishResponse{
+		User: passkeyLoginFinishUser{
 			ID:            u.ID,
 			Email:         u.Email,
 			DisplayName:   u.DisplayName,
@@ -358,16 +377,13 @@ func toLoginFinishResponse(u domain.User) loginFinishResponse {
 	}
 }
 
-func (p *passkeyPlugin) handleLoginFinish(host plugin.PluginHost) func(context.Context, *passkeyInput) (*emptyOutput, error) {
-	return func(ctx context.Context, _ *passkeyInput) (*emptyOutput, error) {
+func (p *passkeyPlugin) handleLoginFinish(host plugin.PluginHost) func(context.Context, *passkeyLoginFinishInput) (*passkeyLoginFinishOutput, error) {
+	return func(ctx context.Context, in *passkeyLoginFinishInput) (*passkeyLoginFinishOutput, error) {
 		r, w, err := reqRespFromCtx(ctx)
 		if err != nil {
 			return nil, err
 		}
-		var req loginFinishRequest
-		if err := decodeJSON(r, &req); err != nil {
-			return nil, huma.Error400BadRequest(err.Error())
-		}
+		req := in.Body
 		if req.ChallengeID == "" || len(req.Credential) == 0 {
 			return nil, huma.Error400BadRequest("challenge_id and credential are required")
 		}
@@ -456,8 +472,7 @@ func (p *passkeyPlugin) handleLoginFinish(host plugin.PluginHost) func(context.C
 			cookieOptionsFromHost(host, r, int(host.SessionTTL().Seconds())),
 			raw,
 		))
-		writeJSON(w, http.StatusOK, toLoginFinishResponse(*matchedUser))
-		return &emptyOutput{}, nil
+		return &passkeyLoginFinishOutput{Body: toLoginFinishResponse(*matchedUser)}, nil
 	}
 }
 

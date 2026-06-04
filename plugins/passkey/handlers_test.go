@@ -118,7 +118,7 @@ func TestRegisterBegin_ReturnsChallengeAndOptions(t *testing.T) {
 		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
 
-	var resp registerBeginResponse
+	var resp passkeyRegisterBeginResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestLoginBegin_DiscoverableFlowWithEmptyBody(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	var resp loginBeginResponse
+	var resp passkeyLoginBeginResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -191,7 +191,7 @@ func TestLoginBegin_WithEmail_AllowListsKnownCredentials(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	var resp loginBeginResponse
+	var resp passkeyLoginBeginResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -208,6 +208,49 @@ func TestLoginBegin_UnknownEmailFallsThroughToDiscoverable(t *testing.T) {
 	rec := h.do(t, "POST", "/passkey/login/begin", `{"email":"nobody@example.com"}`, nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+}
+
+// TestRegisterFinish_CredentialBindsAsJSONObject guards the json.RawMessage
+// credential field: a credential sent as a JSON OBJECT must bind natively (huma
+// schemas json.RawMessage as an open schema, no base64 coercion) and reach the
+// business logic — here the bogus challenge yields a 400, NOT a huma 422. A 422
+// would mean huma rejected the object body before the handler ran.
+func TestRegisterFinish_CredentialBindsAsJSONObject(t *testing.T) {
+	h, fr, user := newHarness(t)
+	cookie := mustSession(t, fr, user.ID)
+
+	body := `{"challenge_id":"bogus","credential":{"id":"abc","type":"public-key"}}`
+	rec := h.do(t, "POST", "/passkeys/register/finish", body, cookie)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected business 400 (challenge not found), got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestLoginFinish_CredentialBindsAsJSONObject is the login-side analogue: a
+// JSON-object credential must reach the business-400 (bogus challenge), not a
+// huma 422.
+func TestLoginFinish_CredentialBindsAsJSONObject(t *testing.T) {
+	h, _, _ := newHarness(t)
+
+	body := `{"challenge_id":"bogus","credential":{"id":"abc","type":"public-key"}}`
+	rec := h.do(t, "POST", "/passkey/login/finish", body, nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected business 400 (challenge not found), got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestRegisterFinish_UnknownFieldRejected confirms the native Body rejects an
+// unknown field with a 422 (additionalProperties:false), the huma-native
+// replacement for the old DisallowUnknownFields 400.
+func TestRegisterFinish_UnknownFieldRejected(t *testing.T) {
+	h, fr, user := newHarness(t)
+	cookie := mustSession(t, fr, user.ID)
+
+	body := `{"challenge_id":"x","credential":{"id":"a"},"bogus_field":1}`
+	rec := h.do(t, "POST", "/passkeys/register/finish", body, cookie)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 for unknown field, got %d body=%s", rec.Code, rec.Body.String())
 	}
 }
 

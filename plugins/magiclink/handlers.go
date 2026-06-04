@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -29,37 +28,6 @@ import (
 // random bytes encoded as base64url is 43 characters, providing ~256 bits
 // of entropy.
 const magicTokenBytes = 32
-
-// magicGuards is the per-operation middleware chain shared by both magic-link
-// routes. The flow is public (no auth), so the only middleware stashes the raw
-// request/writer onto the operation context: /send reuses the strict body
-// decoder and /verify additionally needs the writer for its Set-Cookie.
-func magicGuards(api huma.API) huma.Middlewares {
-	return huma.Middlewares{middleware.StashHTTPHuma(api)}
-}
-
-// reqFromCtx returns the *http.Request stashed by StashHTTPHuma. On a magic-link
-// route it is always present; the nil guard keeps the helper safe and maps an
-// absent request to a 500 problem+json.
-func reqFromCtx(ctx context.Context) (*http.Request, error) {
-	r := middleware.HTTPRequestFromContext(ctx)
-	if r == nil {
-		return nil, huma.Error500InternalServerError("request unavailable")
-	}
-	return r, nil
-}
-
-// decodeJSON parses r.Body into v, enforcing a 1 MiB body cap. Migrated
-// handlers call it on the *http.Request stashed onto the operation context by
-// StashHTTPHuma — the input structs carry NO huma Body field, so huma never
-// consumes the body and this strict decoder (DisallowUnknownFields) stays
-// byte-identical to the legacy net/http handlers.
-func decodeJSON(r *http.Request, v any) error {
-	r.Body = http.MaxBytesReader(nil, r.Body, 1<<20)
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	return dec.Decode(v)
-}
 
 func validEmail(s string) bool {
 	s = strings.TrimSpace(s)
@@ -121,8 +89,18 @@ func buildLink(base, raw string) string {
 
 // --- /magic-link/send -----------------------------------------------------
 
-type sendRequest struct {
-	Email string `json:"email"`
+type magicSendRequest struct {
+	Email string   `json:"email,omitempty"`
+	_     struct{} `json:"-" additionalProperties:"false"`
+}
+
+// magicSendInput is the huma-native request body for /magic-link/send. huma
+// parses + validates it (unknown fields → 422) and the OpenAPI request schema
+// auto-derives — no StashHTTPHuma bridge. Email carries omitempty so a missing
+// field falls through to the business 400 ("email must contain '@'") rather
+// than huma's required-field 422; the enumeration-safe semantics are unchanged.
+type magicSendInput struct {
+	Body magicSendRequest
 }
 
 // sendResponse mirrors the Rust shape — a generic message that does not
@@ -140,10 +118,13 @@ type sendOutput struct {
 }
 
 // registerSend wires POST {prefix}/magic-link/send as a public huma-native
-// operation. It REUSES the legacy strict body decode (via the stashed request),
-// the enumeration-resistant logic, token issuance, and mailer dispatch; only the
-// transport changes. Every success path returns the same generic 200 body so the
-// response never admits whether the email is registered.
+// operation. The request body is a native huma typed Body, so huma parses +
+// validates it and the OpenAPI request schema auto-derives; unknown fields are
+// rejected (422). It REUSES the enumeration-resistant logic, token issuance, and
+// mailer dispatch; only the transport changes. Every success path returns the
+// same generic 200 body so the response never admits whether the email is
+// registered. No StashHTTPHuma bridge — /send needs neither the raw request nor
+// the writer.
 func (p *magicLinkPlugin) registerSend(host plugin.PluginHost, api huma.API, prefix string) {
 	huma.Register(api, huma.Operation{
 		OperationID: "magicLinkSend",
@@ -152,17 +133,8 @@ func (p *magicLinkPlugin) registerSend(host plugin.PluginHost, api huma.API, pre
 		Summary:     "Request a single-use magic-link login email",
 		Tags:        []string{"magic-link"},
 		Security:    []map[string][]string{}, // explicitly public
-		Middlewares: magicGuards(api),
-	}, func(ctx context.Context, _ *struct{}) (*sendOutput, error) {
-		r, err := reqFromCtx(ctx)
-		if err != nil {
-			return nil, err
-		}
-
-		var req sendRequest
-		if err := decodeJSON(r, &req); err != nil {
-			return nil, huma.Error400BadRequest(err.Error())
-		}
+	}, func(ctx context.Context, in *magicSendInput) (*sendOutput, error) {
+		req := in.Body
 		req.Email = strings.TrimSpace(strings.ToLower(req.Email))
 		if !validEmail(req.Email) {
 			return nil, huma.Error400BadRequest("email must contain '@'")
@@ -173,7 +145,7 @@ func (p *magicLinkPlugin) registerSend(host plugin.PluginHost, api huma.API, pre
 
 		// Look up the user but DO NOT branch the response on the result —
 		// /send always returns the same generic 200 body.
-		_, err = repo.GetUserByEmail(ctx, req.Email)
+		_, err := repo.GetUserByEmail(ctx, req.Email)
 		userExists := err == nil
 		if err != nil && !errors.Is(err, yautherr.ErrNotFound) {
 			// Backend failure: we still respond 200 to preserve enumeration
@@ -212,8 +184,19 @@ func (p *magicLinkPlugin) registerSend(host plugin.PluginHost, api huma.API, pre
 
 // --- /magic-link/verify ---------------------------------------------------
 
-type verifyRequest struct {
-	Token string `json:"token"`
+type magicVerifyRequest struct {
+	Token string   `json:"token,omitempty"`
+	_     struct{} `json:"-" additionalProperties:"false"`
+}
+
+// magicVerifyInput is the huma-native request body for /magic-link/verify. huma
+// parses + validates it (unknown fields → 422). /verify still pairs with
+// StashHTTPHuma because it needs the raw *http.Request (RequestIP / User-Agent)
+// and the http.ResponseWriter (to set the session cookie); the response body
+// itself is a typed huma Body output. Token carries omitempty so a missing field
+// falls through to the business 400 ("token is required") rather than a 422.
+type magicVerifyInput struct {
+	Body magicVerifyRequest
 }
 
 // verifyResponse wraps the verified user under `user`. The session
@@ -263,22 +246,15 @@ func (p *magicLinkPlugin) registerVerify(host plugin.PluginHost, api huma.API, p
 		Summary:     "Exchange a magic-link token for a session",
 		Tags:        []string{"magic-link"},
 		Security:    []map[string][]string{}, // explicitly public
-		Middlewares: magicGuards(api),
-	}, func(ctx context.Context, _ *struct{}) (*verifyOutput, error) {
-		r, err := reqFromCtx(ctx)
-		if err != nil {
-			return nil, err
-		}
+		Middlewares: huma.Middlewares{middleware.StashHTTPHuma(api)},
+	}, func(ctx context.Context, in *magicVerifyInput) (*verifyOutput, error) {
+		r := middleware.HTTPRequestFromContext(ctx)
 		w := middleware.HTTPResponseFromContext(ctx)
-		if w == nil {
-			return nil, huma.Error500InternalServerError("response unavailable")
+		if r == nil || w == nil {
+			return nil, huma.Error500InternalServerError("request unavailable")
 		}
 
-		var req verifyRequest
-		if err := decodeJSON(r, &req); err != nil {
-			return nil, huma.Error400BadRequest(err.Error())
-		}
-		raw := strings.TrimSpace(req.Token)
+		raw := strings.TrimSpace(in.Body.Token)
 		if raw == "" {
 			return nil, huma.Error400BadRequest("token is required")
 		}

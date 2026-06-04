@@ -123,14 +123,18 @@ func TestHandleCreate_RejectsPastExpiry(t *testing.T) {
 	defer srv.Close()
 
 	past := time.Now().UTC().Add(-time.Hour)
+	// `expires_at` is not a field on createRequest — huma's native body
+	// validation (additionalProperties:false) rejects the unknown field with
+	// 422 Unprocessable Entity (the RFC-standard validation status), replacing
+	// the old hand-rolled strict-decode 400.
 	body, _ := json.Marshal(map[string]any{"name": "expired", "expires_at": past})
 	res, err := http.Post(srv.URL+"/api-keys", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("post: %v", err)
 	}
 	defer res.Body.Close()
-	if res.StatusCode != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", res.StatusCode)
+	if res.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422, got %d", res.StatusCode)
 	}
 }
 

@@ -69,14 +69,6 @@ func decodeScopes(raw json.RawMessage) []string {
 	return out
 }
 
-// decodeJSON parses r.Body into v with a 1 MiB cap.
-func decodeJSON(r *http.Request, v any) error {
-	r.Body = http.MaxBytesReader(nil, r.Body, 1<<20)
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	return dec.Decode(v)
-}
-
 // --- GET /api-keys ------------------------------------------------------
 
 // listResponse wraps the GET /api-keys collection with pagination
@@ -197,6 +189,14 @@ type createRequest struct {
 	Name          string   `json:"name"`
 	Scopes        []string `json:"scopes,omitempty"`
 	ExpiresInDays *int     `json:"expires_in_days,omitempty"`
+	_             struct{} `json:"-" additionalProperties:"false"`
+}
+
+// createInput is the huma-native request: a typed JSON body. huma parses +
+// validates it (and rejects unknown fields via additionalProperties:false),
+// so the spec auto-derives the request schema — no StashHTTPHuma bridge.
+type createInput struct {
+	Body createRequest
 }
 
 // createResponse splits the persisted key metadata from the one-time
@@ -216,11 +216,9 @@ type createOutput struct {
 }
 
 // registerCreate wires POST /api-keys as a huma-native operation guarded by
-// RequireAuthHuma. It pairs with StashHTTPHuma and reuses the strict decodeJSON
-// (DisallowUnknownFields, 1 MiB cap) on the stashed request so the request body
-// parsing — including the 400 on unknown/malformed fields — stays
-// byte-identical to the legacy handler. The input struct carries NO huma Body
-// field, so huma never consumes the body itself.
+// RequireAuthHuma. The request body is a native huma typed Body, so huma
+// parses + validates it and the OpenAPI request schema auto-derives;
+// additionalProperties:false rejects unknown fields (422).
 func (p *apiKeyPlugin) registerCreate(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
 	huma.Register(api, huma.Operation{
 		OperationID:   "apikey-create",
@@ -230,21 +228,13 @@ func (p *apiKeyPlugin) registerCreate(host plugin.PluginHost, api huma.API, mw *
 		Tags:          []string{"api-key"},
 		Security:      apiKeySecurity(),
 		DefaultStatus: http.StatusCreated,
-		Middlewares:   huma.Middlewares{middleware.StashHTTPHuma(api), middleware.RequireAuthHuma(api, mw)},
-	}, func(ctx context.Context, _ *struct{}) (*createOutput, error) {
+		Middlewares:   huma.Middlewares{middleware.RequireAuthHuma(api, mw)},
+	}, func(ctx context.Context, in *createInput) (*createOutput, error) {
 		au, ok := middleware.AuthUserFromContext(ctx)
 		if !ok || au == nil {
 			return nil, huma.Error401Unauthorized("not authenticated")
 		}
-		r, err := reqFromCtx(ctx)
-		if err != nil {
-			return nil, err
-		}
-
-		var req createRequest
-		if err := decodeJSON(r, &req); err != nil {
-			return nil, huma.Error400BadRequest(err.Error())
-		}
+		req := in.Body
 		req.Name = strings.TrimSpace(req.Name)
 		if req.Name == "" {
 			return nil, huma.Error400BadRequest("name is required")

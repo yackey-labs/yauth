@@ -41,6 +41,7 @@ import (
 	"time"
 
 	"github.com/crewjam/saml"
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/google/uuid"
 
 	"github.com/yackey-labs/yauth-go/auth"
@@ -50,6 +51,44 @@ import (
 	"github.com/yackey-labs/yauth-go/plugin"
 	"github.com/yackey-labs/yauth-go/yautherr"
 )
+
+// flowOutput is the response shape for the huma-native SAML protocol + XML
+// operations (login/acs/logout/slo/metadata.xml). These routes have
+// binding-specific wire contracts (302 redirects with RelayState, the
+// {"error":{code,message}} envelope, raw XML, text/plain 404/SLO errors) that
+// must stay byte-identical to the pre-huma net/http handlers, so the body is a
+// raw []byte and the status/headers are carried as fields. huma performs the
+// single status+body write; Set-Cookie and any header with no field here are
+// mutated directly on the http.ResponseWriter stashed by StashHTTPHuma (those
+// mutations land before huma's WriteHeader). A bodyless 302 sets only Status +
+// Location.
+type flowOutput struct {
+	Status              int
+	Location            string `header:"Location"`
+	ContentType         string `header:"Content-Type"`
+	CacheControl        string `header:"Cache-Control"`
+	XContentTypeOptions string `header:"X-Content-Type-Options"`
+	Body                []byte
+}
+
+// flowGuards stashes the raw request/writer onto the operation context. The
+// SAML protocol/metadata routes are public (no auth middleware) — per-connection
+// gating (status==active, IdP-initiated opt-in, signature verification) happens
+// inside each handler.
+func flowGuards(api huma.API) huma.Middlewares {
+	return huma.Middlewares{middleware.StashHTTPHuma(api)}
+}
+
+// flowReqResp recovers the stashed *http.Request and http.ResponseWriter. On a
+// flow route both are always present; the nil guards keep the helper safe.
+func flowReqResp(ctx context.Context) (*http.Request, http.ResponseWriter, error) {
+	r := middleware.HTTPRequestFromContext(ctx)
+	w := middleware.HTTPResponseFromContext(ctx)
+	if r == nil || w == nil {
+		return nil, nil, huma.Error500InternalServerError("request/response unavailable")
+	}
+	return r, w, nil
+}
 
 // generateRandom returns a base64url-encoded random string of the given
 // byte length. Used for RelayState.
@@ -115,96 +154,105 @@ func (p *ssoSAMLPlugin) safeRedirect(in string) string {
 }
 
 // resolveConnection picks the target SAML SsoConnection from the query
-// parameters. Returns nil + a written error response on miss.
-func (p *ssoSAMLPlugin) resolveConnection(ctx context.Context, host plugin.PluginHost, w http.ResponseWriter, q url.Values) *domain.SsoConnection {
+// parameters. On miss it returns (nil, *flowOutput) carrying the exact legacy
+// error envelope + status; callers return that flowOutput to huma unchanged so
+// the status/body bytes are byte-identical to the pre-huma handlers.
+func (p *ssoSAMLPlugin) resolveConnection(ctx context.Context, host plugin.PluginHost, q url.Values) (*domain.SsoConnection, *flowOutput) {
 	if cid := strings.TrimSpace(q.Get("connection_id")); cid != "" {
 		c, err := host.Repo().GetSsoConnectionByID(ctx, cid)
 		if err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "NOT_FOUND", "sso connection not found")
-				return nil
+				return nil, writeError(http.StatusNotFound, "NOT_FOUND", "sso connection not found")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "lookup failed")
-			return nil
+			return nil, writeError(http.StatusInternalServerError, "INTERNAL", "lookup failed")
 		}
 		if c.Kind != domain.ConnectionKindSamlSP {
-			writeError(w, http.StatusBadRequest, "WRONG_KIND", "connection is not saml_sp")
-			return nil
+			return nil, writeError(http.StatusBadRequest, "WRONG_KIND", "connection is not saml_sp")
 		}
 		if c.Status != domain.ConnectionStatusActive {
-			writeError(w, http.StatusForbidden, "INACTIVE", "sso connection is not active")
-			return nil
+			return nil, writeError(http.StatusForbidden, "INACTIVE", "sso connection is not active")
 		}
-		return c
+		return c, nil
 	}
 	if slug := strings.TrimSpace(q.Get("org")); slug != "" {
 		org, err := host.Repo().GetOrganizationBySlug(ctx, slug)
 		if err != nil || org == nil {
-			writeError(w, http.StatusNotFound, "NOT_FOUND", "organization not found")
-			return nil
+			return nil, writeError(http.StatusNotFound, "NOT_FOUND", "organization not found")
 		}
-		return p.firstActiveSAMLForOrg(ctx, host, w, org.ID)
+		return p.firstActiveSAMLForOrg(ctx, host, org.ID)
 	}
 	if domainStr := strings.TrimSpace(q.Get("domain")); domainStr != "" {
 		canon := strings.ToLower(domainStr)
 		d, err := host.Repo().GetOrganizationDomainByDomain(ctx, canon)
 		if err != nil || d == nil {
-			writeError(w, http.StatusNotFound, "NOT_FOUND", "domain is not registered for SSO")
-			return nil
+			return nil, writeError(http.StatusNotFound, "NOT_FOUND", "domain is not registered for SSO")
 		}
 		if d.Status != domain.DomainVerified {
-			writeError(w, http.StatusForbidden, "DOMAIN_UNVERIFIED", "domain has not been verified")
-			return nil
+			return nil, writeError(http.StatusForbidden, "DOMAIN_UNVERIFIED", "domain has not been verified")
 		}
-		return p.firstActiveSAMLForOrg(ctx, host, w, d.OrganizationID)
+		return p.firstActiveSAMLForOrg(ctx, host, d.OrganizationID)
 	}
-	writeError(w, http.StatusBadRequest, "BAD_REQUEST", "one of connection_id, org, or domain is required")
-	return nil
+	return nil, writeError(http.StatusBadRequest, "BAD_REQUEST", "one of connection_id, org, or domain is required")
 }
 
-func (p *ssoSAMLPlugin) firstActiveSAMLForOrg(ctx context.Context, host plugin.PluginHost, w http.ResponseWriter, orgID string) *domain.SsoConnection {
+func (p *ssoSAMLPlugin) firstActiveSAMLForOrg(ctx context.Context, host plugin.PluginHost, orgID string) (*domain.SsoConnection, *flowOutput) {
 	rows, err := host.Repo().ListSsoConnectionsByOrg(ctx, orgID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "lookup failed")
-		return nil
+		return nil, writeError(http.StatusInternalServerError, "INTERNAL", "lookup failed")
 	}
 	for _, c := range rows {
 		if c == nil {
 			continue
 		}
 		if c.Status == domain.ConnectionStatusActive && c.Kind == domain.ConnectionKindSamlSP {
-			return c
+			return c, nil
 		}
 	}
-	writeError(w, http.StatusNotFound, "NOT_FOUND", "no active saml sso connection for this organization")
-	return nil
+	return nil, writeError(http.StatusNotFound, "NOT_FOUND", "no active saml sso connection for this organization")
 }
 
 // --- GET /sso/saml/login ----------------------------------------------
 
-func (p *ssoSAMLPlugin) handleSamlLogin(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		ctx := r.Context()
+// registerSamlLogin wires GET {prefix}/sso/saml/login as a public huma-native
+// operation. It resolves the target SAML connection, builds the AuthnRequest,
+// persists the SsoLoginState keyed by RelayState, and 302s to the IdP SSO URL
+// over the HTTP-Redirect binding. The redirect URL (which carries the deflated +
+// base64 SAMLRequest + RelayState, plus the SP signature when configured) is
+// emitted via flowOutput (Status 302 + Location, no body) so huma writes it
+// cleanly — preserving the exact redirect-binding URL bytes. The input is
+// `_ *struct{}` so huma never touches r.URL.RawQuery (custom
+// connection_id/org/domain precedence) or consumes the body.
+func (p *ssoSAMLPlugin) registerSamlLogin(host plugin.PluginHost, api huma.API, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "ssosaml-login",
+		Method:      http.MethodGet,
+		Path:        prefix + "/sso/saml/login",
+		Summary:     "Begin SP-initiated SAML login (org= / connection_id= / domain= HRD)",
+		Tags:        []string{"oauth"},
+		Security:    []map[string][]string{}, // explicitly public
+		Middlewares: flowGuards(api),
+	}, func(ctx context.Context, _ *struct{}) (*flowOutput, error) {
+		r, _, err := flowReqResp(ctx)
+		if err != nil {
+			return nil, err
+		}
 		q := r.URL.Query()
-		conn := p.resolveConnection(ctx, host, w, q)
-		if conn == nil {
-			return
+		conn, fo := p.resolveConnection(ctx, host, q)
+		if fo != nil {
+			return fo, nil
 		}
 		cfg, err := unmarshalSamlConfig(p.cfg.EncryptionKey, conn.Config)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "decode connection config failed")
-			return
+			return writeError(http.StatusInternalServerError, "INTERNAL", "decode connection config failed"), nil
 		}
 		sp, err := buildServiceProvider(&cfg, host.BaseURL(), conn.ID, p.cfg.ClockSkew)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "build sp failed: "+err.Error())
-			return
+			return writeError(http.StatusInternalServerError, "INTERNAL", "build sp failed: "+err.Error()), nil
 		}
 
 		relayState, err := generateRandom(32)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "relay state gen failed")
-			return
+			return writeError(http.StatusInternalServerError, "INTERNAL", "relay state gen failed"), nil
 		}
 		// We use crewjam/saml's redirect-binding helper to build the
 		// AuthnRequest. The library handles base64-encoding +
@@ -216,8 +264,7 @@ func (p *ssoSAMLPlugin) handleSamlLogin(host plugin.PluginHost) http.HandlerFunc
 			saml.HTTPPostBinding, // result binding — IdP must POST back
 		)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "make authn request failed: "+err.Error())
-			return
+			return writeError(http.StatusInternalServerError, "INTERNAL", "make authn request failed: "+err.Error()), nil
 		}
 
 		// Persist the SsoLoginState row keyed by RelayState. The
@@ -240,8 +287,7 @@ func (p *ssoSAMLPlugin) handleSamlLogin(host plugin.PluginHost) http.HandlerFunc
 			CreatedAt:    now,
 			ExpiresAt:    now.Add(p.cfg.AuthnRequestTTL),
 		}); err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "persist state failed")
-			return
+			return writeError(http.StatusInternalServerError, "INTERNAL", "persist state failed"), nil
 		}
 
 		// Build the HTTP-Redirect URL. crewjam/saml's redirect helper
@@ -249,39 +295,45 @@ func (p *ssoSAMLPlugin) handleSamlLogin(host plugin.PluginHost) http.HandlerFunc
 		// HTTP-Redirect binding spec.
 		redirectURL, err := authReq.Redirect(relayState, sp)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "build redirect failed: "+err.Error())
-			return
+			return writeError(http.StatusInternalServerError, "INTERNAL", "build redirect failed: "+err.Error()), nil
 		}
-		http.Redirect(w, r, redirectURL.String(), http.StatusFound)
-	}
+		return &flowOutput{Status: http.StatusFound, Location: redirectURL.String()}, nil
+	})
 }
 
 // --- POST /sso/saml/acs -----------------------------------------------
 
-type acsResponse struct {
-	User acsUser `json:"user"`
-}
-
-type acsUser struct {
-	ID            string  `json:"id"`
-	Email         string  `json:"email"`
-	DisplayName   *string `json:"display_name,omitempty"`
-	EmailVerified bool    `json:"email_verified"`
-	Role          string  `json:"role"`
-}
-
-func (p *ssoSAMLPlugin) handleSamlACS(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		ctx := r.Context()
+// registerSamlACS wires POST {prefix}/sso/saml/acs (the Assertion Consumer
+// Service) as a public huma-native operation. The input is `_ *struct{}` so
+// huma never consumes the body — the handler runs r.ParseForm() on the stashed
+// raw request itself, preserving the exact SAMLResponse/RelayState parsing and
+// the crewjam/saml ParseResponse signature/audience/recipient/replay path. On
+// success it Set-Cookies the session on the raw writer and returns a bodyless
+// 302 to the per-state RedirectURL (IdP-initiated falls back to "/"); errors
+// return the legacy {"error":{code,message}} envelope via flowOutput, NOT
+// problem+json. The success response was always a bodyless redirect (the old
+// writeJSONIfNotWritten was a no-op), so no JSON body is emitted.
+func (p *ssoSAMLPlugin) registerSamlACS(host plugin.PluginHost, api huma.API, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "ssosaml-acs",
+		Method:      http.MethodPost,
+		Path:        prefix + "/sso/saml/acs",
+		Summary:     "SAML Assertion Consumer Service (IdP POSTs the SAMLResponse here)",
+		Tags:        []string{"oauth"},
+		Security:    []map[string][]string{}, // explicitly public
+		Middlewares: flowGuards(api),
+	}, func(ctx context.Context, _ *struct{}) (*flowOutput, error) {
+		r, w, err := flowReqResp(ctx)
+		if err != nil {
+			return nil, err
+		}
 		if err := r.ParseForm(); err != nil {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "cannot parse form")
-			return
+			return writeError(http.StatusBadRequest, "INVALID_REQUEST", "cannot parse form"), nil
 		}
 		samlResponse := r.FormValue("SAMLResponse")
 		relayState := r.FormValue("RelayState")
 		if samlResponse == "" {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "missing SAMLResponse")
-			return
+			return writeError(http.StatusBadRequest, "INVALID_REQUEST", "missing SAMLResponse"), nil
 		}
 
 		// Resolve the target connection. Two paths:
@@ -307,19 +359,16 @@ func (p *ssoSAMLPlugin) handleSamlACS(host plugin.PluginHost) http.HandlerFunc {
 		if relayState != "" {
 			st, err := host.Repo().ConsumeSsoLoginState(ctx, relayState)
 			if err != nil {
-				writeError(w, http.StatusInternalServerError, "INTERNAL", "consume state failed")
-				return
+				return writeError(http.StatusInternalServerError, "INTERNAL", "consume state failed"), nil
 			}
 			if st != nil {
 				loginState = st
 				c, err := host.Repo().GetSsoConnectionByID(ctx, st.ConnectionID)
 				if err != nil || c == nil {
-					writeError(w, http.StatusNotFound, "NOT_FOUND", "sso connection not found")
-					return
+					return writeError(http.StatusNotFound, "NOT_FOUND", "sso connection not found"), nil
 				}
 				if c.Kind != domain.ConnectionKindSamlSP {
-					writeError(w, http.StatusBadRequest, "WRONG_KIND", "connection is not saml_sp")
-					return
+					return writeError(http.StatusBadRequest, "WRONG_KIND", "connection is not saml_sp"), nil
 				}
 				conn = c
 				possibleRequestIDs = []string{st.PKCEVerifier}
@@ -346,32 +395,27 @@ func (p *ssoSAMLPlugin) handleSamlACS(host plugin.PluginHost) http.HandlerFunc {
 				// the lookup fails — it's the only useful breadcrumb
 				// for an operator debugging an IdP misconfiguration.
 				_, _ = peekResponseIssuer(samlResponse)
-				writeError(w, http.StatusNotFound, "NOT_FOUND", "no sso connection for unsolicited response (set RelayState to cid:<uuid>)")
-				return
+				return writeError(http.StatusNotFound, "NOT_FOUND", "no sso connection for unsolicited response (set RelayState to cid:<uuid>)"), nil
 			}
 		}
 
 		if conn.Status != domain.ConnectionStatusActive {
-			writeError(w, http.StatusForbidden, "INACTIVE", "sso connection is not active")
-			return
+			return writeError(http.StatusForbidden, "INACTIVE", "sso connection is not active"), nil
 		}
 
 		cfg, err := unmarshalSamlConfig(p.cfg.EncryptionKey, conn.Config)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "decode connection config failed")
-			return
+			return writeError(http.StatusInternalServerError, "INTERNAL", "decode connection config failed"), nil
 		}
 
 		// IdP-initiated guardrail: only proceed if explicitly enabled.
 		if loginState == nil && !cfg.IdpInitiatedSsoAllowed {
-			writeError(w, http.StatusForbidden, "IDP_INITIATED_DENIED", "idp-initiated sso is not enabled for this connection")
-			return
+			return writeError(http.StatusForbidden, "IDP_INITIATED_DENIED", "idp-initiated sso is not enabled for this connection"), nil
 		}
 
 		sp, err := buildServiceProvider(&cfg, host.BaseURL(), conn.ID, p.cfg.ClockSkew)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "build sp failed: "+err.Error())
-			return
+			return writeError(http.StatusInternalServerError, "INTERNAL", "build sp failed: "+err.Error()), nil
 		}
 
 		// Verify the SAMLResponse. crewjam/saml's ParseResponse:
@@ -391,15 +435,13 @@ func (p *ssoSAMLPlugin) handleSamlACS(host plugin.PluginHost) http.HandlerFunc {
 			// crewjam/saml wraps the underlying cause; we surface a
 			// generic INVALID_ASSERTION code to clients and the full
 			// error text for the audit log.
-			writeError(w, http.StatusUnauthorized, "INVALID_ASSERTION", err.Error())
-			return
+			return writeError(http.StatusUnauthorized, "INVALID_ASSERTION", err.Error()), nil
 		}
 
 		// Validate the assertion structure once more at our layer —
 		// defense in depth against any future crewjam/saml regression.
 		if err := p.validateAssertion(assertion, &cfg); err != nil {
-			writeError(w, http.StatusUnauthorized, "INVALID_ASSERTION", err.Error())
-			return
+			return writeError(http.StatusUnauthorized, "INVALID_ASSERTION", err.Error()), nil
 		}
 
 		// Replay defense: each assertion ID is one-shot per validity
@@ -409,8 +451,7 @@ func (p *ssoSAMLPlugin) handleSamlACS(host plugin.PluginHost) http.HandlerFunc {
 		// earns its keep.
 		validUntil := assertionValidUntil(assertion)
 		if p.replay().Seen(cfg.IdpEntityID, assertion.ID, validUntil) {
-			writeError(w, http.StatusUnauthorized, "REPLAY", "assertion id already seen")
-			return
+			return writeError(http.StatusUnauthorized, "REPLAY", "assertion id already seen"), nil
 		}
 
 		// Project attributes onto the JIT shape.
@@ -422,8 +463,7 @@ func (p *ssoSAMLPlugin) handleSamlACS(host plugin.PluginHost) http.HandlerFunc {
 		}
 		extID := resolveExternalID(mapping.ExternalID, attrs, nameID)
 		if extID == "" {
-			writeError(w, http.StatusBadRequest, "NO_EXTERNAL_ID", "assertion missing external_id attribute / NameID")
-			return
+			return writeError(http.StatusBadRequest, "NO_EXTERNAL_ID", "assertion missing external_id attribute / NameID"), nil
 		}
 		email := firstString(attrs[mapping.Email])
 		var displayName *string
@@ -442,15 +482,12 @@ func (p *ssoSAMLPlugin) handleSamlACS(host plugin.PluginHost) http.HandlerFunc {
 		userID, isNew, err := p.resolveOrJITUser(ctx, host, conn, provider, extID, email, displayName)
 		if err != nil {
 			if errors.Is(err, errJITDisabled) {
-				writeError(w, http.StatusForbidden, "JIT_DISABLED", "your account is not provisioned in this organization; ask an admin to invite you")
-				return
+				return writeError(http.StatusForbidden, "JIT_DISABLED", "your account is not provisioned in this organization; ask an admin to invite you"), nil
 			}
 			if errors.Is(err, errEmailRequired) {
-				writeError(w, http.StatusBadRequest, "NO_EMAIL", "assertion missing email attribute")
-				return
+				return writeError(http.StatusBadRequest, "NO_EMAIL", "assertion missing email attribute"), nil
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", err.Error())
-			return
+			return writeError(http.StatusInternalServerError, "INTERNAL", err.Error()), nil
 		}
 
 		role := conn.DefaultRoleOnJit
@@ -461,17 +498,17 @@ func (p *ssoSAMLPlugin) handleSamlACS(host plugin.PluginHost) http.HandlerFunc {
 			role = mapped
 		}
 		if err := p.upsertMembership(ctx, host, conn.OrganizationID, userID, role); err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "membership upsert failed")
-			return
+			return writeError(http.StatusInternalServerError, "INTERNAL", "membership upsert failed"), nil
 		}
 
 		raw, sess, err := auth.IssueSession(ctx, host.Repo(), userID, middleware.RequestIP(r), requestUA(r), host.SessionTTL())
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "issue session failed")
-			return
+			return writeError(http.StatusInternalServerError, "INTERNAL", "issue session failed"), nil
 		}
 		oid := conn.OrganizationID
 		_ = host.Repo().SetSessionActiveOrg(ctx, sess.ID, &oid)
+		// Set-Cookie is mutated on the raw writer (header-map mutation lands
+		// before huma's single WriteHeader for the 302 below).
 		http.SetCookie(w, auth.SessionCookie(
 			cookieOptionsFromHost(host, r, int(host.SessionTTL().Seconds())),
 			raw,
@@ -492,8 +529,9 @@ func (p *ssoSAMLPlugin) handleSamlACS(host plugin.PluginHost) http.HandlerFunc {
 		})
 
 		// Redirect honors the per-state RedirectURL when present
-		// (SP-initiated). IdP-initiated falls back to the connection's
-		// DefaultRedirectURI, then "/".
+		// (SP-initiated). IdP-initiated falls back to "/". The success
+		// response has always been a bodyless 302 (the prior
+		// writeJSONIfNotWritten was a no-op); we preserve that exactly.
 		target := ""
 		if loginState != nil {
 			target = loginState.RedirectURL
@@ -501,25 +539,32 @@ func (p *ssoSAMLPlugin) handleSamlACS(host plugin.PluginHost) http.HandlerFunc {
 		if target == "" {
 			target = "/"
 		}
-		// JSON body on the same response — convenient for SPA flows
-		// that bypass the redirect by sniffing the response. Browsers
-		// follow the 302 and never see the body; SPAs that POST the
-		// ACS path will see the body.
-		http.Redirect(w, r, target, http.StatusFound)
-		_ = writeJSONIfNotWritten(w, http.StatusOK, acsResponse{User: acsUser{ID: userID, Email: email}})
-		_ = isNew // referenced above; silence unused-var false positive
-	}
+		return &flowOutput{Status: http.StatusFound, Location: target}, nil
+	})
 }
-
-// writeJSONIfNotWritten is a no-op when the redirect has already
-// claimed the response. It exists only so the SAML ACS path can be
-// driven by unit tests that hit the handler directly (no browser).
-func writeJSONIfNotWritten(_ http.ResponseWriter, _ int, _ any) error { return nil }
 
 // --- GET /sso/saml/logout ---------------------------------------------
 
-func (p *ssoSAMLPlugin) handleSamlLogout(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+// registerSamlLogout wires GET {prefix}/sso/saml/logout as a public huma-native
+// operation (SP-initiated SLO). It clears the local session cookie on the raw
+// writer (header-map mutation), best-effort revokes the session, and — when a
+// connection_id is supplied and the IdP published an SLO URL — 302s a signed
+// LogoutRequest to the IdP over the redirect binding. Otherwise it returns a
+// 200 {"ok":true}. Public (no auth): AuthUser is read best-effort from context.
+func (p *ssoSAMLPlugin) registerSamlLogout(host plugin.PluginHost, api huma.API, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "ssosaml-logout",
+		Method:      http.MethodGet,
+		Path:        prefix + "/sso/saml/logout",
+		Summary:     "SP-initiated SAML Single Logout",
+		Tags:        []string{"oauth"},
+		Security:    []map[string][]string{}, // explicitly public
+		Middlewares: flowGuards(api),
+	}, func(ctx context.Context, _ *struct{}) (*flowOutput, error) {
+		r, w, err := flowReqResp(ctx)
+		if err != nil {
+			return nil, err
+		}
 		// SP-initiated SLO. We delete the local session cookie
 		// unconditionally; whether the IdP also tears down its
 		// session depends on the IdP. SAML SLO is brittle in
@@ -530,36 +575,35 @@ func (p *ssoSAMLPlugin) handleSamlLogout(host plugin.PluginHost) http.HandlerFun
 			"",
 		))
 		// Best-effort: read session, revoke it.
-		if au, ok := middleware.AuthUserFromContext(r.Context()); ok && au != nil && au.Session.ID != "" {
-			_ = host.Repo().DeleteSessionByID(r.Context(), au.Session.ID)
+		if au, ok := middleware.AuthUserFromContext(ctx); ok && au != nil && au.Session.ID != "" {
+			_ = host.Repo().DeleteSessionByID(ctx, au.Session.ID)
 		}
 		// Optionally craft a LogoutRequest and 302 to the IdP. We do
 		// this only if a connection_id was supplied — otherwise we
 		// have no IdP to talk to.
 		if cid := strings.TrimSpace(r.URL.Query().Get("connection_id")); cid != "" {
-			conn, err := host.Repo().GetSsoConnectionByID(r.Context(), cid)
+			conn, err := host.Repo().GetSsoConnectionByID(ctx, cid)
 			if err == nil && conn != nil && conn.Kind == domain.ConnectionKindSamlSP {
 				cfg, err := unmarshalSamlConfig(p.cfg.EncryptionKey, conn.Config)
 				if err == nil && cfg.IdpSloURL != "" {
 					sp, err := buildServiceProvider(&cfg, host.BaseURL(), conn.ID, p.cfg.ClockSkew)
 					if err == nil {
 						nameID := ""
-						if au, ok := middleware.AuthUserFromContext(r.Context()); ok && au != nil {
+						if au, ok := middleware.AuthUserFromContext(ctx); ok && au != nil {
 							nameID = au.User.Email
 						}
 						if redir, err := sp.MakeRedirectLogoutRequest(nameID, ""); err == nil && redir != nil {
-							http.Redirect(w, r, redir.String(), http.StatusFound)
-							return
+							return &flowOutput{Status: http.StatusFound, Location: redir.String()}, nil
 						}
 					}
 				}
 			}
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-	}
+		return jsonFlow(http.StatusOK, map[string]any{"ok": true}), nil
+	})
 }
 
-// handleSamlSLO (IdP-initiated Single Logout) is implemented in slo.go.
+// registerSamlSLO (IdP-initiated Single Logout) is implemented in slo.go.
 
 // --- helpers ----------------------------------------------------------
 

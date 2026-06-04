@@ -654,17 +654,23 @@ func TestRegister_AllowSignupsFalse_Returns403(t *testing.T) {
 	if res.StatusCode != http.StatusForbidden {
 		t.Fatalf("register w/ signups disabled: want 403, got %d (%s)", res.StatusCode, drain(res))
 	}
+	// Errors are now huma-native RFC 9457 problem+json ({type,title,status,
+	// detail}); the legacy {"error":{"code:"SIGNUPS_DISABLED"}} body became a
+	// 403 problem+json carrying the message as "detail". The 403 status — the
+	// security-relevant signal that signups are blocked — is unchanged.
 	var body struct {
-		Error struct {
-			Code string `json:"code"`
-		} `json:"error"`
+		Status int    `json:"status"`
+		Detail string `json:"detail"`
 	}
 	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	res.Body.Close()
-	if body.Error.Code != "SIGNUPS_DISABLED" {
-		t.Fatalf("error code: want SIGNUPS_DISABLED, got %q", body.Error.Code)
+	if body.Status != http.StatusForbidden {
+		t.Fatalf("problem+json status: want 403, got %d", body.Status)
+	}
+	if body.Detail != "public registration is disabled" {
+		t.Fatalf("problem+json detail: want %q, got %q", "public registration is disabled", body.Detail)
 	}
 }
 

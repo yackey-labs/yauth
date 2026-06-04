@@ -29,6 +29,8 @@
 package ssooidc
 
 import (
+	"github.com/danielgtaylor/huma/v2"
+
 	"errors"
 	"net/http"
 	"sync"
@@ -138,27 +140,46 @@ func (p *ssoOIDCPlugin) Name() string { return "sso_oidc" }
 //
 // User-facing login/callback routes are gated on the same hosting
 // invariant. Phase A (this commit) ships the admin surface only.
-func (p *ssoOIDCPlugin) Routes(host plugin.PluginHost, mux plugin.Router, prefix string) {
+// Routes implements plugin.Plugin. Every route is huma-native: a typed
+// operation that threads the underlying *http.Request / http.ResponseWriter
+// onto the operation context via middleware.StashHTTPHuma so the ported
+// handlers keep byte-identical request parsing (custom query precedence,
+// strict body decode, RequestIP, form_post handling) and response-side cookie
+// writes / 302 redirects.
+//
+// Two route families:
+//
+//   - org-scoped admin CRUD under /organizations/{id}/sso/connections... —
+//     gated by RequireAuthHuma plus the inline requireOrgAdmin membership
+//     check (org-admin, NOT global-admin), clean typed JSON.
+//   - the public SSO login flow (/sso/login, /sso/callback GET+POST,
+//     /sso/backchannel-logout) — browser redirects, Set-Cookie, state/nonce/
+//     CSRF, all written through the stashed raw request/writer.
+//
+// The mux is retained in the signature for plugins that still register raw
+// net/http routes; ssooidc no longer uses it.
+func (p *ssoOIDCPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.API, prefix string) {
 	mw := host.Middleware()
 
-	mux.Handle("POST "+prefix+"/organizations/{id}/sso/connections", mw.RequireAuth(http.HandlerFunc(p.handleCreateConnection(host))))
-	mux.Handle("GET "+prefix+"/organizations/{id}/sso/connections", mw.RequireAuth(http.HandlerFunc(p.handleListConnections(host))))
-	mux.Handle("GET "+prefix+"/organizations/{id}/sso/connections/{cid}", mw.RequireAuth(http.HandlerFunc(p.handleGetConnection(host))))
-	mux.Handle("PATCH "+prefix+"/organizations/{id}/sso/connections/{cid}", mw.RequireAuth(http.HandlerFunc(p.handleUpdateConnection(host))))
-	mux.Handle("DELETE "+prefix+"/organizations/{id}/sso/connections/{cid}", mw.RequireAuth(http.HandlerFunc(p.handleDeleteConnection(host))))
-	mux.Handle("POST "+prefix+"/organizations/{id}/sso/connections/{cid}/test", mw.RequireAuth(http.HandlerFunc(p.handleTestConnection(host))))
+	// Admin CRUD (org-scoped).
+	p.registerCreateConnection(host, api, mw, prefix)
+	p.registerListConnections(host, api, mw, prefix)
+	p.registerGetConnection(host, api, mw, prefix)
+	p.registerUpdateConnection(host, api, mw, prefix)
+	p.registerDeleteConnection(host, api, mw, prefix)
+	p.registerTestConnection(host, api, mw, prefix)
 
-	// User-facing routes (begin SSO + callback). Wired here so the
-	// admin CRUD and the login surface live in the same plugin. The
-	// route bodies live in login.go and callback.go.
-	mux.Handle("GET "+prefix+"/sso/login", http.HandlerFunc(p.handleSsoLogin(host)))
-	mux.Handle("GET "+prefix+"/sso/callback", http.HandlerFunc(p.handleSsoCallback(host)))
-	mux.Handle("POST "+prefix+"/sso/callback", http.HandlerFunc(p.handleSsoCallback(host)))
+	// User-facing login flow. The route bodies live in handlers_login.go.
+	p.registerSsoLogin(host, api, prefix)
+	// GET and POST share one callback handler but need distinct OperationIDs
+	// (huma requires operation-id uniqueness).
+	p.registerSsoCallback(host, api, prefix, http.MethodGet, "ssooidc-callback-get")
+	p.registerSsoCallback(host, api, prefix, http.MethodPost, "ssooidc-callback-post")
 
 	// OIDC Back-Channel Logout 1.0 receiver: the upstream IdP POSTs a
 	// logout_token here when a user is logged out/offboarded, and we terminate
 	// the matching local sessions. Public (verified by logout_token signature).
-	mux.Handle("POST "+prefix+"/sso/backchannel-logout", http.HandlerFunc(p.handleBackchannelLogout(host)))
+	p.registerBackchannelLogout(host, api, prefix)
 }
 
 // httpClient returns the configured HTTP client or a 10s-timeout

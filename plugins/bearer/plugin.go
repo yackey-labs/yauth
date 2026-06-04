@@ -21,7 +21,8 @@
 package bearer
 
 import (
-	"net/http"
+	"github.com/danielgtaylor/huma/v2"
+
 	"time"
 
 	"github.com/yackey-labs/yauth-go/plugin"
@@ -70,11 +71,19 @@ func New(cfg Config) plugin.Plugin {
 func (p *bearerPlugin) Name() string { return "bearer" }
 
 // Routes implements plugin.Plugin. It resolves the JWT secret, registers
-// a Bearer AuthResolver with the host, and wires the /token endpoints.
+// a Bearer AuthResolver with the host, and wires the /token endpoints as
+// huma-native typed operations on the shared huma.API.
+//
+// Each route declares a native huma typed Body, so huma parses + validates the
+// JSON request directly (additionalProperties:false → 422 on unknown/malformed
+// bodies). /token and /token/refresh are public (Security: none); /token/revoke
+// is gated by RequireAuthHuma — the same identity logic as the legacy
+// mw.RequireAuth wrapper. The mux is retained in the signature for plugins that
+// still register raw net/http routes; bearer no longer uses it.
 //
 // Panics if no JWT secret is available (neither Config.JWTSecret nor
 // host.JWTSecret()) — bearer cannot operate without one.
-func (p *bearerPlugin) Routes(host plugin.PluginHost, mux plugin.Router, prefix string) {
+func (p *bearerPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.API, prefix string) {
 	if len(p.cfg.JWTSecret) == 0 {
 		p.cfg.JWTSecret = host.JWTSecret()
 	}
@@ -85,7 +94,7 @@ func (p *bearerPlugin) Routes(host plugin.PluginHost, mux plugin.Router, prefix 
 	host.RegisterAuthResolver(newResolver(host, p.cfg))
 
 	mw := host.Middleware()
-	mux.Handle("POST "+prefix+"/token", http.HandlerFunc(p.handleToken(host)))
-	mux.Handle("POST "+prefix+"/token/refresh", http.HandlerFunc(p.handleRefresh(host)))
-	mux.Handle("POST "+prefix+"/token/revoke", mw.RequireAuth(http.HandlerFunc(p.handleRevoke(host))))
+	p.registerToken(host, api, prefix)
+	p.registerRefresh(host, api, prefix)
+	p.registerRevoke(host, api, mw, prefix)
 }

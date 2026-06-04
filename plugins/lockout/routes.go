@@ -1,11 +1,11 @@
 package lockout
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -13,40 +13,16 @@ import (
 	"strings"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/google/uuid"
 
 	"github.com/yackey-labs/yauth-go/domain"
+	"github.com/yackey-labs/yauth-go/middleware"
 	"github.com/yackey-labs/yauth-go/plugin"
 	"github.com/yackey-labs/yauth-go/yautherr"
 )
 
 const unlockTokenBytes = 32
-
-type errorBody struct {
-	Error errorPayload `json:"error"`
-}
-
-type errorPayload struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeError(w http.ResponseWriter, status int, code, message string) {
-	writeJSON(w, status, errorBody{Error: errorPayload{Code: code, Message: message}})
-}
-
-func decodeJSON(r *http.Request, v any) error {
-	r.Body = http.MaxBytesReader(nil, r.Body, 1<<20)
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	return dec.Decode(v)
-}
 
 func validEmail(s string) bool {
 	s = strings.TrimSpace(s)
@@ -78,96 +54,131 @@ func buildLink(base, raw string) string {
 	return base + sep + "token=" + url.QueryEscape(raw)
 }
 
-// --- POST /unlock --------------------------------------------------------
+// --- POST /account/unlock (public) ---------------------------------------
 
-type unlockRequest struct {
-	Token string `json:"token"`
+type lockoutUnlockRequest struct {
+	Token string   `json:"token"`
+	_     struct{} `json:"-" additionalProperties:"false"`
+}
+
+// lockoutUnlockInput is the huma-native request: a typed JSON body. huma
+// parses + validates it (rejecting unknown fields via
+// additionalProperties:false → 422), so the request schema auto-derives — no
+// StashHTTPHuma bridge.
+type lockoutUnlockInput struct {
+	Body lockoutUnlockRequest
 }
 
 type unlockResponse struct {
 	Message string `json:"message"`
 }
 
+type unlockOutput struct {
+	Body unlockResponse
+}
+
 const unlockMessage = "Account unlocked."
 
-func (p *lockoutPlugin) handleUnlock(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		var req unlockRequest
-		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
-			return
-		}
-		raw := strings.TrimSpace(req.Token)
+// registerUnlock wires POST {prefix}/account/unlock as a huma-native public
+// operation. The request body is a native huma typed Body, so huma parses +
+// validates it (unknown fields / malformed body → 422) and the request schema
+// auto-derives. The trim/required-token check (empty token → 400) and the
+// invalid-token 401 stay exactly as before.
+func (p *lockoutPlugin) registerUnlock(host plugin.PluginHost, api huma.API, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "lockout-unlock",
+		Method:      http.MethodPost,
+		Path:        prefix + "/account/unlock",
+		Summary:     "Consume an unlock token to clear an account lock",
+		Tags:        []string{"lockout"},
+		Security:    []map[string][]string{}, // explicitly public
+	}, func(ctx context.Context, in *lockoutUnlockInput) (*unlockOutput, error) {
+		raw := strings.TrimSpace(in.Body.Token)
 		if raw == "" {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "token is required")
-			return
+			return nil, huma.Error400BadRequest("token is required")
 		}
 
-		ctx := r.Context()
 		repo := host.Repo()
 		sum := sha256.Sum256([]byte(raw))
 		hash := hex.EncodeToString(sum[:])
 
 		tok, err := repo.ConsumeUnlockToken(ctx, hash)
 		if err != nil || tok == nil {
-			writeError(w, http.StatusUnauthorized, "INVALID_TOKEN", "token is invalid, expired, or already used")
-			return
+			return nil, huma.Error401Unauthorized("token is invalid, expired, or already used")
 		}
 
-		// Clear the lock state for this user (if present). The unlock-token
-		// is keyed on user_id, so look up the lock row by user_id.
+		// Clear the lock state for this user (if present). The unlock-token is
+		// keyed on user_id, so look up the lock row by user_id.
 		now := time.Now().UTC()
 		if lock, err := repo.GetAccountLockByUserID(ctx, tok.UserID); err == nil && lock != nil {
 			_ = repo.AutoUnlockAccount(ctx, lock.ID, now)
 			_ = repo.ResetAccountLockFailedCount(ctx, lock.ID, now)
 		}
-		writeJSON(w, http.StatusOK, unlockResponse{Message: unlockMessage})
-	}
+		return &unlockOutput{Body: unlockResponse{Message: unlockMessage}}, nil
+	})
 }
 
-// --- POST /unlock/request -----------------------------------------------
+// --- POST /account/request-unlock (public) -------------------------------
 
-type unlockRequestRequest struct {
-	Email string `json:"email"`
+type lockoutUnlockReqRequest struct {
+	Email string   `json:"email"`
+	_     struct{} `json:"-" additionalProperties:"false"`
+}
+
+// lockoutUnlockReqInput is the huma-native request: a typed JSON body. huma
+// parses + validates it (unknown fields / malformed body → 422); the request
+// schema auto-derives — no StashHTTPHuma bridge.
+type lockoutUnlockReqInput struct {
+	Body lockoutUnlockReqRequest
 }
 
 type unlockRequestResponse struct {
 	Message string `json:"message"`
 }
 
+type unlockRequestOutput struct {
+	Body unlockRequestResponse
+}
+
 const unlockRequestMessage = "If the email exists, an unlock link has been sent."
 
-func (p *lockoutPlugin) handleUnlockRequest(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		var req unlockRequestRequest
-		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
-			return
-		}
+// registerUnlockRequest wires POST {prefix}/account/request-unlock as a
+// huma-native public operation. The request body is a native huma typed Body,
+// so huma parses + validates it (unknown fields / malformed body → 422). It
+// always responds 200 for an existing-or-unknown email (enumeration
+// resistance) and only 400 on an email without '@'; the body-shaped
+// success/error semantics are otherwise unchanged.
+func (p *lockoutPlugin) registerUnlockRequest(host plugin.PluginHost, api huma.API, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "lockout-unlock-request",
+		Method:      http.MethodPost,
+		Path:        prefix + "/account/request-unlock",
+		Summary:     "Email a single-use unlock token",
+		Description: "Always responds 200 to prevent user enumeration.",
+		Tags:        []string{"lockout"},
+		Security:    []map[string][]string{}, // explicitly public
+	}, func(ctx context.Context, in *lockoutUnlockReqInput) (*unlockRequestOutput, error) {
+		req := in.Body
 		req.Email = strings.TrimSpace(strings.ToLower(req.Email))
 		if !validEmail(req.Email) {
-			writeError(w, http.StatusBadRequest, "INVALID_EMAIL", "email must contain '@'")
-			return
+			return nil, huma.Error400BadRequest("email must contain '@'")
 		}
 
-		ctx := r.Context()
 		repo := host.Repo()
+		ack := &unlockRequestOutput{Body: unlockRequestResponse{Message: unlockRequestMessage}}
 
 		user, err := repo.GetUserByEmail(ctx, req.Email)
 		if err != nil && !errors.Is(err, yautherr.ErrNotFound) {
 			// Fail-open with 200 to preserve enumeration resistance.
-			writeJSON(w, http.StatusOK, unlockRequestResponse{Message: unlockRequestMessage})
-			return
+			return ack, nil
 		}
 		if user == nil {
-			writeJSON(w, http.StatusOK, unlockRequestResponse{Message: unlockRequestMessage})
-			return
+			return ack, nil
 		}
 
 		raw, hash, err := generateToken()
 		if err != nil {
-			writeJSON(w, http.StatusOK, unlockRequestResponse{Message: unlockRequestMessage})
-			return
+			return ack, nil
 		}
 		now := time.Now().UTC()
 		if err := repo.CreateUnlockToken(ctx, domain.NewUnlockToken{
@@ -177,42 +188,58 @@ func (p *lockoutPlugin) handleUnlockRequest(host plugin.PluginHost) http.Handler
 			ExpiresAt: now.Add(p.cfg.UnlockTokenTTL),
 			CreatedAt: now,
 		}); err != nil {
-			writeJSON(w, http.StatusOK, unlockRequestResponse{Message: unlockRequestMessage})
-			return
+			return ack, nil
 		}
 
 		link := buildLink(p.cfg.LinkBaseURL, raw)
 		_ = p.cfg.Mailer.SendUnlockToken(ctx, req.Email, link)
 
-		writeJSON(w, http.StatusOK, unlockRequestResponse{Message: unlockRequestMessage})
-	}
+		return ack, nil
+	})
 }
 
-// --- POST /admin/users/{id}/unlock (admin force-unlock) -----------------
+// --- POST /admin/users/{id}/unlock (admin force-unlock) ------------------
 
-func (p *lockoutPlugin) handleAdminUnlock(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		userID := strings.TrimSpace(r.PathValue("id"))
+type adminUnlockInput struct {
+	ID string `path:"id" doc:"User id"`
+}
+
+// registerAdminUnlock wires POST {prefix}/admin/users/{id}/unlock as an
+// admin-gated huma-native operation (RequireAdminHuma reuses the same
+// role=="admin" + cookie-session rules as the legacy mw.RequireAdmin wrapper,
+// writing 401/403 problem+json on failure). It takes the {id} via a typed path
+// input and parses no body. The 200 acknowledgement body matches the legacy
+// handler exactly, including the "force-unlock a non-locked user still acks
+// 200" behaviour.
+func (p *lockoutPlugin) registerAdminUnlock(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "lockout-admin-unlock",
+		Method:      http.MethodPost,
+		Path:        prefix + "/admin/users/{id}/unlock",
+		Summary:     "Force-unlock a user (admin)",
+		Tags:        []string{"lockout"},
+		Security:    []map[string][]string{{"sessionCookie": {}}},
+		Middlewares: huma.Middlewares{middleware.RequireAdminHuma(api, mw)},
+	}, func(ctx context.Context, in *adminUnlockInput) (*unlockOutput, error) {
+		userID := strings.TrimSpace(in.ID)
 		if userID == "" {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "user id is required")
-			return
+			return nil, huma.Error400BadRequest("user id is required")
 		}
-		ctx := r.Context()
 		repo := host.Repo()
+		ack := &unlockOutput{Body: unlockResponse{Message: unlockMessage}}
 
 		now := time.Now().UTC()
 		lock, err := repo.GetAccountLockByUserID(ctx, userID)
 		if err != nil || lock == nil {
-			writeJSON(w, http.StatusOK, unlockResponse{Message: unlockMessage})
-			return
+			return ack, nil
 		}
 		_ = repo.AutoUnlockAccount(ctx, lock.ID, now)
 		_ = repo.ResetAccountLockFailedCount(ctx, lock.ID, now)
-		writeJSON(w, http.StatusOK, unlockResponse{Message: unlockMessage})
-	}
+		return ack, nil
+	})
 }
 
-// --- GET /lockout/state (admin) -----------------------------------------
+// --- GET /lockout/state (admin) ------------------------------------------
 
 type lockedAccountJSON struct {
 	UserID       string  `json:"user_id"`
@@ -227,19 +254,31 @@ type lockoutStateResponse struct {
 	Locked []lockedAccountJSON `json:"locked"`
 }
 
-// handleLockoutState returns every account currently locked or that has
-// non-zero FailedCount. The repo does not expose a list endpoint for
-// account_locks, so we walk the user table once and filter — this is an
-// admin-only endpoint where O(N) over users is acceptable.
-func (p *lockoutPlugin) handleLockoutState(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		ctx := r.Context()
+type lockoutStateOutput struct {
+	Body lockoutStateResponse
+}
+
+// registerLockoutState wires GET {prefix}/lockout/state as an admin-gated
+// huma-native operation. It returns every account currently locked or that has
+// a non-zero FailedCount. The repo exposes no list endpoint for account_locks,
+// so it walks the user table once and filters — O(N) over users is acceptable
+// on this admin-only endpoint. The response body is byte-identical to the
+// legacy handler.
+func (p *lockoutPlugin) registerLockoutState(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "lockout-state",
+		Method:      http.MethodGet,
+		Path:        prefix + "/lockout/state",
+		Summary:     "List currently locked accounts (admin)",
+		Tags:        []string{"lockout"},
+		Security:    []map[string][]string{{"sessionCookie": {}}},
+		Middlewares: huma.Middlewares{middleware.RequireAdminHuma(api, mw)},
+	}, func(ctx context.Context, _ *struct{}) (*lockoutStateOutput, error) {
 		repo := host.Repo()
 
 		users, _, err := repo.ListUsers(ctx, "", 1000, 0)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to list users")
-			return
+			return nil, huma.Error500InternalServerError("unable to list users")
 		}
 		now := time.Now().UTC()
 		out := make([]lockedAccountJSON, 0)
@@ -268,6 +307,6 @@ func (p *lockoutPlugin) handleLockoutState(host plugin.PluginHost) http.HandlerF
 			row.LockedReason = lock.LockedReason
 			out = append(out, row)
 		}
-		writeJSON(w, http.StatusOK, lockoutStateResponse{Locked: out})
-	}
+		return &lockoutStateOutput{Body: lockoutStateResponse{Locked: out}}, nil
+	})
 }

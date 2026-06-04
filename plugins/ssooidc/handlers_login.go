@@ -31,6 +31,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/google/uuid"
 
 	"github.com/yackey-labs/yauth-go/auth"
@@ -40,6 +41,38 @@ import (
 	"github.com/yackey-labs/yauth-go/plugin"
 	"github.com/yackey-labs/yauth-go/yautherr"
 )
+
+// flowOutput is the response shape for the public login-flow operations. They
+// are undocumented (in the spec-drift baseline), so the body schema is
+// unconstrained: a raw []byte body lets the redirect branch emit a bodyless
+// 302 (Body=nil) and the JSON branch emit a hand-marshaled 200, with the
+// Content-Type / Location headers carried as header fields. Set-Cookie is
+// written directly on the http.ResponseWriter stashed by StashHTTPHuma.
+type flowOutput struct {
+	Status       int
+	Location     string `header:"Location"`
+	ContentType  string `header:"Content-Type"`
+	CacheControl string `header:"Cache-Control"`
+	Body         []byte
+}
+
+// flowGuards stashes the raw request/writer onto the operation context. The
+// login flow is public (no auth middleware) — gating happens per-connection
+// (status==active) inside the handler.
+func flowGuards(api huma.API) huma.Middlewares {
+	return huma.Middlewares{middleware.StashHTTPHuma(api)}
+}
+
+// flowReqResp recovers the stashed *http.Request and http.ResponseWriter. On a
+// flow route both are always present; the nil guards keep the helper safe.
+func flowReqResp(ctx context.Context) (*http.Request, http.ResponseWriter, error) {
+	r := middleware.HTTPRequestFromContext(ctx)
+	w := middleware.HTTPResponseFromContext(ctx)
+	if r == nil || w == nil {
+		return nil, nil, huma.Error500InternalServerError("request/response unavailable")
+	}
+	return r, w, nil
+}
 
 // generateRandom returns a base64url-encoded random string of the given
 // byte length. Used for state, nonce, and PKCE verifier.
@@ -112,105 +145,108 @@ func (p *ssoOIDCPlugin) safeRedirect(in string) string {
 }
 
 // resolveConnection picks the target SsoConnection from the query
-// parameters. Returns nil + a written error response on miss.
-func (p *ssoOIDCPlugin) resolveConnection(ctx context.Context, host plugin.PluginHost, w http.ResponseWriter, q url.Values) *domain.SsoConnection {
+// parameters. Returns a huma error (matching the legacy status) on miss.
+func (p *ssoOIDCPlugin) resolveConnection(ctx context.Context, host plugin.PluginHost, q url.Values) (*domain.SsoConnection, error) {
 	if cid := strings.TrimSpace(q.Get("connection_id")); cid != "" {
 		c, err := host.Repo().GetSsoConnectionByID(ctx, cid)
 		if err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "NOT_FOUND", "sso connection not found")
-				return nil
+				return nil, huma.Error404NotFound("sso connection not found")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "lookup failed")
-			return nil
+			return nil, huma.Error500InternalServerError("lookup failed")
 		}
 		if c.Status != domain.ConnectionStatusActive {
-			writeError(w, http.StatusForbidden, "INACTIVE", "sso connection is not active")
-			return nil
+			return nil, huma.Error403Forbidden("sso connection is not active")
 		}
-		return c
+		return c, nil
 	}
 	if slug := strings.TrimSpace(q.Get("org")); slug != "" {
 		org, err := host.Repo().GetOrganizationBySlug(ctx, slug)
 		if err != nil || org == nil {
-			writeError(w, http.StatusNotFound, "NOT_FOUND", "organization not found")
-			return nil
+			return nil, huma.Error404NotFound("organization not found")
 		}
-		return p.firstActiveOIDCForOrg(ctx, host, w, org.ID)
+		return p.firstActiveOIDCForOrg(ctx, host, org.ID)
 	}
 	if domainStr := strings.TrimSpace(q.Get("domain")); domainStr != "" {
 		canon := strings.ToLower(domainStr)
 		d, err := host.Repo().GetOrganizationDomainByDomain(ctx, canon)
 		if err != nil || d == nil {
-			writeError(w, http.StatusNotFound, "NOT_FOUND", "domain is not registered for SSO")
-			return nil
+			return nil, huma.Error404NotFound("domain is not registered for SSO")
 		}
 		if d.Status != domain.DomainVerified {
 			// HRD is restricted to verified domains — anyone can
 			// claim a domain, only verified ones can drive
 			// federated login.
-			writeError(w, http.StatusForbidden, "DOMAIN_UNVERIFIED", "domain has not been verified")
-			return nil
+			return nil, huma.Error403Forbidden("domain has not been verified")
 		}
-		return p.firstActiveOIDCForOrg(ctx, host, w, d.OrganizationID)
+		return p.firstActiveOIDCForOrg(ctx, host, d.OrganizationID)
 	}
-	writeError(w, http.StatusBadRequest, "BAD_REQUEST", "one of connection_id, org, or domain is required")
-	return nil
+	return nil, huma.Error400BadRequest("one of connection_id, org, or domain is required")
 }
 
-func (p *ssoOIDCPlugin) firstActiveOIDCForOrg(ctx context.Context, host plugin.PluginHost, w http.ResponseWriter, orgID string) *domain.SsoConnection {
+func (p *ssoOIDCPlugin) firstActiveOIDCForOrg(ctx context.Context, host plugin.PluginHost, orgID string) (*domain.SsoConnection, error) {
 	rows, err := host.Repo().ListSsoConnectionsByOrg(ctx, orgID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "lookup failed")
-		return nil
+		return nil, huma.Error500InternalServerError("lookup failed")
 	}
 	for _, c := range rows {
 		if c == nil {
 			continue
 		}
 		if c.Status == domain.ConnectionStatusActive && c.Kind == domain.ConnectionKindOIDCClient {
-			return c
+			return c, nil
 		}
 	}
-	writeError(w, http.StatusNotFound, "NOT_FOUND", "no active sso connection for this organization")
-	return nil
+	return nil, huma.Error404NotFound("no active sso connection for this organization")
 }
 
 // --- GET /sso/login ----------------------------------------------------
 
-func (p *ssoOIDCPlugin) handleSsoLogin(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		ctx := r.Context()
+// registerSsoLogin wires GET {prefix}/sso/login as a public huma-native
+// operation. It resolves the target connection, mints state+nonce+PKCE,
+// persists the SsoLoginState row, and 302s to the IdP authorization endpoint.
+// The 302 is expressed via flowOutput (Status + Location header, no body) so
+// huma writes the redirect cleanly — no raw http.Redirect double-write. No
+// cookie is set (state is server-side via CreateSsoLoginState).
+func (p *ssoOIDCPlugin) registerSsoLogin(host plugin.PluginHost, api huma.API, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "ssooidc-login",
+		Method:      http.MethodGet,
+		Path:        prefix + "/sso/login",
+		Summary:     "Begin SSO login (org= / connection_id= / domain= HRD)",
+		Tags:        []string{"oauth"},
+		Security:    []map[string][]string{}, // explicitly public
+		Middlewares: flowGuards(api),
+	}, func(ctx context.Context, _ *struct{}) (*flowOutput, error) {
+		r, _, err := flowReqResp(ctx)
+		if err != nil {
+			return nil, err
+		}
 		q := r.URL.Query()
-		conn := p.resolveConnection(ctx, host, w, q)
-		if conn == nil {
-			return
+		conn, err := p.resolveConnection(ctx, host, q)
+		if err != nil {
+			return nil, err
 		}
 		cfg, err := unmarshalOidcConfig(p.cfg.EncryptionKey, conn.Config)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "decode connection config failed")
-			return
+			return nil, huma.Error500InternalServerError("decode connection config failed")
 		}
 		disco, err := fetchDiscovery(ctx, p.httpClient(), cfg.DiscoveryURL)
 		if err != nil {
-			writeError(w, http.StatusBadGateway, "DISCOVERY_FAILED", err.Error())
-			return
+			return nil, huma.Error502BadGateway(err.Error())
 		}
 
 		state, err := generateRandom(32)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "state gen failed")
-			return
+			return nil, huma.Error500InternalServerError("state gen failed")
 		}
 		nonce, err := generateRandom(32)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "nonce gen failed")
-			return
+			return nil, huma.Error500InternalServerError("nonce gen failed")
 		}
 		verifier, err := generateRandom(48)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "pkce gen failed")
-			return
+			return nil, huma.Error500InternalServerError("pkce gen failed")
 		}
 		redirect := p.safeRedirect(q.Get("redirect_url"))
 
@@ -224,8 +260,7 @@ func (p *ssoOIDCPlugin) handleSsoLogin(host plugin.PluginHost) http.HandlerFunc 
 			CreatedAt:    now,
 			ExpiresAt:    now.Add(p.cfg.StateTTL),
 		}); err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "persist state failed")
-			return
+			return nil, huma.Error500InternalServerError("persist state failed")
 		}
 
 		callbackURL := callbackAbsoluteURL(host)
@@ -243,8 +278,11 @@ func (p *ssoOIDCPlugin) handleSsoLogin(host plugin.PluginHost) http.HandlerFunc 
 		if strings.Contains(disco.AuthorizationURL, "?") {
 			sep = "&"
 		}
-		http.Redirect(w, r, disco.AuthorizationURL+sep+params.Encode(), http.StatusFound)
-	}
+		return &flowOutput{
+			Status:   http.StatusFound,
+			Location: disco.AuthorizationURL + sep + params.Encode(),
+		}, nil
+	})
 }
 
 func callbackAbsoluteURL(host plugin.PluginHost) string {
@@ -266,9 +304,28 @@ type callbackUser struct {
 	Role          string  `json:"role"`
 }
 
-func (p *ssoOIDCPlugin) handleSsoCallback(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		ctx := r.Context()
+// registerSsoCallback wires GET/POST {prefix}/sso/callback as a public
+// huma-native operation (one Register per method, distinct OperationIDs,
+// shared body). The IdP returns here; we consume state, exchange the code,
+// verify the id_token, JIT-provision, issue a session cookie, then either 302
+// to the stored redirect_url (bodyless) or return 200 + the callback JSON.
+// Both success branches Set-Cookie on the stashed writer; error exits return
+// huma errors with the legacy status codes. State/nonce/audience/expiry
+// rejection paths are preserved exactly (security-critical).
+func (p *ssoOIDCPlugin) registerSsoCallback(host plugin.PluginHost, api huma.API, prefix, method, operationID string) {
+	huma.Register(api, huma.Operation{
+		OperationID: operationID,
+		Method:      method,
+		Path:        prefix + "/sso/callback",
+		Summary:     "SSO callback (IdP returns here)",
+		Tags:        []string{"oauth"},
+		Security:    []map[string][]string{}, // explicitly public
+		Middlewares: flowGuards(api),
+	}, func(ctx context.Context, _ *struct{}) (*flowOutput, error) {
+		r, w, err := flowReqResp(ctx)
+		if err != nil {
+			return nil, err
+		}
 
 		// Form_post + query forms both accepted (form_post is the
 		// OIDC default for fragment-mode IdPs).
@@ -288,42 +345,34 @@ func (p *ssoOIDCPlugin) handleSsoCallback(host plugin.PluginHost) http.HandlerFu
 			idpErr = r.FormValue("error")
 		}
 		if idpErr != "" {
-			writeError(w, http.StatusBadRequest, "PROVIDER_ERROR", idpErr)
-			return
+			return nil, huma.Error400BadRequest(idpErr)
 		}
 		if code == "" || state == "" {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "missing code or state")
-			return
+			return nil, huma.Error400BadRequest("missing code or state")
 		}
 
 		st, err := host.Repo().ConsumeSsoLoginState(ctx, state)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "consume state failed")
-			return
+			return nil, huma.Error500InternalServerError("consume state failed")
 		}
 		if st == nil {
-			writeError(w, http.StatusBadRequest, "INVALID_STATE", "state not found, expired, or already consumed")
-			return
+			return nil, huma.Error400BadRequest("state not found, expired, or already consumed")
 		}
 
 		conn, err := host.Repo().GetSsoConnectionByID(ctx, st.ConnectionID)
 		if err != nil || conn == nil {
-			writeError(w, http.StatusNotFound, "NOT_FOUND", "sso connection not found")
-			return
+			return nil, huma.Error404NotFound("sso connection not found")
 		}
 		if conn.Status != domain.ConnectionStatusActive {
-			writeError(w, http.StatusForbidden, "INACTIVE", "sso connection is not active")
-			return
+			return nil, huma.Error403Forbidden("sso connection is not active")
 		}
 		cfg, err := unmarshalOidcConfig(p.cfg.EncryptionKey, conn.Config)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "decode connection config failed")
-			return
+			return nil, huma.Error500InternalServerError("decode connection config failed")
 		}
 		disco, err := fetchDiscovery(ctx, p.httpClient(), cfg.DiscoveryURL)
 		if err != nil {
-			writeError(w, http.StatusBadGateway, "DISCOVERY_FAILED", err.Error())
-			return
+			return nil, huma.Error502BadGateway(err.Error())
 		}
 
 		// Exchange the code at the IdP token endpoint. Confidential
@@ -338,12 +387,10 @@ func (p *ssoOIDCPlugin) handleSsoCallback(host plugin.PluginHost) http.HandlerFu
 			PKCEVerifier: st.PKCEVerifier,
 		})
 		if err != nil {
-			writeError(w, http.StatusBadGateway, "EXCHANGE_FAILED", err.Error())
-			return
+			return nil, huma.Error502BadGateway(err.Error())
 		}
 		if tokenResp.IDToken == "" {
-			writeError(w, http.StatusBadGateway, "NO_ID_TOKEN", "IdP did not return id_token")
-			return
+			return nil, huma.Error502BadGateway("IdP did not return id_token")
 		}
 
 		// Verify the id_token signature + standard claims.
@@ -351,8 +398,7 @@ func (p *ssoOIDCPlugin) handleSsoCallback(host plugin.PluginHost) http.HandlerFu
 		claims, err := cache.verifyIDToken(ctx, disco.JWKSURL, tokenResp.IDToken,
 			disco.Issuer, cfg.ClientID, st.Nonce)
 		if err != nil {
-			writeError(w, http.StatusUnauthorized, "ID_TOKEN_INVALID", err.Error())
-			return
+			return nil, huma.Error401Unauthorized(err.Error())
 		}
 
 		// Project claims into a JIT shape.
@@ -379,15 +425,12 @@ func (p *ssoOIDCPlugin) handleSsoCallback(host plugin.PluginHost) http.HandlerFu
 		userID, isNew, err := p.resolveOrJITUser(ctx, host, conn, provider, extID, email, displayName, claims.EmailOK)
 		if err != nil {
 			if errors.Is(err, errJITDisabled) {
-				writeError(w, http.StatusForbidden, "JIT_DISABLED", "your account is not provisioned in this organization; ask an admin to invite you")
-				return
+				return nil, huma.Error403Forbidden("your account is not provisioned in this organization; ask an admin to invite you")
 			}
 			if errors.Is(err, errEmailRequired) {
-				writeError(w, http.StatusBadRequest, "NO_EMAIL", "IdP did not return an email claim")
-				return
+				return nil, huma.Error400BadRequest("IdP did not return an email claim")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", err.Error())
-			return
+			return nil, huma.Error500InternalServerError(err.Error())
 		}
 
 		// Resolve org role + create/update membership.
@@ -395,19 +438,17 @@ func (p *ssoOIDCPlugin) handleSsoCallback(host plugin.PluginHost) http.HandlerFu
 		if role == "" {
 			role = auth.RoleMember
 		}
-		if r := mapGroupToRole(groups, mapping.GroupToRole); r != "" {
-			role = r
+		if mapped := mapGroupToRole(groups, mapping.GroupToRole); mapped != "" {
+			role = mapped
 		}
 		if err := p.upsertMembership(ctx, host, conn.OrganizationID, userID, role); err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "membership upsert failed")
-			return
+			return nil, huma.Error500InternalServerError("membership upsert failed")
 		}
 
 		// Issue session and set the cookie.
 		raw, sess, err := auth.IssueSession(ctx, host.Repo(), userID, middleware.RequestIP(r), requestUA(r), host.SessionTTL())
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "issue session failed")
-			return
+			return nil, huma.Error500InternalServerError("issue session failed")
 		}
 		// Stamp active_org_id so subsequent /me etc. land in this org.
 		oid := conn.OrganizationID
@@ -421,21 +462,23 @@ func (p *ssoOIDCPlugin) handleSsoCallback(host plugin.PluginHost) http.HandlerFu
 		// back the session.
 		uid := userID
 		em := email
-		method := "ssooidc:" + IssuerKeyFromDiscoveryURL(cfg.DiscoveryURL)
+		emitMethod := "ssooidc:" + IssuerKeyFromDiscoveryURL(cfg.DiscoveryURL)
 		if isNew {
 			_, _ = host.Emit(ctx, events.AuthEvent{
 				Type: events.EventUserRegistered, UserID: &uid, Email: &em,
-				IPAddress: middleware.RequestIP(r), Method: &method,
+				IPAddress: middleware.RequestIP(r), Method: &emitMethod,
 			})
 		}
 		_, _ = host.Emit(ctx, events.AuthEvent{
 			Type: events.EventLoginSucceeded, UserID: &uid, Email: &em,
-			IPAddress: middleware.RequestIP(r), Method: &method,
+			IPAddress: middleware.RequestIP(r), Method: &emitMethod,
 		})
 
 		if st.RedirectURL != "" {
-			http.Redirect(w, r, st.RedirectURL, http.StatusFound)
-			return
+			// Bodyless 302 to the stored redirect target; the Set-Cookie
+			// written above lands first (header-map mutation), then huma
+			// writes the Location header + 302 status.
+			return &flowOutput{Status: http.StatusFound, Location: st.RedirectURL}, nil
 		}
 		resp := callbackResponse{User: callbackUser{ID: userID, Email: email}}
 		if u, err := host.Repo().GetUserByID(ctx, userID); err == nil && u != nil {
@@ -443,8 +486,16 @@ func (p *ssoOIDCPlugin) handleSsoCallback(host plugin.PluginHost) http.HandlerFu
 			resp.User.EmailVerified = u.EmailVerified
 			resp.User.Role = u.Role
 		}
-		writeJSON(w, http.StatusOK, resp)
-	}
+		buf, err := json.Marshal(resp)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("encode response failed")
+		}
+		return &flowOutput{
+			Status:      http.StatusOK,
+			ContentType: "application/json; charset=utf-8",
+			Body:        buf,
+		}, nil
+	})
 }
 
 // --- helpers -----------------------------------------------------------

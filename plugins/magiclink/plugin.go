@@ -13,8 +13,9 @@
 package magiclink
 
 import (
-	"net/http"
 	"time"
+
+	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/yackey-labs/yauth-go/plugin"
 )
@@ -60,8 +61,15 @@ func New(cfg Config) plugin.Plugin {
 // Name implements plugin.Plugin.
 func (p *magicLinkPlugin) Name() string { return "magic-link" }
 
-// Routes implements plugin.Plugin.
-func (p *magicLinkPlugin) Routes(host plugin.PluginHost, mux plugin.Router, prefix string) {
-	mux.Handle("POST "+prefix+"/magic-link/send", http.HandlerFunc(p.handleSend(host)))
-	mux.Handle("POST "+prefix+"/magic-link/verify", http.HandlerFunc(p.handleVerify(host)))
+// Routes implements plugin.Plugin. Both routes are huma-native and public (no
+// auth gate, mirroring the passwordless flow). The request bodies are native
+// huma typed Body fields, so huma parses + validates them and the OpenAPI
+// request schemas auto-derive. /verify additionally uses StashHTTPHuma to reach
+// the underlying *http.Request (RequestIP / User-Agent) and http.ResponseWriter
+// for its Set-Cookie write; /send needs neither and uses no bridge. The mux is
+// retained in the signature for plugins that still register raw net/http routes;
+// magic-link no longer uses it.
+func (p *magicLinkPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.API, prefix string) {
+	p.registerSend(host, api, prefix)
+	p.registerVerify(host, api, prefix)
 }

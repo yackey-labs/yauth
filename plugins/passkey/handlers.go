@@ -6,11 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/google/uuid"
@@ -36,30 +36,34 @@ const (
 
 // --- response shapes ----------------------------------------------------
 
-type errorBody struct {
-	Error errorPayload `json:"error"`
-}
+// emptyOutput carries no body. The delete route returns it to drive a 204 via
+// DefaultStatus; the list route (still wired with StashHTTPHuma) writes its
+// success response directly onto the stashed http.ResponseWriter and returns
+// this so huma adds no body of its own.
+type emptyOutput struct{}
 
-type errorPayload struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+// passkeyInput is the zero-field input for the no-body routes: register/begin
+// (RequireAuth, no request body) and list (a GET whose pagination is parsed
+// from the stashed *http.Request). huma never consumes a body for either.
+type passkeyInput struct{}
+
+// reqRespFromCtx recovers the *http.Request and http.ResponseWriter stashed by
+// StashHTTPHuma. Used by login/finish (which sets a session cookie on the
+// writer) and list (which writes its paginated body directly); both are always
+// present there and the guard keeps it safe.
+func reqRespFromCtx(ctx context.Context) (*http.Request, http.ResponseWriter, error) {
+	r := middleware.HTTPRequestFromContext(ctx)
+	w := middleware.HTTPResponseFromContext(ctx)
+	if r == nil || w == nil {
+		return nil, nil, huma.Error500InternalServerError("request unavailable")
+	}
+	return r, w, nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeError(w http.ResponseWriter, status int, code, message string) {
-	writeJSON(w, status, errorBody{Error: errorPayload{Code: code, Message: message}})
-}
-
-func decodeJSON(r *http.Request, v any) error {
-	r.Body = http.MaxBytesReader(nil, r.Body, 1<<20)
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	return dec.Decode(v)
 }
 
 func cookieOptionsFromHost(host plugin.PluginHost, r *http.Request, maxAge int) auth.CookieOptions {
@@ -100,119 +104,123 @@ func loadCredentialsForUser(ctx context.Context, r repo.Repository, userID strin
 
 // --- /passkeys/register/begin -------------------------------------------
 
-// registerBeginResponse mirrors the Rust spec: returns the WebAuthn
+// passkeyRegisterBeginResponse mirrors the Rust spec: returns the WebAuthn
 // CredentialCreation options at the top level, with a challenge_id used
 // to correlate with the matching /finish call.
-type registerBeginResponse struct {
+type passkeyRegisterBeginResponse struct {
 	ChallengeID string                       `json:"challenge_id"`
 	Options     *protocol.CredentialCreation `json:"options"`
 }
 
-func (p *passkeyPlugin) handleRegisterBegin(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := middleware.AuthUserFromContext(r.Context())
+// passkeyRegisterBeginOutput is the huma-native typed output. The WebAuthn
+// options contain '&'/'<'/'>' in some fields; huma's escape-disabled Body
+// marshaler is semantically identical to the legacy escaping encoder, so a
+// native Output is safe here (no Set-Cookie forces the raw writer).
+type passkeyRegisterBeginOutput struct {
+	Body passkeyRegisterBeginResponse
+}
+
+func (p *passkeyPlugin) handleRegisterBegin(host plugin.PluginHost) func(context.Context, *passkeyInput) (*passkeyRegisterBeginOutput, error) {
+	return func(ctx context.Context, _ *passkeyInput) (*passkeyRegisterBeginOutput, error) {
+		au, ok := middleware.AuthUserFromContext(ctx)
 		if !ok || au == nil {
-			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "not authenticated")
-			return
+			return nil, huma.Error401Unauthorized("not authenticated")
 		}
-		ctx := r.Context()
 		repoRef := host.Repo()
 
 		creds, _, err := loadCredentialsForUser(ctx, repoRef, au.User.ID)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to load credentials")
-			return
+			return nil, huma.Error500InternalServerError("unable to load credentials")
 		}
 		pu := newPasskeyUser(&au.User, creds)
 
 		options, sess, err := p.wa.BeginRegistration(pu)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to begin registration")
-			return
+			return nil, huma.Error500InternalServerError("unable to begin registration")
 		}
 
 		sessJSON, err := json.Marshal(sess)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to encode session")
-			return
+			return nil, huma.Error500InternalServerError("unable to encode session")
 		}
 		reqID := uuid.NewString()
 		if err := repoRef.SetChallenge(ctx, regChallengePrefix+reqID, string(sessJSON), challengeTTL); err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to store challenge")
-			return
+			return nil, huma.Error500InternalServerError("unable to store challenge")
 		}
 
-		writeJSON(w, http.StatusOK, registerBeginResponse{ChallengeID: reqID, Options: options})
+		return &passkeyRegisterBeginOutput{Body: passkeyRegisterBeginResponse{ChallengeID: reqID, Options: options}}, nil
 	}
 }
 
 // --- /passkeys/register/finish ------------------------------------------
 
-type registerFinishRequest struct {
-	ChallengeID string          `json:"challenge_id"`
+// passkeyRegisterFinishRequest is the native huma Body for register/finish.
+// challenge_id and credential are validated to a business-400 below, so they
+// carry omitempty (a missing field must reach that check, not a huma 422); the
+// sentinel rejects unknown fields with a 422. Credential is json.RawMessage so
+// the inner attestation JSON object binds verbatim (huma schemas it as an open
+// schema, no base64 coercion).
+type passkeyRegisterFinishRequest struct {
+	ChallengeID string          `json:"challenge_id,omitempty"`
 	Name        string          `json:"name,omitempty"`
-	Credential  json.RawMessage `json:"credential"`
+	Credential  json.RawMessage `json:"credential,omitempty"`
+	_           struct{}        `json:"-" additionalProperties:"false"`
 }
 
-type registerFinishResponse struct {
+type passkeyRegisterFinishInput struct {
+	Body passkeyRegisterFinishRequest
+}
+
+type passkeyRegisterFinishResponse struct {
 	ID        string    `json:"id"`
 	Name      string    `json:"name"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
-func (p *passkeyPlugin) handleRegisterFinish(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := middleware.AuthUserFromContext(r.Context())
+type passkeyRegisterFinishOutput struct {
+	Body passkeyRegisterFinishResponse
+}
+
+func (p *passkeyPlugin) handleRegisterFinish(host plugin.PluginHost) func(context.Context, *passkeyRegisterFinishInput) (*passkeyRegisterFinishOutput, error) {
+	return func(ctx context.Context, in *passkeyRegisterFinishInput) (*passkeyRegisterFinishOutput, error) {
+		au, ok := middleware.AuthUserFromContext(ctx)
 		if !ok || au == nil {
-			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "not authenticated")
-			return
+			return nil, huma.Error401Unauthorized("not authenticated")
 		}
-		var req registerFinishRequest
-		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
-			return
-		}
+		req := in.Body
 		if req.ChallengeID == "" || len(req.Credential) == 0 {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "challenge_id and credential are required")
-			return
+			return nil, huma.Error400BadRequest("challenge_id and credential are required")
 		}
 
-		ctx := r.Context()
 		repoRef := host.Repo()
 
 		ch, err := repoRef.ConsumeChallenge(ctx, regChallengePrefix+req.ChallengeID)
 		if err != nil || ch == nil {
-			writeError(w, http.StatusBadRequest, "INVALID_CHALLENGE", "registration challenge not found or expired")
-			return
+			return nil, huma.Error400BadRequest("registration challenge not found or expired")
 		}
 		var sess webauthn.SessionData
 		if err := json.Unmarshal([]byte(ch.Value), &sess); err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to decode session")
-			return
+			return nil, huma.Error500InternalServerError("unable to decode session")
 		}
 
 		creds, _, err := loadCredentialsForUser(ctx, repoRef, au.User.ID)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to load credentials")
-			return
+			return nil, huma.Error500InternalServerError("unable to load credentials")
 		}
 		pu := newPasskeyUser(&au.User, creds)
 
 		parsed, err := protocol.ParseCredentialCreationResponseBody(bytes.NewReader(req.Credential))
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "INVALID_RESPONSE", "invalid attestation response: "+err.Error())
-			return
+			return nil, huma.Error400BadRequest("invalid attestation response: " + err.Error())
 		}
 		credential, err := p.wa.CreateCredential(pu, sess, parsed)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "ATTESTATION_FAILED", err.Error())
-			return
+			return nil, huma.Error400BadRequest(err.Error())
 		}
 
 		credJSON, err := json.Marshal(credential)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to encode credential")
-			return
+			return nil, huma.Error500InternalServerError("unable to encode credential")
 		}
 
 		name := strings.TrimSpace(req.Name)
@@ -236,42 +244,47 @@ func (p *passkeyPlugin) handleRegisterFinish(host plugin.PluginHost) http.Handle
 			Credential: credJSON,
 			CreatedAt:  now,
 		}); err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to store credential")
-			return
+			return nil, huma.Error500InternalServerError("unable to store credential")
 		}
 
-		writeJSON(w, http.StatusCreated, registerFinishResponse{
+		return &passkeyRegisterFinishOutput{Body: passkeyRegisterFinishResponse{
 			ID:        credID,
 			Name:      name,
 			CreatedAt: now,
-		})
+		}}, nil
 	}
 }
 
 // --- /passkey/login/begin -----------------------------------------------
 
-type loginBeginRequest struct {
-	Email string `json:"email,omitempty"`
+type passkeyLoginBeginRequest struct {
+	Email string   `json:"email,omitempty"`
+	_     struct{} `json:"-" additionalProperties:"false"`
 }
 
-type loginBeginResponse struct {
+// passkeyLoginBeginInput is the native huma input. Body is a POINTER so a
+// missing/empty request body is allowed (huma leaves it nil) — the discoverable
+// flow posts no body. A non-pointer Body would 422 on an empty body.
+type passkeyLoginBeginInput struct {
+	Body *passkeyLoginBeginRequest
+}
+
+type passkeyLoginBeginResponse struct {
 	ChallengeID string                        `json:"challenge_id"`
 	Options     *protocol.CredentialAssertion `json:"options"`
 }
 
-func (p *passkeyPlugin) handleLoginBegin(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		var req loginBeginRequest
-		// Body is optional; allow empty body for the discoverable flow.
-		if r.ContentLength != 0 {
-			if err := decodeJSON(r, &req); err != nil && !errors.Is(err, io.EOF) {
-				writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
-				return
-			}
-		}
-		ctx := r.Context()
+type passkeyLoginBeginOutput struct {
+	Body passkeyLoginBeginResponse
+}
+
+func (p *passkeyPlugin) handleLoginBegin(host plugin.PluginHost) func(context.Context, *passkeyLoginBeginInput) (*passkeyLoginBeginOutput, error) {
+	return func(ctx context.Context, in *passkeyLoginBeginInput) (*passkeyLoginBeginOutput, error) {
 		repoRef := host.Repo()
-		req.Email = strings.TrimSpace(strings.ToLower(req.Email))
+		var email string
+		if in.Body != nil {
+			email = strings.TrimSpace(strings.ToLower(in.Body.Email))
+		}
 
 		var (
 			options *protocol.CredentialAssertion
@@ -279,17 +292,15 @@ func (p *passkeyPlugin) handleLoginBegin(host plugin.PluginHost) http.HandlerFun
 			err     error
 		)
 
-		if req.Email != "" {
-			user, lookupErr := repoRef.GetUserByEmail(ctx, req.Email)
+		if email != "" {
+			user, lookupErr := repoRef.GetUserByEmail(ctx, email)
 			if lookupErr != nil && !errors.Is(lookupErr, yautherr.ErrNotFound) {
-				writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to look up user")
-				return
+				return nil, huma.Error500InternalServerError("unable to look up user")
 			}
 			if user != nil {
 				creds, _, loadErr := loadCredentialsForUser(ctx, repoRef, user.ID)
 				if loadErr != nil {
-					writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to load credentials")
-					return
+					return nil, huma.Error500InternalServerError("unable to load credentials")
 				}
 				if len(creds) > 0 {
 					pu := newPasskeyUser(user, creds)
@@ -301,39 +312,52 @@ func (p *passkeyPlugin) handleLoginBegin(host plugin.PluginHost) http.HandlerFun
 			options, sess, err = p.wa.BeginDiscoverableLogin()
 		}
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to begin login")
-			return
+			return nil, huma.Error500InternalServerError("unable to begin login")
 		}
 
 		sessJSON, err := json.Marshal(sess)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to encode session")
-			return
+			return nil, huma.Error500InternalServerError("unable to encode session")
 		}
 		reqID := uuid.NewString()
 		if err := repoRef.SetChallenge(ctx, loginChallengePrefix+reqID, string(sessJSON), challengeTTL); err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to store challenge")
-			return
+			return nil, huma.Error500InternalServerError("unable to store challenge")
 		}
 
-		writeJSON(w, http.StatusOK, loginBeginResponse{ChallengeID: reqID, Options: options})
+		return &passkeyLoginBeginOutput{Body: passkeyLoginBeginResponse{ChallengeID: reqID, Options: options}}, nil
 	}
 }
 
 // --- /passkey/login/finish ----------------------------------------------
 
-type loginFinishRequest struct {
-	ChallengeID string          `json:"challenge_id"`
-	Credential  json.RawMessage `json:"credential"`
+// passkeyLoginFinishRequest is the native huma Body. challenge_id and
+// credential are validated to a business-400 below, so they carry omitempty (a
+// missing field must reach that check, not a huma 422); the sentinel rejects
+// unknown fields with a 422. Credential is json.RawMessage so the inner
+// assertion JSON object binds verbatim.
+type passkeyLoginFinishRequest struct {
+	ChallengeID string          `json:"challenge_id,omitempty"`
+	Credential  json.RawMessage `json:"credential,omitempty"`
+	_           struct{}        `json:"-" additionalProperties:"false"`
 }
 
-// loginFinishResponse wraps the authenticated user under `user`. The
-// session cookie is set in the response headers.
-type loginFinishResponse struct {
-	User loginFinishUser `json:"user"`
+type passkeyLoginFinishInput struct {
+	Body passkeyLoginFinishRequest
 }
 
-type loginFinishUser struct {
+// passkeyLoginFinishResponse wraps the authenticated user under `user`. The
+// session cookie is set on the stashed response writer.
+type passkeyLoginFinishResponse struct {
+	User passkeyLoginFinishUser `json:"user"`
+}
+
+// passkeyLoginFinishOutput wraps the response body so huma marshals it after the
+// handler sets the session cookie on the stashed writer.
+type passkeyLoginFinishOutput struct {
+	Body passkeyLoginFinishResponse
+}
+
+type passkeyLoginFinishUser struct {
 	ID            string  `json:"id"`
 	Email         string  `json:"email"`
 	DisplayName   *string `json:"display_name,omitempty"`
@@ -341,9 +365,9 @@ type loginFinishUser struct {
 	Role          string  `json:"role"`
 }
 
-func toLoginFinishResponse(u domain.User) loginFinishResponse {
-	return loginFinishResponse{
-		User: loginFinishUser{
+func toLoginFinishResponse(u domain.User) passkeyLoginFinishResponse {
+	return passkeyLoginFinishResponse{
+		User: passkeyLoginFinishUser{
 			ID:            u.ID,
 			Email:         u.Email,
 			DisplayName:   u.DisplayName,
@@ -353,37 +377,31 @@ func toLoginFinishResponse(u domain.User) loginFinishResponse {
 	}
 }
 
-
-func (p *passkeyPlugin) handleLoginFinish(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		var req loginFinishRequest
-		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
-			return
+func (p *passkeyPlugin) handleLoginFinish(host plugin.PluginHost) func(context.Context, *passkeyLoginFinishInput) (*passkeyLoginFinishOutput, error) {
+	return func(ctx context.Context, in *passkeyLoginFinishInput) (*passkeyLoginFinishOutput, error) {
+		r, w, err := reqRespFromCtx(ctx)
+		if err != nil {
+			return nil, err
 		}
+		req := in.Body
 		if req.ChallengeID == "" || len(req.Credential) == 0 {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "challenge_id and credential are required")
-			return
+			return nil, huma.Error400BadRequest("challenge_id and credential are required")
 		}
 
-		ctx := r.Context()
 		repoRef := host.Repo()
 
 		ch, err := repoRef.ConsumeChallenge(ctx, loginChallengePrefix+req.ChallengeID)
 		if err != nil || ch == nil {
-			writeError(w, http.StatusBadRequest, "INVALID_CHALLENGE", "login challenge not found or expired")
-			return
+			return nil, huma.Error400BadRequest("login challenge not found or expired")
 		}
 		var sess webauthn.SessionData
 		if err := json.Unmarshal([]byte(ch.Value), &sess); err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to decode session")
-			return
+			return nil, huma.Error500InternalServerError("unable to decode session")
 		}
 
 		parsed, err := protocol.ParseCredentialRequestResponseBody(bytes.NewReader(req.Credential))
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "INVALID_RESPONSE", "invalid assertion response: "+err.Error())
-			return
+			return nil, huma.Error400BadRequest("invalid assertion response: " + err.Error())
 		}
 
 		// Discoverable flow: the server only knows the user once the
@@ -412,37 +430,31 @@ func (p *passkeyPlugin) handleLoginFinish(host plugin.PluginHost) http.HandlerFu
 		} else {
 			user, lookupErr := repoRef.GetUserByID(ctx, string(sess.UserID))
 			if lookupErr != nil {
-				writeError(w, http.StatusUnauthorized, "INVALID_CREDENTIALS", "unknown user")
-				return
+				return nil, huma.Error401Unauthorized("unknown user")
 			}
 			matchedUser = user
 			creds, _, loadErr := loadCredentialsForUser(ctx, repoRef, user.ID)
 			if loadErr != nil {
-				writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to load credentials")
-				return
+				return nil, huma.Error500InternalServerError("unable to load credentials")
 			}
 			verified, err = p.wa.ValidateLogin(newPasskeyUser(user, creds), sess, parsed)
 		}
 		if err != nil || verified == nil || matchedUser == nil {
-			writeError(w, http.StatusUnauthorized, "INVALID_CREDENTIALS", "passkey verification failed")
-			return
+			return nil, huma.Error401Unauthorized("passkey verification failed")
 		}
 		if matchedUser.Banned {
-			writeError(w, http.StatusForbidden, "USER_BANNED", "account suspended")
-			return
+			return nil, huma.Error403Forbidden("account suspended")
 		}
 
 		// Refresh the stored credential record (sign-counter / flags update).
 		if err := p.persistVerifiedCredential(ctx, repoRef, matchedUser.ID, verified); err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to update credential")
-			return
+			return nil, huma.Error500InternalServerError("unable to update credential")
 		}
 
 		ip := middleware.RequestIP(r)
 		raw, _, err := auth.IssueSession(ctx, repoRef, matchedUser.ID, ip, requestUA(r), host.SessionTTL())
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to issue session")
-			return
+			return nil, huma.Error500InternalServerError("unable to issue session")
 		}
 
 		method := "passkey"
@@ -460,7 +472,7 @@ func (p *passkeyPlugin) handleLoginFinish(host plugin.PluginHost) http.HandlerFu
 			cookieOptionsFromHost(host, r, int(host.SessionTTL().Seconds())),
 			raw,
 		))
-		writeJSON(w, http.StatusOK, toLoginFinishResponse(*matchedUser))
+		return &passkeyLoginFinishOutput{Body: toLoginFinishResponse(*matchedUser)}, nil
 	}
 }
 
@@ -513,17 +525,19 @@ type listResponse struct {
 	PerPage int           `json:"per_page"`
 }
 
-func (p *passkeyPlugin) handleList(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := middleware.AuthUserFromContext(r.Context())
+func (p *passkeyPlugin) handleList(host plugin.PluginHost) func(context.Context, *passkeyInput) (*emptyOutput, error) {
+	return func(ctx context.Context, _ *passkeyInput) (*emptyOutput, error) {
+		au, ok := middleware.AuthUserFromContext(ctx)
 		if !ok || au == nil {
-			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "not authenticated")
-			return
+			return nil, huma.Error401Unauthorized("not authenticated")
 		}
-		rows, err := host.Repo().GetPasskeysByUserID(r.Context(), au.User.ID)
+		r, w, err := reqRespFromCtx(ctx)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to list passkeys")
-			return
+			return nil, err
+		}
+		rows, err := host.Repo().GetPasskeysByUserID(ctx, au.User.ID)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("unable to list passkeys")
 		}
 		page, perPage := paginationFromQuery(r)
 		total := int64(len(rows))
@@ -553,6 +567,7 @@ func (p *passkeyPlugin) handleList(host plugin.PluginHost) http.HandlerFunc {
 			Page:    page,
 			PerPage: perPage,
 		})
+		return &emptyOutput{}, nil
 	}
 }
 
@@ -593,35 +608,35 @@ var errParseInt = errors.New("parse int")
 
 // --- /passkeys/{id} (delete) --------------------------------------------
 
-func (p *passkeyPlugin) handleDelete(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := middleware.AuthUserFromContext(r.Context())
+// deleteInput carries the credential id path parameter. huma binds {id} from
+// the route into ID; no body is consumed.
+type deleteInput struct {
+	ID string `path:"id" doc:"Passkey credential ID"`
+}
+
+func (p *passkeyPlugin) handleDelete(host plugin.PluginHost) func(context.Context, *deleteInput) (*emptyOutput, error) {
+	return func(ctx context.Context, in *deleteInput) (*emptyOutput, error) {
+		au, ok := middleware.AuthUserFromContext(ctx)
 		if !ok || au == nil {
-			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "not authenticated")
-			return
+			return nil, huma.Error401Unauthorized("not authenticated")
 		}
-		id := r.PathValue("id")
+		id := in.ID
 		if id == "" {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "missing id")
-			return
+			return nil, huma.Error400BadRequest("missing id")
 		}
-		ctx := r.Context()
 		repoRef := host.Repo()
 
 		row, err := repoRef.GetPasskeyByIDAndUser(ctx, id, au.User.ID)
 		if err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "NOT_FOUND", "passkey not found")
-				return
+				return nil, huma.Error404NotFound("passkey not found")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to look up passkey")
-			return
+			return nil, huma.Error500InternalServerError("unable to look up passkey")
 		}
 		if err := repoRef.DeletePasskey(ctx, row.ID); err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to delete passkey")
-			return
+			return nil, huma.Error500InternalServerError("unable to delete passkey")
 		}
-		w.WriteHeader(http.StatusNoContent)
+		return &emptyOutput{}, nil
 	}
 }
 

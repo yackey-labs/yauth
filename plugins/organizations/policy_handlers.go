@@ -15,14 +15,18 @@
 package organizations
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
+
 	"github.com/yackey-labs/yauth-go/auth"
 	"github.com/yackey-labs/yauth-go/domain"
+	"github.com/yackey-labs/yauth-go/middleware"
 	"github.com/yackey-labs/yauth-go/plugin"
 	"github.com/yackey-labs/yauth-go/yautherr"
 )
@@ -77,7 +81,9 @@ type getOrgPolicyResponse struct {
 // cap fields.
 type patchOrgPolicyRequest struct {
 	// Numeric caps: json.RawMessage lets us discriminate "absent"
-	// (nil) from "null" (clear to nil) from a concrete number.
+	// (nil) from "null" (clear to nil) from a concrete number. huma
+	// carries the RawMessage fields through as free-form JSON; the
+	// handler still does the absent/null/value discrimination.
 	MaxSessionDurationSecs json.RawMessage            `json:"max_session_duration_secs,omitempty"`
 	IdleTimeoutSecs        json.RawMessage            `json:"idle_timeout_secs,omitempty"`
 	MfaRequired            *bool                      `json:"mfa_required,omitempty"`
@@ -86,6 +92,13 @@ type patchOrgPolicyRequest struct {
 	MaxConcurrentSessions  json.RawMessage            `json:"max_concurrent_sessions,omitempty"`
 	AllowedAuthMethods     *[]string                  `json:"allowed_auth_methods,omitempty"`
 	SessionBinding         *domain.SessionBindingMode `json:"session_binding,omitempty"`
+	_                      struct{}                   `json:"-" additionalProperties:"false"`
+}
+
+// patchOrgPolicyInput wraps the native JSON body plus the org path param.
+type patchOrgPolicyInput struct {
+	ID   string `path:"id" doc:"Organization ID"`
+	Body patchOrgPolicyRequest
 }
 
 // --- Conversions ---
@@ -147,20 +160,32 @@ func toEffectiveJSON(eff auth.EffectivePolicy) effectivePolicyJSON {
 
 // --- GET /organizations/{id}/policy ---
 
-func (p *orgsPlugin) handleGetOrgPolicy(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := authUser(w, r)
-		if !ok {
-			return
+// getOrgPolicyOutput wraps the getOrgPolicyResponse body shared by GET + PATCH.
+type getOrgPolicyOutput struct {
+	Body getOrgPolicyResponse
+}
+
+func (p *orgsPlugin) registerGetOrgPolicy(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "organizations-get-policy",
+		Method:      http.MethodGet,
+		Path:        prefix + "/organizations/{id}/policy",
+		Summary:     "Read the org's effective auth policy",
+		Tags:        []string{"organizations"},
+		Security:    []map[string][]string{{"sessionCookie": {}}},
+		Middlewares: authGuards(api, mw),
+	}, func(ctx context.Context, in *orgIDInput) (*getOrgPolicyOutput, error) {
+		au, err := authUser(ctx)
+		if err != nil {
+			return nil, err
 		}
-		orgID := r.PathValue("id")
-		if _, ok := requireOrgMember(w, r, host, orgID, au.User.ID); !ok {
-			return
+		orgID := in.ID
+		if _, err := requireOrgMember(ctx, host, orgID, au.User.ID); err != nil {
+			return nil, err
 		}
-		policy, err := host.Repo().GetOrganizationPolicy(r.Context(), orgID)
+		policy, err := host.Repo().GetOrganizationPolicy(ctx, orgID)
 		if err != nil && !errors.Is(err, yautherr.ErrNotFound) {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "policy lookup failed")
-			return
+			return nil, huma.Error500InternalServerError("policy lookup failed")
 		}
 		// Build the effective policy by merging org + globals. When
 		// the org has no row (policy == nil) the effective policy
@@ -178,11 +203,11 @@ func (p *orgsPlugin) handleGetOrgPolicy(host plugin.PluginHost) http.HandlerFunc
 			j := toOrgPolicyJSON(*policy)
 			stored = &j
 		}
-		writeJSON(w, http.StatusOK, getOrgPolicyResponse{
+		return &getOrgPolicyOutput{Body: getOrgPolicyResponse{
 			Policy:    stored,
 			Effective: toEffectiveJSON(enf.Effective()),
-		})
-	}
+		}}, nil
+	})
 }
 
 // --- PATCH /organizations/{id}/policy ---
@@ -200,32 +225,34 @@ func (p *orgsPlugin) handleGetOrgPolicy(host plugin.PluginHost) http.HandlerFunc
 //
 // Returns the merged effective policy after the write so the client
 // does not need to fetch it separately.
-func (p *orgsPlugin) handlePatchOrgPolicy(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := authUser(w, r)
-		if !ok {
-			return
+func (p *orgsPlugin) registerPatchOrgPolicy(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "organizations-patch-policy",
+		Method:      http.MethodPatch,
+		Path:        prefix + "/organizations/{id}/policy",
+		Summary:     "Update the org's auth policy (partial)",
+		Tags:        []string{"organizations"},
+		Security:    []map[string][]string{{"sessionCookie": {}}},
+		Middlewares: authGuards(api, mw),
+	}, func(ctx context.Context, in *patchOrgPolicyInput) (*getOrgPolicyOutput, error) {
+		au, err := authUser(ctx)
+		if err != nil {
+			return nil, err
 		}
-		orgID := r.PathValue("id")
-		if _, ok := requireOrgAdmin(w, r, host, orgID, au.User.ID); !ok {
-			return
+		orgID := in.ID
+		if _, err := requireOrgAdmin(ctx, host, orgID, au.User.ID); err != nil {
+			return nil, err
 		}
-		var req patchOrgPolicyRequest
-		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid json body")
-			return
-		}
+		req := in.Body
 
 		changes, errMsg := buildPolicyUpdate(req)
 		if errMsg != "" {
-			writeError(w, http.StatusBadRequest, "BAD_REQUEST", errMsg)
-			return
+			return nil, huma.Error400BadRequest(errMsg)
 		}
 
-		updated, err := host.Repo().UpsertOrganizationPolicy(r.Context(), orgID, changes)
+		updated, err := host.Repo().UpsertOrganizationPolicy(ctx, orgID, changes)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "policy upsert failed")
-			return
+			return nil, huma.Error500InternalServerError("policy upsert failed")
 		}
 
 		bindIP, bindUA := host.SessionBinding()
@@ -235,11 +262,11 @@ func (p *orgsPlugin) handlePatchOrgPolicy(host plugin.PluginHost) http.HandlerFu
 			GlobalBindUA: bindUA,
 		})
 		j := toOrgPolicyJSON(updated)
-		writeJSON(w, http.StatusOK, getOrgPolicyResponse{
+		return &getOrgPolicyOutput{Body: getOrgPolicyResponse{
 			Policy:    &j,
 			Effective: toEffectiveJSON(enf.Effective()),
-		})
-	}
+		}}, nil
+	})
 }
 
 // buildPolicyUpdate translates the on-the-wire patch shape into the

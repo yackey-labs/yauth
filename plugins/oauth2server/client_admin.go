@@ -1,11 +1,13 @@
 package oauth2server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/google/uuid"
 
 	"github.com/yackey-labs/yauth-go/auth"
@@ -39,13 +41,21 @@ type clientJSON struct {
 	BackchannelLogoutSessionRequired bool     `json:"backchannel_logout_session_required"`
 }
 
-// createClientRequest is the body for POST /oauth2/clients.
+// createClientRequest is the body for POST /oauth2/clients. It is a native
+// huma typed Body (additionalProperties:false rejects unknown fields → 422),
+// so the request schema auto-derives.
 type createClientRequest struct {
+	// Every field is omitempty so huma imposes no required constraint the
+	// bridged strict-decoder did not: the legacy handler accepted bodies with
+	// zero redirect_uris / absent grant_types (e.g. a public device-flow or a
+	// client_credentials-only confidential client), validating per-grant later
+	// on /authorize and /token. Marking any field required would 422 those
+	// legitimate bodies.
 	Name                    *string  `json:"name,omitempty"`
-	RedirectURIs            []string `json:"redirect_uris"`
-	GrantTypes              []string `json:"grant_types"`
-	Scopes                  []string `json:"scopes"`
-	IsPublic                bool     `json:"is_public"`
+	RedirectURIs            []string `json:"redirect_uris,omitempty"`
+	GrantTypes              []string `json:"grant_types,omitempty"`
+	Scopes                  []string `json:"scopes,omitempty"`
+	IsPublic                bool     `json:"is_public,omitempty"`
 	TokenEndpointAuthMethod *string  `json:"token_endpoint_auth_method,omitempty"`
 	PublicKeyPEM            *string  `json:"public_key_pem,omitempty"`
 	JWKSURI                 *string  `json:"jwks_uri,omitempty"`
@@ -54,6 +64,13 @@ type createClientRequest struct {
 	PostLogoutRedirectURIs           []string `json:"post_logout_redirect_uris,omitempty"`
 	BackchannelLogoutURI             *string  `json:"backchannel_logout_uri,omitempty"`
 	BackchannelLogoutSessionRequired bool     `json:"backchannel_logout_session_required,omitempty"`
+
+	_ struct{} `json:"-" additionalProperties:"false"`
+}
+
+// createClientInput is the native huma request wrapper for POST /oauth2/clients.
+type createClientInput struct {
+	Body createClientRequest
 }
 
 type createClientResponse struct {
@@ -61,8 +78,14 @@ type createClientResponse struct {
 	ClientSecret *string    `json:"client_secret,omitempty"`
 }
 
+// createClientOutput wraps createClientResponse; DefaultStatus drives the 201.
+type createClientOutput struct {
+	Body createClientResponse
+}
+
 // patchClientRequest is the body for PATCH /oauth2/clients/{id}. Pointer
-// fields are absent when not changing; an explicit Banned=false unbans.
+// fields are absent when not changing; an explicit Banned=false unbans. It is a
+// native huma typed Body (additionalProperties:false → 422 on unknown fields).
 type patchClientRequest struct {
 	Banned                 *bool   `json:"banned,omitempty"`
 	BannedReason           *string `json:"banned_reason,omitempty"`
@@ -74,6 +97,20 @@ type patchClientRequest struct {
 	PostLogoutRedirectURIs           *[]string `json:"post_logout_redirect_uris,omitempty"`
 	BackchannelLogoutURI             *string   `json:"backchannel_logout_uri,omitempty"`
 	BackchannelLogoutSessionRequired *bool     `json:"backchannel_logout_session_required,omitempty"`
+
+	_ struct{} `json:"-" additionalProperties:"false"`
+}
+
+// patchClientInput is the native huma request for PATCH /oauth2/clients/{id}:
+// the {id} path param plus the typed JSON body.
+type patchClientInput struct {
+	ID   string `path:"id"`
+	Body patchClientRequest
+}
+
+// clientOutput wraps a single clientJSON (the 200 body shared by patch).
+type clientOutput struct {
+	Body clientJSON
 }
 
 // toClientJSON converts a domain.OAuth2Client to its JSON shape.
@@ -103,16 +140,17 @@ func toClientJSON(c domain.OAuth2Client) clientJSON {
 // handleCreateClient registers a new OAuth2 client. For confidential
 // clients (is_public=false) a fresh secret is generated, hashed, and
 // returned exactly once in the response.
-func (p *oauth2Plugin) handleCreateClient(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		var req createClientRequest
-		r.Body = http.MaxBytesReader(nil, r.Body, 1<<20)
-		dec := json.NewDecoder(r.Body)
-		dec.DisallowUnknownFields()
-		if err := dec.Decode(&req); err != nil {
-			writeOAuthError(w, "invalid_request", err.Error())
-			return
-		}
+//
+// This is a native huma handler: huma parses + validates the typed Body
+// (additionalProperties:false → 422 on unknown/malformed JSON), so the
+// request schema auto-derives and the old strict-decoder bridge is gone.
+// Business errors keep their original status: a server-side failure that
+// the legacy handler wrote as RFC 6749 server_error (HTTP 500) becomes
+// huma.Error500InternalServerError (problem+json, same 500). The 201 success
+// shape ({client, client_secret}) is byte-identical.
+func (p *oauth2Plugin) handleCreateClient(host plugin.PluginHost) func(context.Context, *createClientInput) (*createClientOutput, error) {
+	return func(ctx context.Context, in *createClientInput) (*createClientOutput, error) {
+		req := in.Body
 		// Confidential clients used only for client_credentials and
 		// public clients used for the device flow may legitimately
 		// have zero redirect_uris. Validation is per-grant on the
@@ -133,28 +171,25 @@ func (p *oauth2Plugin) handleCreateClient(host plugin.PluginHost) http.HandlerFu
 
 		clientID, err := randomHex(16)
 		if err != nil {
-			writeOAuthError(w, "server_error", err.Error())
-			return
+			return nil, huma.Error500InternalServerError(err.Error())
 		}
 		var secretHash *string
 		var rawSecret *string
 		if !req.IsPublic {
 			s, err := randomHex(24)
 			if err != nil {
-				writeOAuthError(w, "server_error", err.Error())
-				return
+				return nil, huma.Error500InternalServerError(err.Error())
 			}
 			h, err := auth.HashPassword(s)
 			if err != nil {
-				writeOAuthError(w, "server_error", err.Error())
-				return
+				return nil, huma.Error500InternalServerError(err.Error())
 			}
 			secretHash = &h
 			rawSecret = &s
 		}
 
 		now := time.Now().UTC()
-		new := domain.NewOAuth2Client{
+		newClient := domain.NewOAuth2Client{
 			ID:                      uuid.NewString(),
 			ClientID:                clientID,
 			ClientSecretHash:        secretHash,
@@ -173,20 +208,17 @@ func (p *oauth2Plugin) handleCreateClient(host plugin.PluginHost) http.HandlerFu
 			BackchannelLogoutURI:             req.BackchannelLogoutURI,
 			BackchannelLogoutSessionRequired: req.BackchannelLogoutSessionRequired,
 		}
-		if err := host.Repo().CreateOAuth2Client(r.Context(), new); err != nil {
-			// writeOAuthError emits a JSON response body per RFC 6749 §5.2, not a SQL string.
-			writeOAuthError(w, "server_error", "create client: "+sanitizeErr(err)) // nosemgrep: go.lang.security.injection.tainted-sql-string.tainted-sql-string
-			return
+		if err := host.Repo().CreateOAuth2Client(ctx, newClient); err != nil {
+			return nil, huma.Error500InternalServerError("create client: " + sanitizeErr(err))
 		}
-		stored, err := host.Repo().GetOAuth2ClientByClientID(r.Context(), clientID)
+		stored, err := host.Repo().GetOAuth2ClientByClientID(ctx, clientID)
 		if err != nil {
-			writeOAuthError(w, "server_error", "lookup created client: "+sanitizeErr(err)) // nosemgrep: go.lang.security.injection.tainted-sql-string.tainted-sql-string
-			return
+			return nil, huma.Error500InternalServerError("lookup created client: " + sanitizeErr(err))
 		}
-		writeJSON(w, http.StatusCreated, createClientResponse{
+		return &createClientOutput{Body: createClientResponse{
 			Client:       toClientJSON(*stored),
 			ClientSecret: rawSecret,
-		})
+		}}, nil
 	}
 }
 
@@ -234,15 +266,16 @@ func (p *oauth2Plugin) handleListClients(host plugin.PluginHost) http.HandlerFun
 
 // handlePatchClient supports two operations: ban/unban and
 // public-key rotation (for private_key_jwt-authenticated clients).
-func (p *oauth2Plugin) handlePatchClient(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		var req patchClientRequest
-		r.Body = http.MaxBytesReader(nil, r.Body, 1<<20)
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeOAuthError(w, "invalid_request", err.Error())
-			return
-		}
-		id := r.PathValue("id")
+//
+// Native huma handler: typed Body (additionalProperties:false → 422 on
+// unknown/malformed JSON). Business errors keep their legacy status —
+// invalid_request → 400 (huma.Error400BadRequest), server_error → 500
+// (huma.Error500InternalServerError) — emitted as problem+json. The 200
+// clientJSON body is unchanged.
+func (p *oauth2Plugin) handlePatchClient(host plugin.PluginHost) func(context.Context, *patchClientInput) (*clientOutput, error) {
+	return func(ctx context.Context, in *patchClientInput) (*clientOutput, error) {
+		req := in.Body
+		id := in.ID
 
 		if req.Banned != nil {
 			now := time.Now().UTC()
@@ -252,33 +285,28 @@ func (p *oauth2Plugin) handlePatchClient(host plugin.PluginHost) http.HandlerFun
 				bannedAt = &now
 				reason = req.BannedReason
 			}
-			if _, err := host.Repo().SetOAuth2ClientBanned(r.Context(), id, bannedAt, reason); err != nil {
-				writeOAuthError(w, "server_error", err.Error())
-				return
+			if _, err := host.Repo().SetOAuth2ClientBanned(ctx, id, bannedAt, reason); err != nil {
+				return nil, huma.Error500InternalServerError(err.Error())
 			}
 		}
 		if req.PublicKeyPEM != nil {
-			if _, err := host.Repo().RotateOAuth2ClientPublicKey(r.Context(), id, req.PublicKeyPEM); err != nil {
-				writeOAuthError(w, "server_error", err.Error())
-				return
+			if _, err := host.Repo().RotateOAuth2ClientPublicKey(ctx, id, req.PublicKeyPEM); err != nil {
+				return nil, huma.Error500InternalServerError(err.Error())
 			}
 		}
 		if req.EnforceGroupAssignment != nil {
-			if err := host.Repo().SetClientEnforceGroupAssignment(r.Context(), id, *req.EnforceGroupAssignment); err != nil {
-				writeOAuthError(w, "server_error", err.Error())
-				return
+			if err := host.Repo().SetClientEnforceGroupAssignment(ctx, id, *req.EnforceGroupAssignment); err != nil {
+				return nil, huma.Error500InternalServerError(err.Error())
 			}
 		}
 		if req.PostLogoutRedirectURIs != nil || req.BackchannelLogoutURI != nil || req.BackchannelLogoutSessionRequired != nil {
 			// Merge against current values for the logout fields not provided.
-			cur, err := host.Repo().GetOAuth2ClientByClientID(r.Context(), id)
+			cur, err := host.Repo().GetOAuth2ClientByClientID(ctx, id)
 			if err != nil {
 				if errors.Is(err, yautherr.ErrNotFound) {
-					writeOAuthError(w, "invalid_request", "client not found")
-					return
+					return nil, huma.Error400BadRequest("client not found")
 				}
-				writeOAuthError(w, "server_error", err.Error())
-				return
+				return nil, huma.Error500InternalServerError(err.Error())
 			}
 			plru := cur.PostLogoutRedirectURIs
 			if req.PostLogoutRedirectURIs != nil {
@@ -301,17 +329,15 @@ func (p *oauth2Plugin) handlePatchClient(host plugin.PluginHost) http.HandlerFun
 			if req.BackchannelLogoutSessionRequired != nil {
 				sessReq = *req.BackchannelLogoutSessionRequired
 			}
-			if _, err := host.Repo().SetOAuth2ClientLogout(r.Context(), id, plru, bclURI, sessReq); err != nil {
-				writeOAuthError(w, "server_error", err.Error())
-				return
+			if _, err := host.Repo().SetOAuth2ClientLogout(ctx, id, plru, bclURI, sessReq); err != nil {
+				return nil, huma.Error500InternalServerError(err.Error())
 			}
 		}
-		c, err := host.Repo().GetOAuth2ClientByClientID(r.Context(), id)
+		c, err := host.Repo().GetOAuth2ClientByClientID(ctx, id)
 		if err != nil {
-			writeOAuthError(w, "server_error", err.Error())
-			return
+			return nil, huma.Error500InternalServerError(err.Error())
 		}
-		writeJSON(w, http.StatusOK, toClientJSON(*c))
+		return &clientOutput{Body: toClientJSON(*c)}, nil
 	}
 }
 

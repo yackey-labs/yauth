@@ -1,6 +1,8 @@
 package organizations
 
 import (
+	"github.com/yackey-labs/yauth-go/humaapi"
+
 	"bytes"
 	"context"
 	"encoding/json"
@@ -79,7 +81,7 @@ func newTestServer(t *testing.T, user domain.User) (*httptest.Server, repo.Repos
 
 	mux := http.NewServeMux()
 	p := New(Config{}).(*orgsPlugin)
-	p.Routes(host, mux, "")
+	p.Routes(host, mux, humaapi.New(mux), "")
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv, r
@@ -372,7 +374,7 @@ func TestUnauthenticatedReturns401(t *testing.T) {
 	r := memrepo.New()
 	host := newFakeHost(r)
 	mux := http.NewServeMux()
-	New(Config{}).(*orgsPlugin).Routes(host, mux, "")
+	New(Config{}).(*orgsPlugin).Routes(host, mux, humaapi.New(mux), "")
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
@@ -410,7 +412,7 @@ func newTestServerWithSharedRepo(t *testing.T, user domain.User, r repo.Reposito
 	host := newFakeHost(r)
 	host.mw.AddResolver(&stubResolver{user: &domain.AuthUser{User: user}})
 	mux := http.NewServeMux()
-	New(Config{}).(*orgsPlugin).Routes(host, mux, "")
+	New(Config{}).(*orgsPlugin).Routes(host, mux, humaapi.New(mux), "")
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv

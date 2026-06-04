@@ -39,20 +39,30 @@
 package organizations
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/google/uuid"
 
 	"github.com/yackey-labs/yauth-go/auth"
 	"github.com/yackey-labs/yauth-go/domain"
+	"github.com/yackey-labs/yauth-go/middleware"
 	"github.com/yackey-labs/yauth-go/plugin"
 	"github.com/yackey-labs/yauth-go/plugins/apikey"
 	"github.com/yackey-labs/yauth-go/yautherr"
 )
+
+// orgKeyInput adds the API key id to the org-scoped path. The path params are
+// named "id" and "key_id" to match the legacy r.PathValue lookups.
+type orgKeyInput struct {
+	ID    string `path:"id" doc:"Organization ID"`
+	KeyID string `path:"key_id" doc:"API key ID"`
+}
 
 // rotationGracePeriod is how long the rotated-out key stays valid after
 // rotation. 24h is the value documented in the design sketch — long
@@ -126,11 +136,20 @@ func encodePermissions(perms []string) json.RawMessage {
 }
 
 // createOrgAPIKeyRequest is the input for POST /organizations/{id}/api-keys.
+// Name carries omitempty so an absent/blank value reaches the handler's
+// business-rule 400 ("name is required"), not huma's 422.
 type createOrgAPIKeyRequest struct {
-	Name          string   `json:"name"`
+	Name          string   `json:"name,omitempty"`
 	Role          *string  `json:"role,omitempty"`
 	Permissions   []string `json:"permissions,omitempty"`
 	ExpiresInDays *int     `json:"expires_in_days,omitempty"`
+	_             struct{} `json:"-" additionalProperties:"false"`
+}
+
+// createOrgAPIKeyInput wraps the native JSON body plus the org path param.
+type createOrgAPIKeyInput struct {
+	ID   string `path:"id" doc:"Organization ID"`
+	Body createOrgAPIKeyRequest
 }
 
 // createOrgAPIKeyResponse mirrors the user-scoped create response shape:
@@ -242,46 +261,49 @@ func isBuiltinPermission(p auth.Permission) bool {
 // Admin+ in the target org only. The freshly-generated plaintext is
 // emitted exactly once in the response `secret` field; subsequent
 // reads return metadata only.
-func (p *orgsPlugin) handleCreateOrgAPIKey(host plugin.PluginHost, prefixTag string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := authUser(w, r)
-		if !ok {
-			return
+func (p *orgsPlugin) registerCreateOrgAPIKey(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix, prefixTag string) {
+	type output struct {
+		Body createOrgAPIKeyResponse
+	}
+	huma.Register(api, huma.Operation{
+		OperationID:   "organizations-create-api-key",
+		Method:        http.MethodPost,
+		Path:          prefix + "/organizations/{id}/api-keys",
+		Summary:       "Create an org-scoped API key (service account)",
+		Tags:          []string{"organizations"},
+		Security:      []map[string][]string{{"sessionCookie": {}}},
+		DefaultStatus: http.StatusCreated,
+		Middlewares:   authGuards(api, mw),
+	}, func(ctx context.Context, in *createOrgAPIKeyInput) (*output, error) {
+		au, err := authUser(ctx)
+		if err != nil {
+			return nil, err
 		}
-		orgID := r.PathValue("id")
+		orgID := in.ID
 		if orgID == "" {
-			writeError(w, http.StatusBadRequest, "BAD_REQUEST", "org id is required")
-			return
+			return nil, huma.Error400BadRequest("org id is required")
 		}
-		caller, ok := requireOrgAdmin(w, r, host, orgID, au.User.ID)
-		if !ok {
-			return
+		caller, err := requireOrgAdmin(ctx, host, orgID, au.User.ID)
+		if err != nil {
+			return nil, err
 		}
 
-		var req createOrgAPIKeyRequest
-		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid json body")
-			return
-		}
+		req := in.Body
 		req.Name = strings.TrimSpace(req.Name)
 		if req.Name == "" {
-			writeError(w, http.StatusBadRequest, "INVALID_NAME", "name is required")
-			return
+			return nil, huma.Error400BadRequest("name is required")
 		}
 		if code, msg := validateServiceAccountRole(caller.Role, req.Role); code != "" {
-			writeError(w, http.StatusForbidden, code, msg)
-			return
+			return nil, huma.Error403Forbidden(msg)
 		}
 		if code, msg := validateServiceAccountPermissions(caller.Role, req.Permissions); code != "" {
-			writeError(w, http.StatusForbidden, code, msg)
-			return
+			return nil, huma.Error403Forbidden(msg)
 		}
 
 		var expiresAt *time.Time
 		if req.ExpiresInDays != nil {
 			if *req.ExpiresInDays <= 0 {
-				writeError(w, http.StatusBadRequest, "INVALID_EXPIRY", "expires_in_days must be positive")
-				return
+				return nil, huma.Error400BadRequest("expires_in_days must be positive")
 			}
 			t := time.Now().UTC().Add(time.Duration(*req.ExpiresInDays) * 24 * time.Hour)
 			expiresAt = &t
@@ -289,8 +311,7 @@ func (p *orgsPlugin) handleCreateOrgAPIKey(host plugin.PluginHost, prefixTag str
 
 		gen, err := apikey.GenerateKey(prefixTag)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to generate key")
-			return
+			return nil, huma.Error500InternalServerError("unable to generate key")
 		}
 
 		now := time.Now().UTC()
@@ -307,9 +328,8 @@ func (p *orgsPlugin) handleCreateOrgAPIKey(host plugin.PluginHost, prefixTag str
 			CreatedAt:       now,
 			CreatedByUserID: au.User.ID,
 		}
-		if err := host.Repo().CreateAPIKey(r.Context(), input); err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to store api key")
-			return
+		if err := host.Repo().CreateAPIKey(ctx, input); err != nil {
+			return nil, huma.Error500InternalServerError("unable to store api key")
 		}
 
 		// Reflect the just-persisted row back to the caller. We
@@ -328,33 +348,42 @@ func (p *orgsPlugin) handleCreateOrgAPIKey(host plugin.PluginHost, prefixTag str
 			CreatedAt:       input.CreatedAt,
 			CreatedByUserID: input.CreatedByUserID,
 		}
-		writeJSON(w, http.StatusCreated, createOrgAPIKeyResponse{
+		return &output{Body: createOrgAPIKeyResponse{
 			APIKey: toOrgAPIKeyJSON(stored),
 			Secret: gen.Plaintext,
-		})
-	}
+		}}, nil
+	})
 }
 
 // handleListOrgAPIKeys returns every org-scoped key for the target org.
 // Admin+ only; no plaintext is ever emitted.
-func (p *orgsPlugin) handleListOrgAPIKeys(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := authUser(w, r)
-		if !ok {
-			return
-		}
-		orgID := r.PathValue("id")
-		if orgID == "" {
-			writeError(w, http.StatusBadRequest, "BAD_REQUEST", "org id is required")
-			return
-		}
-		if _, ok := requireOrgAdmin(w, r, host, orgID, au.User.ID); !ok {
-			return
-		}
-		rows, err := host.Repo().ListAPIKeysByOrgID(r.Context(), orgID)
+func (p *orgsPlugin) registerListOrgAPIKeys(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	type output struct {
+		Body listOrgAPIKeysResponse
+	}
+	huma.Register(api, huma.Operation{
+		OperationID: "organizations-list-api-keys",
+		Method:      http.MethodGet,
+		Path:        prefix + "/organizations/{id}/api-keys",
+		Summary:     "List org-scoped API keys (metadata only)",
+		Tags:        []string{"organizations"},
+		Security:    []map[string][]string{{"sessionCookie": {}}},
+		Middlewares: authGuards(api, mw),
+	}, func(ctx context.Context, in *orgIDInput) (*output, error) {
+		au, err := authUser(ctx)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to list api keys")
-			return
+			return nil, err
+		}
+		orgID := in.ID
+		if orgID == "" {
+			return nil, huma.Error400BadRequest("org id is required")
+		}
+		if _, err := requireOrgAdmin(ctx, host, orgID, au.User.ID); err != nil {
+			return nil, err
+		}
+		rows, err := host.Repo().ListAPIKeysByOrgID(ctx, orgID)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("unable to list api keys")
 		}
 		out := make([]orgAPIKeyJSON, 0, len(rows))
 		for _, k := range rows {
@@ -363,47 +392,51 @@ func (p *orgsPlugin) handleListOrgAPIKeys(host plugin.PluginHost) http.HandlerFu
 			}
 			out = append(out, toOrgAPIKeyJSON(*k))
 		}
-		writeJSON(w, http.StatusOK, listOrgAPIKeysResponse{Items: out, Total: len(out)})
-	}
+		return &output{Body: listOrgAPIKeysResponse{Items: out, Total: len(out)}}, nil
+	})
 }
 
 // handleDeleteOrgAPIKey revokes an org-scoped key. Admin+ only.
 //
 // The lookup is scoped to (key_id, org_id) so a caller cannot revoke
 // a key belonging to a different org by URL fiddling.
-func (p *orgsPlugin) handleDeleteOrgAPIKey(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := authUser(w, r)
-		if !ok {
-			return
+func (p *orgsPlugin) registerDeleteOrgAPIKey(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID:   "organizations-delete-api-key",
+		Method:        http.MethodDelete,
+		Path:          prefix + "/organizations/{id}/api-keys/{key_id}",
+		Summary:       "Revoke an org-scoped API key",
+		Tags:          []string{"organizations"},
+		Security:      []map[string][]string{{"sessionCookie": {}}},
+		DefaultStatus: http.StatusNoContent,
+		Middlewares:   authGuards(api, mw),
+	}, func(ctx context.Context, in *orgKeyInput) (*orgEmptyOutput, error) {
+		au, err := authUser(ctx)
+		if err != nil {
+			return nil, err
 		}
-		orgID := r.PathValue("id")
-		keyID := r.PathValue("key_id")
+		orgID := in.ID
+		keyID := in.KeyID
 		if orgID == "" || keyID == "" {
-			writeError(w, http.StatusBadRequest, "BAD_REQUEST", "org id and key id are required")
-			return
+			return nil, huma.Error400BadRequest("org id and key id are required")
 		}
-		if _, ok := requireOrgAdmin(w, r, host, orgID, au.User.ID); !ok {
-			return
+		if _, err := requireOrgAdmin(ctx, host, orgID, au.User.ID); err != nil {
+			return nil, err
 		}
-		if _, err := host.Repo().GetAPIKeyByIDAndOrg(r.Context(), keyID, orgID); err != nil {
+		if _, err := host.Repo().GetAPIKeyByIDAndOrg(ctx, keyID, orgID); err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "NOT_FOUND", "api key not found")
-				return
+				return nil, huma.Error404NotFound("api key not found")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to look up api key")
-			return
+			return nil, huma.Error500InternalServerError("unable to look up api key")
 		}
-		if err := host.Repo().DeleteAPIKey(r.Context(), keyID); err != nil {
+		if err := host.Repo().DeleteAPIKey(ctx, keyID); err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "NOT_FOUND", "api key not found")
-				return
+				return nil, huma.Error404NotFound("api key not found")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to delete api key")
-			return
+			return nil, huma.Error500InternalServerError("unable to delete api key")
 		}
-		w.WriteHeader(http.StatusNoContent)
-	}
+		return &orgEmptyOutput{}, nil
+	})
 }
 
 // handleRotateOrgAPIKey rotates an existing key. Admin+ only.
@@ -412,34 +445,41 @@ func (p *orgsPlugin) handleDeleteOrgAPIKey(host plugin.PluginHost) http.HandlerF
 // Name/Role/Permissions/Org, and stamps the old row with
 // ExpiresAt = now + rotationGracePeriod so existing clients have time
 // to swap.
-func (p *orgsPlugin) handleRotateOrgAPIKey(host plugin.PluginHost, prefixTag string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := authUser(w, r)
-		if !ok {
-			return
+func (p *orgsPlugin) registerRotateOrgAPIKey(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix, prefixTag string) {
+	type output struct {
+		Body rotateOrgAPIKeyResponse
+	}
+	huma.Register(api, huma.Operation{
+		OperationID: "organizations-rotate-api-key",
+		Method:      http.MethodPost,
+		Path:        prefix + "/organizations/{id}/api-keys/{key_id}/rotate",
+		Summary:     "Rotate an org-scoped API key",
+		Tags:        []string{"organizations"},
+		Security:    []map[string][]string{{"sessionCookie": {}}},
+		Middlewares: authGuards(api, mw),
+	}, func(ctx context.Context, in *orgKeyInput) (*output, error) {
+		au, err := authUser(ctx)
+		if err != nil {
+			return nil, err
 		}
-		orgID := r.PathValue("id")
-		keyID := r.PathValue("key_id")
+		orgID := in.ID
+		keyID := in.KeyID
 		if orgID == "" || keyID == "" {
-			writeError(w, http.StatusBadRequest, "BAD_REQUEST", "org id and key id are required")
-			return
+			return nil, huma.Error400BadRequest("org id and key id are required")
 		}
-		if _, ok := requireOrgAdmin(w, r, host, orgID, au.User.ID); !ok {
-			return
+		if _, err := requireOrgAdmin(ctx, host, orgID, au.User.ID); err != nil {
+			return nil, err
 		}
-		old, err := host.Repo().GetAPIKeyByIDAndOrg(r.Context(), keyID, orgID)
+		old, err := host.Repo().GetAPIKeyByIDAndOrg(ctx, keyID, orgID)
 		if err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "NOT_FOUND", "api key not found")
-				return
+				return nil, huma.Error404NotFound("api key not found")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to look up api key")
-			return
+			return nil, huma.Error500InternalServerError("unable to look up api key")
 		}
 		gen, err := apikey.GenerateKey(prefixTag)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to generate key")
-			return
+			return nil, huma.Error500InternalServerError("unable to generate key")
 		}
 		now := time.Now().UTC()
 		orgIDCopy := orgID
@@ -454,17 +494,15 @@ func (p *orgsPlugin) handleRotateOrgAPIKey(host plugin.PluginHost, prefixTag str
 			CreatedAt:       now,
 			CreatedByUserID: au.User.ID,
 		}
-		if err := host.Repo().CreateAPIKey(r.Context(), input); err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to store new api key")
-			return
+		if err := host.Repo().CreateAPIKey(ctx, input); err != nil {
+			return nil, huma.Error500InternalServerError("unable to store new api key")
 		}
 		gracedExpiry := now.Add(rotationGracePeriod)
-		if err := host.Repo().SetAPIKeyExpiry(r.Context(), old.ID, &gracedExpiry); err != nil {
+		if err := host.Repo().SetAPIKeyExpiry(ctx, old.ID, &gracedExpiry); err != nil {
 			// New key is live; old key still valid. Surface a
 			// 500 so an operator notices and can manually
 			// revoke the old key if they need to.
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "rotation completed but failed to expire old key")
-			return
+			return nil, huma.Error500InternalServerError("rotation completed but failed to expire old key")
 		}
 		stored := domain.APIKey{
 			ID:              input.ID,
@@ -478,48 +516,56 @@ func (p *orgsPlugin) handleRotateOrgAPIKey(host plugin.PluginHost, prefixTag str
 			CreatedAt:       input.CreatedAt,
 			CreatedByUserID: input.CreatedByUserID,
 		}
-		writeJSON(w, http.StatusOK, rotateOrgAPIKeyResponse{
+		return &output{Body: rotateOrgAPIKeyResponse{
 			APIKey:               toOrgAPIKeyJSON(stored),
 			Secret:               gen.Plaintext,
 			PreviousKeyID:        old.ID,
 			PreviousKeyExpiresAt: gracedExpiry,
-		})
-	}
+		}}, nil
+	})
 }
 
 // handleOrgAPIKeyUsage exposes last-used + created/expires telemetry
 // for one key. Admin+ only.
-func (p *orgsPlugin) handleOrgAPIKeyUsage(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := authUser(w, r)
-		if !ok {
-			return
+func (p *orgsPlugin) registerOrgAPIKeyUsage(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	type output struct {
+		Body usageOrgAPIKeyResponse
+	}
+	huma.Register(api, huma.Operation{
+		OperationID: "organizations-api-key-usage",
+		Method:      http.MethodGet,
+		Path:        prefix + "/organizations/{id}/api-keys/{key_id}/usage",
+		Summary:     "Read last-used telemetry for an org-scoped API key",
+		Tags:        []string{"organizations"},
+		Security:    []map[string][]string{{"sessionCookie": {}}},
+		Middlewares: authGuards(api, mw),
+	}, func(ctx context.Context, in *orgKeyInput) (*output, error) {
+		au, err := authUser(ctx)
+		if err != nil {
+			return nil, err
 		}
-		orgID := r.PathValue("id")
-		keyID := r.PathValue("key_id")
+		orgID := in.ID
+		keyID := in.KeyID
 		if orgID == "" || keyID == "" {
-			writeError(w, http.StatusBadRequest, "BAD_REQUEST", "org id and key id are required")
-			return
+			return nil, huma.Error400BadRequest("org id and key id are required")
 		}
-		if _, ok := requireOrgAdmin(w, r, host, orgID, au.User.ID); !ok {
-			return
+		if _, err := requireOrgAdmin(ctx, host, orgID, au.User.ID); err != nil {
+			return nil, err
 		}
-		k, err := host.Repo().GetAPIKeyByIDAndOrg(r.Context(), keyID, orgID)
+		k, err := host.Repo().GetAPIKeyByIDAndOrg(ctx, keyID, orgID)
 		if err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "NOT_FOUND", "api key not found")
-				return
+				return nil, huma.Error404NotFound("api key not found")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to look up api key")
-			return
+			return nil, huma.Error500InternalServerError("unable to look up api key")
 		}
-		writeJSON(w, http.StatusOK, usageOrgAPIKeyResponse{
+		return &output{Body: usageOrgAPIKeyResponse{
 			ID:         k.ID,
 			LastUsedAt: k.LastUsedAt,
 			CreatedAt:  k.CreatedAt,
 			ExpiresAt:  k.ExpiresAt,
-		})
-	}
+		}}, nil
+	})
 }
 
 // cloneStrPtr deep-copies a *string so the request struct cannot

@@ -145,7 +145,14 @@ pagination UI without a second request.
 
 ## Cross-language conformance
 
-`scripts/openapi-diff.py` is a hard CI gate for **feature parity**:
+> **Historical:** the Rust backend has since been archived and huma's
+> auto-derived spec is now yauth-go's single source of truth. The cross-language
+> conformance gate described below (`scripts/openapi-{diff,conformance}.py`, the
+> `openapi-conformance` CI job) has been removed; it is preserved here only as a
+> record of the v0.1.0 migration. The current spec gate is `openapi-fresh`
+> (regenerate huma spec == committed `openapi.json`).
+
+`scripts/openapi-diff.py` was a hard CI gate for **feature parity**:
 
 - BREAKING (path missing in Go) → fails the check.
 - MISSING (operation missing in Go) → fails the check.

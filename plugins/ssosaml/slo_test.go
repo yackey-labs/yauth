@@ -1,6 +1,8 @@
 package ssosaml
 
 import (
+	"github.com/yackey-labs/yauth-go/humaapi"
+
 	"bytes"
 	"compress/flate"
 	"context"
@@ -105,7 +107,7 @@ func sloTestEnv(t *testing.T) (*httptest.Server, *memrepo.Repo, *rsa.PrivateKey,
 
 	mux := http.NewServeMux()
 	host := newFakeHost(r, "")
-	p.Routes(host, mux, "")
+	p.Routes(host, mux, humaapi.New(mux), "")
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	host.base = srv.URL

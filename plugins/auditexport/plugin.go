@@ -1,6 +1,8 @@
 package auditexport
 
 import (
+	"github.com/danielgtaylor/huma/v2"
+
 	"context"
 	"net/http"
 	"sync"
@@ -108,51 +110,37 @@ func (p *plugin) Name() string { return "audit-export" }
 // spawns one worker per active destination, and hooks an events.Handler
 // that fans every AuthEvent through EnqueueForAudit so the outbox
 // stays in sync with audit-log writes.
-func (p *plugin) Routes(host pluginpkg.PluginHost, mux pluginpkg.Router, prefix string) {
+func (p *plugin) Routes(host pluginpkg.PluginHost, mux pluginpkg.Router, api huma.API, prefix string) {
 	p.host = host
 	p.auditRepo = host.Repo()
 	mw := host.Middleware()
 
-	// Deployment-wide admin endpoints.
-	mux.Handle("POST "+prefix+"/audit/destinations",
-		mw.RequireAdmin(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			p.handleCreate(w, r, nil)
-		})))
-	mux.Handle("GET "+prefix+"/audit/destinations",
-		mw.RequireAdmin(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			p.handleList(w, r, nil)
-		})))
-	mux.Handle("GET "+prefix+"/audit/destinations/{id}",
-		mw.RequireAdmin(http.HandlerFunc(p.handleGet)))
-	mux.Handle("PATCH "+prefix+"/audit/destinations/{id}",
-		mw.RequireAdmin(http.HandlerFunc(p.handleUpdate)))
-	mux.Handle("PUT "+prefix+"/audit/destinations/{id}",
-		mw.RequireAdmin(http.HandlerFunc(p.handleUpdate)))
-	mux.Handle("DELETE "+prefix+"/audit/destinations/{id}",
-		mw.RequireAdmin(http.HandlerFunc(p.handleDelete)))
-	mux.Handle("GET "+prefix+"/audit/destinations/{id}/outbox",
-		mw.RequireAdmin(http.HandlerFunc(p.handleOutbox)))
-	mux.Handle("POST "+prefix+"/audit/replay",
-		mw.RequireAdmin(http.HandlerFunc(p.handleReplay)))
+	// Every route is huma-native: a typed operation guarded by
+	// RequireAdminHuma, with StashHTTPHuma threading the underlying
+	// *http.Request onto the operation ctx so the ported handlers keep
+	// byte-identical request parsing (strict body decode via decodeJSON,
+	// custom scope/limit query precedence). The resolved admin identity is
+	// recovered from the operation ctx (NOT the stashed request), so actor
+	// attribution in auditEvent stays correct.
+	_ = mux // routes are huma-native; the raw mux is no longer used here.
 
-	// Per-organization admin endpoints. The path parameter scopes the
-	// CRUD to that org.
-	withOrg := func(h func(http.ResponseWriter, *http.Request, *string)) http.HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request) {
-			orgID := r.PathValue("org_id")
-			h(w, r, &orgID)
-		}
-	}
-	mux.Handle("POST "+prefix+"/organizations/{org_id}/audit/destinations",
-		mw.RequireAdmin(withOrg(p.handleCreate)))
-	mux.Handle("GET "+prefix+"/organizations/{org_id}/audit/destinations",
-		mw.RequireAdmin(withOrg(p.handleList)))
-	mux.Handle("PATCH "+prefix+"/organizations/{org_id}/audit/destinations/{id}",
-		mw.RequireAdmin(http.HandlerFunc(p.handleUpdate)))
-	mux.Handle("PUT "+prefix+"/organizations/{org_id}/audit/destinations/{id}",
-		mw.RequireAdmin(http.HandlerFunc(p.handleUpdate)))
-	mux.Handle("DELETE "+prefix+"/organizations/{org_id}/audit/destinations/{id}",
-		mw.RequireAdmin(http.HandlerFunc(p.handleDelete)))
+	// Deployment-wide admin endpoints.
+	p.registerCreate(api, mw, prefix, prefix+"/audit/destinations", "auditExport-create-destination", false)
+	p.registerList(api, mw, prefix, prefix+"/audit/destinations", "auditExport-list-destinations", false)
+	p.registerGet(api, mw, prefix)
+	p.registerUpdate(api, mw, prefix, prefix+"/audit/destinations/{id}", http.MethodPatch, "auditExport-patch-destination", false)
+	p.registerUpdate(api, mw, prefix, prefix+"/audit/destinations/{id}", http.MethodPut, "auditExport-put-destination", false)
+	p.registerDelete(api, mw, prefix, prefix+"/audit/destinations/{id}", "auditExport-delete-destination", false)
+	p.registerOutbox(api, mw, prefix)
+	p.registerReplay(api, mw, prefix)
+
+	// Per-organization admin endpoints. The {org_id} path parameter scopes
+	// the CRUD to that org.
+	p.registerCreate(api, mw, prefix, prefix+"/organizations/{org_id}/audit/destinations", "auditExport-org-create-destination", true)
+	p.registerList(api, mw, prefix, prefix+"/organizations/{org_id}/audit/destinations", "auditExport-org-list-destinations", true)
+	p.registerUpdate(api, mw, prefix, prefix+"/organizations/{org_id}/audit/destinations/{id}", http.MethodPatch, "auditExport-org-patch-destination", true)
+	p.registerUpdate(api, mw, prefix, prefix+"/organizations/{org_id}/audit/destinations/{id}", http.MethodPut, "auditExport-org-put-destination", true)
+	p.registerDelete(api, mw, prefix, prefix+"/organizations/{org_id}/audit/destinations/{id}", "auditExport-org-delete-destination", true)
 
 	// AuthEvent handler — every emitted event becomes an audit row and
 	// outbox entries for matching destinations. We register here rather

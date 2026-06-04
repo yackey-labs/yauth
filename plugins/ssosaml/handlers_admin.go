@@ -14,14 +14,15 @@
 package ssosaml
 
 import (
+	"context"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
-	"io"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/google/uuid"
 
 	"github.com/yackey-labs/yauth-go/auth"
@@ -32,7 +33,11 @@ import (
 )
 
 // errorBody mirrors the canonical envelope used by every yauth-go
-// plugin so error consumers see a single shape across the surface.
+// plugin so error consumers see a single shape across the surface. The
+// org-scoped CRUD routes are huma-native and emit RFC 9457 problem+json via
+// huma's built-in errors; this envelope is retained for the SAML PROTOCOL
+// routes (login/acs/logout), whose error shape is a wire contract that must
+// stay {"error":{code,message}} — written through flowOutput, NOT problem+json.
 type errorBody struct {
 	Error errorPayload `json:"error"`
 }
@@ -42,58 +47,89 @@ type errorPayload struct {
 	Message string `json:"message"`
 }
 
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+// writeError marshals the canonical protocol error envelope into a flowOutput
+// with the legacy status + JSON content-type. Used only by the SAML protocol
+// routes (login/acs/logout) so their error bytes/status stay byte-identical to
+// the pre-huma net/http handlers; CRUD routes use huma.Error* instead.
+func writeError(status int, code, message string) *flowOutput {
+	return jsonFlow(status, errorBody{Error: errorPayload{Code: code, Message: message}})
 }
 
-func writeError(w http.ResponseWriter, status int, code, message string) {
-	writeJSON(w, status, errorBody{Error: errorPayload{Code: code, Message: message}})
-}
-
-func decodeJSON(r *http.Request, dst any) error {
-	body := http.MaxBytesReader(nil, r.Body, 1<<20)
-	defer func() { _ = body.Close() }()
-	raw, err := io.ReadAll(body)
-	if err != nil {
-		return err
+// jsonFlow marshals v into a flowOutput exactly as the pre-huma writeJSON did:
+// json.NewEncoder(w).Encode appended a trailing newline, so we replicate that
+// here (json.Marshal alone would drop it) to keep the protocol-route bodies
+// byte-identical. Used by the SAML protocol routes (error envelope + the logout
+// {"ok":true} success body).
+func jsonFlow(status int, v any) *flowOutput {
+	buf, _ := json.Marshal(v)
+	buf = append(buf, '\n')
+	return &flowOutput{
+		Status:      status,
+		ContentType: "application/json; charset=utf-8",
+		Body:        buf,
 	}
-	if len(raw) == 0 {
-		return nil
-	}
-	return json.Unmarshal(raw, dst)
 }
 
-func authUser(w http.ResponseWriter, r *http.Request) (*domain.AuthUser, bool) {
-	au, ok := middleware.AuthUserFromContext(r.Context())
+// authUserID returns the authenticated user's ID injected by RequireAuthHuma,
+// or a 401 error if somehow missing (cannot happen on a gated route).
+func authUserID(ctx context.Context) (string, error) {
+	au, ok := middleware.AuthUserFromContext(ctx)
 	if !ok || au == nil {
-		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "not authenticated")
-		return nil, false
+		return "", huma.Error401Unauthorized("not authenticated")
 	}
-	return au, true
+	return au.User.ID, nil
 }
 
-func requireOrgAdmin(w http.ResponseWriter, r *http.Request, host plugin.PluginHost, orgID, userID string) (*domain.Membership, bool) {
-	m, err := host.Repo().GetMembershipByOrgUser(r.Context(), orgID, userID)
+// requireOrgAdmin returns the gating membership row or a huma error (403/500).
+// Mirrors plugins/ssooidc/handlers_admin.go's helper — duplicated here so
+// ssosaml/ does not depend on the organizations package.
+func requireOrgAdmin(ctx context.Context, host plugin.PluginHost, orgID, userID string) (*domain.Membership, error) {
+	m, err := host.Repo().GetMembershipByOrgUser(ctx, orgID, userID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "membership lookup failed")
-		return nil, false
+		return nil, huma.Error500InternalServerError("membership lookup failed")
 	}
 	if m == nil {
-		writeError(w, http.StatusForbidden, "FORBIDDEN", "not a member of this organization")
-		return nil, false
+		return nil, huma.Error403Forbidden("not a member of this organization")
 	}
 	if !auth.RoleAtLeast(m.Role, auth.RoleAdmin) {
-		writeError(w, http.StatusForbidden, "FORBIDDEN", "organization admin role required")
-		return nil, false
+		return nil, huma.Error403Forbidden("organization admin role required")
 	}
-	return m, true
+	return m, nil
 }
 
-// connectionJSON is the wire shape returned to clients. SP private key
-// is never echoed; only a `sp_private_key_set` boolean is exposed.
-type connectionJSON struct {
+// crudGuards is the per-operation middleware chain shared by every admin CRUD
+// route: require an authenticated identity. Org-admin authorization is enforced
+// in-handler by requireOrgAdmin (org-admins, not global admins —
+// RequireAdminHuma would wrongly lock them out).
+//
+// No StashHTTPHuma: the CRUD write-ops (create/patch) now take a native huma
+// typed Body, so huma parses + validates the JSON itself and no handler reaches
+// for the raw *http.Request. (The SAML PROTOCOL + metadata.xml routes keep their
+// own flowGuards bridge — see handlers_login.go / the metadata.xml handler.)
+func crudGuards(api huma.API, mw *middleware.Middleware) huma.Middlewares {
+	return huma.Middlewares{
+		middleware.RequireAuthHuma(api, mw),
+	}
+}
+
+// samlOrgInput is the typed path-parameter input for routes scoped to a single
+// org. Prefixed (samlOrgInput / samlConnInput) so the huma global schema
+// registry does not collide with ssooidc's identically-shaped inputs.
+type samlOrgInput struct {
+	ID string `path:"id" doc:"Organization ID"`
+}
+
+// samlConnInput adds the connection ID to the org-scoped path.
+type samlConnInput struct {
+	ID  string `path:"id" doc:"Organization ID"`
+	CID string `path:"cid" doc:"SSO connection ID"`
+}
+
+// samlConnectionJSON is the wire shape returned to clients. SP private key
+// is never echoed; only a `sp_private_key_set` boolean is exposed. The type
+// (and its nested samlPublicConfig) is ssosaml-prefixed so it does not collide
+// with ssooidc's connectionJSON in huma's global schema registry.
+type samlConnectionJSON struct {
 	ID                     string            `json:"id"`
 	OrganizationID         string            `json:"organization_id"`
 	Kind                   string            `json:"kind"`
@@ -126,8 +162,8 @@ type samlPublicConfig struct {
 	MetadataURL             string            `json:"metadata_url"`
 }
 
-func toConnectionJSON(c domain.SsoConnection, baseURL string) connectionJSON {
-	out := connectionJSON{
+func toConnectionJSON(c domain.SsoConnection, baseURL string) samlConnectionJSON {
+	out := samlConnectionJSON{
 		ID:                     c.ID,
 		OrganizationID:         c.OrganizationID,
 		Kind:                   string(c.Kind),
@@ -166,46 +202,83 @@ func toConnectionJSON(c domain.SsoConnection, baseURL string) connectionJSON {
 	return out
 }
 
-type createConnectionRequest struct {
-	Name                   string                `json:"name"`
-	Status                 string                `json:"status"`
-	JitProvisioningEnabled bool                  `json:"jit_provisioning_enabled"`
-	DefaultRoleOnJit       string                `json:"default_role_on_jit"`
-	SAML                   *SamlConnectionConfig `json:"saml"`
+// samlCreateConnectionRequest is the huma-native request body for POST
+// .../sso/saml/connections. Prefixed (saml*) so its huma schema name does
+// not collide with ssooidc's still-bridged createConnectionRequest in the
+// global registry. Every business-400 field carries omitempty so huma does
+// not force it required (the secure-default + required-name checks stay in
+// the handler); additionalProperties:false makes huma reject unknown keys
+// with a 422 instead of silently ignoring them.
+type samlCreateConnectionRequest struct {
+	Name                   string                `json:"name,omitempty"`
+	Status                 string                `json:"status,omitempty"`
+	JitProvisioningEnabled bool                  `json:"jit_provisioning_enabled,omitempty"`
+	DefaultRoleOnJit       string                `json:"default_role_on_jit,omitempty"`
+	SAML                   *SamlConnectionConfig `json:"saml,omitempty"`
+	_                      struct{}              `json:"-" additionalProperties:"false"`
 }
 
-type updateConnectionRequest struct {
-	Name                   *string               `json:"name"`
-	Status                 *string               `json:"status"`
-	JitProvisioningEnabled *bool                 `json:"jit_provisioning_enabled"`
-	DefaultRoleOnJit       *string               `json:"default_role_on_jit"`
-	SAML                   *SamlConnectionConfig `json:"saml"`
+// samlUpdateConnectionRequest is the huma-native request body for PATCH
+// .../sso/saml/connections/{cid}. Pointer fields stay optional (a nil
+// pointer means "leave unchanged"); omitempty keeps huma from marking them
+// required so a partial PATCH need only carry the changed fields.
+type samlUpdateConnectionRequest struct {
+	Name                   *string               `json:"name,omitempty"`
+	Status                 *string               `json:"status,omitempty"`
+	JitProvisioningEnabled *bool                 `json:"jit_provisioning_enabled,omitempty"`
+	DefaultRoleOnJit       *string               `json:"default_role_on_jit,omitempty"`
+	SAML                   *SamlConnectionConfig `json:"saml,omitempty"`
+	_                      struct{}              `json:"-" additionalProperties:"false"`
+}
+
+// samlCreateConnectionInput is the huma-native create input: a typed JSON
+// body that huma parses + validates before the handler runs (unknown keys →
+// 422), so no StashHTTPHuma bridge is needed.
+type samlCreateConnectionInput struct {
+	ID   string `path:"id" doc:"Organization ID"`
+	Body samlCreateConnectionRequest
+}
+
+// samlUpdateConnectionInput is the huma-native patch input: org+connection
+// path params plus a typed JSON body.
+type samlUpdateConnectionInput struct {
+	ID   string `path:"id" doc:"Organization ID"`
+	CID  string `path:"cid" doc:"SSO connection ID"`
+	Body samlUpdateConnectionRequest
+}
+
+// samlConnectionOutput wraps a single samlConnectionJSON body.
+type samlConnectionOutput struct {
+	Body samlConnectionJSON
 }
 
 // --- POST /organizations/{id}/sso/saml/connections --------------------
 
-func (p *ssoSAMLPlugin) handleCreateConnection(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := authUser(w, r)
-		if !ok {
-			return
+func (p *ssoSAMLPlugin) registerCreateConnection(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID:   "ssosaml-create-connection",
+		Method:        http.MethodPost,
+		Path:          prefix + "/organizations/{id}/sso/saml/connections",
+		Summary:       "Create a SAML SSO connection",
+		Tags:          []string{"organizations"},
+		Security:      []map[string][]string{{"sessionCookie": {}}},
+		DefaultStatus: http.StatusCreated,
+		Middlewares:   crudGuards(api, mw),
+	}, func(ctx context.Context, in *samlCreateConnectionInput) (*samlConnectionOutput, error) {
+		uid, err := authUserID(ctx)
+		if err != nil {
+			return nil, err
 		}
-		orgID := r.PathValue("id")
-		if _, ok := requireOrgAdmin(w, r, host, orgID, au.User.ID); !ok {
-			return
+		orgID := in.ID
+		if _, err := requireOrgAdmin(ctx, host, orgID, uid); err != nil {
+			return nil, err
 		}
-		var req createConnectionRequest
-		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid json body")
-			return
-		}
+		req := in.Body
 		if strings.TrimSpace(req.Name) == "" {
-			writeError(w, http.StatusBadRequest, "BAD_REQUEST", "name is required")
-			return
+			return nil, huma.Error400BadRequest("name is required")
 		}
 		if req.SAML == nil {
-			writeError(w, http.StatusBadRequest, "BAD_REQUEST", "saml config block is required")
-			return
+			return nil, huma.Error400BadRequest("saml config block is required")
 		}
 		// Default both signed-required flags to true unless the client
 		// explicitly sent the create payload with them set false. We
@@ -221,22 +294,20 @@ func (p *ssoSAMLPlugin) handleCreateConnection(host plugin.PluginHost) http.Hand
 		if strings.TrimSpace(req.Status) != "" {
 			parsed, ok := domain.ParseConnectionStatus(req.Status)
 			if !ok {
-				writeError(w, http.StatusBadRequest, "BAD_REQUEST", "status must be one of draft|active|disabled")
-				return
+				return nil, huma.Error400BadRequest("status must be one of draft|active|disabled")
 			}
 			status = parsed
 		}
 		raw, err := marshalSamlConfig(p.cfg.EncryptionKey, *req.SAML)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
-			return
+			return nil, huma.Error400BadRequest(err.Error())
 		}
 		role := strings.TrimSpace(req.DefaultRoleOnJit)
 		if role == "" {
 			role = auth.RoleMember
 		}
 		now := time.Now().UTC()
-		created, err := host.Repo().CreateSsoConnection(r.Context(), domain.NewSsoConnection{
+		created, err := host.Repo().CreateSsoConnection(ctx, domain.NewSsoConnection{
 			ID:                     uuid.NewString(),
 			OrganizationID:         orgID,
 			Kind:                   domain.ConnectionKindSamlSP,
@@ -250,121 +321,136 @@ func (p *ssoSAMLPlugin) handleCreateConnection(host plugin.PluginHost) http.Hand
 		})
 		if err != nil {
 			if errors.Is(err, yautherr.ErrConflict) {
-				writeError(w, http.StatusConflict, "CONFLICT", "sso connection already exists")
-				return
+				return nil, huma.Error409Conflict("sso connection already exists")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "create sso connection failed")
-			return
+			return nil, huma.Error500InternalServerError("create sso connection failed")
 		}
-		writeJSON(w, http.StatusCreated, toConnectionJSON(created, host.BaseURL()))
-	}
+		return &samlConnectionOutput{Body: toConnectionJSON(created, host.BaseURL())}, nil
+	})
 }
 
 // --- GET /organizations/{id}/sso/saml/connections ----------------------
 
-func (p *ssoSAMLPlugin) handleListConnections(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := authUser(w, r)
-		if !ok {
-			return
-		}
-		orgID := r.PathValue("id")
-		if _, ok := requireOrgAdmin(w, r, host, orgID, au.User.ID); !ok {
-			return
-		}
-		rows, err := host.Repo().ListSsoConnectionsByOrg(r.Context(), orgID)
+func (p *ssoSAMLPlugin) registerListConnections(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	type samlConnectionsListResponse struct {
+		SsoConnections []samlConnectionJSON `json:"sso_connections"`
+	}
+	type output struct {
+		Body samlConnectionsListResponse
+	}
+	huma.Register(api, huma.Operation{
+		OperationID: "ssosaml-list-connections",
+		Method:      http.MethodGet,
+		Path:        prefix + "/organizations/{id}/sso/saml/connections",
+		Summary:     "List SAML SSO connections for an organization",
+		Tags:        []string{"organizations"},
+		Security:    []map[string][]string{{"sessionCookie": {}}},
+		Middlewares: crudGuards(api, mw),
+	}, func(ctx context.Context, in *samlOrgInput) (*output, error) {
+		uid, err := authUserID(ctx)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "list sso connections failed")
-			return
+			return nil, err
 		}
-		out := make([]connectionJSON, 0, len(rows))
+		orgID := in.ID
+		if _, err := requireOrgAdmin(ctx, host, orgID, uid); err != nil {
+			return nil, err
+		}
+		rows, err := host.Repo().ListSsoConnectionsByOrg(ctx, orgID)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("list sso connections failed")
+		}
+		out := make([]samlConnectionJSON, 0, len(rows))
 		for _, c := range rows {
 			if c == nil || c.Kind != domain.ConnectionKindSamlSP {
 				continue
 			}
 			out = append(out, toConnectionJSON(*c, host.BaseURL()))
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"sso_connections": out})
-	}
+		return &output{Body: samlConnectionsListResponse{SsoConnections: out}}, nil
+	})
 }
 
 // --- GET /organizations/{id}/sso/saml/connections/{cid} ----------------
 
-func (p *ssoSAMLPlugin) handleGetConnection(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := authUser(w, r)
-		if !ok {
-			return
+func (p *ssoSAMLPlugin) registerGetConnection(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "ssosaml-get-connection",
+		Method:      http.MethodGet,
+		Path:        prefix + "/organizations/{id}/sso/saml/connections/{cid}",
+		Summary:     "Fetch a single SAML SSO connection",
+		Tags:        []string{"organizations"},
+		Security:    []map[string][]string{{"sessionCookie": {}}},
+		Middlewares: crudGuards(api, mw),
+	}, func(ctx context.Context, in *samlConnInput) (*samlConnectionOutput, error) {
+		uid, err := authUserID(ctx)
+		if err != nil {
+			return nil, err
 		}
-		orgID := r.PathValue("id")
-		cid := r.PathValue("cid")
-		if _, ok := requireOrgAdmin(w, r, host, orgID, au.User.ID); !ok {
-			return
+		orgID := in.ID
+		cid := in.CID
+		if _, err := requireOrgAdmin(ctx, host, orgID, uid); err != nil {
+			return nil, err
 		}
-		c, err := host.Repo().GetSsoConnectionByID(r.Context(), cid)
+		c, err := host.Repo().GetSsoConnectionByID(ctx, cid)
 		if err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "NOT_FOUND", "sso connection not found")
-				return
+				return nil, huma.Error404NotFound("sso connection not found")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "get sso connection failed")
-			return
+			return nil, huma.Error500InternalServerError("get sso connection failed")
 		}
 		if c.OrganizationID != orgID || c.Kind != domain.ConnectionKindSamlSP {
-			writeError(w, http.StatusNotFound, "NOT_FOUND", "sso connection not found")
-			return
+			return nil, huma.Error404NotFound("sso connection not found")
 		}
-		writeJSON(w, http.StatusOK, toConnectionJSON(*c, host.BaseURL()))
-	}
+		return &samlConnectionOutput{Body: toConnectionJSON(*c, host.BaseURL())}, nil
+	})
 }
 
 // --- PATCH /organizations/{id}/sso/saml/connections/{cid} --------------
 
-func (p *ssoSAMLPlugin) handleUpdateConnection(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := authUser(w, r)
-		if !ok {
-			return
+func (p *ssoSAMLPlugin) registerUpdateConnection(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "ssosaml-update-connection",
+		Method:      http.MethodPatch,
+		Path:        prefix + "/organizations/{id}/sso/saml/connections/{cid}",
+		Summary:     "Update a SAML SSO connection (partial)",
+		Tags:        []string{"organizations"},
+		Security:    []map[string][]string{{"sessionCookie": {}}},
+		Middlewares: crudGuards(api, mw),
+	}, func(ctx context.Context, in *samlUpdateConnectionInput) (*samlConnectionOutput, error) {
+		uid, err := authUserID(ctx)
+		if err != nil {
+			return nil, err
 		}
-		orgID := r.PathValue("id")
-		cid := r.PathValue("cid")
-		if _, ok := requireOrgAdmin(w, r, host, orgID, au.User.ID); !ok {
-			return
+		orgID := in.ID
+		cid := in.CID
+		if _, err := requireOrgAdmin(ctx, host, orgID, uid); err != nil {
+			return nil, err
 		}
-		current, err := host.Repo().GetSsoConnectionByID(r.Context(), cid)
+		current, err := host.Repo().GetSsoConnectionByID(ctx, cid)
 		if err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "NOT_FOUND", "sso connection not found")
-				return
+				return nil, huma.Error404NotFound("sso connection not found")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "get sso connection failed")
-			return
+			return nil, huma.Error500InternalServerError("get sso connection failed")
 		}
 		if current.OrganizationID != orgID || current.Kind != domain.ConnectionKindSamlSP {
-			writeError(w, http.StatusNotFound, "NOT_FOUND", "sso connection not found")
-			return
+			return nil, huma.Error404NotFound("sso connection not found")
 		}
 
-		var req updateConnectionRequest
-		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid json body")
-			return
-		}
+		req := in.Body
 
 		var changes domain.UpdateSsoConnection
 		if req.Name != nil {
 			trimmed := strings.TrimSpace(*req.Name)
 			if trimmed == "" {
-				writeError(w, http.StatusBadRequest, "BAD_REQUEST", "name cannot be empty")
-				return
+				return nil, huma.Error400BadRequest("name cannot be empty")
 			}
 			changes.Name = &trimmed
 		}
 		if req.Status != nil {
 			parsed, ok := domain.ParseConnectionStatus(*req.Status)
 			if !ok {
-				writeError(w, http.StatusBadRequest, "BAD_REQUEST", "status must be one of draft|active|disabled")
-				return
+				return nil, huma.Error400BadRequest("status must be one of draft|active|disabled")
 			}
 			changes.Status = &parsed
 		}
@@ -381,8 +467,7 @@ func (p *ssoSAMLPlugin) handleUpdateConnection(host plugin.PluginHost) http.Hand
 		if req.SAML != nil {
 			cur, err := unmarshalSamlConfig(p.cfg.EncryptionKey, current.Config)
 			if err != nil {
-				writeError(w, http.StatusInternalServerError, "INTERNAL", "decode current config failed")
-				return
+				return nil, huma.Error500InternalServerError("decode current config failed")
 			}
 			merged := cur
 			if strings.TrimSpace(req.SAML.IdpEntityID) != "" {
@@ -427,101 +512,138 @@ func (p *ssoSAMLPlugin) handleUpdateConnection(host plugin.PluginHost) http.Hand
 			}
 			raw, err := marshalSamlConfig(p.cfg.EncryptionKey, merged)
 			if err != nil {
-				writeError(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
-				return
+				return nil, huma.Error400BadRequest(err.Error())
 			}
 			changes.Config = &raw
 		}
 		now := time.Now().UTC()
 		changes.UpdatedAt = &now
 
-		updated, err := host.Repo().UpdateSsoConnection(r.Context(), cid, changes)
+		updated, err := host.Repo().UpdateSsoConnection(ctx, cid, changes)
 		if err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "NOT_FOUND", "sso connection not found")
-				return
+				return nil, huma.Error404NotFound("sso connection not found")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "update sso connection failed")
-			return
+			return nil, huma.Error500InternalServerError("update sso connection failed")
 		}
-		writeJSON(w, http.StatusOK, toConnectionJSON(updated, host.BaseURL()))
-	}
+		return &samlConnectionOutput{Body: toConnectionJSON(updated, host.BaseURL())}, nil
+	})
 }
 
 // --- DELETE /organizations/{id}/sso/saml/connections/{cid} -------------
 
-func (p *ssoSAMLPlugin) handleDeleteConnection(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := authUser(w, r)
-		if !ok {
-			return
+func (p *ssoSAMLPlugin) registerDeleteConnection(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	// emptyOutput carries no body; DefaultStatus drives the 204.
+	type emptyOutput struct{}
+	huma.Register(api, huma.Operation{
+		OperationID:   "ssosaml-delete-connection",
+		Method:        http.MethodDelete,
+		Path:          prefix + "/organizations/{id}/sso/saml/connections/{cid}",
+		Summary:       "Delete a SAML SSO connection",
+		Tags:          []string{"organizations"},
+		Security:      []map[string][]string{{"sessionCookie": {}}},
+		DefaultStatus: http.StatusNoContent,
+		Middlewares:   crudGuards(api, mw),
+	}, func(ctx context.Context, in *samlConnInput) (*emptyOutput, error) {
+		uid, err := authUserID(ctx)
+		if err != nil {
+			return nil, err
 		}
-		orgID := r.PathValue("id")
-		cid := r.PathValue("cid")
-		if _, ok := requireOrgAdmin(w, r, host, orgID, au.User.ID); !ok {
-			return
+		orgID := in.ID
+		cid := in.CID
+		if _, err := requireOrgAdmin(ctx, host, orgID, uid); err != nil {
+			return nil, err
 		}
-		current, err := host.Repo().GetSsoConnectionByID(r.Context(), cid)
+		current, err := host.Repo().GetSsoConnectionByID(ctx, cid)
 		if err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				w.WriteHeader(http.StatusNoContent)
-				return
+				// idempotent: 204 for unknown ids — avoids leaking which exist
+				return &emptyOutput{}, nil
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "get sso connection failed")
-			return
+			return nil, huma.Error500InternalServerError("get sso connection failed")
 		}
 		if current.OrganizationID != orgID || current.Kind != domain.ConnectionKindSamlSP {
-			w.WriteHeader(http.StatusNoContent)
-			return
+			return &emptyOutput{}, nil
 		}
-		if err := host.Repo().DeleteSsoConnection(r.Context(), cid); err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "delete sso connection failed")
-			return
+		if err := host.Repo().DeleteSsoConnection(ctx, cid); err != nil {
+			return nil, huma.Error500InternalServerError("delete sso connection failed")
 		}
-		w.WriteHeader(http.StatusNoContent)
-	}
+		return &emptyOutput{}, nil
+	})
 }
 
 // --- GET /organizations/{id}/sso/saml/connections/{cid}/metadata.xml ---
 
-// handleMetadataXML serves the SP metadata document. UNAUTHENTICATED on
-// purpose — SAML metadata is a public artefact (it's what an IdP admin
-// uploads to configure the trust relationship). The connection ID is
-// the only capability gate; an attacker who guesses a UUID can fetch
-// a connection's SP metadata, which is acceptable (the metadata is
-// public).
-func (p *ssoSAMLPlugin) handleMetadataXML(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		orgID := r.PathValue("id")
-		cid := r.PathValue("cid")
-		c, err := host.Repo().GetSsoConnectionByID(r.Context(), cid)
+// registerMetadataXML serves the SP metadata document. UNAUTHENTICATED on
+// purpose — SAML metadata is a public artefact (it's what an IdP admin uploads
+// to configure the trust relationship). The connection ID is the only
+// capability gate; an attacker who guesses a UUID can fetch a connection's SP
+// metadata, which is acceptable (the metadata is public).
+//
+// huma-native but XML on the wire: the response is emitted through flowOutput
+// so huma performs the single status+body write. The success branch carries the
+// exact application/samlmetadata+xml Content-Type, the attachment
+// Content-Disposition (set on the raw writer header map before return), and the
+// xml.Header + indented metadata bytes. Missing / cross-tenant lookups reproduce
+// http.NotFound's plain-text 404 byte-for-byte (text/plain, nosniff, trailing
+// newline); decode/build/marshal failures keep the legacy 500 error envelope.
+func (p *ssoSAMLPlugin) registerMetadataXML(host plugin.PluginHost, api huma.API, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "ssosaml-connection-metadata-xml",
+		Method:      http.MethodGet,
+		Path:        prefix + "/organizations/{id}/sso/saml/connections/{cid}/metadata.xml",
+		Summary:     "Download SP metadata.xml for a SAML connection",
+		Tags:        []string{"organizations"},
+		Security:    []map[string][]string{}, // public
+		Middlewares: flowGuards(api),
+	}, func(ctx context.Context, in *samlConnInput) (*flowOutput, error) {
+		_, w, err := flowReqResp(ctx)
 		if err != nil {
-			http.NotFound(w, r)
-			return
+			return nil, err
+		}
+		orgID := in.ID
+		cid := in.CID
+		c, err := host.Repo().GetSsoConnectionByID(ctx, cid)
+		if err != nil {
+			return notFoundFlow(), nil
 		}
 		if c.OrganizationID != orgID || c.Kind != domain.ConnectionKindSamlSP {
-			http.NotFound(w, r)
-			return
+			return notFoundFlow(), nil
 		}
 		cfg, err := unmarshalSamlConfig(p.cfg.EncryptionKey, c.Config)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "decode connection config failed")
-			return
+			return writeError(http.StatusInternalServerError, "INTERNAL", "decode connection config failed"), nil
 		}
 		sp, err := buildServiceProvider(&cfg, host.BaseURL(), c.ID, p.cfg.ClockSkew)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "build sp failed: "+err.Error())
-			return
+			return writeError(http.StatusInternalServerError, "INTERNAL", "build sp failed: "+err.Error()), nil
 		}
 		md := sp.Metadata()
 		buf, err := xml.MarshalIndent(md, "", "  ")
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "marshal metadata failed")
-			return
+			return writeError(http.StatusInternalServerError, "INTERNAL", "marshal metadata failed"), nil
 		}
-		w.Header().Set("Content-Type", "application/samlmetadata+xml")
+		// Content-Disposition has no flowOutput header field; set it on the raw
+		// writer header map (mutation lands before huma's single WriteHeader).
 		w.Header().Set("Content-Disposition", `attachment; filename="metadata.xml"`)
-		_, _ = w.Write([]byte(xml.Header))
-		_, _ = w.Write(buf)
+		body := append([]byte(xml.Header), buf...)
+		return &flowOutput{
+			Status:      http.StatusOK,
+			ContentType: "application/samlmetadata+xml",
+			Body:        body,
+		}, nil
+	})
+}
+
+// notFoundFlow reproduces net/http's http.NotFound response byte-for-byte as a
+// flowOutput: a 404 with text/plain; charset=utf-8, X-Content-Type-Options:
+// nosniff, and the "404 page not found\n" body. The nosniff header is added by
+// the flowOutput writer via the XContentTypeOptions field.
+func notFoundFlow() *flowOutput {
+	return &flowOutput{
+		Status:              http.StatusNotFound,
+		ContentType:         "text/plain; charset=utf-8",
+		XContentTypeOptions: "nosniff",
+		Body:                []byte("404 page not found\n"),
 	}
 }

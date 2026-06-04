@@ -25,6 +25,9 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/danielgtaylor/huma/v2"
+
+	"github.com/yackey-labs/yauth-go/middleware"
 	"github.com/yackey-labs/yauth-go/plugin"
 )
 
@@ -58,7 +61,24 @@ type mfaPlugin struct {
 
 func (p *mfaPlugin) Name() string { return "mfa" }
 
-func (p *mfaPlugin) Routes(host plugin.PluginHost, mux plugin.Router, prefix string) {
+// Routes registers the MFA operations as huma-native typed handlers on the
+// shared huma.API. The mux is retained in the signature for parity with the
+// plugin interface but is no longer used.
+//
+// Every write-op uses a native huma typed Body (request schemas auto-derive;
+// unknown fields → 422) and a typed Body output (huma marshals the response).
+// Middleware is per-route, following the rule "StashHTTPHuma only when a route
+// needs raw *http.Request / http.ResponseWriter access":
+//
+//   - setup / confirm / delete / backup-codes count / regenerate —
+//     RequireAuthHuma only: no cookie to write and no need for the raw request,
+//     so they are fully huma-native (typed Body in, typed Body out). The user is
+//     recovered via AuthUserFromContext.
+//   - verify — RequireAuthHuma is NOT applied (public: gated by the
+//     pending-session id) but StashHTTPHuma IS: it needs the raw request to read
+//     RequestIP / User-Agent and the writer to set the session cookie. The
+//     request body and response are still native huma typed Body.
+func (p *mfaPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.API, prefix string) {
 	mw := host.Middleware()
 
 	host.RegisterEventHandler(&loginEventHandler{
@@ -67,10 +87,77 @@ func (p *mfaPlugin) Routes(host plugin.PluginHost, mux plugin.Router, prefix str
 		pendingSessionTTL: pendingSessionTTL,
 	})
 
-	mux.Handle("POST "+prefix+"/mfa/totp/setup", mw.RequireAuth(http.HandlerFunc(p.handleSetup(host))))
-	mux.Handle("POST "+prefix+"/mfa/totp/confirm", mw.RequireAuth(http.HandlerFunc(p.handleConfirm(host))))
-	mux.Handle("DELETE "+prefix+"/mfa/totp", mw.RequireAuth(http.HandlerFunc(p.handleDelete(host))))
-	mux.Handle("GET "+prefix+"/mfa/backup-codes", mw.RequireAuth(http.HandlerFunc(p.handleBackupCodesCount(host))))
-	mux.Handle("POST "+prefix+"/mfa/backup-codes/regenerate", mw.RequireAuth(http.HandlerFunc(p.handleRegenerateBackupCodes(host))))
-	mux.Handle("POST "+prefix+"/mfa/verify", http.HandlerFunc(p.handleVerify(host)))
+	authMw := huma.Middlewares{
+		middleware.RequireAuthHuma(api, mw),
+	}
+	sec := []map[string][]string{
+		{"sessionCookie": {}},
+		{"bearer": {}},
+		{"apiKey": {}},
+	}
+
+	huma.Register(api, huma.Operation{
+		OperationID: "mfa-totp-setup",
+		Method:      http.MethodPost,
+		Path:        prefix + "/mfa/totp/setup",
+		Summary:     "Begin TOTP enrollment",
+		Description: "Create (or reset) an unverified TOTP secret and a fresh set of backup codes.",
+		Tags:        []string{"mfa"},
+		Security:    sec,
+		Middlewares: authMw,
+	}, p.handleSetup(host))
+
+	huma.Register(api, huma.Operation{
+		OperationID: "mfa-totp-confirm",
+		Method:      http.MethodPost,
+		Path:        prefix + "/mfa/totp/confirm",
+		Summary:     "Confirm + activate TOTP",
+		Description: "Validate a TOTP code against the pending secret and mark it verified.",
+		Tags:        []string{"mfa"},
+		Security:    sec,
+		Middlewares: authMw,
+	}, p.handleConfirm(host))
+
+	huma.Register(api, huma.Operation{
+		OperationID: "mfa-totp-delete",
+		Method:      http.MethodDelete,
+		Path:        prefix + "/mfa/totp",
+		Summary:     "Disable TOTP",
+		Description: "Remove the user's TOTP secret and all backup codes.",
+		Tags:        []string{"mfa"},
+		Security:    sec,
+		Middlewares: authMw,
+	}, p.handleDelete(host))
+
+	huma.Register(api, huma.Operation{
+		OperationID: "mfa-backup-codes-count",
+		Method:      http.MethodGet,
+		Path:        prefix + "/mfa/backup-codes",
+		Summary:     "Count unused backup codes",
+		Tags:        []string{"mfa"},
+		Security:    sec,
+		Middlewares: authMw,
+	}, p.handleBackupCodesCount(host))
+
+	huma.Register(api, huma.Operation{
+		OperationID: "mfa-backup-codes-regenerate",
+		Method:      http.MethodPost,
+		Path:        prefix + "/mfa/backup-codes/regenerate",
+		Summary:     "Regenerate backup codes",
+		Description: "Replace all backup codes with a fresh set.",
+		Tags:        []string{"mfa"},
+		Security:    sec,
+		Middlewares: authMw,
+	}, p.handleRegenerateBackupCodes(host))
+
+	huma.Register(api, huma.Operation{
+		OperationID: "mfa-verify",
+		Method:      http.MethodPost,
+		Path:        prefix + "/mfa/verify",
+		Summary:     "Verify an MFA challenge",
+		Description: "Consume a pending-session created by the login flow and issue a real session.",
+		Tags:        []string{"mfa"},
+		Security:    []map[string][]string{}, // public: gated by the pending-session id
+		Middlewares: huma.Middlewares{middleware.StashHTTPHuma(api)},
+	}, p.handleVerify(host))
 }

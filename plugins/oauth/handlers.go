@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/google/uuid"
 	"golang.org/x/oauth2"
 
@@ -23,25 +24,48 @@ import (
 	"github.com/yackey-labs/yauth-go/yautherr"
 )
 
-// errorBody is the canonical error response shape, mirroring the email-
-// password plugin so error consumers see one shape across plugins.
-type errorBody struct {
-	Error errorPayload `json:"error"`
+// oauthGuards is the per-operation middleware chain for the public browser
+// flows (/authorize, /callback): stash the raw request/writer so the migrated
+// handlers keep byte-identical query/form/JSON parsing, the state/CSRF lookup,
+// the Set-Cookie session write, and the 302 redirects. It never short-circuits
+// — these routes are public, mirroring the legacy un-gated mux registration.
+func oauthGuards(api huma.API) huma.Middlewares {
+	return huma.Middlewares{middleware.StashHTTPHuma(api)}
 }
 
-type errorPayload struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+// authedGuards is the per-operation middleware chain for the authenticated
+// bridged routes (/accounts and DELETE /{provider}): stash the raw request/
+// writer, then require a valid identity — the SAME rule as the legacy
+// mw.RequireAuth wrappers. Migrated handlers recover the AuthUser via the
+// unchanged middleware.AuthUserFromContext. /link no longer uses this: it took
+// a native typed Body and needs neither the raw request nor the writer, so it
+// runs RequireAuthHuma alone (no StashHTTPHuma).
+func authedGuards(api huma.API, mw *middleware.Middleware) huma.Middlewares {
+	return huma.Middlewares{
+		middleware.StashHTTPHuma(api),
+		middleware.RequireAuthHuma(api, mw),
+	}
 }
 
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+// reqFromCtx returns the *http.Request stashed by StashHTTPHuma. On an oauth
+// route it is always present; the nil guard maps an absent request to a 500
+// problem+json.
+func reqFromCtx(ctx context.Context) (*http.Request, error) {
+	r := middleware.HTTPRequestFromContext(ctx)
+	if r == nil {
+		return nil, huma.Error500InternalServerError("request unavailable")
+	}
+	return r, nil
 }
 
-func writeError(w http.ResponseWriter, status int, code, message string) {
-	writeJSON(w, status, errorBody{Error: errorPayload{Code: code, Message: message}})
+// respFromCtx returns the http.ResponseWriter stashed by StashHTTPHuma, used by
+// the callback flow for its Set-Cookie session write.
+func respFromCtx(ctx context.Context) (http.ResponseWriter, error) {
+	w := middleware.HTTPResponseFromContext(ctx)
+	if w == nil {
+		return nil, huma.Error500InternalServerError("response unavailable")
+	}
+	return w, nil
 }
 
 // generateState produces a base64url-encoded 32-byte random string suited
@@ -146,21 +170,50 @@ func decodeStatePayload(raw string) (mode, userID, redirect string) {
 
 // --- /oauth/{provider}/authorize ---------------------------------------
 
-func (p *oauthPlugin) handleAuthorize(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		name := r.PathValue("provider")
+// providerInput carries the {provider} path parameter for the routes that
+// take one. The redirect_url query parameter is read off the stashed raw
+// request (no Body field) so huma leaves the request untouched and the legacy
+// query/form parsing stays byte-identical.
+type providerInput struct {
+	Provider string `path:"provider" doc:"OAuth provider name"`
+}
+
+// redirectOutput drives a 302 with a Location header and no body. huma writes
+// the status/Location after the handler returns, so it must NOT also be written
+// to the stashed writer.
+type redirectOutput struct {
+	Status   int
+	Location string `header:"Location"`
+}
+
+// registerAuthorize wires GET {prefix}/oauth/{provider}/authorize. It mints and
+// persists a CSRF state row, then 302-redirects to the provider's authorization
+// endpoint. Public (no auth gate), matching the legacy registration.
+func (p *oauthPlugin) registerAuthorize(host plugin.PluginHost, api huma.API, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "oauthAuthorize",
+		Method:      http.MethodGet,
+		Path:        prefix + "/oauth/{provider}/authorize",
+		Summary:     "Begin the OAuth authorization-code flow",
+		Tags:        []string{"oauth"},
+		Security:    []map[string][]string{}, // explicitly public
+		Middlewares: oauthGuards(api),
+	}, func(ctx context.Context, in *providerInput) (*redirectOutput, error) {
+		r, err := reqFromCtx(ctx)
+		if err != nil {
+			return nil, err
+		}
+		name := in.Provider
 		prov, ok := p.providers[name]
 		if !ok {
-			writeError(w, http.StatusNotFound, "UNKNOWN_PROVIDER", "no oauth provider with that name")
-			return
+			return nil, huma.Error404NotFound("no oauth provider with that name")
 		}
 
 		redirect := p.safeRedirect(r.URL.Query().Get("redirect_url"))
 
 		state, err := generateState()
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to generate state")
-			return
+			return nil, huma.Error500InternalServerError("unable to generate state")
 		}
 
 		payload := encodeStatePayload(linkModeLogin, "", redirect)
@@ -170,20 +223,19 @@ func (p *oauthPlugin) handleAuthorize(host plugin.PluginHost) http.HandlerFunc {
 			pp := payload
 			redirectPtr = &pp
 		}
-		if err := host.Repo().CreateOAuthState(r.Context(), domain.NewOAuthState{
+		if err := host.Repo().CreateOAuthState(ctx, domain.NewOAuthState{
 			State:       state,
 			Provider:    name,
 			RedirectURL: redirectPtr,
 			ExpiresAt:   now.Add(p.cfg.StateTTL),
 			CreatedAt:   now,
 		}); err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to persist state")
-			return
+			return nil, huma.Error500InternalServerError("unable to persist state")
 		}
 
 		authURL := prov.Config().AuthCodeURL(state, oauth2.AccessTypeOffline)
-		http.Redirect(w, r, authURL, http.StatusFound)
-	}
+		return &redirectOutput{Status: http.StatusFound, Location: authURL}, nil
+	})
 }
 
 // --- /oauth/{provider}/link --------------------------------------------
@@ -192,65 +244,140 @@ type linkResponse struct {
 	AuthURL string `json:"auth_url"`
 }
 
-func (p *oauthPlugin) handleLink(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := middleware.AuthUserFromContext(r.Context())
+// linkOutput wraps linkResponse so huma marshals exactly the legacy 200 body.
+type linkOutput struct {
+	Body linkResponse
+}
+
+// linkRequest is the native huma JSON body for POST /oauth/{provider}/link.
+// The sole field is the optional post-callback redirect target, moved off the
+// query string and onto a typed body so huma parses + validates it (and rejects
+// unknown fields via additionalProperties:false → 422). It is still filtered
+// through safeRedirect, so the open-redirect mitigation is unchanged.
+type linkRequest struct {
+	RedirectURL string   `json:"redirect_url,omitempty" doc:"Optional URL to navigate to after callback."`
+	_           struct{} `json:"-" additionalProperties:"false"`
+}
+
+// linkInput is the huma-native request for the link flow: the {provider} path
+// param plus an OPTIONAL typed JSON body. The body is a pointer so a no-body
+// POST is accepted (redirect_url has always been optional); a present-but-
+// malformed or unknown-field body is rejected by huma with a native 422.
+type linkInput struct {
+	Provider string       `path:"provider" doc:"OAuth provider name"`
+	Body     *linkRequest `required:"false"`
+}
+
+// registerLink wires POST {prefix}/oauth/{provider}/link. It starts a linking
+// flow for an already-authed user, returning the provider authorization URL the
+// client should send the browser to. Gated by RequireAuthHuma.
+//
+// This is the one oauth write-op with a native typed Body: it needs neither the
+// raw request (redirect_url now arrives in the body) nor the writer (it returns
+// JSON, not a cookie/302), so it drops StashHTTPHuma and runs only
+// RequireAuthHuma. The redirect/callback flows keep the bridge — they parse
+// query/form/JSON, set cookies, and 302.
+func (p *oauthPlugin) registerLink(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "oauthLink",
+		Method:      http.MethodPost,
+		Path:        prefix + "/oauth/{provider}/link",
+		Summary:     "Start linking an OAuth provider to the current account",
+		Tags:        []string{"oauth"},
+		Security:    []map[string][]string{{"sessionCookie": {}}},
+		Middlewares: huma.Middlewares{middleware.RequireAuthHuma(api, mw)},
+	}, func(ctx context.Context, in *linkInput) (*linkOutput, error) {
+		au, ok := middleware.AuthUserFromContext(ctx)
 		if !ok || au == nil {
-			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "not authenticated")
-			return
+			return nil, huma.Error401Unauthorized("not authenticated")
 		}
 
-		name := r.PathValue("provider")
+		name := in.Provider
 		prov, ok := p.providers[name]
 		if !ok {
-			writeError(w, http.StatusNotFound, "UNKNOWN_PROVIDER", "no oauth provider with that name")
-			return
+			return nil, huma.Error404NotFound("no oauth provider with that name")
 		}
 
 		// Reject if this user already has this provider linked.
-		if existing, err := host.Repo().GetOAuthAccountByUserAndProvider(r.Context(), au.User.ID, name); err == nil && existing != nil {
-			writeError(w, http.StatusConflict, "ALREADY_LINKED", "this provider is already linked to your account")
-			return
+		if existing, err := host.Repo().GetOAuthAccountByUserAndProvider(ctx, au.User.ID, name); err == nil && existing != nil {
+			return nil, huma.Error409Conflict("this provider is already linked to your account")
 		} else if err != nil && !errors.Is(err, yautherr.ErrNotFound) {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to check existing link")
-			return
+			return nil, huma.Error500InternalServerError("unable to check existing link")
 		}
 
-		redirect := p.safeRedirect(r.URL.Query().Get("redirect_url"))
+		var rawRedirect string
+		if in.Body != nil {
+			rawRedirect = in.Body.RedirectURL
+		}
+		redirect := p.safeRedirect(rawRedirect)
 
 		state, err := generateState()
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to generate state")
-			return
+			return nil, huma.Error500InternalServerError("unable to generate state")
 		}
 		payload := encodeStatePayload(linkModeLink, au.User.ID, redirect)
 		pp := payload
 		now := time.Now().UTC()
-		if err := host.Repo().CreateOAuthState(r.Context(), domain.NewOAuthState{
+		if err := host.Repo().CreateOAuthState(ctx, domain.NewOAuthState{
 			State:       state,
 			Provider:    name,
 			RedirectURL: &pp,
 			ExpiresAt:   now.Add(p.cfg.StateTTL),
 			CreatedAt:   now,
 		}); err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to persist state")
-			return
+			return nil, huma.Error500InternalServerError("unable to persist state")
 		}
 
 		authURL := prov.Config().AuthCodeURL(state, oauth2.AccessTypeOffline)
-		writeJSON(w, http.StatusOK, linkResponse{AuthURL: authURL})
-	}
+		return &linkOutput{Body: linkResponse{AuthURL: authURL}}, nil
+	})
 }
 
 // --- /oauth/{provider}/callback ----------------------------------------
 
-func (p *oauthPlugin) handleCallback(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		name := r.PathValue("provider")
+// callbackOutput is the dynamic output for the callback flow. The two terminal
+// shapes are mutually exclusive:
+//
+//   - redirect: Status=302, Location set, Body=nil (the success-with-redirect
+//     branch — the session cookie is written on the stashed writer).
+//   - JSON:     Status=200, Body=&callbackResponse, Location empty.
+//
+// huma owns the status/Location/body write that happens AFTER the handler
+// returns; the Set-Cookie is staged on the stashed writer (header only) so it
+// lands in huma's WriteHeader, the same pattern as magiclink/admin.
+type callbackOutput struct {
+	Status   int
+	Location string            `header:"Location"`
+	Body     *callbackResponse `json:",omitempty"`
+}
+
+// registerCallback wires {method} {prefix}/oauth/{provider}/callback for both
+// GET (query string) and POST (form_post / JSON) variants — two huma operations
+// sharing one handler, matching the legacy GET+POST mux registrations. Public
+// (no auth gate): the callback returns from the provider, so it cannot rely on
+// an ambient session except in the link-mode path, which re-checks identity.
+func (p *oauthPlugin) registerCallback(host plugin.PluginHost, api huma.API, prefix, method, opID string) {
+	huma.Register(api, huma.Operation{
+		OperationID: opID,
+		Method:      method,
+		Path:        prefix + "/oauth/{provider}/callback",
+		Summary:     "Complete the OAuth authorization-code flow",
+		Tags:        []string{"oauth"},
+		Security:    []map[string][]string{}, // explicitly public
+		Middlewares: oauthGuards(api),
+	}, func(ctx context.Context, in *providerInput) (*callbackOutput, error) {
+		r, err := reqFromCtx(ctx)
+		if err != nil {
+			return nil, err
+		}
+		w, err := respFromCtx(ctx)
+		if err != nil {
+			return nil, err
+		}
+		name := in.Provider
 		prov, ok := p.providers[name]
 		if !ok {
-			writeError(w, http.StatusNotFound, "UNKNOWN_PROVIDER", "no oauth provider with that name")
-			return
+			return nil, huma.Error404NotFound("no oauth provider with that name")
 		}
 
 		// Rust parity: callbacks may arrive via GET (query string), POST
@@ -272,22 +399,18 @@ func (p *oauthPlugin) handleCallback(host plugin.PluginHost) http.HandlerFunc {
 			errCode = r.FormValue("error")
 		}
 		if errCode != "" {
-			writeError(w, http.StatusBadRequest, "PROVIDER_ERROR", errCode)
-			return
+			return nil, huma.Error400BadRequest(errCode)
 		}
 		if code == "" || state == "" {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "missing code or state")
-			return
+			return nil, huma.Error400BadRequest("missing code or state")
 		}
 
-		st, err := host.Repo().ConsumeOAuthState(r.Context(), state)
+		st, err := host.Repo().ConsumeOAuthState(ctx, state)
 		if err != nil || st == nil {
-			writeError(w, http.StatusBadRequest, "INVALID_STATE", "state not found, expired, or already consumed")
-			return
+			return nil, huma.Error400BadRequest("state not found, expired, or already consumed")
 		}
 		if st.Provider != name {
-			writeError(w, http.StatusBadRequest, "INVALID_STATE", "state does not belong to this provider")
-			return
+			return nil, huma.Error400BadRequest("state does not belong to this provider")
 		}
 
 		mode, linkUserID, redirect := linkModeLogin, "", ""
@@ -295,21 +418,17 @@ func (p *oauthPlugin) handleCallback(host plugin.PluginHost) http.HandlerFunc {
 			mode, linkUserID, redirect = decodeStatePayload(*st.RedirectURL)
 		}
 
-		ctx := r.Context()
 		tok, err := prov.Config().Exchange(ctx, code)
 		if err != nil {
-			writeError(w, http.StatusBadGateway, "EXCHANGE_FAILED", "code exchange failed")
-			return
+			return nil, huma.Error502BadGateway("code exchange failed")
 		}
 
 		info, err := prov.FetchUserInfo(ctx, tok)
 		if err != nil || info == nil {
-			writeError(w, http.StatusBadGateway, "USERINFO_FAILED", "fetching user info failed")
-			return
+			return nil, huma.Error502BadGateway("fetching user info failed")
 		}
 		if info.ProviderUserID == "" {
-			writeError(w, http.StatusBadGateway, "USERINFO_INVALID", "provider returned no user id")
-			return
+			return nil, huma.Error502BadGateway("provider returned no user id")
 		}
 
 		// Encrypt tokens before persistence.
@@ -317,16 +436,14 @@ func (p *oauthPlugin) handleCallback(host plugin.PluginHost) http.HandlerFunc {
 		if tok.AccessToken != "" {
 			a, err := encryptToken(p.cfg.EncryptionKey, tok.AccessToken)
 			if err != nil {
-				writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to encrypt access token")
-				return
+				return nil, huma.Error500InternalServerError("unable to encrypt access token")
 			}
 			accessEnc = &a
 		}
 		if tok.RefreshToken != "" {
 			rt, err := encryptToken(p.cfg.EncryptionKey, tok.RefreshToken)
 			if err != nil {
-				writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to encrypt refresh token")
-				return
+				return nil, huma.Error500InternalServerError("unable to encrypt refresh token")
 			}
 			refreshEnc = &rt
 		}
@@ -338,17 +455,18 @@ func (p *oauthPlugin) handleCallback(host plugin.PluginHost) http.HandlerFunc {
 
 		switch mode {
 		case linkModeLink:
-			p.completeLink(w, r, host, name, linkUserID, info, accessEnc, refreshEnc, expiresAt, redirect)
+			return p.completeLink(ctx, w, r, host, name, linkUserID, info, accessEnc, refreshEnc, expiresAt, redirect)
 		default:
-			p.completeLogin(w, r, host, name, info, accessEnc, refreshEnc, expiresAt, redirect)
+			return p.completeLogin(ctx, w, r, host, name, info, accessEnc, refreshEnc, expiresAt, redirect)
 		}
-	}
+	})
 }
 
 // completeLogin handles the "anonymous user lands at /authorize" path.
 // Existing OAuth account → load user, issue session. Otherwise, look the
 // user up by email or create a fresh one, link the account, issue session.
 func (p *oauthPlugin) completeLogin(
+	ctx context.Context,
 	w http.ResponseWriter,
 	r *http.Request,
 	host plugin.PluginHost,
@@ -357,8 +475,7 @@ func (p *oauthPlugin) completeLogin(
 	accessEnc, refreshEnc *string,
 	expiresAt *time.Time,
 	redirect string,
-) {
-	ctx := r.Context()
+) (*callbackOutput, error) {
 	repoRef := host.Repo()
 	now := time.Now().UTC()
 
@@ -374,17 +491,14 @@ func (p *oauthPlugin) completeLogin(
 		// Already linked. Refresh the stored tokens.
 		userID = existing.UserID
 		if err := repoRef.UpdateOAuthAccountTokens(ctx, existing.ID, accessEnc, refreshEnc, expiresAt, now); err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to update tokens")
-			return
+			return nil, huma.Error500InternalServerError("unable to update tokens")
 		}
 		u, err := repoRef.GetUserByID(ctx, userID)
 		if err != nil || u == nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "linked user not found")
-			return
+			return nil, huma.Error500InternalServerError("linked user not found")
 		}
 		if u.Banned {
-			writeError(w, http.StatusForbidden, "USER_BANNED", "account suspended")
-			return
+			return nil, huma.Error403Forbidden("account suspended")
 		}
 		email = u.Email
 
@@ -392,18 +506,15 @@ func (p *oauthPlugin) completeLogin(
 		// No existing link — try to attach to an existing user with the
 		// same email, otherwise create one.
 		if info.Email == "" {
-			writeError(w, http.StatusBadRequest, "NO_EMAIL", "provider returned no email; cannot create account")
-			return
+			return nil, huma.Error400BadRequest("provider returned no email; cannot create account")
 		}
 		existingUser, err := repoRef.GetUserByEmail(ctx, info.Email)
 		if err != nil && !errors.Is(err, yautherr.ErrNotFound) {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to look up user")
-			return
+			return nil, huma.Error500InternalServerError("unable to look up user")
 		}
 		if err == nil && existingUser != nil {
 			if existingUser.Banned {
-				writeError(w, http.StatusForbidden, "USER_BANNED", "account suspended")
-				return
+				return nil, huma.Error403Forbidden("account suspended")
 			}
 			userID = existingUser.ID
 			email = existingUser.Email
@@ -423,8 +534,7 @@ func (p *oauthPlugin) completeLogin(
 				UpdatedAt:     now,
 			})
 			if err != nil {
-				writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to create user")
-				return
+				return nil, huma.Error500InternalServerError("unable to create user")
 			}
 			userID = created.ID
 			email = created.Email
@@ -442,20 +552,17 @@ func (p *oauthPlugin) completeLogin(
 			CreatedAt:       now,
 			UpdatedAt:       now,
 		}); err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to link account")
-			return
+			return nil, huma.Error500InternalServerError("unable to link account")
 		}
 
 	default:
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to look up oauth account")
-		return
+		return nil, huma.Error500InternalServerError("unable to look up oauth account")
 	}
 
 	// Issue session.
 	raw, _, err := auth.IssueSession(ctx, repoRef, userID, middleware.RequestIP(r), requestUA(r), host.SessionTTL())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to issue session")
-		return
+		return nil, huma.Error500InternalServerError("unable to issue session")
 	}
 	http.SetCookie(w, auth.SessionCookie(
 		cookieOptionsFromHost(host, r, int(host.SessionTTL().Seconds())),
@@ -484,8 +591,7 @@ func (p *oauthPlugin) completeLogin(
 	})
 
 	if redirect != "" {
-		http.Redirect(w, r, redirect, http.StatusFound)
-		return
+		return &callbackOutput{Status: http.StatusFound, Location: redirect}, nil
 	}
 	resp := callbackResponse{User: callbackUser{ID: userID, Email: email}}
 	if u, err := repoRef.GetUserByID(ctx, userID); err == nil && u != nil {
@@ -493,12 +599,12 @@ func (p *oauthPlugin) completeLogin(
 		resp.User.EmailVerified = u.EmailVerified
 		resp.User.Role = u.Role
 	}
-	_ = provider
-	writeJSON(w, http.StatusOK, resp)
+	return &callbackOutput{Status: http.StatusOK, Body: &resp}, nil
 }
 
 // completeLink attaches the OAuth account to an already-authed user.
 func (p *oauthPlugin) completeLink(
+	ctx context.Context,
 	w http.ResponseWriter,
 	r *http.Request,
 	host plugin.PluginHost,
@@ -507,18 +613,15 @@ func (p *oauthPlugin) completeLink(
 	accessEnc, refreshEnc *string,
 	expiresAt *time.Time,
 	redirect string,
-) {
-	au, ok := middleware.AuthUserFromContext(r.Context())
+) (*callbackOutput, error) {
+	au, ok := middleware.AuthUserFromContext(ctx)
 	if !ok || au == nil {
-		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "linking requires an authenticated session")
-		return
+		return nil, huma.Error401Unauthorized("linking requires an authenticated session")
 	}
 	if expectedUserID != "" && au.User.ID != expectedUserID {
-		writeError(w, http.StatusForbidden, "USER_MISMATCH", "callback session does not match link initiator")
-		return
+		return nil, huma.Error403Forbidden("callback session does not match link initiator")
 	}
 
-	ctx := r.Context()
 	repoRef := host.Repo()
 	now := time.Now().UTC()
 
@@ -528,16 +631,13 @@ func (p *oauthPlugin) completeLink(
 		if owned.UserID == au.User.ID {
 			// Idempotent re-link: refresh the stored tokens.
 			if err := repoRef.UpdateOAuthAccountTokens(ctx, owned.ID, accessEnc, refreshEnc, expiresAt, now); err != nil {
-				writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to update tokens")
-				return
+				return nil, huma.Error500InternalServerError("unable to update tokens")
 			}
 		} else {
-			writeError(w, http.StatusConflict, "ACCOUNT_LINKED_ELSEWHERE", "this provider account is linked to a different user")
-			return
+			return nil, huma.Error409Conflict("this provider account is linked to a different user")
 		}
 	} else if err != nil && !errors.Is(err, yautherr.ErrNotFound) {
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to look up oauth account")
-		return
+		return nil, huma.Error500InternalServerError("unable to look up oauth account")
 	} else {
 		if err := repoRef.CreateOAuthAccount(ctx, domain.NewOAuthAccount{
 			ID:              uuid.NewString(),
@@ -550,16 +650,15 @@ func (p *oauthPlugin) completeLink(
 			CreatedAt:       now,
 			UpdatedAt:       now,
 		}); err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to link account")
-			return
+			return nil, huma.Error500InternalServerError("unable to link account")
 		}
 	}
 
+	_ = w
 	if redirect != "" {
-		http.Redirect(w, r, redirect, http.StatusFound)
-		return
+		return &callbackOutput{Status: http.StatusFound, Location: redirect}, nil
 	}
-	writeJSON(w, http.StatusOK, callbackResponse{
+	return &callbackOutput{Status: http.StatusOK, Body: &callbackResponse{
 		User: callbackUser{
 			ID:            au.User.ID,
 			Email:         au.User.Email,
@@ -567,8 +666,7 @@ func (p *oauthPlugin) completeLink(
 			EmailVerified: au.User.EmailVerified,
 			Role:          au.User.Role,
 		},
-	})
-	_ = provider
+	}}, nil
 }
 
 // --- /oauth/accounts ---------------------------------------------------
@@ -580,7 +678,6 @@ type accountJSON struct {
 	ExpiresAt      *time.Time `json:"expires_at,omitempty"`
 }
 
-
 // listAccountsResponse wraps GET /oauth/accounts with pagination
 // metadata.
 type listAccountsResponse struct {
@@ -590,17 +687,36 @@ type listAccountsResponse struct {
 	PerPage int           `json:"per_page"`
 }
 
-func (p *oauthPlugin) handleListAccounts(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := middleware.AuthUserFromContext(r.Context())
-		if !ok || au == nil {
-			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "not authenticated")
-			return
-		}
-		rows, err := host.Repo().GetOAuthAccountsByUserID(r.Context(), au.User.ID)
+// listAccountsOutput wraps listAccountsResponse so huma marshals exactly the
+// legacy 200 body.
+type listAccountsOutput struct {
+	Body listAccountsResponse
+}
+
+// registerListAccounts wires GET {prefix}/oauth/accounts. Gated by
+// RequireAuthHuma; pagination is read off the stashed raw request so the
+// page/per_page parsing stays byte-identical to the legacy handler.
+func (p *oauthPlugin) registerListAccounts(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "oauthListAccounts",
+		Method:      http.MethodGet,
+		Path:        prefix + "/oauth/accounts",
+		Summary:     "List the caller's linked OAuth accounts",
+		Tags:        []string{"oauth"},
+		Security:    []map[string][]string{{"sessionCookie": {}}},
+		Middlewares: authedGuards(api, mw),
+	}, func(ctx context.Context, _ *struct{}) (*listAccountsOutput, error) {
+		r, err := reqFromCtx(ctx)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to load accounts")
-			return
+			return nil, err
+		}
+		au, ok := middleware.AuthUserFromContext(ctx)
+		if !ok || au == nil {
+			return nil, huma.Error401Unauthorized("not authenticated")
+		}
+		rows, err := host.Repo().GetOAuthAccountsByUserID(ctx, au.User.ID)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("unable to load accounts")
 		}
 		page, perPage := paginationFromQuery(r)
 		total := int64(len(rows))
@@ -622,13 +738,13 @@ func (p *oauthPlugin) handleListAccounts(host plugin.PluginHost) http.HandlerFun
 				ExpiresAt:      a.ExpiresAt,
 			})
 		}
-		writeJSON(w, http.StatusOK, listAccountsResponse{
+		return &listAccountsOutput{Body: listAccountsResponse{
 			Items:   out,
 			Total:   total,
 			Page:    page,
 			PerPage: perPage,
-		})
-	}
+		}}, nil
+	})
 }
 
 func paginationFromQuery(r *http.Request) (page, perPage int) {
@@ -668,46 +784,55 @@ var errParseInt = errors.New("parse int")
 
 // --- DELETE /oauth/{provider} ------------------------------------------
 
-func (p *oauthPlugin) handleUnlink(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := middleware.AuthUserFromContext(r.Context())
+// unlinkOutput carries no body and lets the operation drive a 204 via
+// DefaultStatus.
+type unlinkOutput struct{}
+
+// registerUnlink wires DELETE {prefix}/oauth/{provider}. Gated by
+// RequireAuthHuma; refuses (409) when unlinking would leave the user with no
+// authentication method. Returns 204 on success.
+func (p *oauthPlugin) registerUnlink(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID:   "oauthUnlink",
+		Method:        http.MethodDelete,
+		Path:          prefix + "/oauth/{provider}",
+		Summary:       "Unlink an OAuth provider from the current account",
+		Tags:          []string{"oauth"},
+		Security:      []map[string][]string{{"sessionCookie": {}}},
+		DefaultStatus: http.StatusNoContent,
+		Middlewares:   authedGuards(api, mw),
+	}, func(ctx context.Context, in *providerInput) (*unlinkOutput, error) {
+		au, ok := middleware.AuthUserFromContext(ctx)
 		if !ok || au == nil {
-			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "not authenticated")
-			return
+			return nil, huma.Error401Unauthorized("not authenticated")
 		}
-		name := r.PathValue("provider")
+		name := in.Provider
 		if name == "" {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "missing provider")
-			return
+			return nil, huma.Error400BadRequest("missing provider")
 		}
 
-		ctx := r.Context()
 		repoRef := host.Repo()
 
 		target, err := repoRef.GetOAuthAccountByUserAndProvider(ctx, au.User.ID, name)
 		if err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "NOT_LINKED", "no link to that provider")
-				return
+				return nil, huma.Error404NotFound("no link to that provider")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to load link")
-			return
+			return nil, huma.Error500InternalServerError("unable to load link")
 		}
 
 		// Lockout guard: refuse if removing this would leave the user
 		// with no way to authenticate.
 		if !p.userHasAlternateAuth(ctx, repoRef, au.User.ID, target.ID) {
-			writeError(w, http.StatusConflict, "WOULD_LOCK_OUT",
+			return nil, huma.Error409Conflict(
 				"refusing to unlink: this is your only authentication method. Set a password or link another OAuth provider first.")
-			return
 		}
 
 		if err := repoRef.DeleteOAuthAccount(ctx, target.ID); err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to unlink")
-			return
+			return nil, huma.Error500InternalServerError("unable to unlink")
 		}
-		w.WriteHeader(http.StatusNoContent)
-	}
+		return &unlinkOutput{}, nil
+	})
 }
 
 // userHasAlternateAuth reports whether the user has at least one

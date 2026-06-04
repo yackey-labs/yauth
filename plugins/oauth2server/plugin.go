@@ -41,7 +41,8 @@
 package oauth2server
 
 import (
-	"net/http"
+	"github.com/danielgtaylor/huma/v2"
+
 	"sync"
 	"time"
 
@@ -203,7 +204,7 @@ func (p *oauth2Plugin) Name() string { return "oauth2-server" }
 // Routes implements plugin.Plugin. It mounts the admin client CRUD,
 // authorize/consent, token, introspect, revoke, and device-flow
 // endpoints described in the package doc.
-func (p *oauth2Plugin) Routes(host plugin.PluginHost, mux plugin.Router, prefix string) {
+func (p *oauth2Plugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.API, prefix string) {
 	mw := host.Middleware()
 
 	// OIDC Back-Channel Logout: react to logout/suspend/ban events by notifying
@@ -215,66 +216,20 @@ func (p *oauth2Plugin) Routes(host plugin.PluginHost, mux plugin.Router, prefix 
 		p.startStaleClientSweep(host)
 	}
 
-	// --- admin client CRUD ---
-	mux.Handle("GET "+prefix+"/oauth2/clients", mw.RequireAdmin(http.HandlerFunc(p.handleListClients(host))))
-	mux.Handle("POST "+prefix+"/oauth2/clients", mw.RequireAdmin(http.HandlerFunc(p.handleCreateClient(host))))
-	mux.Handle("GET "+prefix+"/oauth2/clients/{id}", mw.RequireAdmin(http.HandlerFunc(p.handleGetClient(host))))
-	mux.Handle("PATCH "+prefix+"/oauth2/clients/{id}", mw.RequireAdmin(http.HandlerFunc(p.handlePatchClient(host))))
-	mux.Handle("DELETE "+prefix+"/oauth2/clients/{id}", mw.RequireAdmin(http.HandlerFunc(p.handleDeleteClient(host))))
-	mux.Handle("POST "+prefix+"/oauth2/clients/{id}/ban", mw.RequireAdmin(http.HandlerFunc(p.handleBanClient(host))))
-	mux.Handle("POST "+prefix+"/oauth2/clients/{id}/unban", mw.RequireAdmin(http.HandlerFunc(p.handleUnbanClient(host))))
-	mux.Handle("POST "+prefix+"/oauth2/clients/{id}/rotate-public-key", mw.RequireAdmin(http.HandlerFunc(p.handleRotatePublicKey(host))))
-
-	// Application group assignments (which groups may access this client).
-	mux.Handle("GET "+prefix+"/oauth2/clients/{id}/groups", mw.RequireAdmin(http.HandlerFunc(p.handleListClientGroups(host))))
-	mux.Handle("POST "+prefix+"/oauth2/clients/{id}/groups", mw.RequireAdmin(http.HandlerFunc(p.handleAssignClientGroup(host))))
-	mux.Handle("DELETE "+prefix+"/oauth2/clients/{id}/groups/{gid}", mw.RequireAdmin(http.HandlerFunc(p.handleUnassignClientGroup(host))))
-
-	// Application (client) roles — free-form labels assigned to groups or users,
-	// emitted per-app as the "roles" claim.
-	mux.Handle("GET "+prefix+"/oauth2/clients/{id}/roles", mw.RequireAdmin(http.HandlerFunc(p.handleListClientRoles(host))))
-	mux.Handle("POST "+prefix+"/oauth2/clients/{id}/roles", mw.RequireAdmin(http.HandlerFunc(p.handleAssignClientRole(host))))
-	mux.Handle("DELETE "+prefix+"/oauth2/clients/{id}/roles/{aid}", mw.RequireAdmin(http.HandlerFunc(p.handleUnassignClientRole(host))))
-
-	// --- RFC 8414 authorization server metadata ---
-	mux.Handle("GET "+prefix+"/.well-known/oauth-authorization-server", http.HandlerFunc(p.handleAuthServerMetadata(host)))
-
-	// --- authorization-code + consent ---
-	// /authorize is a session-protected endpoint: the caller must be a
-	// logged-in user before consent makes sense.
+	// Every route is huma-native (see routes_huma.go). The migration is
+	// transport-only: the ported handlers keep writing byte-identical RFC
+	// 6749 / 7662 / 8628 / 7591 responses (including the OAuth2 error shape,
+	// Cache-Control: no-store, WWW-Authenticate, redirects, and the
+	// end_session HTML) via a func(huma.Context) stream body, so huma never
+	// problem+json-wraps or re-marshals the OAuth2 wire bytes.
 	//
 	// Path note: /oauth/authorize, /oauth/token, etc. are literal patterns
 	// that take precedence over the wildcard /oauth/{provider}/* registered
-	// by the oauth client plugin (Go 1.22+ ServeMux specificity rules).
-	mux.Handle("GET "+prefix+"/oauth/authorize", mw.RequireAuth(http.HandlerFunc(p.handleAuthorize(host))))
-	mux.Handle("POST "+prefix+"/oauth/authorize", mw.RequireAuth(http.HandlerFunc(p.handleAuthorize(host))))
-	mux.Handle("POST "+prefix+"/oauth2/consent", mw.RequireAuth(http.HandlerFunc(p.handleConsent(host))))
-
-	// --- OIDC RP-Initiated Logout 1.0 (end_session) ---
-	// Public: must work whether or not a session is still active, and is
-	// browser-facing (GET) as well as form-POST.
-	mux.Handle("GET "+prefix+"/oauth/end_session", http.HandlerFunc(p.handleEndSession(host)))
-	mux.Handle("POST "+prefix+"/oauth/end_session", http.HandlerFunc(p.handleEndSession(host)))
-
-	// --- token / introspect / revoke ---
-	mux.Handle("POST "+prefix+"/oauth/token", http.HandlerFunc(p.handleToken(host)))
-	mux.Handle("POST "+prefix+"/oauth/introspect", http.HandlerFunc(p.handleIntrospect(host)))
-	mux.Handle("POST "+prefix+"/oauth/revoke", http.HandlerFunc(p.handleRevoke(host)))
-
-	// --- device flow ---
-	mux.Handle("POST "+prefix+"/oauth/device/code", http.HandlerFunc(p.handleDeviceAuth(host)))
-	mux.Handle("POST "+prefix+"/oauth/device", mw.RequireAuth(http.HandlerFunc(p.handleDeviceVerify(host))))
-	mux.Handle("GET "+prefix+"/oauth/device", mw.RequireAuth(http.HandlerFunc(p.handleDeviceVerify(host))))
-
-	// --- RFC 7591 dynamic client registration (opt-in) ---
-	// The handler enforces the split policy itself (see DCREnabled doc):
-	// public loopback-only clients may register anonymously; everything
-	// else is admin-gated via Middleware.ResolveAdmin. It must therefore
-	// run unwrapped so it can read the request body before deciding which
-	// rule applies — and so it can return the RFC 7591 §3.2.2 JSON error
-	// body rather than RequireAdmin's plain-text 401 (which MCP SDKs cannot
-	// parse as an OAuth error).
-	if p.cfg.DCREnabled {
-		mux.Handle("POST "+prefix+"/oauth/register", http.HandlerFunc(p.handleDCRRegister(host, prefix)))
-	}
+	// by the oauth client plugin (Go 1.22+ ServeMux specificity rules); the
+	// huma adapter registers the same literal patterns, so the precedence is
+	// preserved.
+	//
+	// The mux is retained in the Routes signature for plugins that still
+	// register raw net/http routes; oauth2server no longer uses it.
+	p.registerRoutes(host, api, mw, prefix)
 }

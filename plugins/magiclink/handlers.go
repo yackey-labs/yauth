@@ -1,11 +1,11 @@
 package magiclink
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/google/uuid"
 
 	"github.com/yackey-labs/yauth-go/auth"
@@ -27,32 +28,6 @@ import (
 // random bytes encoded as base64url is 43 characters, providing ~256 bits
 // of entropy.
 const magicTokenBytes = 32
-
-type errorBody struct {
-	Error errorPayload `json:"error"`
-}
-
-type errorPayload struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeError(w http.ResponseWriter, status int, code, message string) {
-	writeJSON(w, status, errorBody{Error: errorPayload{Code: code, Message: message}})
-}
-
-func decodeJSON(r *http.Request, v any) error {
-	r.Body = http.MaxBytesReader(nil, r.Body, 1<<20)
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	return dec.Decode(v)
-}
 
 func validEmail(s string) bool {
 	s = strings.TrimSpace(s)
@@ -114,8 +89,18 @@ func buildLink(base, raw string) string {
 
 // --- /magic-link/send -----------------------------------------------------
 
-type sendRequest struct {
-	Email string `json:"email"`
+type magicSendRequest struct {
+	Email string   `json:"email,omitempty"`
+	_     struct{} `json:"-" additionalProperties:"false"`
+}
+
+// magicSendInput is the huma-native request body for /magic-link/send. huma
+// parses + validates it (unknown fields → 422) and the OpenAPI request schema
+// auto-derives — no StashHTTPHuma bridge. Email carries omitempty so a missing
+// field falls through to the business 400 ("email must contain '@'") rather
+// than huma's required-field 422; the enumeration-safe semantics are unchanged.
+type magicSendInput struct {
+	Body magicSendRequest
 }
 
 // sendResponse mirrors the Rust shape — a generic message that does not
@@ -127,44 +112,56 @@ type sendResponse struct {
 
 const magicLinkSendMessage = "If the email exists, a magic link has been sent."
 
-func (p *magicLinkPlugin) handleSend(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		var req sendRequest
-		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
-			return
-		}
+// sendOutput wraps sendResponse so huma marshals exactly the legacy 200 body.
+type sendOutput struct {
+	Body sendResponse
+}
+
+// registerSend wires POST {prefix}/magic-link/send as a public huma-native
+// operation. The request body is a native huma typed Body, so huma parses +
+// validates it and the OpenAPI request schema auto-derives; unknown fields are
+// rejected (422). It REUSES the enumeration-resistant logic, token issuance, and
+// mailer dispatch; only the transport changes. Every success path returns the
+// same generic 200 body so the response never admits whether the email is
+// registered. No StashHTTPHuma bridge — /send needs neither the raw request nor
+// the writer.
+func (p *magicLinkPlugin) registerSend(host plugin.PluginHost, api huma.API, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "magicLinkSend",
+		Method:      http.MethodPost,
+		Path:        prefix + "/magic-link/send",
+		Summary:     "Request a single-use magic-link login email",
+		Tags:        []string{"magic-link"},
+		Security:    []map[string][]string{}, // explicitly public
+	}, func(ctx context.Context, in *magicSendInput) (*sendOutput, error) {
+		req := in.Body
 		req.Email = strings.TrimSpace(strings.ToLower(req.Email))
 		if !validEmail(req.Email) {
-			writeError(w, http.StatusBadRequest, "INVALID_EMAIL", "email must contain '@'")
-			return
+			return nil, huma.Error400BadRequest("email must contain '@'")
 		}
 
-		ctx := r.Context()
 		repo := host.Repo()
+		ok := &sendOutput{Body: sendResponse{Message: magicLinkSendMessage}}
 
 		// Look up the user but DO NOT branch the response on the result —
-		// /send always returns {"sent": true}.
+		// /send always returns the same generic 200 body.
 		_, err := repo.GetUserByEmail(ctx, req.Email)
 		userExists := err == nil
 		if err != nil && !errors.Is(err, yautherr.ErrNotFound) {
 			// Backend failure: we still respond 200 to preserve enumeration
 			// resistance; the operator sees the error in logs.
-			writeJSON(w, http.StatusOK, sendResponse{Message: magicLinkSendMessage})
-			return
+			return ok, nil
 		}
 
 		// Issue the token only if the user exists OR signup is enabled. In
 		// both other cases we skip persistence/email but still return 200.
 		if !userExists && !p.cfg.SignupEnabled {
-			writeJSON(w, http.StatusOK, sendResponse{Message: magicLinkSendMessage})
-			return
+			return ok, nil
 		}
 
 		raw, hash, err := generateToken()
 		if err != nil {
-			writeJSON(w, http.StatusOK, sendResponse{Message: magicLinkSendMessage})
-			return
+			return ok, nil
 		}
 
 		now := time.Now().UTC()
@@ -175,21 +172,31 @@ func (p *magicLinkPlugin) handleSend(host plugin.PluginHost) http.HandlerFunc {
 			ExpiresAt: now.Add(p.cfg.TokenTTL),
 			CreatedAt: now,
 		}); err != nil {
-			writeJSON(w, http.StatusOK, sendResponse{Message: magicLinkSendMessage})
-			return
+			return ok, nil
 		}
 
 		link := buildLink(p.cfg.LinkBaseURL, raw)
 		_ = p.cfg.Mailer.SendMagicLink(ctx, req.Email, link)
 
-		writeJSON(w, http.StatusOK, sendResponse{Message: magicLinkSendMessage})
-	}
+		return ok, nil
+	})
 }
 
 // --- /magic-link/verify ---------------------------------------------------
 
-type verifyRequest struct {
-	Token string `json:"token"`
+type magicVerifyRequest struct {
+	Token string   `json:"token,omitempty"`
+	_     struct{} `json:"-" additionalProperties:"false"`
+}
+
+// magicVerifyInput is the huma-native request body for /magic-link/verify. huma
+// parses + validates it (unknown fields → 422). /verify still pairs with
+// StashHTTPHuma because it needs the raw *http.Request (RequestIP / User-Agent)
+// and the http.ResponseWriter (to set the session cookie); the response body
+// itself is a typed huma Body output. Token carries omitempty so a missing field
+// falls through to the business 400 ("token is required") rather than a 422.
+type magicVerifyInput struct {
+	Body magicVerifyRequest
 }
 
 // verifyResponse wraps the verified user under `user`. The session
@@ -219,20 +226,39 @@ func toVerifyResponse(u domain.User) verifyResponse {
 	}
 }
 
-func (p *magicLinkPlugin) handleVerify(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		var req verifyRequest
-		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
-			return
-		}
-		raw := strings.TrimSpace(req.Token)
-		if raw == "" {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "token is required")
-			return
+// verifyOutput wraps verifyResponse so huma marshals exactly the legacy 200
+// body. The session cookie is written out-of-band on the stashed writer.
+type verifyOutput struct {
+	Body verifyResponse
+}
+
+// registerVerify wires POST {prefix}/magic-link/verify as a public huma-native
+// operation. It REUSES the legacy token consumption, user resolve/create, ban
+// check, session issuance, and event emission; the Set-Cookie is written on the
+// http.ResponseWriter stashed by StashHTTPHuma (huma writes the 200 + body after
+// the handler returns, so the cookie header lands first) — the same pattern as
+// admin's impersonate route.
+func (p *magicLinkPlugin) registerVerify(host plugin.PluginHost, api huma.API, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "magicLinkVerify",
+		Method:      http.MethodPost,
+		Path:        prefix + "/magic-link/verify",
+		Summary:     "Exchange a magic-link token for a session",
+		Tags:        []string{"magic-link"},
+		Security:    []map[string][]string{}, // explicitly public
+		Middlewares: huma.Middlewares{middleware.StashHTTPHuma(api)},
+	}, func(ctx context.Context, in *magicVerifyInput) (*verifyOutput, error) {
+		r := middleware.HTTPRequestFromContext(ctx)
+		w := middleware.HTTPResponseFromContext(ctx)
+		if r == nil || w == nil {
+			return nil, huma.Error500InternalServerError("request unavailable")
 		}
 
-		ctx := r.Context()
+		raw := strings.TrimSpace(in.Body.Token)
+		if raw == "" {
+			return nil, huma.Error400BadRequest("token is required")
+		}
+
 		repo := host.Repo()
 		ip := middleware.RequestIP(r)
 		method := "magic-link"
@@ -242,20 +268,17 @@ func (p *magicLinkPlugin) handleVerify(host plugin.PluginHost) http.HandlerFunc 
 
 		ml, err := repo.ConsumeMagicLink(ctx, hash)
 		if err != nil || ml == nil {
-			writeError(w, http.StatusUnauthorized, "INVALID_TOKEN", "token is invalid, expired, or already used")
-			return
+			return nil, huma.Error401Unauthorized("token is invalid, expired, or already used")
 		}
 
 		// Resolve or create the user.
 		user, err := repo.GetUserByEmail(ctx, ml.Email)
 		if err != nil && !errors.Is(err, yautherr.ErrNotFound) {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to look up user")
-			return
+			return nil, huma.Error500InternalServerError("unable to look up user")
 		}
 		if user == nil {
 			if !p.cfg.SignupEnabled {
-				writeError(w, http.StatusUnauthorized, "INVALID_TOKEN", "token is invalid, expired, or already used")
-				return
+				return nil, huma.Error401Unauthorized("token is invalid, expired, or already used")
 			}
 			now := time.Now().UTC()
 			created, err := repo.CreateUser(ctx, domain.NewUser{
@@ -267,8 +290,7 @@ func (p *magicLinkPlugin) handleVerify(host plugin.PluginHost) http.HandlerFunc 
 				UpdatedAt:     now,
 			})
 			if err != nil {
-				writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to create user")
-				return
+				return nil, huma.Error500InternalServerError("unable to create user")
 			}
 			user = &created
 			uid := user.ID
@@ -284,14 +306,12 @@ func (p *magicLinkPlugin) handleVerify(host plugin.PluginHost) http.HandlerFunc 
 		}
 
 		if user.Banned {
-			writeError(w, http.StatusForbidden, "USER_BANNED", "account suspended")
-			return
+			return nil, huma.Error403Forbidden("account suspended")
 		}
 
 		raw2, _, err := auth.IssueSession(ctx, repo, user.ID, ip, requestUA(r), host.SessionTTL())
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to issue session")
-			return
+			return nil, huma.Error500InternalServerError("unable to issue session")
 		}
 
 		uid := user.ID
@@ -309,6 +329,6 @@ func (p *magicLinkPlugin) handleVerify(host plugin.PluginHost) http.HandlerFunc 
 			cookieOptionsFromHost(host, r, int(host.SessionTTL().Seconds())),
 			raw2,
 		))
-		writeJSON(w, http.StatusOK, toVerifyResponse(*user))
-	}
+		return &verifyOutput{Body: toVerifyResponse(*user)}, nil
+	})
 }

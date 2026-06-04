@@ -6,6 +6,8 @@
 package scim
 
 import (
+	"github.com/yackey-labs/yauth-go/humaapi"
+
 	"bytes"
 	"context"
 	"encoding/json"
@@ -162,7 +164,7 @@ func newTestApp(t *testing.T) *testApp {
 	mux := http.NewServeMux()
 	host := newFakeHost(r, "")
 	p := New(Config{}).(*scimPlugin)
-	p.Routes(host, mux, "")
+	p.Routes(host, mux, humaapi.New(mux), "")
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	host.base = srv.URL

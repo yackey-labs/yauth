@@ -1,12 +1,14 @@
 package apikey
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/google/uuid"
 
 	"github.com/yackey-labs/yauth-go/domain"
@@ -14,6 +16,17 @@ import (
 	"github.com/yackey-labs/yauth-go/plugin"
 	"github.com/yackey-labs/yauth-go/yautherr"
 )
+
+// reqFromCtx returns the *http.Request stashed by StashHTTPHuma. On a route in
+// this plugin's GET/POST chain it is always present; the nil guard keeps the
+// helper safe.
+func reqFromCtx(ctx context.Context) (*http.Request, error) {
+	r := middleware.HTTPRequestFromContext(ctx)
+	if r == nil {
+		return nil, huma.Error500InternalServerError("request unavailable")
+	}
+	return r, nil
+}
 
 // apiKeyJSON is the JSON shape returned by the management endpoints. It
 // deliberately omits any secret material — only the prefix and metadata.
@@ -56,35 +69,6 @@ func decodeScopes(raw json.RawMessage) []string {
 	return out
 }
 
-// errorBody mirrors the canonical error envelope used elsewhere in
-// yauth-go.
-type errorBody struct {
-	Error errorPayload `json:"error"`
-}
-
-type errorPayload struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeError(w http.ResponseWriter, status int, code, message string) {
-	writeJSON(w, status, errorBody{Error: errorPayload{Code: code, Message: message}})
-}
-
-// decodeJSON parses r.Body into v with a 1 MiB cap.
-func decodeJSON(r *http.Request, v any) error {
-	r.Body = http.MaxBytesReader(nil, r.Body, 1<<20)
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	return dec.Decode(v)
-}
-
 // --- GET /api-keys ------------------------------------------------------
 
 // listResponse wraps the GET /api-keys collection with pagination
@@ -97,20 +81,40 @@ type listResponse struct {
 	PerPage int          `json:"per_page"`
 }
 
-func (p *apiKeyPlugin) handleList(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := middleware.AuthUserFromContext(r.Context())
+// listOutput wraps listResponse so huma marshals exactly the body the legacy
+// handleList produced.
+type listOutput struct {
+	Body listResponse
+}
+
+// registerList wires GET /api-keys as a huma-native operation guarded by
+// RequireAuthHuma. It pairs with StashHTTPHuma so paginationFromQuery keeps its
+// lenient ?page=/?per_page= parsing (bad values degrade to defaults rather than
+// 400) — typed huma query params would 422 instead, changing behaviour.
+func (p *apiKeyPlugin) registerList(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "apikey-list",
+		Method:      http.MethodGet,
+		Path:        prefix + "/api-keys",
+		Summary:     "List the current user's API keys",
+		Tags:        []string{"api-key"},
+		Security:    apiKeySecurity(),
+		Middlewares: huma.Middlewares{middleware.StashHTTPHuma(api), middleware.RequireAuthHuma(api, mw)},
+	}, func(ctx context.Context, _ *struct{}) (*listOutput, error) {
+		au, ok := middleware.AuthUserFromContext(ctx)
 		if !ok || au == nil {
-			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "not authenticated")
-			return
+			return nil, huma.Error401Unauthorized("not authenticated")
+		}
+		r, err := reqFromCtx(ctx)
+		if err != nil {
+			return nil, err
 		}
 
 		page, perPage := paginationFromQuery(r)
 
-		rows, err := host.Repo().ListAPIKeysByUserID(r.Context(), au.User.ID)
+		rows, err := host.Repo().ListAPIKeysByUserID(ctx, au.User.ID)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to list api keys")
-			return
+			return nil, huma.Error500InternalServerError("unable to list api keys")
 		}
 		total := int64(len(rows))
 		// Repo currently returns the full list; slice in-memory for now.
@@ -133,13 +137,13 @@ func (p *apiKeyPlugin) handleList(host plugin.PluginHost) http.HandlerFunc {
 			}
 			out = append(out, toAPIKeyJSON(*k))
 		}
-		writeJSON(w, http.StatusOK, listResponse{
+		return &listOutput{Body: listResponse{
 			Items:   out,
 			Total:   total,
 			Page:    page,
 			PerPage: perPage,
-		})
-	}
+		}}, nil
+	})
 }
 
 // paginationFromQuery parses ?page= and ?per_page= with sane defaults
@@ -185,6 +189,14 @@ type createRequest struct {
 	Name          string   `json:"name"`
 	Scopes        []string `json:"scopes,omitempty"`
 	ExpiresInDays *int     `json:"expires_in_days,omitempty"`
+	_             struct{} `json:"-" additionalProperties:"false"`
+}
+
+// createInput is the huma-native request: a typed JSON body. huma parses +
+// validates it (and rejects unknown fields via additionalProperties:false),
+// so the spec auto-derives the request schema — no StashHTTPHuma bridge.
+type createInput struct {
+	Body createRequest
 }
 
 // createResponse splits the persisted key metadata from the one-time
@@ -197,49 +209,57 @@ type createResponse struct {
 	Secret string     `json:"secret"`
 }
 
-func (p *apiKeyPlugin) handleCreate(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := middleware.AuthUserFromContext(r.Context())
-		if !ok || au == nil {
-			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "not authenticated")
-			return
-		}
+// createOutput wraps createResponse and drives the 201 status via the
+// operation's DefaultStatus.
+type createOutput struct {
+	Body createResponse
+}
 
-		var req createRequest
-		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
-			return
+// registerCreate wires POST /api-keys as a huma-native operation guarded by
+// RequireAuthHuma. The request body is a native huma typed Body, so huma
+// parses + validates it and the OpenAPI request schema auto-derives;
+// additionalProperties:false rejects unknown fields (422).
+func (p *apiKeyPlugin) registerCreate(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID:   "apikey-create",
+		Method:        http.MethodPost,
+		Path:          prefix + "/api-keys",
+		Summary:       "Create a new API key",
+		Tags:          []string{"api-key"},
+		Security:      apiKeySecurity(),
+		DefaultStatus: http.StatusCreated,
+		Middlewares:   huma.Middlewares{middleware.RequireAuthHuma(api, mw)},
+	}, func(ctx context.Context, in *createInput) (*createOutput, error) {
+		au, ok := middleware.AuthUserFromContext(ctx)
+		if !ok || au == nil {
+			return nil, huma.Error401Unauthorized("not authenticated")
 		}
+		req := in.Body
 		req.Name = strings.TrimSpace(req.Name)
 		if req.Name == "" {
-			writeError(w, http.StatusBadRequest, "INVALID_NAME", "name is required")
-			return
+			return nil, huma.Error400BadRequest("name is required")
 		}
 		var expiresAt *time.Time
 		if req.ExpiresInDays != nil {
 			if *req.ExpiresInDays <= 0 {
-				writeError(w, http.StatusBadRequest, "INVALID_EXPIRY", "expires_in_days must be positive")
-				return
+				return nil, huma.Error400BadRequest("expires_in_days must be positive")
 			}
 			t := time.Now().UTC().Add(time.Duration(*req.ExpiresInDays) * 24 * time.Hour)
 			expiresAt = &t
 		}
 
 		repo := host.Repo()
-		existing, err := repo.ListAPIKeysByUserID(r.Context(), au.User.ID)
+		existing, err := repo.ListAPIKeysByUserID(ctx, au.User.ID)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to count api keys")
-			return
+			return nil, huma.Error500InternalServerError("unable to count api keys")
 		}
 		if len(existing) >= p.cfg.MaxKeysPerUser {
-			writeError(w, http.StatusConflict, "TOO_MANY_KEYS", "max api keys per user reached")
-			return
+			return nil, huma.Error409Conflict("max api keys per user reached")
 		}
 
 		gen, err := GenerateKey(p.cfg.Prefix)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to generate key")
-			return
+			return nil, huma.Error500InternalServerError("unable to generate key")
 		}
 
 		scopesJSON := encodeScopes(req.Scopes)
@@ -257,12 +277,11 @@ func (p *apiKeyPlugin) handleCreate(host plugin.PluginHost) http.HandlerFunc {
 			CreatedAt:       now,
 			CreatedByUserID: au.User.ID,
 		}
-		if err := repo.CreateAPIKey(r.Context(), input); err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to store api key")
-			return
+		if err := repo.CreateAPIKey(ctx, input); err != nil {
+			return nil, huma.Error500InternalServerError("unable to store api key")
 		}
 
-		writeJSON(w, http.StatusCreated, createResponse{
+		return &createOutput{Body: createResponse{
 			APIKey: apiKeyJSON{
 				ID:        input.ID,
 				Name:      input.Name,
@@ -272,8 +291,8 @@ func (p *apiKeyPlugin) handleCreate(host plugin.PluginHost) http.HandlerFunc {
 				ExpiresAt: input.ExpiresAt,
 			},
 			Secret: gen.Plaintext,
-		})
-	}
+		}}, nil
+	})
 }
 
 // encodeScopes serialises a (possibly nil) scope slice into its stored
@@ -300,17 +319,34 @@ func normalizeScopes(scopes []string) []string {
 
 // --- DELETE /api-keys/{id} ----------------------------------------------
 
-func (p *apiKeyPlugin) handleDelete(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := middleware.AuthUserFromContext(r.Context())
+// deleteInput is the typed request for DELETE /api-keys/{id}: a single
+// required path parameter. huma's router guarantees a non-empty {id}, so the
+// legacy empty-id 400 branch is unreachable and dropped.
+type deleteInput struct {
+	ID string `path:"id" doc:"API key ID"`
+}
+
+// emptyOutput carries no body and lets the operation drive a 204 via
+// DefaultStatus.
+type emptyOutput struct{}
+
+// registerDelete wires DELETE /api-keys/{id} as a huma-native operation guarded
+// by RequireAuthHuma. It takes a native path param (no StashHTTPHuma needed —
+// no body, no custom query parsing) and returns 204 via DefaultStatus.
+func (p *apiKeyPlugin) registerDelete(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID:   "apikey-delete",
+		Method:        http.MethodDelete,
+		Path:          prefix + "/api-keys/{id}",
+		Summary:       "Revoke an API key by ID",
+		Tags:          []string{"api-key"},
+		Security:      apiKeySecurity(),
+		DefaultStatus: http.StatusNoContent,
+		Middlewares:   huma.Middlewares{middleware.RequireAuthHuma(api, mw)},
+	}, func(ctx context.Context, in *deleteInput) (*emptyOutput, error) {
+		au, ok := middleware.AuthUserFromContext(ctx)
 		if !ok || au == nil {
-			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "not authenticated")
-			return
-		}
-		id := r.PathValue("id")
-		if id == "" {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "id is required")
-			return
+			return nil, huma.Error401Unauthorized("not authenticated")
 		}
 
 		repo := host.Repo()
@@ -318,23 +354,19 @@ func (p *apiKeyPlugin) handleDelete(host plugin.PluginHost) http.HandlerFunc {
 		// Ownership check: only allow deleting keys that belong to the
 		// caller. Without this, any authenticated user could delete
 		// another user's key by guessing the id.
-		if _, err := repo.GetAPIKeyByIDAndUser(r.Context(), id, au.User.ID); err != nil {
+		if _, err := repo.GetAPIKeyByIDAndUser(ctx, in.ID, au.User.ID); err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "NOT_FOUND", "api key not found")
-				return
+				return nil, huma.Error404NotFound("api key not found")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to look up api key")
-			return
+			return nil, huma.Error500InternalServerError("unable to look up api key")
 		}
 
-		if err := repo.DeleteAPIKey(r.Context(), id); err != nil {
+		if err := repo.DeleteAPIKey(ctx, in.ID); err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "NOT_FOUND", "api key not found")
-				return
+				return nil, huma.Error404NotFound("api key not found")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to delete api key")
-			return
+			return nil, huma.Error500InternalServerError("unable to delete api key")
 		}
-		w.WriteHeader(http.StatusNoContent)
-	}
+		return &emptyOutput{}, nil
+	})
 }

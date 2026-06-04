@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/google/uuid"
 
 	"github.com/yackey-labs/yauth-go/auth"
@@ -57,33 +59,6 @@ func toUserJSON(u domain.User) userJSON {
 		CreatedAt:       u.CreatedAt,
 		UpdatedAt:       u.UpdatedAt,
 	}
-}
-
-type errorBody struct {
-	Error errorPayload `json:"error"`
-}
-
-type errorPayload struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeError(w http.ResponseWriter, status int, code, message string) {
-	writeJSON(w, status, errorBody{Error: errorPayload{Code: code, Message: message}})
-}
-
-// decodeJSON parses r.Body into v, enforcing a 1 MiB body cap.
-func decodeJSON(r *http.Request, v any) error {
-	r.Body = http.MaxBytesReader(nil, r.Body, 1<<20)
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	return dec.Decode(v)
 }
 
 // parseLimitOffset reads ?limit and ?offset, applying the plugin's
@@ -143,6 +118,16 @@ func cookieOptionsFromHost(host plugin.PluginHost, r *http.Request, maxAge int) 
 	}
 }
 
+// reqFromCtx returns the *http.Request stashed by StashHTTPHuma. On a route in
+// the admin chain it is always present; the nil guard keeps the helper safe.
+func reqFromCtx(ctx context.Context) (*http.Request, error) {
+	r := middleware.HTTPRequestFromContext(ctx)
+	if r == nil {
+		return nil, huma.Error500InternalServerError("request unavailable")
+	}
+	return r, nil
+}
+
 // --- GET /admin/users -----------------------------------------------------
 
 type listUsersResponse struct {
@@ -152,15 +137,30 @@ type listUsersResponse struct {
 	PerPage int        `json:"per_page"`
 }
 
-func (p *adminPlugin) handleListUsers(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+type listUsersOutput struct {
+	Body listUsersResponse
+}
+
+func (p *adminPlugin) registerListUsers(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "admin-list-users",
+		Method:      http.MethodGet,
+		Path:        prefix + "/admin/users",
+		Summary:     "List/search users",
+		Tags:        []string{"admin"},
+		Security:    []map[string][]string{{"sessionCookie": {}}},
+		Middlewares: adminGuards(api, mw),
+	}, func(ctx context.Context, _ *struct{}) (*listUsersOutput, error) {
+		r, err := reqFromCtx(ctx)
+		if err != nil {
+			return nil, err
+		}
 		limit, offset := parseLimitOffset(r)
 		search := strings.TrimSpace(r.URL.Query().Get("search"))
 
-		users, total, err := host.Repo().ListUsers(r.Context(), search, limit, offset)
+		users, total, err := host.Repo().ListUsers(ctx, search, limit, offset)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to list users")
-			return
+			return nil, huma.Error500InternalServerError("unable to list users")
 		}
 
 		out := make([]userJSON, 0, len(users))
@@ -171,49 +171,53 @@ func (p *adminPlugin) handleListUsers(host plugin.PluginHost) http.HandlerFunc {
 		if limit > 0 {
 			page = offset/limit + 1
 		}
-		writeJSON(w, http.StatusOK, listUsersResponse{
+		return &listUsersOutput{Body: listUsersResponse{
 			Users:   out,
 			Total:   total,
 			Page:    page,
 			PerPage: limit,
-		})
-	}
+		}}, nil
+	})
 }
 
-// --- GET /admin/users/{id} ------------------------------------------------
+// --- PATCH/PUT /admin/users/{id} -----------------------------------------
 
-func (p *adminPlugin) handleGetUser(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		u, err := host.Repo().GetUserByID(r.Context(), id)
-		if err != nil {
-			if errors.Is(err, yautherr.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "NOT_FOUND", "user not found")
-				return
-			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to load user")
-			return
-		}
-		writeJSON(w, http.StatusOK, toUserJSON(*u))
-	}
+type adminPatchUserRequest struct {
+	DisplayName   *string  `json:"display_name,omitempty"`
+	Role          *string  `json:"role,omitempty"`
+	EmailVerified *bool    `json:"email_verified,omitempty"`
+	_             struct{} `json:"-" additionalProperties:"false"`
 }
 
-// --- PATCH /admin/users/{id} ---------------------------------------------
-
-type patchUserRequest struct {
-	DisplayName   *string `json:"display_name,omitempty"`
-	Role          *string `json:"role,omitempty"`
-	EmailVerified *bool   `json:"email_verified,omitempty"`
+type idInput struct {
+	ID string `path:"id" doc:"User ID"`
 }
 
-func (p *adminPlugin) handlePatchUser(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		var req patchUserRequest
-		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
-			return
-		}
-		id := r.PathValue("id")
+// patchUserInput is the huma-native request: a typed JSON body plus the path
+// param. huma parses + validates the body (unknown fields → 422) and the
+// request schema auto-derives — no StashHTTPHuma bridge.
+type patchUserInput struct {
+	ID   string `path:"id" doc:"User ID"`
+	Body adminPatchUserRequest
+}
+
+type userOutput struct {
+	Body userJSON
+}
+
+// registerPatchUser wires PATCH (and, with a distinct operationID, its PUT
+// alias) for /admin/users/{id}.
+func (p *adminPlugin) registerPatchUser(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix, method, operationID string) {
+	huma.Register(api, huma.Operation{
+		OperationID: operationID,
+		Method:      method,
+		Path:        prefix + "/admin/users/{id}",
+		Summary:     "Update a user (partial)",
+		Tags:        []string{"admin"},
+		Security:    []map[string][]string{{"sessionCookie": {}}},
+		Middlewares: adminGuardsNoStash(api, mw),
+	}, func(ctx context.Context, in *patchUserInput) (*userOutput, error) {
+		req := in.Body
 		now := time.Now().UTC()
 
 		changes := domain.UpdateUser{UpdatedAt: &now}
@@ -228,38 +232,55 @@ func (p *adminPlugin) handlePatchUser(host plugin.PluginHost) http.HandlerFunc {
 			changes.EmailVerified = req.EmailVerified
 		}
 
-		u, err := host.Repo().UpdateUser(r.Context(), id, changes)
+		u, err := host.Repo().UpdateUser(ctx, in.ID, changes)
 		if err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "NOT_FOUND", "user not found")
-				return
+				return nil, huma.Error404NotFound("user not found")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to update user")
-			return
+			return nil, huma.Error500InternalServerError("unable to update user")
 		}
-		writeJSON(w, http.StatusOK, toUserJSON(u))
-	}
+		return &userOutput{Body: toUserJSON(u)}, nil
+	})
 }
 
 // --- POST /admin/users/{id}/ban ------------------------------------------
 
-type banRequest struct {
-	Reason string     `json:"reason"`
+type adminBanRequest struct {
+	// Reason carries omitempty so huma does NOT mark it schema-required: an
+	// absent/empty reason must reach the handler's business-rule check (400
+	// "reason is required"), not huma's 422 field validation.
+	Reason string     `json:"reason,omitempty"`
 	Until  *time.Time `json:"until,omitempty"`
+	_      struct{}   `json:"-" additionalProperties:"false"`
 }
 
-func (p *adminPlugin) handleBanUser(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		var req banRequest
-		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
-			return
+// banInput carries the native JSON body plus the path param. The body
+// auto-derives; StashHTTPHuma is kept (adminGuards) only so the handler can read
+// RequestIP for the audit row and Emit.
+type banInput struct {
+	ID   string `path:"id" doc:"User ID"`
+	Body adminBanRequest
+}
+
+func (p *adminPlugin) registerBanUser(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "admin-ban-user",
+		Method:      http.MethodPost,
+		Path:        prefix + "/admin/users/{id}/ban",
+		Summary:     "Ban a user",
+		Tags:        []string{"admin"},
+		Security:    []map[string][]string{{"sessionCookie": {}}},
+		Middlewares: adminGuards(api, mw),
+	}, func(ctx context.Context, in *banInput) (*userOutput, error) {
+		r, err := reqFromCtx(ctx)
+		if err != nil {
+			return nil, err
 		}
+		req := in.Body
 		if strings.TrimSpace(req.Reason) == "" {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "reason is required")
-			return
+			return nil, huma.Error400BadRequest("reason is required")
 		}
-		id := r.PathValue("id")
+		id := in.ID
 		now := time.Now().UTC()
 		banned := true
 		reason := req.Reason
@@ -283,28 +304,26 @@ func (p *adminPlugin) handleBanUser(host plugin.PluginHost) http.HandlerFunc {
 			UpdatedAt:    &now,
 		}
 
-		u, err := host.Repo().UpdateUser(r.Context(), id, changes)
+		u, err := host.Repo().UpdateUser(ctx, id, changes)
 		if err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "NOT_FOUND", "user not found")
-				return
+				return nil, huma.Error404NotFound("user not found")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to ban user")
-			return
+			return nil, huma.Error500InternalServerError("unable to ban user")
 		}
 
 		// Revoke every session of the banned user so they are kicked out
 		// of any active client.
-		_, _ = host.Repo().DeleteUserSessions(r.Context(), id)
+		_, _ = host.Repo().DeleteUserSessions(ctx, id)
 
 		// Audit log: admin.ban with the acting admin's id.
-		actorID := actorIDFromCtx(r)
+		actorID := actorIDFromContext(ctx)
 		meta, _ := json.Marshal(map[string]any{
 			"admin_id": actorID,
 			"reason":   req.Reason,
 			"until":    req.Until,
 		})
-		_ = host.Repo().LogAuditEvent(r.Context(), domain.NewAuditLog{
+		_ = host.Repo().LogAuditEvent(ctx, domain.NewAuditLog{
 			ID:        newID(),
 			UserID:    &u.ID,
 			EventType: "admin.ban",
@@ -314,20 +333,32 @@ func (p *adminPlugin) handleBanUser(host plugin.PluginHost) http.HandlerFunc {
 		})
 		// Notify the event pipeline (OIDC Back-Channel Logout fan-out, webhooks).
 		bid := u.ID
-		_, _ = host.Emit(r.Context(), events.AuthEvent{
+		_, _ = host.Emit(ctx, events.AuthEvent{
 			Type: events.EventUserBanned, UserID: &bid,
 			IPAddress: middleware.RequestIP(r), Timestamp: now,
 		})
 
-		writeJSON(w, http.StatusOK, toUserJSON(u))
-	}
+		return &userOutput{Body: toUserJSON(u)}, nil
+	})
 }
 
 // --- POST /admin/users/{id}/unban ----------------------------------------
 
-func (p *adminPlugin) handleUnbanUser(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
+func (p *adminPlugin) registerUnbanUser(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "admin-unban-user",
+		Method:      http.MethodPost,
+		Path:        prefix + "/admin/users/{id}/unban",
+		Summary:     "Clear a user's ban",
+		Tags:        []string{"admin"},
+		Security:    []map[string][]string{{"sessionCookie": {}}},
+		Middlewares: adminGuards(api, mw),
+	}, func(ctx context.Context, in *idInput) (*userOutput, error) {
+		r, err := reqFromCtx(ctx)
+		if err != nil {
+			return nil, err
+		}
+		id := in.ID
 		now := time.Now().UTC()
 		banned := false
 		var nilStr *string
@@ -342,19 +373,17 @@ func (p *adminPlugin) handleUnbanUser(host plugin.PluginHost) http.HandlerFunc {
 			UpdatedAt:    &now,
 		}
 
-		u, err := host.Repo().UpdateUser(r.Context(), id, changes)
+		u, err := host.Repo().UpdateUser(ctx, id, changes)
 		if err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "NOT_FOUND", "user not found")
-				return
+				return nil, huma.Error404NotFound("user not found")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to unban user")
-			return
+			return nil, huma.Error500InternalServerError("unable to unban user")
 		}
 
-		actorID := actorIDFromCtx(r)
+		actorID := actorIDFromContext(ctx)
 		meta, _ := json.Marshal(map[string]any{"admin_id": actorID})
-		_ = host.Repo().LogAuditEvent(r.Context(), domain.NewAuditLog{
+		_ = host.Repo().LogAuditEvent(ctx, domain.NewAuditLog{
 			ID:        newID(),
 			UserID:    &u.ID,
 			EventType: "admin.unban",
@@ -363,111 +392,158 @@ func (p *adminPlugin) handleUnbanUser(host plugin.PluginHost) http.HandlerFunc {
 			CreatedAt: now,
 		})
 
-		writeJSON(w, http.StatusOK, toUserJSON(u))
-	}
+		return &userOutput{Body: toUserJSON(u)}, nil
+	})
 }
 
 // --- POST /admin/users/{id}/suspend & /unsuspend (offboarding) -----------
 
-type suspendRequest struct {
-	Reason string `json:"reason,omitempty"`
+type adminSuspendRequest struct {
+	Reason string   `json:"reason,omitempty"`
+	_      struct{} `json:"-" additionalProperties:"false"`
 }
 
-// handleSuspendUser globally deactivates a user (offboarding) and instantly
+// suspendInput carries an OPTIONAL native JSON body (pointer Body → huma treats
+// the body as not-required, preserving the lenient "absent body is fine"
+// contract) plus the path param. StashHTTPHuma is kept (adminGuards) for
+// RequestIP on the audit row + Emit.
+type suspendInput struct {
+	ID   string `path:"id" doc:"User ID"`
+	Body *adminSuspendRequest
+}
+
+// registerSuspendUser globally deactivates a user (offboarding) and instantly
 // terminates access: it sets suspended_at, kills all sessions, and revokes all
 // refresh tokens. The account is retained (distinct from ban / delete).
-func (p *adminPlugin) handleSuspendUser(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		var req suspendRequest
-		_ = decodeJSON(r, &req)
-		id := r.PathValue("id")
+func (p *adminPlugin) registerSuspendUser(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "admin-suspend-user",
+		Method:      http.MethodPost,
+		Path:        prefix + "/admin/users/{id}/suspend",
+		Summary:     "Globally deactivate (offboard) a user",
+		Tags:        []string{"admin"},
+		Security:    []map[string][]string{{"sessionCookie": {}}},
+		Middlewares: adminGuards(api, mw),
+	}, func(ctx context.Context, in *suspendInput) (*userOutput, error) {
+		r, err := reqFromCtx(ctx)
+		if err != nil {
+			return nil, err
+		}
+		// Lenient: an absent body is fine (reason is optional). huma already
+		// validated any body that was sent.
+		var reason string
+		if in.Body != nil {
+			reason = in.Body.Reason
+		}
+		id := in.ID
 		now := time.Now().UTC()
 		nowPtr := &now
 		suspendedPP := &nowPtr
 		var reasonPtr *string
-		if s := strings.TrimSpace(req.Reason); s != "" {
+		if s := strings.TrimSpace(reason); s != "" {
 			reasonPtr = &s
 		}
 		reasonPP := &reasonPtr
 
-		u, err := host.Repo().UpdateUser(r.Context(), id, domain.UpdateUser{
+		u, err := host.Repo().UpdateUser(ctx, id, domain.UpdateUser{
 			SuspendedAt:     suspendedPP,
 			SuspendedReason: reasonPP,
 			UpdatedAt:       &now,
 		})
 		if err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "NOT_FOUND", "user not found")
-				return
+				return nil, huma.Error404NotFound("user not found")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to suspend user")
-			return
+			return nil, huma.Error500InternalServerError("unable to suspend user")
 		}
 		// Kill switch: terminate sessions + revoke refresh tokens now.
-		_, _ = host.Repo().DeleteUserSessions(r.Context(), id)
-		_, _ = host.Repo().RevokeAllUserRefreshTokens(r.Context(), id)
+		_, _ = host.Repo().DeleteUserSessions(ctx, id)
+		_, _ = host.Repo().RevokeAllUserRefreshTokens(ctx, id)
 
-		meta, _ := json.Marshal(map[string]any{"admin_id": actorIDFromCtx(r), "reason": req.Reason})
-		_ = host.Repo().LogAuditEvent(r.Context(), domain.NewAuditLog{
+		meta, _ := json.Marshal(map[string]any{"admin_id": actorIDFromContext(ctx), "reason": reason})
+		_ = host.Repo().LogAuditEvent(ctx, domain.NewAuditLog{
 			ID: newID(), UserID: &u.ID, EventType: "admin.suspend", Metadata: meta,
 			IPAddress: middleware.RequestIP(r), CreatedAt: now,
 		})
 		// Notify the event pipeline (OIDC Back-Channel Logout fan-out, webhooks).
 		uid := u.ID
-		_, _ = host.Emit(r.Context(), events.AuthEvent{
+		_, _ = host.Emit(ctx, events.AuthEvent{
 			Type: events.EventUserSuspended, UserID: &uid,
 			IPAddress: middleware.RequestIP(r), Timestamp: now,
 		})
-		writeJSON(w, http.StatusOK, toUserJSON(u))
-	}
+		return &userOutput{Body: toUserJSON(u)}, nil
+	})
 }
 
-func (p *adminPlugin) handleUnsuspendUser(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
+func (p *adminPlugin) registerUnsuspendUser(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "admin-unsuspend-user",
+		Method:      http.MethodPost,
+		Path:        prefix + "/admin/users/{id}/unsuspend",
+		Summary:     "Reactivate a suspended user",
+		Tags:        []string{"admin"},
+		Security:    []map[string][]string{{"sessionCookie": {}}},
+		Middlewares: adminGuards(api, mw),
+	}, func(ctx context.Context, in *idInput) (*userOutput, error) {
+		r, err := reqFromCtx(ctx)
+		if err != nil {
+			return nil, err
+		}
+		id := in.ID
 		now := time.Now().UTC()
 		var nilT *time.Time
 		nilTPP := &nilT
 		var nilStr *string
 		nilStrPP := &nilStr
 
-		u, err := host.Repo().UpdateUser(r.Context(), id, domain.UpdateUser{
+		u, err := host.Repo().UpdateUser(ctx, id, domain.UpdateUser{
 			SuspendedAt:     nilTPP,
 			SuspendedReason: nilStrPP,
 			UpdatedAt:       &now,
 		})
 		if err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "NOT_FOUND", "user not found")
-				return
+				return nil, huma.Error404NotFound("user not found")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to reactivate user")
-			return
+			return nil, huma.Error500InternalServerError("unable to reactivate user")
 		}
-		meta, _ := json.Marshal(map[string]any{"admin_id": actorIDFromCtx(r)})
-		_ = host.Repo().LogAuditEvent(r.Context(), domain.NewAuditLog{
+		meta, _ := json.Marshal(map[string]any{"admin_id": actorIDFromContext(ctx)})
+		_ = host.Repo().LogAuditEvent(ctx, domain.NewAuditLog{
 			ID: newID(), UserID: &u.ID, EventType: "admin.unsuspend", Metadata: meta,
 			IPAddress: middleware.RequestIP(r), CreatedAt: now,
 		})
-		writeJSON(w, http.StatusOK, toUserJSON(u))
-	}
+		return &userOutput{Body: toUserJSON(u)}, nil
+	})
 }
 
 // --- POST /admin/users/{id}/schedule-start (staged onboarding) -----------
 
-type scheduleStartRequest struct {
+type adminScheduleStartRequest struct {
 	// ActivatesAt is the scheduled start. Null/absent clears it (active now).
 	ActivatesAt *time.Time `json:"activates_at"`
+	_           struct{}   `json:"-" additionalProperties:"false"`
 }
 
-func (p *adminPlugin) handleScheduleStart(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		var req scheduleStartRequest
-		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
-			return
-		}
-		id := r.PathValue("id")
+// scheduleStartInput is the huma-native request: a typed JSON body plus the path
+// param. huma parses + validates the body and the request schema auto-derives —
+// no StashHTTPHuma bridge.
+type scheduleStartInput struct {
+	ID   string `path:"id" doc:"User ID"`
+	Body adminScheduleStartRequest
+}
+
+func (p *adminPlugin) registerScheduleStart(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "admin-schedule-start",
+		Method:      http.MethodPost,
+		Path:        prefix + "/admin/users/{id}/schedule-start",
+		Summary:     "Set/clear staged activation (activates_at)",
+		Tags:        []string{"admin"},
+		Security:    []map[string][]string{{"sessionCookie": {}}},
+		Middlewares: adminGuardsNoStash(api, mw),
+	}, func(ctx context.Context, in *scheduleStartInput) (*userOutput, error) {
+		req := in.Body
+		id := in.ID
 		now := time.Now().UTC()
 		var at *time.Time
 		if req.ActivatesAt != nil {
@@ -475,46 +551,68 @@ func (p *adminPlugin) handleScheduleStart(host plugin.PluginHost) http.HandlerFu
 			at = &t
 		}
 		atPP := &at
-		u, err := host.Repo().UpdateUser(r.Context(), id, domain.UpdateUser{
+		u, err := host.Repo().UpdateUser(ctx, id, domain.UpdateUser{
 			ActivatesAt: atPP,
 			UpdatedAt:   &now,
 		})
 		if err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "NOT_FOUND", "user not found")
-				return
+				return nil, huma.Error404NotFound("user not found")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to schedule start")
-			return
+			return nil, huma.Error500InternalServerError("unable to schedule start")
 		}
-		writeJSON(w, http.StatusOK, toUserJSON(u))
-	}
+		return &userOutput{Body: toUserJSON(u)}, nil
+	})
 }
 
 // --- POST /admin/users/{id}/impersonate ----------------------------------
 
-func (p *adminPlugin) handleImpersonate(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		ctx := r.Context()
+// impersonateResponse wraps the target user under `user`. The
+// impersonator field is omitted in the v0.1.0 wire format but reserved
+// here so audit-aware clients can be added later without a breaking
+// change.
+type impersonateResponse struct {
+	User userJSON `json:"user"`
+}
+
+type impersonateOutput struct {
+	Body impersonateResponse
+}
+
+func (p *adminPlugin) registerImpersonate(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "admin-impersonate-user",
+		Method:      http.MethodPost,
+		Path:        prefix + "/admin/users/{id}/impersonate",
+		Summary:     "Issue a session for a user (impersonate)",
+		Tags:        []string{"admin"},
+		Security:    []map[string][]string{{"sessionCookie": {}}},
+		Middlewares: adminGuards(api, mw),
+	}, func(ctx context.Context, in *idInput) (*impersonateOutput, error) {
+		r, err := reqFromCtx(ctx)
+		if err != nil {
+			return nil, err
+		}
+		w := middleware.HTTPResponseFromContext(ctx)
+		if w == nil {
+			return nil, huma.Error500InternalServerError("response unavailable")
+		}
+		id := in.ID
 
 		target, err := host.Repo().GetUserByID(ctx, id)
 		if err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "NOT_FOUND", "user not found")
-				return
+				return nil, huma.Error404NotFound("user not found")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to load user")
-			return
+			return nil, huma.Error500InternalServerError("unable to load user")
 		}
 
 		raw, _, err := auth.IssueSession(ctx, host.Repo(), target.ID, middleware.RequestIP(r), nil, host.SessionTTL())
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to issue session")
-			return
+			return nil, huma.Error500InternalServerError("unable to issue session")
 		}
 
-		actorID := actorIDFromCtx(r)
+		actorID := actorIDFromContext(ctx)
 		meta, _ := json.Marshal(map[string]any{"admin_id": actorID})
 		_ = host.Repo().LogAuditEvent(ctx, domain.NewAuditLog{
 			ID:        newID(),
@@ -525,20 +623,14 @@ func (p *adminPlugin) handleImpersonate(host plugin.PluginHost) http.HandlerFunc
 			CreatedAt: time.Now().UTC(),
 		})
 
+		// Set-Cookie on the underlying writer: huma writes status/body after
+		// the operation handler returns, so headers set here land first.
 		http.SetCookie(w, auth.SessionCookie(
 			cookieOptionsFromHost(host, r, int(host.SessionTTL().Seconds())),
 			raw,
 		))
-		writeJSON(w, http.StatusOK, impersonateResponse{User: toUserJSON(*target)})
-	}
-}
-
-// impersonateResponse wraps the target user under `user`. The
-// impersonator field is omitted in the v0.1.0 wire format but reserved
-// here so audit-aware clients can be added later without a breaking
-// change.
-type impersonateResponse struct {
-	User userJSON `json:"user"`
+		return &impersonateOutput{Body: impersonateResponse{User: toUserJSON(*target)}}, nil
+	})
 }
 
 // --- DELETE /admin/users/{id}/sessions -----------------------------------
@@ -547,61 +639,91 @@ type deleteSessionsResponse struct {
 	Deleted int64 `json:"deleted"`
 }
 
-func (p *adminPlugin) handleDeleteUserSessions(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		n, err := host.Repo().DeleteUserSessions(r.Context(), id)
+type deleteSessionsOutput struct {
+	Body deleteSessionsResponse
+}
+
+func (p *adminPlugin) registerDeleteUserSessions(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "admin-delete-user-sessions",
+		Method:      http.MethodDelete,
+		Path:        prefix + "/admin/users/{id}/sessions",
+		Summary:     "Revoke every session for a user",
+		Tags:        []string{"admin"},
+		Security:    []map[string][]string{{"sessionCookie": {}}},
+		Middlewares: adminGuards(api, mw),
+	}, func(ctx context.Context, in *idInput) (*deleteSessionsOutput, error) {
+		n, err := host.Repo().DeleteUserSessions(ctx, in.ID)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to delete sessions")
-			return
+			return nil, huma.Error500InternalServerError("unable to delete sessions")
 		}
-		writeJSON(w, http.StatusOK, deleteSessionsResponse{Deleted: n})
-	}
+		return &deleteSessionsOutput{Body: deleteSessionsResponse{Deleted: n}}, nil
+	})
 }
 
 // --- DELETE /admin/users/{id} --------------------------------------------
 
-type deleteUserRequest struct {
-	Reason string `json:"reason"`
+type adminDeleteUserRequest struct {
+	Reason string   `json:"reason"`
+	_      struct{} `json:"-" additionalProperties:"false"`
 }
 
-func (p *adminPlugin) handleDeleteUser(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
+// deleteUserInput carries an OPTIONAL native JSON body (pointer Body → not
+// required, so an absent body still deletes — e.g. the self-delete path that
+// 409s before ever needing a reason) plus the path param. StashHTTPHuma is kept
+// (adminGuards) for RequestIP on the audit row.
+type deleteUserInput struct {
+	ID   string `path:"id" doc:"User ID"`
+	Body *adminDeleteUserRequest
+}
 
-		// Self-delete protection. The acting admin's id is in context via
-		// RequireAdmin; refuse with 409 when targeting the same user.
-		if actor := actorIDFromCtx(r); actor != "" && actor == id {
-			writeError(w, http.StatusConflict, "SELF_DELETE", "admins cannot delete their own account")
-			return
+// emptyOutput carries no body and lets the operation drive a 204 via
+// DefaultStatus. huma writes no response body for a struct with no fields.
+type emptyOutput struct{}
+
+func (p *adminPlugin) registerDeleteUser(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID:   "admin-delete-user",
+		Method:        http.MethodDelete,
+		Path:          prefix + "/admin/users/{id}",
+		Summary:       "Hard-delete a user",
+		Tags:          []string{"admin"},
+		Security:      []map[string][]string{{"sessionCookie": {}}},
+		DefaultStatus: http.StatusNoContent,
+		Middlewares:   adminGuards(api, mw),
+	}, func(ctx context.Context, in *deleteUserInput) (*emptyOutput, error) {
+		r, err := reqFromCtx(ctx)
+		if err != nil {
+			return nil, err
+		}
+		id := in.ID
+
+		// Self-delete protection. The acting admin's id is on the operation
+		// context; refuse with 409 when targeting the same user.
+		if actor := actorIDFromContext(ctx); actor != "" && actor == id {
+			return nil, huma.Error409Conflict("admins cannot delete their own account")
 		}
 
-		// Body is optional but accepted for an audit-log reason. An empty
-		// or missing body is fine; we only reject malformed JSON.
-		var req deleteUserRequest
-		if r.ContentLength != 0 {
-			if err := decodeJSON(r, &req); err != nil {
-				writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
-				return
-			}
+		// Body is optional but accepted for an audit-log reason. An absent body
+		// is fine (pointer Body → not required); huma validated any body sent.
+		var reason string
+		if in.Body != nil {
+			reason = in.Body.Reason
 		}
 
-		ctx := r.Context()
 		if err := host.Repo().DeleteUser(ctx, id); err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "NOT_FOUND", "user not found")
-				return
+				return nil, huma.Error404NotFound("user not found")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to delete user")
-			return
+			return nil, huma.Error500InternalServerError("unable to delete user")
 		}
 
-		actorID := actorIDFromCtx(r)
+		actorID := actorIDFromContext(ctx)
 		now := time.Now().UTC()
 		meta, _ := json.Marshal(map[string]any{
 			"admin_id":     actorID,
 			"deleted_user": id,
-			"reason":       req.Reason,
+			"reason":       reason,
 		})
 		_ = host.Repo().LogAuditEvent(ctx, domain.NewAuditLog{
 			ID:        newID(),
@@ -611,8 +733,8 @@ func (p *adminPlugin) handleDeleteUser(host plugin.PluginHost) http.HandlerFunc 
 			CreatedAt: now,
 		})
 
-		w.WriteHeader(http.StatusNoContent)
-	}
+		return &emptyOutput{}, nil
+	})
 }
 
 // --- GET /admin/sessions --------------------------------------------------
@@ -633,8 +755,24 @@ type listSessionsResponse struct {
 	PerPage  int           `json:"per_page"`
 }
 
-func (p *adminPlugin) handleListSessions(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+type listSessionsOutput struct {
+	Body listSessionsResponse
+}
+
+func (p *adminPlugin) registerListSessions(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "admin-list-sessions",
+		Method:      http.MethodGet,
+		Path:        prefix + "/admin/sessions",
+		Summary:     "List sessions",
+		Tags:        []string{"admin"},
+		Security:    []map[string][]string{{"sessionCookie": {}}},
+		Middlewares: adminGuards(api, mw),
+	}, func(ctx context.Context, _ *struct{}) (*listSessionsOutput, error) {
+		r, err := reqFromCtx(ctx)
+		if err != nil {
+			return nil, err
+		}
 		limit, offset := parseLimitOffset(r)
 
 		filters := domain.ListSessionsFilters{Limit: limit, Offset: offset}
@@ -642,10 +780,9 @@ func (p *adminPlugin) handleListSessions(host plugin.PluginHost) http.HandlerFun
 			filters.UserID = &v
 		}
 
-		sessions, total, err := host.Repo().ListSessions(r.Context(), filters)
+		sessions, total, err := host.Repo().ListSessions(ctx, filters)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to list sessions")
-			return
+			return nil, huma.Error500InternalServerError("unable to list sessions")
 		}
 
 		out := make([]sessionJSON, 0, len(sessions))
@@ -663,21 +800,33 @@ func (p *adminPlugin) handleListSessions(host plugin.PluginHost) http.HandlerFun
 		if limit > 0 {
 			page = offset/limit + 1
 		}
-		writeJSON(w, http.StatusOK, listSessionsResponse{
+		return &listSessionsOutput{Body: listSessionsResponse{
 			Sessions: out,
 			Total:    total,
 			Page:     page,
 			PerPage:  limit,
-		})
-	}
+		}}, nil
+	})
 }
 
 // --- DELETE /admin/sessions/{id} -----------------------------------------
 
-func (p *adminPlugin) handleDeleteSession(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		ctx := r.Context()
+func (p *adminPlugin) registerDeleteSession(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID:   "admin-delete-session",
+		Method:        http.MethodDelete,
+		Path:          prefix + "/admin/sessions/{id}",
+		Summary:       "Terminate a single session",
+		Tags:          []string{"admin"},
+		Security:      []map[string][]string{{"sessionCookie": {}}},
+		DefaultStatus: http.StatusNoContent,
+		Middlewares:   adminGuards(api, mw),
+	}, func(ctx context.Context, in *idInput) (*emptyOutput, error) {
+		r, err := reqFromCtx(ctx)
+		if err != nil {
+			return nil, err
+		}
+		id := in.ID
 
 		// Capture user_id for the audit row before deleting.
 		var targetUser *string
@@ -688,14 +837,12 @@ func (p *adminPlugin) handleDeleteSession(host plugin.PluginHost) http.HandlerFu
 
 		if err := host.Repo().DeleteSessionByID(ctx, id); err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "NOT_FOUND", "session not found")
-				return
+				return nil, huma.Error404NotFound("session not found")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to delete session")
-			return
+			return nil, huma.Error500InternalServerError("unable to delete session")
 		}
 
-		actorID := actorIDFromCtx(r)
+		actorID := actorIDFromContext(ctx)
 		meta, _ := json.Marshal(map[string]any{
 			"admin_id":   actorID,
 			"session_id": id,
@@ -709,8 +856,8 @@ func (p *adminPlugin) handleDeleteSession(host plugin.PluginHost) http.HandlerFu
 			CreatedAt: time.Now().UTC(),
 		})
 
-		w.WriteHeader(http.StatusNoContent)
-	}
+		return &emptyOutput{}, nil
+	})
 }
 
 // --- GET /admin/audit -----------------------------------------------------
@@ -728,8 +875,24 @@ type listAuditResponse struct {
 	Entries []auditEntryJSON `json:"entries"`
 }
 
-func (p *adminPlugin) handleListAudit(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+type listAuditOutput struct {
+	Body listAuditResponse
+}
+
+func (p *adminPlugin) registerListAudit(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "admin-list-audit",
+		Method:      http.MethodGet,
+		Path:        prefix + "/admin/audit",
+		Summary:     "List audit log rows",
+		Tags:        []string{"admin"},
+		Security:    []map[string][]string{{"sessionCookie": {}}},
+		Middlewares: adminGuards(api, mw),
+	}, func(ctx context.Context, _ *struct{}) (*listAuditOutput, error) {
+		r, err := reqFromCtx(ctx)
+		if err != nil {
+			return nil, err
+		}
 		limit, offset := parseLimitOffset(r)
 
 		filters := domain.ListAuditFilters{Limit: limit, Offset: offset}
@@ -740,10 +903,9 @@ func (p *adminPlugin) handleListAudit(host plugin.PluginHost) http.HandlerFunc {
 			filters.EventType = &v
 		}
 
-		entries, err := host.Repo().ListAuditLog(r.Context(), filters)
+		entries, err := host.Repo().ListAuditLog(ctx, filters)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to list audit log")
-			return
+			return nil, huma.Error500InternalServerError("unable to list audit log")
 		}
 
 		out := make([]auditEntryJSON, 0, len(entries))
@@ -757,17 +919,18 @@ func (p *adminPlugin) handleListAudit(host plugin.PluginHost) http.HandlerFunc {
 				CreatedAt: e.CreatedAt,
 			})
 		}
-		writeJSON(w, http.StatusOK, listAuditResponse{Entries: out})
-	}
+		return &listAuditOutput{Body: listAuditResponse{Entries: out}}, nil
+	})
 }
 
 // --- helpers --------------------------------------------------------------
 
-// actorIDFromCtx returns the id of the AuthUser injected by RequireAdmin
-// or the empty string if it is somehow missing (which can't happen on a
-// route that is RequireAdmin-wrapped, but keeps the helper safe).
-func actorIDFromCtx(r *http.Request) string {
-	if au, ok := middleware.AuthUserFromContext(r.Context()); ok && au != nil {
+// actorIDFromContext returns the id of the AuthUser injected onto the
+// operation context by RequireAdminHuma, or the empty string if it is somehow
+// missing (which can't happen on an admin-gated route, but keeps the helper
+// safe).
+func actorIDFromContext(ctx context.Context) string {
+	if au, ok := middleware.AuthUserFromContext(ctx); ok && au != nil {
 		return au.User.ID
 	}
 	return ""

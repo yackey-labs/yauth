@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
+
 	"github.com/yackey-labs/yauth-go/events"
 	"github.com/yackey-labs/yauth-go/middleware"
 	"github.com/yackey-labs/yauth-go/repo"
@@ -120,15 +122,12 @@ type JWTSigner interface {
 
 // Router is the subset of *http.ServeMux that plugins use to register their
 // handlers inside Routes. It is an interface (rather than the concrete
-// *http.ServeMux) so the root yauth package can pass a passive recording
-// wrapper that observes every (method, path) registration before delegating
-// to the real mux. The real *http.ServeMux satisfies this interface, so
-// production behavior is unchanged. See yauth.RegisteredRoutes / the
-// openapi route-level spec-drift guard.
+// *http.ServeMux) so the root yauth package retains the freedom to wrap the mux
+// without touching plugins. The real *http.ServeMux satisfies this interface.
 //
 // The two methods are exactly the ones plugins call (Handle / HandleFunc with
 // the Go 1.22 "METHOD /path" pattern syntax). If a future plugin needs another
-// ServeMux method inside Routes, add it here and to the recording wrapper.
+// ServeMux method inside Routes, add it here.
 type Router interface {
 	Handle(pattern string, handler http.Handler)
 	HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request))
@@ -141,9 +140,14 @@ type Router interface {
 // every handler it owns onto mux using prefix as the path root (typically
 // the empty string when the YAuth router is later mounted under a parent
 // prefix via http.StripPrefix).
+//
+// api is the huma.API used by huma-native (typed) operations. Plugins
+// migrated to huma serving call huma.Register(api, ...); plugins still on
+// net/http ignore it and register onto mux as before. Both register against
+// the same underlying mux, so the two styles coexist during the migration.
 type Plugin interface {
 	Name() string
-	Routes(host PluginHost, mux Router, prefix string)
+	Routes(host PluginHost, mux Router, api huma.API, prefix string)
 }
 
 // ShutdownAware is an optional interface plugins implement when they own

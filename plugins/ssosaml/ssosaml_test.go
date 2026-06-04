@@ -22,6 +22,8 @@
 package ssosaml
 
 import (
+	"github.com/yackey-labs/yauth-go/humaapi"
+
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
@@ -523,7 +525,7 @@ func newE2E(t *testing.T) *e2eFixture {
 	p := newPlugin(t)
 	host := newFakeHost(r, "")
 	mux := http.NewServeMux()
-	p.Routes(host, mux, "")
+	p.Routes(host, mux, humaapi.New(mux), "")
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	host.base = srv.URL
@@ -1120,7 +1122,7 @@ func TestAdminCRUD_CreateListGetDelete(t *testing.T) {
 	mux := http.NewServeMux()
 	host := newFakeHost(r, "")
 	host.mw.AddResolver(&stubResolver{user: &domain.AuthUser{User: admin}})
-	p.Routes(host, mux, "")
+	p.Routes(host, mux, humaapi.New(mux), "")
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	host.base = srv.URL
@@ -1147,7 +1149,7 @@ func TestAdminCRUD_CreateListGetDelete(t *testing.T) {
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("create: status=%d body=%s", resp.StatusCode, string(body))
 	}
-	var created connectionJSON
+	var created samlConnectionJSON
 	if err := json.Unmarshal(body, &created); err != nil {
 		t.Fatal(err)
 	}
@@ -1168,7 +1170,7 @@ func TestAdminCRUD_CreateListGetDelete(t *testing.T) {
 		t.Fatalf("list: status=%d", resp.StatusCode)
 	}
 	var listed struct {
-		Conns []connectionJSON `json:"sso_connections"`
+		Conns []samlConnectionJSON `json:"sso_connections"`
 	}
 	decode(t, resp, &listed)
 	if len(listed.Conns) != 1 {
@@ -1216,13 +1218,82 @@ func TestAdminCRUD_RejectsNonAdmin(t *testing.T) {
 	mux := http.NewServeMux()
 	host := newFakeHost(r, "")
 	host.mw.AddResolver(&stubResolver{user: &domain.AuthUser{User: nonAdmin}})
-	p.Routes(host, mux, "")
+	p.Routes(host, mux, humaapi.New(mux), "")
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	resp := doJSON(t, http.MethodGet, srv.URL+"/organizations/"+org.ID+"/sso/saml/connections", nil)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("non-member list: status=%d", resp.StatusCode)
+	}
+}
+
+// TestAdminCRUD_UnknownBodyKeysReturn422 pins the huma-native Body contract:
+// an unknown key — whether at the top level of the create request or inside the
+// nested `saml` / `attribute_mappings` blocks — is rejected by huma's schema
+// validation with a 422 (additionalProperties:false), BEFORE the handler runs.
+// This is the behavior the StashHTTPHuma->native conversion buys; the legacy
+// decodeJSON silently ignored unknown keys.
+func TestAdminCRUD_UnknownBodyKeysReturn422(t *testing.T) {
+	p := newPlugin(t)
+	r := memrepo.New()
+	admin, org := seedAdmin(t, r)
+	mux := http.NewServeMux()
+	host := newFakeHost(r, "")
+	host.mw.AddResolver(&stubResolver{user: &domain.AuthUser{User: admin}})
+	p.Routes(host, mux, humaapi.New(mux), "")
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	host.base = srv.URL
+	idp := newFakeIDP(t)
+
+	base := func() map[string]any {
+		return map[string]any{
+			"name": "Okta prod",
+			"saml": map[string]any{
+				"idp_entity_id": idp.entityID,
+				"idp_sso_url":   idp.srv.URL + "/sso",
+				"idp_x509_cert": idp.certPEM,
+				"attribute_mappings": map[string]any{
+					"email": "urn:oid:0.9.2342.19200300.100.1.3",
+				},
+			},
+		}
+	}
+	url := srv.URL + "/organizations/" + org.ID + "/sso/saml/connections"
+
+	cases := []struct {
+		name string
+		mut  func(m map[string]any)
+	}{
+		{"top-level unknown key", func(m map[string]any) { m["bogus"] = true }},
+		{"nested saml unknown key", func(m map[string]any) {
+			m["saml"].(map[string]any)["bogus"] = "x"
+		}},
+		{"nested attribute_mappings unknown key", func(m map[string]any) {
+			m["saml"].(map[string]any)["attribute_mappings"].(map[string]any)["bogus"] = "x"
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body := base()
+			tc.mut(body)
+			resp := doJSON(t, http.MethodPost, url, body)
+			rb, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusUnprocessableEntity {
+				t.Fatalf("expected 422 for %s, got %d body=%s", tc.name, resp.StatusCode, string(rb))
+			}
+		})
+	}
+
+	// Sanity: the same base body with NO unknown keys still creates (201),
+	// proving the 422s above are caused by the unknown keys, not the fixture.
+	resp := doJSON(t, http.MethodPost, url, base())
+	rb, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("clean body should create: status=%d body=%s", resp.StatusCode, string(rb))
 	}
 }
 

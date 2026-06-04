@@ -22,6 +22,8 @@
 package webhooks
 
 import (
+	"github.com/danielgtaylor/huma/v2"
+
 	"context"
 	"net/http"
 	"time"
@@ -135,7 +137,7 @@ func (p *webhooksPlugin) Name() string { return "webhooks" }
 // Routes implements plugin.Plugin. It starts the dispatcher's worker
 // goroutines, registers the events.Handler that fans events out to it,
 // and mounts admin endpoints under prefix guarded by RequireAdmin.
-func (p *webhooksPlugin) Routes(host plugin.PluginHost, mux plugin.Router, prefix string) {
+func (p *webhooksPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.API, prefix string) {
 	mw := host.Middleware()
 
 	httpClient := p.cfg.HTTPClient
@@ -156,14 +158,25 @@ func (p *webhooksPlugin) Routes(host plugin.PluginHost, mux plugin.Router, prefi
 
 	host.RegisterEventHandler(newEventHandler(host.Repo(), p.dispatcher))
 
-	mux.Handle("GET "+prefix+"/webhooks", mw.RequireAdmin(http.HandlerFunc(p.handleList(host))))
-	mux.Handle("POST "+prefix+"/webhooks", mw.RequireAdmin(http.HandlerFunc(p.handleCreate(host))))
-	mux.Handle("GET "+prefix+"/webhooks/{id}", mw.RequireAdmin(http.HandlerFunc(p.handleGet(host))))
-	mux.Handle("PATCH "+prefix+"/webhooks/{id}", mw.RequireAdmin(http.HandlerFunc(p.handleUpdate(host))))
-	mux.Handle("PUT "+prefix+"/webhooks/{id}", mw.RequireAdmin(http.HandlerFunc(p.handleUpdate(host))))
-	mux.Handle("DELETE "+prefix+"/webhooks/{id}", mw.RequireAdmin(http.HandlerFunc(p.handleDelete(host))))
-	mux.Handle("GET "+prefix+"/webhooks/{id}/deliveries", mw.RequireAdmin(http.HandlerFunc(p.handleDeliveries(host))))
-	mux.Handle("POST "+prefix+"/webhooks/{id}/test", mw.RequireAdmin(http.HandlerFunc(p.handleTest(host))))
+	// Every management route is huma-native: a typed operation guarded by
+	// RequireAdminHuma (the same admin identity logic as the legacy
+	// mw.RequireAdmin wrapper). Create/update carry a native typed Body, so
+	// huma parses + validates the request and the OpenAPI request schema
+	// auto-derives; additionalProperties:false rejects unknown fields (422).
+	// Only the list/deliveries routes still pair with StashHTTPHuma, and solely
+	// to keep the lenient ?page=/?per_page= query precedence (bad values degrade
+	// to defaults rather than 422). The mux is retained in the signature for
+	// plugins that still register raw net/http routes; webhooks no longer uses it.
+	p.registerList(host, api, mw, prefix)
+	p.registerCreate(host, api, mw, prefix)
+	p.registerGet(host, api, mw, prefix)
+	// PATCH and its PUT alias (Rust parity) share one handler but need
+	// distinct OperationIDs — huma requires operation-id uniqueness.
+	p.registerUpdate(host, api, mw, prefix, http.MethodPatch, "webhook-update")
+	p.registerUpdate(host, api, mw, prefix, http.MethodPut, "webhook-put")
+	p.registerDelete(host, api, mw, prefix)
+	p.registerDeliveries(host, api, mw, prefix)
+	p.registerTest(host, api, mw, prefix)
 }
 
 // Shutdown implements plugin.ShutdownAware. It signals the dispatcher to

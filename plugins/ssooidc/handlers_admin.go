@@ -5,17 +5,24 @@
 // kept inline so this plugin does not import organizations/. Cross-
 // tenant isolation lives in the gate; cross-org enumeration is
 // impossible because the gate runs before any sso_connections.Read.
+//
+// Read-only / no-body routes (list, get, delete, test) stay on the
+// StashHTTPHuma bridge via crudGuards. The JSON-body write-ops (create,
+// update) are fully huma-native: their request body is a typed huma Body, so
+// huma parses + validates it, the request schema auto-derives, and unknown or
+// malformed bodies are rejected with 422 (additionalProperties:false). Those
+// two ops drop StashHTTPHuma entirely and use ssoConnAuthGuards instead.
 package ssooidc
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/google/uuid"
 
 	"github.com/yackey-labs/yauth-go/auth"
@@ -25,71 +32,54 @@ import (
 	"github.com/yackey-labs/yauth-go/yautherr"
 )
 
-// errorBody mirrors the canonical envelope used by every yauth-go
-// plugin so error consumers see a single shape across the surface.
-type errorBody struct {
-	Error errorPayload `json:"error"`
+// crudGuards is the middleware chain for the read-only / no-body CRUD routes
+// (list, get, delete, test): stash the raw request/writer, then require an
+// authenticated identity. Org-admin authorization is enforced in-handler by
+// requireOrgAdmin (these are org-admins, not global admins — RequireAdminHuma
+// would wrongly lock them out).
+func crudGuards(api huma.API, mw *middleware.Middleware) huma.Middlewares {
+	return huma.Middlewares{
+		middleware.StashHTTPHuma(api),
+		middleware.RequireAuthHuma(api, mw),
+	}
 }
 
-type errorPayload struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+// ssoConnAuthGuards is the middleware chain for the native-Body write-ops
+// (create, update): require an authenticated identity only. No StashHTTPHuma —
+// the request body is a native huma typed Body and nothing reads the raw
+// request, so the request schema auto-derives. Org-admin authorization is still
+// enforced in-handler by requireOrgAdmin.
+func ssoConnAuthGuards(api huma.API, mw *middleware.Middleware) huma.Middlewares {
+	return huma.Middlewares{
+		middleware.RequireAuthHuma(api, mw),
+	}
 }
 
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeError(w http.ResponseWriter, status int, code, message string) {
-	writeJSON(w, status, errorBody{Error: errorPayload{Code: code, Message: message}})
-}
-
-// decodeJSON enforces a 1 MiB body cap before decoding to a target.
-func decodeJSON(r *http.Request, dst any) error {
-	body := http.MaxBytesReader(nil, r.Body, 1<<20)
-	defer func() { _ = body.Close() }()
-	raw, err := io.ReadAll(body)
+// requireOrgAdmin returns the gating membership row or a huma error (403/500).
+// Mirrors plugins/organizations/handlers.go's helper of the same name —
+// duplicated here so sso_oidc/ does not depend on the organizations package.
+func requireOrgAdmin(ctx context.Context, host plugin.PluginHost, orgID, userID string) (*domain.Membership, error) {
+	m, err := host.Repo().GetMembershipByOrgUser(ctx, orgID, userID)
 	if err != nil {
-		return err
-	}
-	if len(raw) == 0 {
-		// allow empty body for endpoints that accept "no changes"
-		return nil
-	}
-	return json.Unmarshal(raw, dst)
-}
-
-// authUser returns the authenticated user or writes 401 + false.
-func authUser(w http.ResponseWriter, r *http.Request) (*domain.AuthUser, bool) {
-	au, ok := middleware.AuthUserFromContext(r.Context())
-	if !ok || au == nil {
-		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "not authenticated")
-		return nil, false
-	}
-	return au, true
-}
-
-// requireOrgAdmin returns the gating membership row or writes a 403/500
-// and returns false. Mirrors plugins/organizations/handlers.go's helper
-// of the same name — duplicated here so sso_oidc/ does not depend on
-// the organizations package.
-func requireOrgAdmin(w http.ResponseWriter, r *http.Request, host plugin.PluginHost, orgID, userID string) (*domain.Membership, bool) {
-	m, err := host.Repo().GetMembershipByOrgUser(r.Context(), orgID, userID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "membership lookup failed")
-		return nil, false
+		return nil, huma.Error500InternalServerError("membership lookup failed")
 	}
 	if m == nil {
-		writeError(w, http.StatusForbidden, "FORBIDDEN", "not a member of this organization")
-		return nil, false
+		return nil, huma.Error403Forbidden("not a member of this organization")
 	}
 	if !auth.RoleAtLeast(m.Role, auth.RoleAdmin) {
-		writeError(w, http.StatusForbidden, "FORBIDDEN", "organization admin role required")
-		return nil, false
+		return nil, huma.Error403Forbidden("organization admin role required")
 	}
-	return m, true
+	return m, nil
+}
+
+// authUserID returns the authenticated user's ID injected by RequireAuthHuma,
+// or a 401 error if somehow missing (cannot happen on a gated route).
+func authUserID(ctx context.Context) (string, error) {
+	au, ok := middleware.AuthUserFromContext(ctx)
+	if !ok || au == nil {
+		return "", huma.Error401Unauthorized("not authenticated")
+	}
+	return au.User.ID, nil
 }
 
 // --- request/response shapes -------------------------------------------
@@ -158,57 +148,95 @@ func hasEncryptedSecret(raw []byte) bool {
 	return strings.TrimSpace(p.ClientSecretEnc) != ""
 }
 
+// createConnectionRequest carries omitempty on the business-validated fields so
+// absent/blank values reach the handler's own 400s ("name is required",
+// "oidc config block is required", kind/status/role parsing) rather than huma's
+// 422. additionalProperties:false rejects unknown fields with a native 422.
 type createConnectionRequest struct {
-	Name                   string                `json:"name"`
-	Kind                   string                `json:"kind"` // defaults to "oidc_client"
-	Status                 string                `json:"status"`
-	JitProvisioningEnabled bool                  `json:"jit_provisioning_enabled"`
-	DefaultRoleOnJit       string                `json:"default_role_on_jit"`
-	OIDC                   *OidcConnectionConfig `json:"oidc"`
+	Name                   string                `json:"name,omitempty"`
+	Kind                   string                `json:"kind,omitempty"` // defaults to "oidc_client"
+	Status                 string                `json:"status,omitempty"`
+	JitProvisioningEnabled bool                  `json:"jit_provisioning_enabled,omitempty"`
+	DefaultRoleOnJit       string                `json:"default_role_on_jit,omitempty"`
+	OIDC                   *OidcConnectionConfig `json:"oidc,omitempty"`
+	_                      struct{}              `json:"-" additionalProperties:"false"`
 }
 
+// updateConnectionRequest is a partial: every field is a pointer so absence is
+// distinguishable from a zero value, and the handler applies its own business
+// 400s. additionalProperties:false rejects unknown fields with a native 422.
 type updateConnectionRequest struct {
-	Name                   *string               `json:"name"`
-	Status                 *string               `json:"status"`
-	JitProvisioningEnabled *bool                 `json:"jit_provisioning_enabled"`
-	DefaultRoleOnJit       *string               `json:"default_role_on_jit"`
-	OIDC                   *OidcConnectionConfig `json:"oidc"`
+	Name                   *string               `json:"name,omitempty"`
+	Status                 *string               `json:"status,omitempty"`
+	JitProvisioningEnabled *bool                 `json:"jit_provisioning_enabled,omitempty"`
+	DefaultRoleOnJit       *string               `json:"default_role_on_jit,omitempty"`
+	OIDC                   *OidcConnectionConfig `json:"oidc,omitempty"`
+	_                      struct{}              `json:"-" additionalProperties:"false"`
+}
+
+// orgInput is the typed path-parameter input for routes scoped to a single org.
+type orgInput struct {
+	ID string `path:"id" doc:"Organization ID"`
+}
+
+// connInput adds the connection ID to the org-scoped path.
+type connInput struct {
+	ID  string `path:"id" doc:"Organization ID"`
+	CID string `path:"cid" doc:"SSO connection ID"`
+}
+
+// connectionOutput wraps a single connectionJSON body.
+type connectionOutput struct {
+	Body connectionJSON
 }
 
 // --- POST /organizations/{id}/sso/connections --------------------------
 
-func (p *ssoOIDCPlugin) handleCreateConnection(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := authUser(w, r)
-		if !ok {
-			return
+// createConnectionInput wraps the native JSON body plus the org path param.
+// huma parses + validates the body (unknown/malformed → 422); the request
+// schema auto-derives, so no StashHTTPHuma bridge is needed.
+type createConnectionInput struct {
+	ID   string `path:"id" doc:"Organization ID"`
+	Body createConnectionRequest
+}
+
+func (p *ssoOIDCPlugin) registerCreateConnection(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	type output struct {
+		Body connectionJSON
+	}
+	huma.Register(api, huma.Operation{
+		OperationID:   "ssooidc-create-connection",
+		Method:        http.MethodPost,
+		Path:          prefix + "/organizations/{id}/sso/connections",
+		Summary:       "Create an SSO connection",
+		Tags:          []string{"organizations"},
+		Security:      []map[string][]string{{"sessionCookie": {}}},
+		DefaultStatus: http.StatusCreated,
+		Middlewares:   ssoConnAuthGuards(api, mw),
+	}, func(ctx context.Context, in *createConnectionInput) (*output, error) {
+		uid, err := authUserID(ctx)
+		if err != nil {
+			return nil, err
 		}
-		orgID := r.PathValue("id")
-		if _, ok := requireOrgAdmin(w, r, host, orgID, au.User.ID); !ok {
-			return
+		orgID := in.ID
+		if _, err := requireOrgAdmin(ctx, host, orgID, uid); err != nil {
+			return nil, err
 		}
-		var req createConnectionRequest
-		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid json body")
-			return
-		}
+		req := in.Body
 		if strings.TrimSpace(req.Name) == "" {
-			writeError(w, http.StatusBadRequest, "BAD_REQUEST", "name is required")
-			return
+			return nil, huma.Error400BadRequest("name is required")
 		}
 		kind := domain.ConnectionKindOIDCClient
 		if strings.TrimSpace(req.Kind) != "" {
 			parsed, ok := domain.ParseConnectionKind(req.Kind)
 			if !ok {
-				writeError(w, http.StatusBadRequest, "BAD_REQUEST", "kind must be 'oidc_client'")
-				return
+				return nil, huma.Error400BadRequest("kind must be 'oidc_client'")
 			}
 			if parsed != domain.ConnectionKindOIDCClient {
 				// SAML SP is reserved for the sibling Rust issue; the
 				// repo will accept the kind, but the plugin refuses
 				// to mint a connection it cannot drive end-to-end.
-				writeError(w, http.StatusBadRequest, "UNSUPPORTED_KIND", "only kind='oidc_client' is supported by this plugin")
-				return
+				return nil, huma.Error400BadRequest("only kind='oidc_client' is supported by this plugin")
 			}
 			kind = parsed
 		}
@@ -216,31 +244,27 @@ func (p *ssoOIDCPlugin) handleCreateConnection(host plugin.PluginHost) http.Hand
 		if strings.TrimSpace(req.Status) != "" {
 			parsed, ok := domain.ParseConnectionStatus(req.Status)
 			if !ok {
-				writeError(w, http.StatusBadRequest, "BAD_REQUEST", "status must be one of draft|active|disabled")
-				return
+				return nil, huma.Error400BadRequest("status must be one of draft|active|disabled")
 			}
 			status = parsed
 		}
 		if req.OIDC == nil {
-			writeError(w, http.StatusBadRequest, "BAD_REQUEST", "oidc config block is required")
-			return
+			return nil, huma.Error400BadRequest("oidc config block is required")
 		}
 		if req.OIDC.ClaimMappings.Email == "" && req.OIDC.ClaimMappings.ExternalID == "" {
-			// Allow callers to omit claim_mappings entirely; defaults
-			// fill in.
+			// Allow callers to omit claim_mappings entirely; defaults fill in.
 			req.OIDC.ClaimMappings = DefaultClaimMappings()
 		}
 		raw, err := marshalOidcConfig(p.cfg.EncryptionKey, *req.OIDC)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
-			return
+			return nil, huma.Error400BadRequest(err.Error())
 		}
 		role := strings.TrimSpace(req.DefaultRoleOnJit)
 		if role == "" {
 			role = auth.RoleMember
 		}
 		now := time.Now().UTC()
-		created, err := host.Repo().CreateSsoConnection(r.Context(), domain.NewSsoConnection{
+		created, err := host.Repo().CreateSsoConnection(ctx, domain.NewSsoConnection{
 			ID:                     uuid.NewString(),
 			OrganizationID:         orgID,
 			Kind:                   kind,
@@ -254,32 +278,43 @@ func (p *ssoOIDCPlugin) handleCreateConnection(host plugin.PluginHost) http.Hand
 		})
 		if err != nil {
 			if errors.Is(err, yautherr.ErrConflict) {
-				writeError(w, http.StatusConflict, "CONFLICT", "sso connection already exists")
-				return
+				return nil, huma.Error409Conflict("sso connection already exists")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "create sso connection failed")
-			return
+			return nil, huma.Error500InternalServerError("create sso connection failed")
 		}
-		writeJSON(w, http.StatusCreated, toConnectionJSON(created))
-	}
+		return &output{Body: toConnectionJSON(created)}, nil
+	})
 }
 
 // --- GET /organizations/{id}/sso/connections ---------------------------
 
-func (p *ssoOIDCPlugin) handleListConnections(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := authUser(w, r)
-		if !ok {
-			return
-		}
-		orgID := r.PathValue("id")
-		if _, ok := requireOrgAdmin(w, r, host, orgID, au.User.ID); !ok {
-			return
-		}
-		rows, err := host.Repo().ListSsoConnectionsByOrg(r.Context(), orgID)
+func (p *ssoOIDCPlugin) registerListConnections(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	type ssoConnectionsListResponse struct {
+		SsoConnections []connectionJSON `json:"sso_connections"`
+	}
+	type output struct {
+		Body ssoConnectionsListResponse
+	}
+	huma.Register(api, huma.Operation{
+		OperationID: "ssooidc-list-connections",
+		Method:      http.MethodGet,
+		Path:        prefix + "/organizations/{id}/sso/connections",
+		Summary:     "List SSO connections for an organization",
+		Tags:        []string{"organizations"},
+		Security:    []map[string][]string{{"sessionCookie": {}}},
+		Middlewares: crudGuards(api, mw),
+	}, func(ctx context.Context, in *orgInput) (*output, error) {
+		uid, err := authUserID(ctx)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "list sso connections failed")
-			return
+			return nil, err
+		}
+		orgID := in.ID
+		if _, err := requireOrgAdmin(ctx, host, orgID, uid); err != nil {
+			return nil, err
+		}
+		rows, err := host.Repo().ListSsoConnectionsByOrg(ctx, orgID)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("list sso connections failed")
 		}
 		out := make([]connectionJSON, 0, len(rows))
 		for _, c := range rows {
@@ -288,89 +323,102 @@ func (p *ssoOIDCPlugin) handleListConnections(host plugin.PluginHost) http.Handl
 			}
 			out = append(out, toConnectionJSON(*c))
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"sso_connections": out})
-	}
+		return &output{Body: ssoConnectionsListResponse{SsoConnections: out}}, nil
+	})
 }
 
 // --- GET /organizations/{id}/sso/connections/{cid} ---------------------
 
-func (p *ssoOIDCPlugin) handleGetConnection(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := authUser(w, r)
-		if !ok {
-			return
+func (p *ssoOIDCPlugin) registerGetConnection(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "ssooidc-get-connection",
+		Method:      http.MethodGet,
+		Path:        prefix + "/organizations/{id}/sso/connections/{cid}",
+		Summary:     "Fetch a single SSO connection",
+		Tags:        []string{"organizations"},
+		Security:    []map[string][]string{{"sessionCookie": {}}},
+		Middlewares: crudGuards(api, mw),
+	}, func(ctx context.Context, in *connInput) (*connectionOutput, error) {
+		uid, err := authUserID(ctx)
+		if err != nil {
+			return nil, err
 		}
-		orgID := r.PathValue("id")
-		cid := r.PathValue("cid")
-		if _, ok := requireOrgAdmin(w, r, host, orgID, au.User.ID); !ok {
-			return
+		orgID := in.ID
+		cid := in.CID
+		if _, err := requireOrgAdmin(ctx, host, orgID, uid); err != nil {
+			return nil, err
 		}
-		c, err := host.Repo().GetSsoConnectionByID(r.Context(), cid)
+		c, err := host.Repo().GetSsoConnectionByID(ctx, cid)
 		if err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "NOT_FOUND", "sso connection not found")
-				return
+				return nil, huma.Error404NotFound("sso connection not found")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "get sso connection failed")
-			return
+			return nil, huma.Error500InternalServerError("get sso connection failed")
 		}
 		if c.OrganizationID != orgID {
 			// Cross-tenant probe — looks identical to NotFound to the
 			// caller so an attacker cannot enumerate other orgs' ids.
-			writeError(w, http.StatusNotFound, "NOT_FOUND", "sso connection not found")
-			return
+			return nil, huma.Error404NotFound("sso connection not found")
 		}
-		writeJSON(w, http.StatusOK, toConnectionJSON(*c))
-	}
+		return &connectionOutput{Body: toConnectionJSON(*c)}, nil
+	})
 }
 
 // --- PATCH /organizations/{id}/sso/connections/{cid} -------------------
 
-func (p *ssoOIDCPlugin) handleUpdateConnection(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := authUser(w, r)
-		if !ok {
-			return
+// updateConnectionInput wraps the native JSON body plus the org+connection path
+// params. huma parses + validates the body (unknown/malformed → 422); the
+// request schema auto-derives, so no StashHTTPHuma bridge is needed.
+type updateConnectionInput struct {
+	ID   string `path:"id" doc:"Organization ID"`
+	CID  string `path:"cid" doc:"SSO connection ID"`
+	Body updateConnectionRequest
+}
+
+func (p *ssoOIDCPlugin) registerUpdateConnection(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "ssooidc-update-connection",
+		Method:      http.MethodPatch,
+		Path:        prefix + "/organizations/{id}/sso/connections/{cid}",
+		Summary:     "Update an SSO connection (partial)",
+		Tags:        []string{"organizations"},
+		Security:    []map[string][]string{{"sessionCookie": {}}},
+		Middlewares: ssoConnAuthGuards(api, mw),
+	}, func(ctx context.Context, in *updateConnectionInput) (*connectionOutput, error) {
+		uid, err := authUserID(ctx)
+		if err != nil {
+			return nil, err
 		}
-		orgID := r.PathValue("id")
-		cid := r.PathValue("cid")
-		if _, ok := requireOrgAdmin(w, r, host, orgID, au.User.ID); !ok {
-			return
+		orgID := in.ID
+		cid := in.CID
+		if _, err := requireOrgAdmin(ctx, host, orgID, uid); err != nil {
+			return nil, err
 		}
-		current, err := host.Repo().GetSsoConnectionByID(r.Context(), cid)
+		current, err := host.Repo().GetSsoConnectionByID(ctx, cid)
 		if err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "NOT_FOUND", "sso connection not found")
-				return
+				return nil, huma.Error404NotFound("sso connection not found")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "get sso connection failed")
-			return
+			return nil, huma.Error500InternalServerError("get sso connection failed")
 		}
 		if current.OrganizationID != orgID {
-			writeError(w, http.StatusNotFound, "NOT_FOUND", "sso connection not found")
-			return
+			return nil, huma.Error404NotFound("sso connection not found")
 		}
 
-		var req updateConnectionRequest
-		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid json body")
-			return
-		}
+		req := in.Body
 
 		var changes domain.UpdateSsoConnection
 		if req.Name != nil {
 			trimmed := strings.TrimSpace(*req.Name)
 			if trimmed == "" {
-				writeError(w, http.StatusBadRequest, "BAD_REQUEST", "name cannot be empty")
-				return
+				return nil, huma.Error400BadRequest("name cannot be empty")
 			}
 			changes.Name = &trimmed
 		}
 		if req.Status != nil {
 			parsed, ok := domain.ParseConnectionStatus(*req.Status)
 			if !ok {
-				writeError(w, http.StatusBadRequest, "BAD_REQUEST", "status must be one of draft|active|disabled")
-				return
+				return nil, huma.Error400BadRequest("status must be one of draft|active|disabled")
 			}
 			changes.Status = &parsed
 		}
@@ -390,8 +438,7 @@ func (p *ssoOIDCPlugin) handleUpdateConnection(host plugin.PluginHost) http.Hand
 			// secret on every update.
 			cur, err := unmarshalOidcConfig(p.cfg.EncryptionKey, current.Config)
 			if err != nil {
-				writeError(w, http.StatusInternalServerError, "INTERNAL", "decode current config failed")
-				return
+				return nil, huma.Error500InternalServerError("decode current config failed")
 			}
 			merged := cur
 			if strings.TrimSpace(req.OIDC.DiscoveryURL) != "" {
@@ -415,61 +462,65 @@ func (p *ssoOIDCPlugin) handleUpdateConnection(host plugin.PluginHost) http.Hand
 			}
 			raw, err := marshalOidcConfig(p.cfg.EncryptionKey, merged)
 			if err != nil {
-				writeError(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
-				return
+				return nil, huma.Error400BadRequest(err.Error())
 			}
 			changes.Config = &raw
 		}
 		now := time.Now().UTC()
 		changes.UpdatedAt = &now
 
-		updated, err := host.Repo().UpdateSsoConnection(r.Context(), cid, changes)
+		updated, err := host.Repo().UpdateSsoConnection(ctx, cid, changes)
 		if err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "NOT_FOUND", "sso connection not found")
-				return
+				return nil, huma.Error404NotFound("sso connection not found")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "update sso connection failed")
-			return
+			return nil, huma.Error500InternalServerError("update sso connection failed")
 		}
-		writeJSON(w, http.StatusOK, toConnectionJSON(updated))
-	}
+		return &connectionOutput{Body: toConnectionJSON(updated)}, nil
+	})
 }
 
 // --- DELETE /organizations/{id}/sso/connections/{cid} ------------------
 
-func (p *ssoOIDCPlugin) handleDeleteConnection(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := authUser(w, r)
-		if !ok {
-			return
+func (p *ssoOIDCPlugin) registerDeleteConnection(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	// emptyOutput carries no body; DefaultStatus drives the 204.
+	type emptyOutput struct{}
+	huma.Register(api, huma.Operation{
+		OperationID:   "ssooidc-delete-connection",
+		Method:        http.MethodDelete,
+		Path:          prefix + "/organizations/{id}/sso/connections/{cid}",
+		Summary:       "Delete an SSO connection",
+		Tags:          []string{"organizations"},
+		Security:      []map[string][]string{{"sessionCookie": {}}},
+		DefaultStatus: http.StatusNoContent,
+		Middlewares:   crudGuards(api, mw),
+	}, func(ctx context.Context, in *connInput) (*emptyOutput, error) {
+		uid, err := authUserID(ctx)
+		if err != nil {
+			return nil, err
 		}
-		orgID := r.PathValue("id")
-		cid := r.PathValue("cid")
-		if _, ok := requireOrgAdmin(w, r, host, orgID, au.User.ID); !ok {
-			return
+		orgID := in.ID
+		cid := in.CID
+		if _, err := requireOrgAdmin(ctx, host, orgID, uid); err != nil {
+			return nil, err
 		}
-		current, err := host.Repo().GetSsoConnectionByID(r.Context(), cid)
+		current, err := host.Repo().GetSsoConnectionByID(ctx, cid)
 		if err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
 				// idempotent: 204 even for unknown ids belonging to
 				// no one — avoids leaking which ids exist
-				w.WriteHeader(http.StatusNoContent)
-				return
+				return &emptyOutput{}, nil
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "get sso connection failed")
-			return
+			return nil, huma.Error500InternalServerError("get sso connection failed")
 		}
 		if current.OrganizationID != orgID {
-			w.WriteHeader(http.StatusNoContent)
-			return
+			return &emptyOutput{}, nil
 		}
-		if err := host.Repo().DeleteSsoConnection(r.Context(), cid); err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "delete sso connection failed")
-			return
+		if err := host.Repo().DeleteSsoConnection(ctx, cid); err != nil {
+			return nil, huma.Error500InternalServerError("delete sso connection failed")
 		}
-		w.WriteHeader(http.StatusNoContent)
-	}
+		return &emptyOutput{}, nil
+	})
 }
 
 // --- POST /organizations/{id}/sso/connections/{cid}/test --------------
@@ -488,59 +539,63 @@ type testConnectionResponse struct {
 	JWKSKeys         int    `json:"jwks_key_count,omitempty"`
 }
 
-func (p *ssoOIDCPlugin) handleTestConnection(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		au, ok := authUser(w, r)
-		if !ok {
-			return
+func (p *ssoOIDCPlugin) registerTestConnection(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	type output struct {
+		Body testConnectionResponse
+	}
+	huma.Register(api, huma.Operation{
+		OperationID: "ssooidc-test-connection",
+		Method:      http.MethodPost,
+		Path:        prefix + "/organizations/{id}/sso/connections/{cid}/test",
+		Summary:     "Test an SSO connection (discovery round-trip)",
+		Tags:        []string{"organizations"},
+		Security:    []map[string][]string{{"sessionCookie": {}}},
+		Middlewares: crudGuards(api, mw),
+	}, func(ctx context.Context, in *connInput) (*output, error) {
+		uid, err := authUserID(ctx)
+		if err != nil {
+			return nil, err
 		}
-		orgID := r.PathValue("id")
-		cid := r.PathValue("cid")
-		if _, ok := requireOrgAdmin(w, r, host, orgID, au.User.ID); !ok {
-			return
+		orgID := in.ID
+		cid := in.CID
+		if _, err := requireOrgAdmin(ctx, host, orgID, uid); err != nil {
+			return nil, err
 		}
-		current, err := host.Repo().GetSsoConnectionByID(r.Context(), cid)
+		current, err := host.Repo().GetSsoConnectionByID(ctx, cid)
 		if err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "NOT_FOUND", "sso connection not found")
-				return
+				return nil, huma.Error404NotFound("sso connection not found")
 			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "get sso connection failed")
-			return
+			return nil, huma.Error500InternalServerError("get sso connection failed")
 		}
 		if current.OrganizationID != orgID {
-			writeError(w, http.StatusNotFound, "NOT_FOUND", "sso connection not found")
-			return
+			return nil, huma.Error404NotFound("sso connection not found")
 		}
 		if current.Kind != domain.ConnectionKindOIDCClient {
-			writeError(w, http.StatusBadRequest, "UNSUPPORTED_KIND", "only oidc_client connections can be tested")
-			return
+			return nil, huma.Error400BadRequest("only oidc_client connections can be tested")
 		}
 		cfg, err := unmarshalOidcConfig(p.cfg.EncryptionKey, current.Config)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "decode connection config failed")
-			return
+			return nil, huma.Error500InternalServerError("decode connection config failed")
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), defaultHTTPTimeout)
+		tctx, cancel := context.WithTimeout(ctx, defaultHTTPTimeout)
 		defer cancel()
-		disco, err := fetchDiscovery(ctx, p.httpClient(), cfg.DiscoveryURL)
+		disco, err := fetchDiscovery(tctx, p.httpClient(), cfg.DiscoveryURL)
 		if err != nil {
-			writeError(w, http.StatusBadGateway, "DISCOVERY_FAILED", err.Error())
-			return
+			return nil, huma.Error502BadGateway(err.Error())
 		}
 		// Fetch JWKS to confirm the IdP publishes a usable key
 		// document. We don't validate any particular token here —
 		// just count the keys.
 		keyCount := 0
 		if disco.JWKSURL != "" {
-			set, err := fetchJWKS(ctx, p.httpClient(), disco.JWKSURL)
+			set, err := fetchJWKS(tctx, p.httpClient(), disco.JWKSURL)
 			if err != nil {
-				writeError(w, http.StatusBadGateway, "JWKS_FAILED", err.Error())
-				return
+				return nil, huma.Error502BadGateway(err.Error())
 			}
 			keyCount = set.Len()
 		}
-		writeJSON(w, http.StatusOK, testConnectionResponse{
+		return &output{Body: testConnectionResponse{
 			OK:               true,
 			Issuer:           disco.Issuer,
 			AuthorizationURL: disco.AuthorizationURL,
@@ -548,6 +603,6 @@ func (p *ssoOIDCPlugin) handleTestConnection(host plugin.PluginHost) http.Handle
 			UserInfoURL:      disco.UserInfoURL,
 			JWKSURL:          disco.JWKSURL,
 			JWKSKeys:         keyCount,
-		})
-	}
+		}}, nil
+	})
 }

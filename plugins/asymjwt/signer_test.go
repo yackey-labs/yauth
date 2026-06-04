@@ -1,6 +1,8 @@
 package asymjwt_test
 
 import (
+	"github.com/yackey-labs/yauth-go/humaapi"
+
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -185,7 +187,7 @@ func TestPlugin_RoutesJWKS(t *testing.T) {
 	}
 	host := &captureHost{}
 	mux := http.NewServeMux()
-	p.Routes(host, mux, "")
+	p.Routes(host, mux, humaapi.New(mux), "")
 
 	if host.signer == nil {
 		t.Fatalf("expected SetJWTSigner to be called")

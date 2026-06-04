@@ -23,8 +23,12 @@
 package asymjwt
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
+
+	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/yackey-labs/yauth-go/plugin"
 )
@@ -102,9 +106,43 @@ func (p *asymjwtPlugin) Name() string { return "asymmetric-jwt" }
 // Routes implements plugin.Plugin. It registers the loaded signer with
 // the host (via SetJWTSigner if the host supports it) and mounts the
 // JWKS endpoint.
-func (p *asymjwtPlugin) Routes(host plugin.PluginHost, mux plugin.Router, prefix string) {
+func (p *asymjwtPlugin) Routes(host plugin.PluginHost, _ plugin.Router, api huma.API, prefix string) {
 	if setter, ok := host.(interface{ SetJWTSigner(plugin.JWTSigner) }); ok {
 		setter.SetJWTSigner(p.signer)
 	}
-	mux.Handle("GET "+prefix+"/.well-known/jwks.json", http.HandlerFunc(p.handleJWKS()))
+
+	// GET {prefix}/.well-known/jwks.json — public, unauthenticated single-key
+	// JWKS for the loaded public key. Clean typed output: the precomputed JWKS
+	// bytes are emitted as a json.RawMessage body so no per-request marshalling
+	// is needed, and Cache-Control is preserved via a header-tagged field.
+	huma.Register(api, huma.Operation{
+		OperationID: "asymJWKS",
+		Method:      http.MethodGet,
+		Path:        prefix + "/.well-known/jwks.json",
+		Summary:     "Public JWKS document for the loaded asymmetric signer",
+		Description: "Returned even when no caller is authenticated; suited to relying parties verifying tokens out of band.",
+		Tags:        []string{"asymmetric-jwt"},
+		Security:    []map[string][]string{}, // explicitly public
+	}, func(_ context.Context, _ *jwksInput) (*jwksOutput, error) {
+		body, err := p.signer.PublicJWKS()
+		if err != nil {
+			return nil, huma.Error500InternalServerError("jwks unavailable")
+		}
+		return &jwksOutput{
+			CacheControl: "public, max-age=300",
+			Body:         json.RawMessage(body),
+		}, nil
+	})
+}
+
+// jwksInput has no fields — GET /.well-known/jwks.json takes no parameters or
+// body.
+type jwksInput struct{}
+
+// jwksOutput emits the precomputed JWKS document. Body is a json.RawMessage so
+// huma writes the JWKS JSON directly (Content-Type application/json) and
+// CacheControl maps to the Cache-Control response header.
+type jwksOutput struct {
+	CacheControl string          `header:"Cache-Control"`
+	Body         json.RawMessage `contentType:"application/json"`
 }

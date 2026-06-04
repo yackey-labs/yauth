@@ -1,11 +1,12 @@
 package oauth2server
 
 import (
-	"encoding/json"
+	"context"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/google/uuid"
 
 	"github.com/yackey-labs/yauth-go/domain"
@@ -41,37 +42,46 @@ func (p *oauth2Plugin) handleListClientRoles(host plugin.PluginHost) http.Handle
 }
 
 type assignRoleRequest struct {
-	Role    string  `json:"role"`
-	GroupID *string `json:"group_id"`
-	UserID  *string `json:"user_id"`
+	// All fields are omitempty so huma treats them as optional: the original
+	// bridged handler validated them by hand (empty role → 400, "exactly one
+	// principal" → 400). Marking any required would turn those business 400s
+	// into a parse-time 422, changing behaviour.
+	Role    string   `json:"role,omitempty"`
+	GroupID *string  `json:"group_id,omitempty"`
+	UserID  *string  `json:"user_id,omitempty"`
+	_       struct{} `json:"-" additionalProperties:"false"`
 }
 
-func (p *oauth2Plugin) handleAssignClientRole(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		clientID := r.PathValue("id")
-		if _, err := host.Repo().GetOAuth2ClientByClientID(r.Context(), clientID); err != nil {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "client not found"})
-			return
+// assignRoleInput is the native huma request for POST
+// /oauth2/clients/{id}/roles: the {id} path param plus the typed body.
+type assignRoleInput struct {
+	ID   string `path:"id"`
+	Body assignRoleRequest
+}
+
+// handleAssignClientRole assigns a role to a group or user on a client.
+// Native huma handler: typed Body (additionalProperties:false → 422 on
+// unknown/malformed JSON). Business errors keep their legacy status as
+// problem+json: client not found → 404, validation (empty role / not exactly
+// one principal) → 400, repo failure → 500. Success → 204.
+func (p *oauth2Plugin) handleAssignClientRole(host plugin.PluginHost) func(context.Context, *assignRoleInput) (*oauth2EmptyOutput, error) {
+	return func(ctx context.Context, in *assignRoleInput) (*oauth2EmptyOutput, error) {
+		clientID := in.ID
+		if _, err := host.Repo().GetOAuth2ClientByClientID(ctx, clientID); err != nil {
+			return nil, huma.Error404NotFound("client not found")
 		}
-		var req assignRoleRequest
-		r.Body = http.MaxBytesReader(nil, r.Body, 1<<20)
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
-			return
-		}
+		req := in.Body
 		req.Role = strings.TrimSpace(req.Role)
 		gid := trimPtr(req.GroupID)
 		uid := trimPtr(req.UserID)
 		if req.Role == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "role is required"})
-			return
+			return nil, huma.Error400BadRequest("role is required")
 		}
 		// Exactly one principal.
 		if (gid == nil) == (uid == nil) {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "set exactly one of group_id or user_id"})
-			return
+			return nil, huma.Error400BadRequest("set exactly one of group_id or user_id")
 		}
-		if err := host.Repo().AssignClientRole(r.Context(), domain.NewClientRoleAssignment{
+		if err := host.Repo().AssignClientRole(ctx, domain.NewClientRoleAssignment{
 			ID:        uuid.NewString(),
 			ClientID:  clientID,
 			Role:      req.Role,
@@ -79,10 +89,9 @@ func (p *oauth2Plugin) handleAssignClientRole(host plugin.PluginHost) http.Handl
 			UserID:    uid,
 			CreatedAt: time.Now().UTC(),
 		}); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unable to assign role"})
-			return
+			return nil, huma.Error500InternalServerError("unable to assign role")
 		}
-		w.WriteHeader(http.StatusNoContent)
+		return &oauth2EmptyOutput{}, nil
 	}
 }
 

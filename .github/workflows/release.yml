@@ -72,19 +72,25 @@ jobs:
       - name: Build packages
         run: pnpm run build
 
-      # pnpm pack substitutes workspace:* deps with the concrete version in each
-      # tarball; npm publish then does the OIDC trusted-publishing handshake +
-      # provenance attestation (repository field already points at this repo).
+      # Publish each package from its directory (npm's OIDC trusted-publishing
+      # detection needs the package context). workspace:* deps are substituted
+      # in-place with the concrete version first so consumers get a real range.
       - name: Publish to npm (OIDC trusted publishing + provenance)
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/tgz"
+          echo "npm version: $(npm --version)"
+          if [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "OIDC id-token: available"
+          else
+            echo "OIDC id-token: MISSING (id-token:write not effective)"
+          fi
+          VER=$(node -p "require('./packages/shared/package.json').version")
+          echo "publishing version: $VER"
           for p in shared client ui-vue; do
-            ( cd "packages/$p" && pnpm pack --pack-destination "$RUNNER_TEMP/tgz" )
+            sed -i "s/\"workspace:\*\"/\"$VER\"/g" "packages/$p/package.json"
           done
           for p in shared client ui-vue; do
-            tgz=$(ls "$RUNNER_TEMP"/tgz/yackey-labs-yauth-"$p"-*.tgz)
-            echo "::group::npm publish $tgz"
-            npm publish "$tgz" --provenance --access public
+            echo "::group::npm publish $p"
+            ( cd "packages/$p" && npm publish --provenance --access public )
             echo "::endgroup::"
           done

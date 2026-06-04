@@ -123,10 +123,19 @@ func (p *orgsPlugin) registerListGroups(host plugin.PluginHost, api huma.API, mw
 	})
 }
 
+// createGroupRequest carries omitempty on Name so an absent/blank value reaches
+// the handler's business-rule 400 ("name is required"), not huma's 422.
 type createGroupRequest struct {
-	Name        string  `json:"name"`
-	Description *string `json:"description"`
-	ExternalID  *string `json:"external_id"`
+	Name        string   `json:"name,omitempty"`
+	Description *string  `json:"description"`
+	ExternalID  *string  `json:"external_id"`
+	_           struct{} `json:"-" additionalProperties:"false"`
+}
+
+// createGroupInput wraps the native JSON body plus the org path param.
+type createGroupInput struct {
+	ID   string `path:"id" doc:"Organization ID"`
+	Body createGroupRequest
 }
 
 // groupOutput wraps a single groupJSON body.
@@ -144,11 +153,7 @@ func (p *orgsPlugin) registerCreateGroup(host plugin.PluginHost, api huma.API, m
 		Security:      []map[string][]string{{"sessionCookie": {}}},
 		DefaultStatus: http.StatusCreated,
 		Middlewares:   authGuards(api, mw),
-	}, func(ctx context.Context, in *orgIDInput) (*groupOutput, error) {
-		r, err := reqFromCtx(ctx)
-		if err != nil {
-			return nil, err
-		}
+	}, func(ctx context.Context, in *createGroupInput) (*groupOutput, error) {
 		au, err := authUser(ctx)
 		if err != nil {
 			return nil, err
@@ -157,10 +162,7 @@ func (p *orgsPlugin) registerCreateGroup(host plugin.PluginHost, api huma.API, m
 		if _, err := requireOrgAdmin(ctx, host, orgID, au.User.ID); err != nil {
 			return nil, err
 		}
-		var req createGroupRequest
-		if err := decodeJSON(r, &req); err != nil {
-			return nil, huma.Error400BadRequest("invalid json body")
-		}
+		req := in.Body
 		req.Name = strings.TrimSpace(req.Name)
 		if req.Name == "" {
 			return nil, huma.Error400BadRequest("name is required")
@@ -212,9 +214,17 @@ func (p *orgsPlugin) registerGetGroup(host plugin.PluginHost, api huma.API, mw *
 }
 
 type patchGroupRequest struct {
-	Name        *string `json:"name"`
-	Description *string `json:"description"`
-	ExternalID  *string `json:"external_id"`
+	Name        *string  `json:"name"`
+	Description *string  `json:"description"`
+	ExternalID  *string  `json:"external_id"`
+	_           struct{} `json:"-" additionalProperties:"false"`
+}
+
+// patchGroupInput wraps the native JSON body plus the org+group path params.
+type patchGroupInput struct {
+	ID   string `path:"id" doc:"Organization ID"`
+	GID  string `path:"gid" doc:"Group ID"`
+	Body patchGroupRequest
 }
 
 func (p *orgsPlugin) registerPatchGroup(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
@@ -226,11 +236,7 @@ func (p *orgsPlugin) registerPatchGroup(host plugin.PluginHost, api huma.API, mw
 		Tags:        []string{"organizations"},
 		Security:    []map[string][]string{{"sessionCookie": {}}},
 		Middlewares: authGuards(api, mw),
-	}, func(ctx context.Context, in *orgGroupInput) (*groupOutput, error) {
-		r, err := reqFromCtx(ctx)
-		if err != nil {
-			return nil, err
-		}
+	}, func(ctx context.Context, in *patchGroupInput) (*groupOutput, error) {
 		au, err := authUser(ctx)
 		if err != nil {
 			return nil, err
@@ -243,10 +249,7 @@ func (p *orgsPlugin) registerPatchGroup(host plugin.PluginHost, api huma.API, mw
 		if err != nil {
 			return nil, err
 		}
-		var req patchGroupRequest
-		if err := decodeJSON(r, &req); err != nil {
-			return nil, huma.Error400BadRequest("invalid json body")
-		}
+		req := in.Body
 		if req.Name != nil {
 			trimmed := strings.TrimSpace(*req.Name)
 			if trimmed == "" {
@@ -336,8 +339,19 @@ func (p *orgsPlugin) registerListGroupMembers(host plugin.PluginHost, api huma.A
 	})
 }
 
+// addGroupMemberRequest carries omitempty on UserID so an absent/blank value
+// reaches the handler's business-rule 400 ("user_id is required"), not huma's
+// 422.
 type addGroupMemberRequest struct {
-	UserID string `json:"user_id"`
+	UserID string   `json:"user_id,omitempty"`
+	_      struct{} `json:"-" additionalProperties:"false"`
+}
+
+// addGroupMemberInput wraps the native JSON body plus the org+group path params.
+type addGroupMemberInput struct {
+	ID   string `path:"id" doc:"Organization ID"`
+	GID  string `path:"gid" doc:"Group ID"`
+	Body addGroupMemberRequest
 }
 
 func (p *orgsPlugin) registerAddGroupMember(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
@@ -350,11 +364,7 @@ func (p *orgsPlugin) registerAddGroupMember(host plugin.PluginHost, api huma.API
 		Security:      []map[string][]string{{"sessionCookie": {}}},
 		DefaultStatus: http.StatusNoContent,
 		Middlewares:   authGuards(api, mw),
-	}, func(ctx context.Context, in *orgGroupInput) (*orgEmptyOutput, error) {
-		r, err := reqFromCtx(ctx)
-		if err != nil {
-			return nil, err
-		}
+	}, func(ctx context.Context, in *addGroupMemberInput) (*orgEmptyOutput, error) {
 		au, err := authUser(ctx)
 		if err != nil {
 			return nil, err
@@ -367,10 +377,7 @@ func (p *orgsPlugin) registerAddGroupMember(host plugin.PluginHost, api huma.API
 		if err != nil {
 			return nil, err
 		}
-		var req addGroupMemberRequest
-		if err := decodeJSON(r, &req); err != nil {
-			return nil, huma.Error400BadRequest("invalid json body")
-		}
+		req := in.Body
 		req.UserID = strings.TrimSpace(req.UserID)
 		if req.UserID == "" {
 			return nil, huma.Error400BadRequest("user_id is required")

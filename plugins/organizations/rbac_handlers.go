@@ -22,12 +22,32 @@ import (
 
 // --- Wire shapes ---
 
+// changeRoleRequest carries omitempty on Role so an absent/blank value reaches
+// the handler's business-rule 400 ("role is required"), not huma's 422.
 type changeRoleRequest struct {
-	Role string `json:"role"`
+	Role string   `json:"role,omitempty"`
+	_    struct{} `json:"-" additionalProperties:"false"`
 }
 
+// transferOwnershipRequest carries omitempty on NewOwnerUserID so an
+// absent/blank value reaches the handler's business-rule 400
+// ("new_owner_user_id is required"), not huma's 422.
 type transferOwnershipRequest struct {
-	NewOwnerUserID string `json:"new_owner_user_id"`
+	NewOwnerUserID string   `json:"new_owner_user_id,omitempty"`
+	_              struct{} `json:"-" additionalProperties:"false"`
+}
+
+// changeRoleInput wraps the native JSON body plus the org+user path params.
+type changeRoleInput struct {
+	ID     string `path:"id" doc:"Organization ID"`
+	UserID string `path:"user_id" doc:"Target user ID"`
+	Body   changeRoleRequest
+}
+
+// transferOwnershipInput wraps the native JSON body plus the org path param.
+type transferOwnershipInput struct {
+	ID   string `path:"id" doc:"Organization ID"`
+	Body transferOwnershipRequest
 }
 
 type listPermissionsResponse struct {
@@ -70,11 +90,7 @@ func (p *orgsPlugin) registerChangeMemberRole(host plugin.PluginHost, api huma.A
 		Tags:        []string{"organizations"},
 		Security:    []map[string][]string{{"sessionCookie": {}}},
 		Middlewares: authGuards(api, mw),
-	}, func(ctx context.Context, in *orgUserInput) (*output, error) {
-		r, err := reqFromCtx(ctx)
-		if err != nil {
-			return nil, err
-		}
+	}, func(ctx context.Context, in *changeRoleInput) (*output, error) {
 		au, err := authUser(ctx)
 		if err != nil {
 			return nil, err
@@ -88,10 +104,7 @@ func (p *orgsPlugin) registerChangeMemberRole(host plugin.PluginHost, api huma.A
 		if _, err := requireOrgAdmin(ctx, host, orgID, au.User.ID); err != nil {
 			return nil, err
 		}
-		var req changeRoleRequest
-		if err := decodeJSON(r, &req); err != nil {
-			return nil, huma.Error400BadRequest("invalid json body")
-		}
+		req := in.Body
 		if req.Role == "" {
 			return nil, huma.Error400BadRequest("role is required")
 		}
@@ -154,11 +167,7 @@ func (p *orgsPlugin) registerTransferOwnership(host plugin.PluginHost, api huma.
 		Tags:        []string{"organizations"},
 		Security:    []map[string][]string{{"sessionCookie": {}}},
 		Middlewares: authGuards(api, mw),
-	}, func(ctx context.Context, in *orgIDInput) (*output, error) {
-		r, err := reqFromCtx(ctx)
-		if err != nil {
-			return nil, err
-		}
+	}, func(ctx context.Context, in *transferOwnershipInput) (*output, error) {
 		au, err := authUser(ctx)
 		if err != nil {
 			return nil, err
@@ -179,10 +188,7 @@ func (p *orgsPlugin) registerTransferOwnership(host plugin.PluginHost, api huma.
 			return nil, huma.Error403Forbidden("only the current owner can transfer ownership")
 		}
 
-		var req transferOwnershipRequest
-		if err := decodeJSON(r, &req); err != nil {
-			return nil, huma.Error400BadRequest("invalid json body")
-		}
+		req := in.Body
 		if req.NewOwnerUserID == "" {
 			return nil, huma.Error400BadRequest("new_owner_user_id is required")
 		}

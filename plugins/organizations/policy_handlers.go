@@ -81,7 +81,9 @@ type getOrgPolicyResponse struct {
 // cap fields.
 type patchOrgPolicyRequest struct {
 	// Numeric caps: json.RawMessage lets us discriminate "absent"
-	// (nil) from "null" (clear to nil) from a concrete number.
+	// (nil) from "null" (clear to nil) from a concrete number. huma
+	// carries the RawMessage fields through as free-form JSON; the
+	// handler still does the absent/null/value discrimination.
 	MaxSessionDurationSecs json.RawMessage            `json:"max_session_duration_secs,omitempty"`
 	IdleTimeoutSecs        json.RawMessage            `json:"idle_timeout_secs,omitempty"`
 	MfaRequired            *bool                      `json:"mfa_required,omitempty"`
@@ -90,6 +92,13 @@ type patchOrgPolicyRequest struct {
 	MaxConcurrentSessions  json.RawMessage            `json:"max_concurrent_sessions,omitempty"`
 	AllowedAuthMethods     *[]string                  `json:"allowed_auth_methods,omitempty"`
 	SessionBinding         *domain.SessionBindingMode `json:"session_binding,omitempty"`
+	_                      struct{}                   `json:"-" additionalProperties:"false"`
+}
+
+// patchOrgPolicyInput wraps the native JSON body plus the org path param.
+type patchOrgPolicyInput struct {
+	ID   string `path:"id" doc:"Organization ID"`
+	Body patchOrgPolicyRequest
 }
 
 // --- Conversions ---
@@ -225,11 +234,7 @@ func (p *orgsPlugin) registerPatchOrgPolicy(host plugin.PluginHost, api huma.API
 		Tags:        []string{"organizations"},
 		Security:    []map[string][]string{{"sessionCookie": {}}},
 		Middlewares: authGuards(api, mw),
-	}, func(ctx context.Context, in *orgIDInput) (*getOrgPolicyOutput, error) {
-		r, err := reqFromCtx(ctx)
-		if err != nil {
-			return nil, err
-		}
+	}, func(ctx context.Context, in *patchOrgPolicyInput) (*getOrgPolicyOutput, error) {
 		au, err := authUser(ctx)
 		if err != nil {
 			return nil, err
@@ -238,10 +243,7 @@ func (p *orgsPlugin) registerPatchOrgPolicy(host plugin.PluginHost, api huma.API
 		if _, err := requireOrgAdmin(ctx, host, orgID, au.User.ID); err != nil {
 			return nil, err
 		}
-		var req patchOrgPolicyRequest
-		if err := decodeJSON(r, &req); err != nil {
-			return nil, huma.Error400BadRequest("invalid json body")
-		}
+		req := in.Body
 
 		changes, errMsg := buildPolicyUpdate(req)
 		if errMsg != "" {

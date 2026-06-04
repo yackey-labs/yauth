@@ -37,8 +37,18 @@ import (
 
 // --- Wire shapes ---
 
+// setActiveOrgRequest carries omitempty on OrganizationID so an absent/blank
+// value reaches the handler's business-rule 400 ("organization_id is
+// required"), not huma's 422 field validation.
 type setActiveOrgRequest struct {
-	OrganizationID string `json:"organization_id"`
+	OrganizationID string   `json:"organization_id,omitempty"`
+	_              struct{} `json:"-" additionalProperties:"false"`
+}
+
+// setActiveOrgInput is the huma-native request: a typed JSON body. huma parses +
+// validates it (unknown fields → 422); the schema auto-derives.
+type setActiveOrgInput struct {
+	Body setActiveOrgRequest
 }
 
 type activeOrgResponse struct {
@@ -113,19 +123,12 @@ func (p *orgsPlugin) registerSetActiveOrg(host plugin.PluginHost, api huma.API, 
 		Tags:        []string{"organizations"},
 		Security:    []map[string][]string{{"sessionCookie": {}}},
 		Middlewares: authGuards(api, mw),
-	}, func(ctx context.Context, _ *struct{}) (*output, error) {
-		r, err := reqFromCtx(ctx)
-		if err != nil {
-			return nil, err
-		}
+	}, func(ctx context.Context, in *setActiveOrgInput) (*output, error) {
 		au, err := authUser(ctx)
 		if err != nil {
 			return nil, err
 		}
-		var req setActiveOrgRequest
-		if err := decodeJSON(r, &req); err != nil {
-			return nil, huma.Error400BadRequest("invalid json body")
-		}
+		req := in.Body
 		if req.OrganizationID == "" {
 			return nil, huma.Error400BadRequest("organization_id is required")
 		}

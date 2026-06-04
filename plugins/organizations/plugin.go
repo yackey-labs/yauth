@@ -126,12 +126,13 @@ func New(cfg Config) plugin.Plugin {
 // Name implements plugin.Plugin.
 func (p *orgsPlugin) Name() string { return "organizations" }
 
-// Routes implements plugin.Plugin. Every route is huma-native: a typed
-// operation guarded by authGuards (StashHTTPHuma + RequireAuthHuma).
-// Authorization (org-membership / org-admin role) is enforced in-handler by
-// requireOrgMember / requireOrgAdmin — these are org-scoped roles, NOT global
-// admin, so RequireAdminHuma is deliberately not used. The mux is retained in
-// the signature for plugins that still register raw net/http routes;
+// Routes implements plugin.Plugin. Every route is fully huma-native: a typed
+// operation guarded by authGuards (RequireAuthHuma only — no StashHTTPHuma).
+// Body-bearing write-ops parse a native huma typed Body, so the request schema
+// auto-derives. Authorization (org-membership / org-admin role) is enforced
+// in-handler by requireOrgMember / requireOrgAdmin — these are org-scoped roles,
+// NOT global admin, so RequireAdminHuma is deliberately not used. The mux is
+// retained in the signature for plugins that still register raw net/http routes;
 // organizations no longer uses it (the route set is unchanged — huma.Register
 // flows through the same recording router, so the spec-drift guard still sees
 // every (method, path)).

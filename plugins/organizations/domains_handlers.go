@@ -77,17 +77,34 @@ func toOrgDomainJSON(d domain.OrganizationDomain) organizationDomainJSON {
 	}
 }
 
+// createDomainRequest carries omitempty on Domain so an absent/blank value
+// reaches the handler's business-rule 400 (looksLikeDomain), not huma's 422.
 type createDomainRequest struct {
-	Domain                string  `json:"domain"`
-	AutoJoinOnSignup      *bool   `json:"auto_join_on_signup,omitempty"`
-	DefaultRoleOnAutoJoin *string `json:"default_role_on_auto_join,omitempty"`
-	RequireEmailVerified  *bool   `json:"require_email_verified,omitempty"`
+	Domain                string   `json:"domain,omitempty"`
+	AutoJoinOnSignup      *bool    `json:"auto_join_on_signup,omitempty"`
+	DefaultRoleOnAutoJoin *string  `json:"default_role_on_auto_join,omitempty"`
+	RequireEmailVerified  *bool    `json:"require_email_verified,omitempty"`
+	_                     struct{} `json:"-" additionalProperties:"false"`
 }
 
 type patchDomainRequest struct {
-	AutoJoinOnSignup      *bool   `json:"auto_join_on_signup,omitempty"`
-	DefaultRoleOnAutoJoin *string `json:"default_role_on_auto_join,omitempty"`
-	RequireEmailVerified  *bool   `json:"require_email_verified,omitempty"`
+	AutoJoinOnSignup      *bool    `json:"auto_join_on_signup,omitempty"`
+	DefaultRoleOnAutoJoin *string  `json:"default_role_on_auto_join,omitempty"`
+	RequireEmailVerified  *bool    `json:"require_email_verified,omitempty"`
+	_                     struct{} `json:"-" additionalProperties:"false"`
+}
+
+// createDomainInput wraps the native JSON body plus the org path param.
+type createDomainInput struct {
+	ID   string `path:"id" doc:"Organization ID"`
+	Body createDomainRequest
+}
+
+// patchDomainInput wraps the native JSON body plus the org+domain path params.
+type patchDomainInput struct {
+	ID   string `path:"id" doc:"Organization ID"`
+	DID  string `path:"did" doc:"Domain ID"`
+	Body patchDomainRequest
 }
 
 // --- helpers ---
@@ -152,11 +169,7 @@ func (p *orgsPlugin) registerCreateOrgDomain(host plugin.PluginHost, api huma.AP
 		Security:      []map[string][]string{{"sessionCookie": {}}},
 		DefaultStatus: http.StatusCreated,
 		Middlewares:   authGuards(api, mw),
-	}, func(ctx context.Context, in *orgIDInput) (*output, error) {
-		r, err := reqFromCtx(ctx)
-		if err != nil {
-			return nil, err
-		}
+	}, func(ctx context.Context, in *createDomainInput) (*output, error) {
 		au, err := authUser(ctx)
 		if err != nil {
 			return nil, err
@@ -165,10 +178,7 @@ func (p *orgsPlugin) registerCreateOrgDomain(host plugin.PluginHost, api huma.AP
 		if _, err := requireOrgAdmin(ctx, host, orgID, au.User.ID); err != nil {
 			return nil, err
 		}
-		var req createDomainRequest
-		if err := decodeJSON(r, &req); err != nil {
-			return nil, huma.Error400BadRequest("invalid json body")
-		}
+		req := in.Body
 		if !looksLikeDomain(req.Domain) {
 			return nil, huma.Error400BadRequest("domain is required and must contain a dot")
 		}
@@ -381,11 +391,7 @@ func (p *orgsPlugin) registerPatchOrgDomain(host plugin.PluginHost, api huma.API
 		Tags:        []string{"organizations"},
 		Security:    []map[string][]string{{"sessionCookie": {}}},
 		Middlewares: authGuards(api, mw),
-	}, func(ctx context.Context, in *orgDomainInput) (*output, error) {
-		r, err := reqFromCtx(ctx)
-		if err != nil {
-			return nil, err
-		}
+	}, func(ctx context.Context, in *patchDomainInput) (*output, error) {
 		au, err := authUser(ctx)
 		if err != nil {
 			return nil, err
@@ -398,10 +404,7 @@ func (p *orgsPlugin) registerPatchOrgDomain(host plugin.PluginHost, api huma.API
 		if _, err := resolveDomainForOrg(ctx, host, orgID, domainID); err != nil {
 			return nil, err
 		}
-		var req patchDomainRequest
-		if err := decodeJSON(r, &req); err != nil {
-			return nil, huma.Error400BadRequest("invalid json body")
-		}
+		req := in.Body
 		changes := domain.UpdateOrganizationDomain{
 			AutoJoinOnSignup:      req.AutoJoinOnSignup,
 			DefaultRoleOnAutoJoin: req.DefaultRoleOnAutoJoin,

@@ -136,11 +136,20 @@ func encodePermissions(perms []string) json.RawMessage {
 }
 
 // createOrgAPIKeyRequest is the input for POST /organizations/{id}/api-keys.
+// Name carries omitempty so an absent/blank value reaches the handler's
+// business-rule 400 ("name is required"), not huma's 422.
 type createOrgAPIKeyRequest struct {
-	Name          string   `json:"name"`
+	Name          string   `json:"name,omitempty"`
 	Role          *string  `json:"role,omitempty"`
 	Permissions   []string `json:"permissions,omitempty"`
 	ExpiresInDays *int     `json:"expires_in_days,omitempty"`
+	_             struct{} `json:"-" additionalProperties:"false"`
+}
+
+// createOrgAPIKeyInput wraps the native JSON body plus the org path param.
+type createOrgAPIKeyInput struct {
+	ID   string `path:"id" doc:"Organization ID"`
+	Body createOrgAPIKeyRequest
 }
 
 // createOrgAPIKeyResponse mirrors the user-scoped create response shape:
@@ -265,11 +274,7 @@ func (p *orgsPlugin) registerCreateOrgAPIKey(host plugin.PluginHost, api huma.AP
 		Security:      []map[string][]string{{"sessionCookie": {}}},
 		DefaultStatus: http.StatusCreated,
 		Middlewares:   authGuards(api, mw),
-	}, func(ctx context.Context, in *orgIDInput) (*output, error) {
-		r, err := reqFromCtx(ctx)
-		if err != nil {
-			return nil, err
-		}
+	}, func(ctx context.Context, in *createOrgAPIKeyInput) (*output, error) {
 		au, err := authUser(ctx)
 		if err != nil {
 			return nil, err
@@ -283,10 +288,7 @@ func (p *orgsPlugin) registerCreateOrgAPIKey(host plugin.PluginHost, api huma.AP
 			return nil, err
 		}
 
-		var req createOrgAPIKeyRequest
-		if err := decodeJSON(r, &req); err != nil {
-			return nil, huma.Error400BadRequest("invalid json body")
-		}
+		req := in.Body
 		req.Name = strings.TrimSpace(req.Name)
 		if req.Name == "" {
 			return nil, huma.Error400BadRequest("name is required")

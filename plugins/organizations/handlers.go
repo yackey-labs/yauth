@@ -88,25 +88,35 @@ func toInvitationJSON(i domain.Invitation) invitationJSON {
 	}
 }
 
+// createOrgRequest carries omitempty on Name+Slug so huma does NOT mark them
+// schema-required: an absent/blank value must reach the handler's business-rule
+// checks (400 "name is required" / "slug is required"), not huma's 422 field
+// validation.
 type createOrgRequest struct {
-	Name        string  `json:"name"`
-	Slug        string  `json:"slug"`
-	DisplayName *string `json:"display_name,omitempty"`
+	Name        string   `json:"name,omitempty"`
+	Slug        string   `json:"slug,omitempty"`
+	DisplayName *string  `json:"display_name,omitempty"`
+	_           struct{} `json:"-" additionalProperties:"false"`
 }
 
 // updateOrgRequest uses json.RawMessage for nullable fields so we can
 // distinguish "absent" (leave unchanged) from "null" (clear) from a
-// concrete value (replace).
+// concrete value (replace). huma carries the RawMessage fields through as
+// free-form JSON; the handler still does the absent/null/value discrimination.
 type updateOrgRequest struct {
 	Name        *string         `json:"name,omitempty"`
 	Slug        *string         `json:"slug,omitempty"`
 	DisplayName json.RawMessage `json:"display_name,omitempty"`
 	AvatarURL   json.RawMessage `json:"avatar_url,omitempty"`
+	_           struct{}        `json:"-" additionalProperties:"false"`
 }
 
+// createInvitationRequest carries omitempty on Email so an absent/blank value
+// reaches the handler's business-rule 400 ("email is required"), not huma's 422.
 type createInvitationRequest struct {
-	Email string  `json:"email"`
-	Role  *string `json:"role,omitempty"`
+	Email string   `json:"email,omitempty"`
+	Role  *string  `json:"role,omitempty"`
+	_     struct{} `json:"-" additionalProperties:"false"`
 }
 
 // createInvitationResponse carries the persisted record alongside the
@@ -117,45 +127,34 @@ type createInvitationResponse struct {
 	Token      string         `json:"token"`
 }
 
+// acceptInvitationRequest carries omitempty on Token so an absent/blank value
+// reaches the handler's business-rule 400 ("token is required"), not huma's 422.
 type acceptInvitationRequest struct {
-	Token string `json:"token"`
+	Token string   `json:"token,omitempty"`
+	_     struct{} `json:"-" additionalProperties:"false"`
 }
 
 // --- huma transport helpers ---
 //
-// The organizations plugin is huma-native: every route is a typed operation
-// guarded by authGuards (StashHTTPHuma + RequireAuthHuma). Authorization is
-// enforced in-handler by requireOrgAdmin / requireOrgMember (org-admins /
-// org-members, NOT global admins — RequireAdminHuma would wrongly lock them
-// out). Errors are native RFC 9457 problem+json, preserving the SAME status
-// codes the legacy writeError calls produced (the custom {"error":{code,
-// message}} envelope is dropped in favour of the fleet-wide problem+json shape).
+// The organizations plugin is fully huma-native: every route is a typed
+// operation guarded by authGuards (RequireAuthHuma) and every body-bearing
+// write-op parses a native huma typed Body, so the request schema auto-derives
+// and unknown fields are rejected with 422 (additionalProperties:false).
+// Authorization is enforced in-handler by requireOrgAdmin / requireOrgMember
+// (org-admins / org-members, NOT global admins — RequireAdminHuma would wrongly
+// lock them out). No handler needs the raw *http.Request/writer (no RequestIP,
+// no cookie writes — active-org persists via the session row), so StashHTTPHuma
+// is dropped entirely. Errors are native RFC 9457 problem+json, preserving the
+// SAME status codes the legacy writeError calls produced.
 
-// authGuards is the per-operation middleware chain shared by every route: stash
-// the raw request/writer (so decodeJSON / RequestIP / cookie writes keep working
-// off the underlying *http.Request) then require an authenticated identity.
+// authGuards is the per-operation middleware chain shared by every route:
+// require an authenticated identity. No StashHTTPHuma — bodies are native huma
+// typed Bodies and nothing reads the raw request, so the request schema
+// auto-derives.
 func authGuards(api huma.API, mw *middleware.Middleware) huma.Middlewares {
 	return huma.Middlewares{
-		middleware.StashHTTPHuma(api),
 		middleware.RequireAuthHuma(api, mw),
 	}
-}
-
-// reqFromCtx returns the *http.Request stashed by StashHTTPHuma. On a guarded
-// route it is always present; the nil guard keeps the helper safe.
-func reqFromCtx(ctx context.Context) (*http.Request, error) {
-	r := middleware.HTTPRequestFromContext(ctx)
-	if r == nil {
-		return nil, huma.Error500InternalServerError("request unavailable")
-	}
-	return r, nil
-}
-
-func decodeJSON(r *http.Request, v any) error {
-	r.Body = http.MaxBytesReader(nil, r.Body, 1<<20)
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	return dec.Decode(v)
 }
 
 // --- Helpers ---
@@ -272,6 +271,12 @@ func (p *orgsPlugin) registerList(host plugin.PluginHost, api huma.API, mw *midd
 
 // --- POST /organizations ---
 
+// createOrgInput is the huma-native request: a typed JSON body. huma parses +
+// validates it and rejects unknown fields (422); the schema auto-derives.
+type createOrgInput struct {
+	Body createOrgRequest
+}
+
 func (p *orgsPlugin) registerCreate(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
 	huma.Register(api, huma.Operation{
 		OperationID:   "organizations-create",
@@ -282,19 +287,12 @@ func (p *orgsPlugin) registerCreate(host plugin.PluginHost, api huma.API, mw *mi
 		Security:      []map[string][]string{{"sessionCookie": {}}},
 		DefaultStatus: http.StatusCreated,
 		Middlewares:   authGuards(api, mw),
-	}, func(ctx context.Context, _ *struct{}) (*organizationOutput, error) {
-		r, err := reqFromCtx(ctx)
-		if err != nil {
-			return nil, err
-		}
+	}, func(ctx context.Context, in *createOrgInput) (*organizationOutput, error) {
 		au, err := authUser(ctx)
 		if err != nil {
 			return nil, err
 		}
-		var req createOrgRequest
-		if err := decodeJSON(r, &req); err != nil {
-			return nil, huma.Error400BadRequest("invalid json body")
-		}
+		req := in.Body
 		if strings.TrimSpace(req.Name) == "" {
 			return nil, huma.Error400BadRequest("name is required")
 		}
@@ -386,6 +384,13 @@ func rawMessageNull(b json.RawMessage) bool {
 	return s == "null"
 }
 
+// updateOrgInput wraps the native JSON body plus the path param. huma parses +
+// validates the body (unknown fields → 422); the schema auto-derives.
+type updateOrgInput struct {
+	ID   string `path:"id" doc:"Organization ID"`
+	Body updateOrgRequest
+}
+
 func (p *orgsPlugin) registerUpdate(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
 	huma.Register(api, huma.Operation{
 		OperationID: "organizations-update",
@@ -395,11 +400,7 @@ func (p *orgsPlugin) registerUpdate(host plugin.PluginHost, api huma.API, mw *mi
 		Tags:        []string{"organizations"},
 		Security:    []map[string][]string{{"sessionCookie": {}}},
 		Middlewares: authGuards(api, mw),
-	}, func(ctx context.Context, in *orgIDInput) (*organizationOutput, error) {
-		r, err := reqFromCtx(ctx)
-		if err != nil {
-			return nil, err
-		}
+	}, func(ctx context.Context, in *updateOrgInput) (*organizationOutput, error) {
 		au, err := authUser(ctx)
 		if err != nil {
 			return nil, err
@@ -408,10 +409,7 @@ func (p *orgsPlugin) registerUpdate(host plugin.PluginHost, api huma.API, mw *mi
 		if _, err := requireOrgAdmin(ctx, host, id, au.User.ID); err != nil {
 			return nil, err
 		}
-		var req updateOrgRequest
-		if err := decodeJSON(r, &req); err != nil {
-			return nil, huma.Error400BadRequest("invalid json body")
-		}
+		req := in.Body
 
 		changes := domain.UpdateOrganization{
 			Name: req.Name,
@@ -534,6 +532,13 @@ func (p *orgsPlugin) registerListMembers(host plugin.PluginHost, api huma.API, m
 
 // --- POST /organizations/{id}/invitations ---
 
+// createInvitationInput wraps the native JSON body plus the path param. huma
+// parses + validates the body (unknown fields → 422); the schema auto-derives.
+type createInvitationInput struct {
+	ID   string `path:"id" doc:"Organization ID"`
+	Body createInvitationRequest
+}
+
 func (p *orgsPlugin) registerCreateInvitation(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
 	type output struct {
 		Body createInvitationResponse
@@ -547,11 +552,7 @@ func (p *orgsPlugin) registerCreateInvitation(host plugin.PluginHost, api huma.A
 		Security:      []map[string][]string{{"sessionCookie": {}}},
 		DefaultStatus: http.StatusCreated,
 		Middlewares:   authGuards(api, mw),
-	}, func(ctx context.Context, in *orgIDInput) (*output, error) {
-		r, err := reqFromCtx(ctx)
-		if err != nil {
-			return nil, err
-		}
+	}, func(ctx context.Context, in *createInvitationInput) (*output, error) {
 		au, err := authUser(ctx)
 		if err != nil {
 			return nil, err
@@ -560,10 +561,7 @@ func (p *orgsPlugin) registerCreateInvitation(host plugin.PluginHost, api huma.A
 		if _, err := requireOrgAdmin(ctx, host, id, au.User.ID); err != nil {
 			return nil, err
 		}
-		var req createInvitationRequest
-		if err := decodeJSON(r, &req); err != nil {
-			return nil, huma.Error400BadRequest("invalid json body")
-		}
+		req := in.Body
 		if strings.TrimSpace(req.Email) == "" {
 			return nil, huma.Error400BadRequest("email is required")
 		}
@@ -601,6 +599,12 @@ func (p *orgsPlugin) registerCreateInvitation(host plugin.PluginHost, api huma.A
 
 // --- POST /invitations/accept ---
 
+// acceptInvitationInput is the huma-native request: a typed JSON body. huma
+// parses + validates it (unknown fields → 422); the schema auto-derives.
+type acceptInvitationInput struct {
+	Body acceptInvitationRequest
+}
+
 func (p *orgsPlugin) registerAcceptInvitation(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
 	type output struct {
 		Body membershipJSON
@@ -614,19 +618,12 @@ func (p *orgsPlugin) registerAcceptInvitation(host plugin.PluginHost, api huma.A
 		Security:      []map[string][]string{{"sessionCookie": {}}},
 		DefaultStatus: http.StatusCreated,
 		Middlewares:   authGuards(api, mw),
-	}, func(ctx context.Context, _ *struct{}) (*output, error) {
-		r, err := reqFromCtx(ctx)
-		if err != nil {
-			return nil, err
-		}
+	}, func(ctx context.Context, in *acceptInvitationInput) (*output, error) {
 		au, err := authUser(ctx)
 		if err != nil {
 			return nil, err
 		}
-		var req acceptInvitationRequest
-		if err := decodeJSON(r, &req); err != nil {
-			return nil, huma.Error400BadRequest("invalid json body")
-		}
+		req := in.Body
 		if strings.TrimSpace(req.Token) == "" {
 			return nil, huma.Error400BadRequest("token is required")
 		}

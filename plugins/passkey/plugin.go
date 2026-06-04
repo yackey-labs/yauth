@@ -79,24 +79,22 @@ func (p *passkeyPlugin) Name() string { return "passkey" }
 // shared huma.API. The mux is retained in the signature for parity with the
 // plugin interface but is no longer used directly.
 //
-// Middleware wiring is per-route, following the rule "StashHTTPHuma whenever a
-// route consumes a JSON body, sets a cookie, or does custom query parsing —
-// otherwise pure typed huma I/O":
+// Middleware wiring is per-route. The write-ops now take native huma typed
+// Body inputs (request schemas auto-derive; unknown fields → 422), so they no
+// longer need StashHTTPHuma to read the raw body. StashHTTPHuma is retained only
+// where a route sets a cookie (login/finish) or does custom query parsing
+// (list):
 //
-//   - register/begin — RequireAuthHuma + StashHTTPHuma: no body to decode, but
-//     its success body carries a *protocol.CredentialCreation (WebAuthn options)
-//     emitted through the legacy default-escaping json.Encoder with a
-//     "charset=utf-8" content type. Writing it onto the stashed writer keeps the
-//     bytes (and header) byte-identical to the legacy handler.
-//   - register/finish — RequireAuthHuma + StashHTTPHuma: needs the raw request
-//     for the strict decodeJSON (DisallowUnknownFields) that keeps a malformed
-//     body a 400 (a huma Body input would yield 422), and writes its 201 body
-//     itself for byte-identity.
-//   - login/begin — StashHTTPHuma (public): optional body decode + charset-exact
-//     options response.
-//   - login/finish — StashHTTPHuma (public): body decode (400 on malformed),
-//     Set-Cookie on success, and a user body that may contain HTML-escapable
-//     characters.
+//   - register/begin — RequireAuthHuma only: no request body; its WebAuthn
+//     options response is a native typed Output (huma's unescaped JSON is
+//     semantically identical for the client).
+//   - register/finish — RequireAuthHuma only: native Body request (malformed /
+//     unknown body → 422; missing required fields still reach the business-400),
+//     native 201 Output.
+//   - login/begin — public, no middleware: native *pointer* Body (optional, nil
+//     for the discoverable empty-body flow), native Output.
+//   - login/finish — StashHTTPHuma (public): native Body request, but keeps the
+//     stash to Set-Cookie on the response writer on success.
 //   - list — RequireAuthHuma + StashHTTPHuma: custom paginationFromQuery tolerates
 //     garbage query values (defaults) where huma query ints would 422.
 //   - delete {id} — RequireAuthHuma only: path param + 204, no body/cookie. Pure
@@ -127,7 +125,7 @@ func (p *passkeyPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api hu
 		Summary:     "Start passkey registration; return CredentialCreation options",
 		Tags:        []string{"passkey"},
 		Security:    sec,
-		Middlewares: authStashMw,
+		Middlewares: authMw,
 	}, p.handleRegisterBegin(host))
 
 	huma.Register(api, huma.Operation{
@@ -137,7 +135,7 @@ func (p *passkeyPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api hu
 		Summary:     "Finalize attestation and store the credential",
 		Tags:        []string{"passkey"},
 		Security:    sec,
-		Middlewares: authStashMw,
+		Middlewares: authMw,
 	}, p.handleRegisterFinish(host))
 
 	huma.Register(api, huma.Operation{
@@ -147,7 +145,6 @@ func (p *passkeyPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api hu
 		Summary:     "Start a passkey assertion; supports discoverable flow",
 		Tags:        []string{"passkey"},
 		Security:    []map[string][]string{},
-		Middlewares: publicStashMw,
 	}, p.handleLoginBegin(host))
 
 	huma.Register(api, huma.Operation{

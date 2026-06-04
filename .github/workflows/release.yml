@@ -7,13 +7,14 @@ name: Release npm packages
 # npm packages and the server release at the same version. workflow_dispatch
 # is provided for the first publish under this repo.
 #
-# Auth: a one-time NPM_TOKEN (secrets.NPM_TOKEN) bootstrap. The repo rename
-# broke OIDC trusted publishing — the published 0.14.0 provenance points at a
-# commit now in yauth-rs, so npm can't validate the trusted-publisher source.
-# This publish re-anchors provenance to THIS repo; afterwards set up the
-# trusted publisher (repo `yackey-labs/yauth`, workflow `release.yml`, no
-# environment) and drop NODE_AUTH_TOKEN to revert to pure OIDC. Keep this file
-# named release.yml so it matches the npm trusted-publisher config.
+# Auth: npm OIDC **trusted publishing** (no token). The trusted-publisher
+# config on npm is pinned to repo `yackey-labs/yauth` + workflow `release.yml`,
+# no environment — do NOT rename this file or add an `environment:` without
+# updating the npm config. (History: the yauth-go→yauth rename broke OIDC once
+# because 0.14.0's provenance commit moved to yauth-rs; fixed by a one-time
+# NPM_TOKEN publish of 0.23.0 to re-anchor provenance, then re-bound via
+# `npm trust github`. Empty NODE_AUTH_TOKEN from setup-node blocks OIDC, hence
+# the unset below.)
 
 on:
   push:

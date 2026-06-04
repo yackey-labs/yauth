@@ -45,7 +45,9 @@ package scim
 import (
 	"bytes"
 	"context"
+	"io"
 	"net/http"
+	"reflect"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -101,20 +103,23 @@ func (p *scimPlugin) Name() string { return "scim" }
 func (p *scimPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.API, prefix string) {
 	base := prefix + "/api/scim/v2/organizations/{org_id}"
 
-	// Users
-	scimRegister[scimOrgInput](api, "scimCreateUser", http.MethodPost, base+"/Users", p.handleCreateUser(host))
+	// Users. The WRITE routes (POST/PUT/PATCH) carry a RawBody + a derived SCIM
+	// request schema (see request.go / scimRegisterBody); GET/DELETE stay
+	// path-only. RawBody (not a typed Body) keeps malformed/empty/mismatched
+	// bodies flowing to the handler so its scim+json errors survive.
+	scimRegisterBody[scimUserCreateInput, scimUserBody](api, "scimCreateUser", http.MethodPost, base+"/Users", p.handleCreateUser(host))
 	scimRegister[scimOrgInput](api, "scimListUsers", http.MethodGet, base+"/Users", p.handleListUsers(host))
 	scimRegister[scimUserInput](api, "scimGetUser", http.MethodGet, base+"/Users/{user_id}", p.handleGetUser(host))
-	scimRegister[scimUserInput](api, "scimPutUser", http.MethodPut, base+"/Users/{user_id}", p.handlePutUser(host))
-	scimRegister[scimUserInput](api, "scimPatchUser", http.MethodPatch, base+"/Users/{user_id}", p.handlePatchUser(host))
+	scimRegisterBody[scimUserPutInput, scimUserBody](api, "scimPutUser", http.MethodPut, base+"/Users/{user_id}", p.handlePutUser(host))
+	scimRegisterBody[scimUserPatchInput, scimPatchBody](api, "scimPatchUser", http.MethodPatch, base+"/Users/{user_id}", p.handlePatchUser(host))
 	scimRegister[scimUserInput](api, "scimDeleteUser", http.MethodDelete, base+"/Users/{user_id}", p.handleDeleteUser(host))
 
-	// Groups
-	scimRegister[scimOrgInput](api, "scimCreateGroup", http.MethodPost, base+"/Groups", p.handleCreateGroup(host))
+	// Groups. Same split: write routes get a derived request schema, read/delete do not.
+	scimRegisterBody[scimGroupCreateInput, scimGroupBody](api, "scimCreateGroup", http.MethodPost, base+"/Groups", p.handleCreateGroup(host))
 	scimRegister[scimOrgInput](api, "scimListGroups", http.MethodGet, base+"/Groups", p.handleListGroups(host))
 	scimRegister[scimGroupInput](api, "scimGetGroup", http.MethodGet, base+"/Groups/{group_id}", p.handleGetGroup(host))
-	scimRegister[scimGroupInput](api, "scimPutGroup", http.MethodPut, base+"/Groups/{group_id}", p.handlePutGroup(host))
-	scimRegister[scimGroupInput](api, "scimPatchGroup", http.MethodPatch, base+"/Groups/{group_id}", p.handlePatchGroup(host))
+	scimRegisterBody[scimGroupPutInput, scimGroupBody](api, "scimPutGroup", http.MethodPut, base+"/Groups/{group_id}", p.handlePutGroup(host))
+	scimRegisterBody[scimGroupPatchInput, scimPatchBody](api, "scimPatchGroup", http.MethodPatch, base+"/Groups/{group_id}", p.handlePatchGroup(host))
 	scimRegister[scimGroupInput](api, "scimDeleteGroup", http.MethodDelete, base+"/Groups/{group_id}", p.handleDeleteGroup(host))
 
 	// Discovery / meta. No PATCH / POST; the spec is read-only.
@@ -213,6 +218,109 @@ func scimRegister[In any](api huma.API, operationID, method, path string, h http
 			Body:        cap.buf.Bytes(),
 		}, nil
 	})
+}
+
+// scimRegisterBody is scimRegister for the WRITE routes that carry a request
+// body (POST/PUT/PATCH Users & Groups). It is identical to scimRegister except
+// the input type In declares a typed Body (so huma AUTO-DERIVES the request
+// schema) plus a RawBody []byte (so huma stores the verbatim request bytes).
+//
+// huma reads the body ONCE: it fills RawBody with the exact original bytes and
+// unmarshals+validates Body before this handler runs. Because that read drains
+// the underlying r.Body, we RESET r.Body from RawBody before invoking the
+// legacy handler — so the unchanged handler's json.NewDecoder(r.Body) sees the
+// SAME bytes it always did (extension attributes, free-form fields, and all),
+// and performs the authoritative SCIM validation. The response is still the
+// legacy handler's captured bytes, so application/scim+json + the SCIM error
+// envelope are preserved EXACTLY. The In constraint requires raw() so the
+// bridge can recover RawBody generically across the six input shapes.
+// scimRegisterBody wires one SCIM WRITE route (POST/PUT/PATCH). It is
+// scimRegister plus a derived request schema, and CRUCIALLY it preserves the
+// SCIM error format that a typed huma Body would have broken.
+//
+//   - In is the path+RawBody input struct (e.g. scimUserCreateInput): huma copies
+//     the verbatim request bytes into RawBody WITHOUT unmarshaling them (no typed
+//     Body field ⇒ no pre-handler parse/validate ⇒ malformed/empty/type-mismatched
+//     bodies reach the legacy handler, which returns its own scim+json error
+//     rather than huma's problem+json). The bridge resets r.Body from RawBody so
+//     the unchanged handler re-reads the exact original bytes.
+//   - Body is the SCIM resource shape (scimUserBody / scimGroupBody /
+//     scimPatchBody). After registration we derive its JSON Schema via
+//     huma.SchemaFromType and attach it to the operation's application/scim+json
+//     request body, REPLACING the binary placeholder huma assigns to a raw byte
+//     body. This is documentation-only (the handler still owns validation), so the
+//     derived schema is the AUTO-DERIVED request schema the task asks for, with no
+//     effect on the wire contract.
+func scimRegisterBody[In, Body any](api huma.API, operationID, method, path string, h http.HandlerFunc) {
+	huma.Register(api, huma.Operation{
+		OperationID: operationID,
+		Method:      method,
+		Path:        path,
+		Tags:        []string{"scim"},
+		Middlewares: huma.Middlewares{middleware.StashHTTPHuma(api)},
+	}, func(ctx context.Context, in *In) (*scimRawOutput, error) {
+		r := middleware.HTTPRequestFromContext(ctx)
+		if r == nil {
+			return nil, huma.Error500InternalServerError("request unavailable")
+		}
+		// huma already copied r.Body into RawBody; restore the verbatim bytes
+		// so the unchanged legacy handler re-reads them.
+		var raw []byte
+		if rb, ok := any(in).(rawBodyer); ok {
+			raw = rb.raw()
+		}
+		r.Body = io.NopCloser(bytes.NewReader(raw))
+		cap := newScimCapture()
+		h(cap, r.WithContext(ctx))
+		return &scimRawOutput{
+			Status:      cap.status,
+			ContentType: cap.header.Get("Content-Type"),
+			Body:        cap.buf.Bytes(),
+		}, nil
+	})
+	attachScimSchema[Body](api, method, path)
+}
+
+// attachScimSchema derives the JSON Schema for the SCIM body type Body and
+// installs it onto the just-registered operation's application/scim+json request
+// body, overriding the {type:string,format:binary} placeholder huma assigns to a
+// RawBody []byte. It mutates the in-memory OpenAPI operation in place; it has NO
+// effect on the published openapi.json (that is produced by the openapi/
+// package, not from these huma operations).
+func attachScimSchema[Body any](api huma.API, method, path string) {
+	oapi := api.OpenAPI()
+	if oapi == nil || oapi.Paths == nil {
+		return
+	}
+	item := oapi.Paths[path]
+	if item == nil {
+		return
+	}
+	var op *huma.Operation
+	switch method {
+	case http.MethodPost:
+		op = item.Post
+	case http.MethodPut:
+		op = item.Put
+	case http.MethodPatch:
+		op = item.Patch
+	}
+	if op == nil || op.RequestBody == nil || op.RequestBody.Content == nil {
+		return
+	}
+	mt := op.RequestBody.Content[ScimContentType]
+	if mt == nil {
+		return
+	}
+	var zero Body
+	mt.Schema = huma.SchemaFromType(oapi.Components.Schemas, reflect.TypeOf(zero))
+
+	// huma marks a RawBody []byte request body Required; an empty body then
+	// short-circuits to huma's "request body is required" problem+json BEFORE the
+	// handler runs — losing the scim+json error. Clear Required so an empty body
+	// flows to the legacy handler, which decodes EOF and returns its own SCIM
+	// BadRequest("invalid JSON body").
+	op.RequestBody.Required = false
 }
 
 // handleServiceProviderConfig serves the SCIM ServiceProviderConfig.

@@ -18,6 +18,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
+
 	"github.com/yackey-labs/yauth-go/events"
 	"github.com/yackey-labs/yauth-go/humaapi"
 	"github.com/yackey-labs/yauth-go/middleware"
@@ -48,6 +50,11 @@ type YAuth struct {
 	// RegisteredRoutes for the route-level openapi spec-drift guard. Purely
 	// observational — it does not affect routing.
 	recordedRoutes []RouteInfo
+
+	// humaAPI is the huma API every plugin registered its routes on. Its
+	// auto-derived OpenAPI is exposed via OpenAPI() — the spec source once the
+	// hand-written openapi/ package is retired.
+	humaAPI huma.API
 }
 
 // RouteInfo is a single observed route registration: the HTTP method and
@@ -232,12 +239,19 @@ func (b *YAuthBuilder) Build() (*YAuth, error) {
 	// native RFC 9457 problem+json.
 	rec := &recordingRouter{mux: mux, out: &ya.recordedRoutes}
 	api := humaapi.New(rec)
+	ya.humaAPI = api
 	for _, p := range b.plugins {
 		p.Routes(ya, rec, api, "")
 	}
 
 	return ya, nil
 }
+
+// OpenAPI returns the huma-derived OpenAPI document for every route the plugins
+// registered. As plugins carry explicit request/response schemas on their
+// operations, this becomes the published spec source (replacing the hand-written
+// openapi/ package).
+func (y *YAuth) OpenAPI() *huma.OpenAPI { return y.humaAPI.OpenAPI() }
 
 // Router returns the configured ServeMux, optionally wrapped with the
 // OpenTelemetry trace middleware when WithTelemetry was called on the

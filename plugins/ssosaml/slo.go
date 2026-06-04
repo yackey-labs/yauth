@@ -3,6 +3,7 @@ package ssosaml
 import (
 	"bytes"
 	"compress/flate"
+	"context"
 	"crypto"
 	"crypto/rsa"
 	"crypto/sha1"
@@ -17,6 +18,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
+
 	"github.com/yackey-labs/yauth-go/auth"
 	"github.com/yackey-labs/yauth-go/domain"
 	"github.com/yackey-labs/yauth-go/plugin"
@@ -30,18 +33,38 @@ type logoutRequestXML struct {
 	NameID  string   `xml:"urn:oasis:names:tc:SAML:2.0:assertion NameID"`
 }
 
-// handleSamlSLO receives an IdP-initiated SAML Single Logout request over the
+// registerSamlSLO wires {method} {prefix}/sso/saml/slo as a public huma-native
+// operation. It receives an IdP-initiated SAML Single Logout request over the
 // HTTP-Redirect binding, verifies its signature against the IdP certificate,
 // and terminates the matching local sessions server-side — making IdP-side
-// offboarding propagate to this SAML SP.
+// offboarding propagate to this SAML SP. GET and POST share this handler but
+// register as distinct OperationIDs (huma requires operation-id uniqueness).
+//
+// The input is `_ *struct{}` so huma never consumes the POST body or rewrites
+// r.URL.RawQuery — the handler reads the raw octet source itself (query for GET,
+// urlencoded body for POST) so the redirect-binding signed-octet-string
+// reconstruction stays byte-exact.
 //
 // Security: the LogoutRequest signature is REQUIRED and verified against the
 // connection's configured IdP cert (SAML Binding §3.4.4.1 redirect-binding
 // signature over the raw query). An unsigned or badly-signed request is
-// rejected, closing the "anyone can force-logout any NameID" hole the previous
-// MVP stub documented. Only the HTTP-Redirect binding is accepted.
-func (p *ssoSAMLPlugin) handleSamlSLO(host plugin.PluginHost) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+// rejected, closing the "anyone can force-logout any NameID" hole. Only the
+// HTTP-Redirect binding is accepted. All error/redirect/200 responses are
+// emitted via flowOutput so their status/body bytes stay byte-identical.
+func (p *ssoSAMLPlugin) registerSamlSLO(host plugin.PluginHost, api huma.API, prefix, method, operationID string) {
+	huma.Register(api, huma.Operation{
+		OperationID: operationID,
+		Method:      method,
+		Path:        prefix + "/sso/saml/slo",
+		Summary:     "IdP-initiated SAML Single Logout (signed HTTP-Redirect binding)",
+		Tags:        []string{"oauth"},
+		Security:    []map[string][]string{}, // explicitly public
+		Middlewares: flowGuards(api),
+	}, func(ctx context.Context, _ *struct{}) (*flowOutput, error) {
+		r, w, err := flowReqResp(ctx)
+		if err != nil {
+			return nil, err
+		}
 		// Redirect binding carries params in the query (GET) or, for some IdPs,
 		// a urlencoded body (POST). Use the raw source so we can reconstruct the
 		// exact signed octet string.
@@ -57,29 +80,24 @@ func (p *ssoSAMLPlugin) handleSamlSLO(host plugin.PluginHost) http.HandlerFunc {
 		signature := urlDecode(raw["Signature"])
 		relayState := urlDecode(raw["RelayState"])
 		if samlReq == "" || sigAlg == "" || signature == "" {
-			writeSLOError(w, "missing SAMLRequest/SigAlg/Signature (signed HTTP-Redirect binding required)")
-			return
+			return sloError("missing SAMLRequest/SigAlg/Signature (signed HTTP-Redirect binding required)"), nil
 		}
 
 		xmlBytes, err := inflateSAML(samlReq)
 		if err != nil {
-			writeSLOError(w, "could not decode SAMLRequest")
-			return
+			return sloError("could not decode SAMLRequest"), nil
 		}
 		var lr logoutRequestXML
 		if err := xml.Unmarshal(xmlBytes, &lr); err != nil || strings.TrimSpace(lr.NameID) == "" {
-			writeSLOError(w, "malformed LogoutRequest")
-			return
+			return sloError("malformed LogoutRequest"), nil
 		}
 		reqIssuer := strings.TrimSpace(lr.Issuer)
 		nameID := strings.TrimSpace(lr.NameID)
 
 		// Find the SAML connection whose IdP entity id matches the request.
-		ctx := r.Context()
 		conns, err := host.Repo().ListAllSsoConnections(ctx)
 		if err != nil {
-			writeSLOError(w, "internal error")
-			return
+			return sloError("internal error"), nil
 		}
 		var cfg *SamlConnectionConfig
 		for _, conn := range conns {
@@ -97,26 +115,22 @@ func (p *ssoSAMLPlugin) handleSamlSLO(host plugin.PluginHost) http.HandlerFunc {
 			}
 		}
 		if cfg == nil {
-			writeSLOError(w, "no SAML connection matches the request issuer")
-			return
+			return sloError("no SAML connection matches the request issuer"), nil
 		}
 
 		// Verify the redirect-binding signature against the IdP cert.
 		cert, err := parsePEMCert(cfg.IdpX509Cert)
 		if err != nil {
-			writeSLOError(w, "idp cert unreadable")
-			return
+			return sloError("idp cert unreadable"), nil
 		}
 		if err := verifyRedirectSignature(rawSource, sigAlg, signature, cert); err != nil {
-			writeSLOError(w, "LogoutRequest signature invalid")
-			return
+			return sloError("LogoutRequest signature invalid"), nil
 		}
 
 		// Replay protection on the request ID.
 		if lr.ID != "" && p.replay().Seen(cfg.IdpEntityID, lr.ID, time.Now().UTC().Add(p.cfg.ReplayCacheTTL)) {
 			// Already processed — idempotent success.
-			w.WriteHeader(http.StatusOK)
-			return
+			return &flowOutput{Status: http.StatusOK}, nil
 		}
 
 		// Map NameID → local user and terminate every session.
@@ -125,19 +139,18 @@ func (p *ssoSAMLPlugin) handleSamlSLO(host plugin.PluginHost) http.HandlerFunc {
 			_, _ = host.Repo().DeleteUserSessions(ctx, ext.UserID)
 			_, _ = host.Repo().RevokeAllUserRefreshTokens(ctx, ext.UserID)
 		}
-		// Clear this browser's session cookie too.
+		// Clear this browser's session cookie too (raw-writer header mutation).
 		http.SetCookie(w, auth.SessionCookie(cookieOptionsFromHost(host, r, -1), ""))
 
 		// Reply with a LogoutResponse over the redirect binding when the IdP
 		// published an SLO endpoint; otherwise a bare 200.
 		if cfg.IdpSloURL != "" {
 			if loc, err := p.buildLogoutResponseRedirect(host, cfg, r, lr.ID, relayState); err == nil {
-				http.Redirect(w, r, loc, http.StatusFound)
-				return
+				return &flowOutput{Status: http.StatusFound, Location: loc}, nil
 			}
 		}
-		w.WriteHeader(http.StatusOK)
-	}
+		return &flowOutput{Status: http.StatusOK}, nil
+	})
 }
 
 // buildLogoutResponseRedirect builds a SAML LogoutResponse and returns the
@@ -239,7 +252,16 @@ func inflateSAML(b64 string) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(fr, 1<<20))
 }
 
-func writeSLOError(w http.ResponseWriter, msg string) {
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	http.Error(w, msg, http.StatusBadRequest)
+// sloError reproduces net/http's http.Error response byte-for-byte as a
+// flowOutput: a 400 with text/plain; charset=utf-8, X-Content-Type-Options:
+// nosniff, and the message followed by a trailing newline (http.Error appends
+// "\n"). Emitting it through flowOutput keeps the SLO error wire contract
+// (status/headers/body) identical to the pre-huma handler.
+func sloError(msg string) *flowOutput {
+	return &flowOutput{
+		Status:              http.StatusBadRequest,
+		ContentType:         "text/plain; charset=utf-8",
+		XContentTypeOptions: "nosniff",
+		Body:                []byte(msg + "\n"),
+	}
 }

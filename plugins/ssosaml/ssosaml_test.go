@@ -1149,7 +1149,7 @@ func TestAdminCRUD_CreateListGetDelete(t *testing.T) {
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("create: status=%d body=%s", resp.StatusCode, string(body))
 	}
-	var created connectionJSON
+	var created samlConnectionJSON
 	if err := json.Unmarshal(body, &created); err != nil {
 		t.Fatal(err)
 	}
@@ -1170,7 +1170,7 @@ func TestAdminCRUD_CreateListGetDelete(t *testing.T) {
 		t.Fatalf("list: status=%d", resp.StatusCode)
 	}
 	var listed struct {
-		Conns []connectionJSON `json:"sso_connections"`
+		Conns []samlConnectionJSON `json:"sso_connections"`
 	}
 	decode(t, resp, &listed)
 	if len(listed.Conns) != 1 {

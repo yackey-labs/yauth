@@ -1,7 +1,7 @@
 // Command lockout-example is a runnable demonstration of the lockout
 // plugin paired with email-password.
 //
-// It opens an in-memory SQLite database, runs migrations, builds a YAuth
+// It opens an in-memory repository, builds a YAuth
 // instance with the email-password and lockout plugins, and serves it
 // under /api/auth/* on :3002. The lockout plugin's LoggingMailer prints
 // any unlock-token link to stderr; copy and paste the token from there
@@ -38,7 +38,6 @@
 package main
 
 import (
-	"context"
 	"log"
 	"net/http"
 	"time"
@@ -46,20 +45,11 @@ import (
 	yauth "github.com/yackey-labs/yauth"
 	"github.com/yackey-labs/yauth/plugins/emailpassword"
 	"github.com/yackey-labs/yauth/plugins/lockout"
-	"github.com/yackey-labs/yauth/repo/gormrepo"
+	"github.com/yackey-labs/yauth/repo/memrepo"
 )
 
 func main() {
-	dsn := "file::memory:?cache=shared&_pragma=foreign_keys(1)"
-	db, err := gormrepo.OpenSQLite(dsn)
-	if err != nil {
-		log.Fatalf("open sqlite: %v", err)
-	}
-	if err := gormrepo.Migrate(context.Background(), db); err != nil {
-		log.Fatalf("migrate: %v", err)
-	}
-
-	repo := gormrepo.New(db)
+	repo := memrepo.New()
 
 	ya, err := yauth.New(repo, yauth.NewDefaultConfig()).
 		WithPlugin(emailpassword.New(emailpassword.Config{})).

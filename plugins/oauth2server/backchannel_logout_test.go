@@ -17,7 +17,7 @@ import (
 	"github.com/yackey-labs/yauth/domain"
 	"github.com/yackey-labs/yauth/plugins/admin"
 	"github.com/yackey-labs/yauth/plugins/oauth2server"
-	"github.com/yackey-labs/yauth/repo/gormrepo"
+	"github.com/yackey-labs/yauth/repo/memrepo"
 )
 
 // TestBackchannelLogout_OnAdminSuspend is the end-to-end offboarding test: an
@@ -27,15 +27,7 @@ import (
 // backchannel_logout_uri. This exercises the cross-plugin path that is the
 // headline feature — admin EventUserSuspended → oauth2server BCL fan-out.
 func TestBackchannelLogout_OnAdminSuspend(t *testing.T) {
-	dsn := "file:" + uuid.NewString() + "?mode=memory&cache=shared&_pragma=foreign_keys(1)"
-	db, err := gormrepo.OpenSQLite(dsn)
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if err := gormrepo.Migrate(context.Background(), db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	r := gormrepo.New(db)
+	r := memrepo.New()
 
 	ya, err := yauth.New(r, yauth.NewDefaultConfig()).
 		WithJWTSecret([]byte("test-only-jwt-secret-please-change-32b")).

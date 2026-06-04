@@ -23,7 +23,7 @@ import (
 	"github.com/yackey-labs/yauth/plugins/asymjwt"
 	"github.com/yackey-labs/yauth/plugins/oauth2server"
 	"github.com/yackey-labs/yauth/plugins/oidc"
-	"github.com/yackey-labs/yauth/repo/gormrepo"
+	"github.com/yackey-labs/yauth/repo/memrepo"
 )
 
 // writeRSAKeys generates a fresh RSA-2048 keypair and writes the PEM
@@ -54,18 +54,10 @@ func writeRSAKeys(t *testing.T, dir string) (privPath, pubPath string) {
 }
 
 // newServer builds a YAuth wrapped under /api/auth with asymjwt + oidc.
-func newServer(t *testing.T) (*httptest.Server, *gormrepo.Repo) {
+func newServer(t *testing.T) (*httptest.Server, *memrepo.Repo) {
 	t.Helper()
 
-	dsn := "file:" + uuid.NewString() + "?mode=memory&cache=shared&_pragma=foreign_keys(1)"
-	db, err := gormrepo.OpenSQLite(dsn)
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if err := gormrepo.Migrate(context.Background(), db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	r := gormrepo.New(db)
+	r := memrepo.New()
 
 	dir := t.TempDir()
 	priv, pub := writeRSAKeys(t, dir)
@@ -93,7 +85,7 @@ func newServer(t *testing.T) (*httptest.Server, *gormrepo.Repo) {
 
 // seedSession creates a user and an active session, returning the
 // raw session cookie value.
-func seedSession(t *testing.T, r *gormrepo.Repo, email, name string, verified bool) (userID, cookie string) {
+func seedSession(t *testing.T, r *memrepo.Repo, email, name string, verified bool) (userID, cookie string) {
 	t.Helper()
 	ctx := context.Background()
 	now := time.Now().UTC()
@@ -185,15 +177,7 @@ func TestDiscovery_Document(t *testing.T) {
 // When oauth2-server is loaded, the discovery document advertises the OIDC
 // RP-Initiated Logout end_session_endpoint.
 func TestDiscovery_EndSessionWhenOAuth2Loaded(t *testing.T) {
-	dsn := "file:" + uuid.NewString() + "?mode=memory&cache=shared&_pragma=foreign_keys(1)"
-	db, err := gormrepo.OpenSQLite(dsn)
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if err := gormrepo.Migrate(context.Background(), db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	r := gormrepo.New(db)
+	r := memrepo.New()
 	dir := t.TempDir()
 	priv, pub := writeRSAKeys(t, dir)
 	asym, err := asymjwt.New(asymjwt.Config{KeyType: "RS256", PrivateKeyPath: priv, PublicKeyPath: pub, KID: "test-kid"})
@@ -233,15 +217,7 @@ func TestDiscovery_EndSessionWhenOAuth2Loaded(t *testing.T) {
 // Operator-supplied ClaimsSupported is reflected verbatim in the
 // discovery document.
 func TestDiscovery_CustomClaimsSupported(t *testing.T) {
-	dsn := "file:" + uuid.NewString() + "?mode=memory&cache=shared&_pragma=foreign_keys(1)"
-	db, err := gormrepo.OpenSQLite(dsn)
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if err := gormrepo.Migrate(context.Background(), db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	r := gormrepo.New(db)
+	r := memrepo.New()
 
 	dir := t.TempDir()
 	priv, pub := writeRSAKeys(t, dir)
@@ -338,21 +314,13 @@ func TestUserInfo_NoAuth401(t *testing.T) {
 }
 
 func TestNonce_RecordRejectsReplay(t *testing.T) {
-	dsn := "file:" + uuid.NewString() + "?mode=memory&cache=shared&_pragma=foreign_keys(1)"
-	db, err := gormrepo.OpenSQLite(dsn)
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if err := gormrepo.Migrate(context.Background(), db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	r := gormrepo.New(db)
+	r := memrepo.New()
 	ctx := context.Background()
 
 	if err := oidc.RecordNonce(ctx, r, "n-1", "code-1"); err != nil {
 		t.Fatalf("first record: %v", err)
 	}
-	err = oidc.RecordNonce(ctx, r, "n-1", "code-2")
+	err := oidc.RecordNonce(ctx, r, "n-1", "code-2")
 	if err == nil {
 		t.Fatalf("expected replay error on second record")
 	}

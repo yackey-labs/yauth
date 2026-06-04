@@ -1,5 +1,5 @@
-// Command telemetry-example runs the same email-password yauth stack as
-// examples/sqlite, but boots the OpenTelemetry SDK first so HTTP requests
+// Command telemetry-example runs an email-password yauth stack and
+// boots the OpenTelemetry SDK first so HTTP requests
 // produce spans exported via OTLP gRPC.
 //
 // Try it:
@@ -26,7 +26,7 @@ import (
 	yauth "github.com/yackey-labs/yauth"
 	"github.com/yackey-labs/yauth/middleware"
 	"github.com/yackey-labs/yauth/plugins/emailpassword"
-	"github.com/yackey-labs/yauth/repo/gormrepo"
+	"github.com/yackey-labs/yauth/repo/memrepo"
 	"github.com/yackey-labs/yauth/telemetry"
 )
 
@@ -49,16 +49,7 @@ func main() {
 		}
 	}()
 
-	dsn := "file::memory:?cache=shared&_pragma=foreign_keys(1)"
-	db, err := gormrepo.OpenSQLite(dsn)
-	if err != nil {
-		log.Fatalf("open sqlite: %v", err)
-	}
-	if err := gormrepo.Migrate(context.Background(), db); err != nil {
-		log.Fatalf("migrate: %v", err)
-	}
-
-	repo := gormrepo.New(db)
+	repo := memrepo.New()
 
 	ya, err := yauth.New(repo, yauth.NewDefaultConfig()).
 		WithPlugin(emailpassword.New(emailpassword.Config{})).

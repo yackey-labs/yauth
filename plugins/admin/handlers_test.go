@@ -16,27 +16,19 @@ import (
 	"github.com/yackey-labs/yauth/auth"
 	"github.com/yackey-labs/yauth/domain"
 	"github.com/yackey-labs/yauth/plugins/admin"
-	"github.com/yackey-labs/yauth/repo/gormrepo"
+	"github.com/yackey-labs/yauth/repo/memrepo"
 )
 
 type testEnv struct {
 	srv  *httptest.Server
-	repo *gormrepo.Repo
+	repo *memrepo.Repo
 	stop func()
 }
 
 func newEnv(t *testing.T) *testEnv {
 	t.Helper()
 
-	dsn := "file:" + uuid.NewString() + "?mode=memory&cache=shared&_pragma=foreign_keys(1)"
-	db, err := gormrepo.OpenSQLite(dsn)
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if err := gormrepo.Migrate(context.Background(), db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	r := gormrepo.New(db)
+	r := memrepo.New()
 
 	ya, err := yauth.New(r, yauth.NewDefaultConfig()).
 		WithPlugin(admin.New()).

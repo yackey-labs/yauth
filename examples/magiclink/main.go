@@ -1,7 +1,7 @@
 // Command magiclink-example is a runnable demonstration of the magic-link
 // plugin.
 //
-// It opens an in-memory SQLite database, runs migrations, builds a YAuth
+// It opens an in-memory repository, builds a YAuth
 // instance with the magic-link plugin (signup enabled), and serves it
 // under /api/auth/* on :3001. The default LoggingMailer prints the
 // generated link to stderr; copy and paste the token from there to
@@ -23,26 +23,16 @@
 package main
 
 import (
-	"context"
 	"log"
 	"net/http"
 
 	yauth "github.com/yackey-labs/yauth"
 	"github.com/yackey-labs/yauth/plugins/magiclink"
-	"github.com/yackey-labs/yauth/repo/gormrepo"
+	"github.com/yackey-labs/yauth/repo/memrepo"
 )
 
 func main() {
-	dsn := "file::memory:?cache=shared&_pragma=foreign_keys(1)"
-	db, err := gormrepo.OpenSQLite(dsn)
-	if err != nil {
-		log.Fatalf("open sqlite: %v", err)
-	}
-	if err := gormrepo.Migrate(context.Background(), db); err != nil {
-		log.Fatalf("migrate: %v", err)
-	}
-
-	repo := gormrepo.New(db)
+	repo := memrepo.New()
 
 	ya, err := yauth.New(repo, yauth.NewDefaultConfig()).
 		WithPlugin(magiclink.New(magiclink.Config{

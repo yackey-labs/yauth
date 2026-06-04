@@ -18,7 +18,7 @@ smoke test for the backend.
   `YAuthPlugin` provider. `main.ts` constructs the client explicitly with
   `createYAuthClient({ baseUrl: "/api/auth" })` and passes it to the
   plugin.
-- **Backend** — `examples/vue/server` boots an in-memory SQLite database,
+- **Backend** — `examples/vue/server` boots an in-memory repository,
   wires the `email-password`, `status`, and `admin` plugins, seeds a demo
   admin user, and serves `/api/auth/*` on `:3000`.
 
@@ -29,7 +29,7 @@ smoke test for the backend.
 cd examples/vue
 npm install
 
-# 2. Start the Go backend (in-memory SQLite, demo admin seeded).
+# 2. Start the Go backend (in-memory repository, demo admin seeded).
 cd ../..
 go run ./examples/vue/server
 # → "yauth-go Vue example backend listening on :3000"
@@ -68,7 +68,7 @@ that the login flow redirects to when the server returns
 ## Why this exists
 
 This example is the cross-language E2E sanity check. The backend uses the
-same `gormrepo` SQLite driver that the unit tests run against, and the
+in-memory `memrepo` repository, and the
 frontend uses the published TS client + UI components from the yauth
 repo. If both halves boot and the walkthrough flows complete in a
 browser, the shape contracts in `openapi.json` are intact.

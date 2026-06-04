@@ -1,7 +1,7 @@
 // Command webhooks-example is a runnable demonstration of the
 // outbound-webhook plugin.
 //
-// It opens an in-memory SQLite database, runs migrations, registers a
+// It opens an in-memory repository, registers a
 // "mock receiver" HTTP handler in-process, seeds a webhook row pointing
 // at the receiver, and serves the YAuth router under /api/auth/* on
 // :3000. Registering a user fires a user.registered event, the
@@ -38,21 +38,13 @@ import (
 	"github.com/yackey-labs/yauth/domain"
 	"github.com/yackey-labs/yauth/plugins/emailpassword"
 	"github.com/yackey-labs/yauth/plugins/webhooks"
-	"github.com/yackey-labs/yauth/repo/gormrepo"
+	"github.com/yackey-labs/yauth/repo/memrepo"
 )
 
 const sharedSecret = "demo-shared-secret-change-me-32bytes-hex"
 
 func main() {
-	dsn := "file::memory:?cache=shared&_pragma=foreign_keys(1)"
-	db, err := gormrepo.OpenSQLite(dsn)
-	if err != nil {
-		log.Fatalf("open sqlite: %v", err)
-	}
-	if err := gormrepo.Migrate(context.Background(), db); err != nil {
-		log.Fatalf("migrate: %v", err)
-	}
-	repo := gormrepo.New(db)
+	repo := memrepo.New()
 
 	ya, err := yauth.New(repo, yauth.NewDefaultConfig()).
 		WithPlugin(emailpassword.New(emailpassword.Config{})).

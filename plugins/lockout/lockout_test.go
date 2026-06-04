@@ -16,7 +16,7 @@ import (
 	yauth "github.com/yackey-labs/yauth"
 	"github.com/yackey-labs/yauth/plugins/emailpassword"
 	"github.com/yackey-labs/yauth/plugins/lockout"
-	"github.com/yackey-labs/yauth/repo/gormrepo"
+	"github.com/yackey-labs/yauth/repo/memrepo"
 )
 
 type captureMailer struct {
@@ -51,14 +51,7 @@ func tokenFromLink(link string) string {
 
 func newServer(t *testing.T, cfg lockout.Config) (*httptest.Server, *captureMailer, func()) {
 	t.Helper()
-	db, err := gormrepo.OpenSQLite("file::memory:?cache=shared&_pragma=foreign_keys(1)")
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if err := gormrepo.Migrate(context.Background(), db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	r := gormrepo.New(db)
+	r := memrepo.New()
 
 	mailer := &captureMailer{}
 	cfg.Mailer = mailer
@@ -355,15 +348,7 @@ func TestLockout_AutoUnlockFalseRequiresExplicitUnlock(t *testing.T) {
 // from neighbouring tests cannot bleed in and exhaust login budgets.
 func newIsolatedServer(t *testing.T, cfg lockout.Config) (*httptest.Server, *captureMailer, func()) {
 	t.Helper()
-	dsn := "file:lockout_" + t.Name() + "?mode=memory&cache=shared&_pragma=foreign_keys(1)"
-	db, err := gormrepo.OpenSQLite(dsn)
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if err := gormrepo.Migrate(context.Background(), db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	r := gormrepo.New(db)
+	r := memrepo.New()
 
 	mailer := &captureMailer{}
 	cfg.Mailer = mailer

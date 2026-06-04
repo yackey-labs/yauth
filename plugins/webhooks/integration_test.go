@@ -20,7 +20,7 @@ import (
 	"github.com/yackey-labs/yauth/domain"
 	"github.com/yackey-labs/yauth/plugins/emailpassword"
 	"github.com/yackey-labs/yauth/plugins/webhooks"
-	"github.com/yackey-labs/yauth/repo/gormrepo"
+	"github.com/yackey-labs/yauth/repo/memrepo"
 )
 
 // receiver is an httptest server that records every webhook delivery
@@ -90,17 +90,7 @@ func newWebhooksTestServer(t *testing.T) (*httptest.Server, *yauth.YAuth) {
 
 func newWebhooksTestServerWithConfig(t *testing.T, cfg webhooks.Config) (*httptest.Server, *yauth.YAuth) {
 	t.Helper()
-	// Per-test in-memory DB. cache=shared scopes by name, so naming
-	// the DB after the test isolates it from sibling tests.
-	dsn := "file:" + t.Name() + "?mode=memory&cache=shared&_pragma=foreign_keys(1)"
-	db, err := gormrepo.OpenSQLite(dsn)
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if err := gormrepo.Migrate(context.Background(), db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	repo := gormrepo.New(db)
+	repo := memrepo.New()
 
 	ya, err := yauth.New(repo, yauth.NewDefaultConfig()).
 		WithPlugin(emailpassword.New(emailpassword.Config{
@@ -562,18 +552,10 @@ func TestWebhookRetry_PersistsAcrossRestart(t *testing.T) {
 	rcv := newProgrammedReceiver(t, []int{500, 200})
 	defer rcv.Close()
 
-	// Per-test SQLite DB shared across the two dispatchers. cache=shared
-	// scopes by name, so identical DSNs in the same process talk to the
-	// same in-memory pages.
-	dsn := "file:" + t.Name() + "?mode=memory&cache=shared&_pragma=foreign_keys(1)"
-	db, err := gormrepo.OpenSQLite(dsn)
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if err := gormrepo.Migrate(context.Background(), db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	r := gormrepo.New(db)
+	// Per-test in-memory repo shared across the two dispatchers — both
+	// dispatchers are constructed against this same r, so the persisted
+	// retry row written by the first is visible to the second.
+	r := memrepo.New()
 
 	const secret = "restart-secret"
 	whID := "wh-restart-" + randHex(t, 4)

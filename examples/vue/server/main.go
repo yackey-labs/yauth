@@ -1,7 +1,7 @@
 // Command vue-example-server is the Go backend for the Vue example
 // frontend in examples/vue.
 //
-// It boots an in-memory SQLite database, wires up the email-password +
+// It boots an in-memory repository, wires up the email-password +
 // status + admin plugins, seeds a demo admin, and serves /api/auth/*
 // on :3000. The Vue dev server (port 5173) proxies /api/* to this
 // process so register/login/dashboard/logout work out of the box.
@@ -30,7 +30,7 @@ import (
 	"github.com/yackey-labs/yauth/plugins/admin"
 	"github.com/yackey-labs/yauth/plugins/emailpassword"
 	"github.com/yackey-labs/yauth/plugins/status"
-	"github.com/yackey-labs/yauth/repo/gormrepo"
+	"github.com/yackey-labs/yauth/repo/memrepo"
 	"github.com/yackey-labs/yauth/yautherr"
 )
 
@@ -40,15 +40,7 @@ const (
 )
 
 func main() {
-	dsn := "file::memory:?cache=shared&_pragma=foreign_keys(1)"
-	db, err := gormrepo.OpenSQLite(dsn)
-	if err != nil {
-		log.Fatalf("open sqlite: %v", err)
-	}
-	if err := gormrepo.Migrate(context.Background(), db); err != nil {
-		log.Fatalf("migrate: %v", err)
-	}
-	repo := gormrepo.New(db)
+	repo := memrepo.New()
 
 	if err := seedAdmin(context.Background(), repo); err != nil {
 		log.Fatalf("seed admin: %v", err)
@@ -75,7 +67,7 @@ func main() {
 	}
 }
 
-func seedAdmin(ctx context.Context, repo *gormrepo.Repo) error {
+func seedAdmin(ctx context.Context, repo *memrepo.Repo) error {
 	if existing, err := repo.GetUserByEmail(ctx, adminEmail); err == nil && existing != nil {
 		return nil
 	} else if err != nil && !errors.Is(err, yautherr.ErrNotFound) {

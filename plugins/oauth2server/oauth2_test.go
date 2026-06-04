@@ -25,27 +25,19 @@ import (
 	"github.com/yackey-labs/yauth/plugins/asymjwt"
 	"github.com/yackey-labs/yauth/plugins/bearer"
 	"github.com/yackey-labs/yauth/plugins/oauth2server"
-	"github.com/yackey-labs/yauth/repo/gormrepo"
+	"github.com/yackey-labs/yauth/repo/memrepo"
 )
 
 // --- harness -----------------------------------------------------------
 
 type harness struct {
 	srv  *httptest.Server
-	repo *gormrepo.Repo
+	repo *memrepo.Repo
 }
 
 func newHarness(t *testing.T) *harness {
 	t.Helper()
-	dsn := "file:" + uuid.NewString() + "?mode=memory&cache=shared&_pragma=foreign_keys(1)"
-	db, err := gormrepo.OpenSQLite(dsn)
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if err := gormrepo.Migrate(context.Background(), db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	r := gormrepo.New(db)
+	r := memrepo.New()
 
 	jwtSecret := []byte("test-only-jwt-secret-please-change-32b")
 
@@ -988,15 +980,7 @@ type pkjwtHarness struct {
 
 func newPKJWTHarness(t *testing.T) *pkjwtHarness {
 	t.Helper()
-	dsn := "file:" + uuid.NewString() + "?mode=memory&cache=shared&_pragma=foreign_keys(1)"
-	db, err := gormrepo.OpenSQLite(dsn)
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if err := gormrepo.Migrate(context.Background(), db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	r := gormrepo.New(db)
+	r := memrepo.New()
 
 	dir := t.TempDir()
 	priv, pub := writeServerRSAKeys(t, dir)

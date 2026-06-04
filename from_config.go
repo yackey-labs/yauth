@@ -69,14 +69,7 @@ func NewFromConfig(ctx context.Context, cfg *yauthcfg.Config) (*YAuth, error) {
 		}
 		repo = pgxrepo.New(pool)
 	default:
-		b, err := lookupBackend(cfg.Database.Driver)
-		if err != nil {
-			return nil, err
-		}
-		repo, err = b.OpenRepository(ctx, cfg.Database, cfg.Telemetry.Enabled)
-		if err != nil {
-			return nil, err
-		}
+		return nil, fmt.Errorf("yauth: unsupported database driver %q (supported: pgx, memory)", cfg.Database.Driver)
 	}
 	if cfg.Cache.Enabled {
 		decorated, err := buildCacheDecorator(repo, cfg.Cache)
@@ -166,9 +159,9 @@ func NewFromConfig(ctx context.Context, cfg *yauthcfg.Config) (*YAuth, error) {
 }
 
 // Migrate opens the database described by cfg and applies all pending
-// migrations. For driver="pgx" goose migrations are used; all other drivers
-// (sqlite, postgres, mysql) use gormrepo AutoMigrate. Intended for the CLI
-// and for tests; production should run `yauth migrate` as a separate job.
+// migrations. Only driver="pgx" has migrations (goose); driver="memory" is
+// in-process and needs none. Intended for the CLI and for tests; production
+// should run `yauth migrate` as a separate job.
 func Migrate(ctx context.Context, cfg *yauthcfg.Config) error {
 	if cfg == nil {
 		return errors.New("yauth: Migrate requires a non-nil config")
@@ -176,18 +169,18 @@ func Migrate(ctx context.Context, cfg *yauthcfg.Config) error {
 	if err := cfg.Validate(); err != nil {
 		return fmt.Errorf("yauth: invalid config: %w", err)
 	}
-	if cfg.Database.Driver == "pgx" {
+	switch cfg.Database.Driver {
+	case "memory", "mem":
+		return nil // in-memory backend has no schema to migrate
+	case "pgx":
 		sqlDB, err := openSQLDB(ctx, cfg.Database)
 		if err != nil {
 			return err
 		}
 		return yauthMigrate.Run(ctx, sqlDB, "pgx")
+	default:
+		return fmt.Errorf("yauth: unsupported database driver %q (supported: pgx, memory)", cfg.Database.Driver)
 	}
-	b, err := lookupBackend(cfg.Database.Driver)
-	if err != nil {
-		return err
-	}
-	return b.Migrate(ctx, cfg.Database)
 }
 
 // SchemaCheck connects to the database and verifies that the tables
@@ -200,6 +193,9 @@ func SchemaCheck(ctx context.Context, cfg *yauthcfg.Config) error {
 	}
 	if err := cfg.Validate(); err != nil {
 		return fmt.Errorf("yauth: invalid config: %w", err)
+	}
+	if d := cfg.Database.Driver; d == "memory" || d == "mem" {
+		return nil // in-memory backend always has every table
 	}
 	sqlDB, err := openSQLDB(ctx, cfg.Database)
 	if err != nil {
@@ -230,22 +226,17 @@ func SchemaCheck(ctx context.Context, cfg *yauthcfg.Config) error {
 	return nil
 }
 
-// openSQLDB returns a *sql.DB for any supported driver. Used by Migrate and
-// SchemaCheck. pgx is handled inline; other drivers are delegated to their
-// registered Backend (see RegisterBackend).
+// openSQLDB returns a *sql.DB for the pgx driver — the only SQL backend.
+// Used by Migrate and SchemaCheck. The in-memory backend has no *sql.DB.
 func openSQLDB(ctx context.Context, d yauthcfg.DatabaseConfig) (*sql.DB, error) {
-	if d.Driver == "pgx" {
-		pool, err := pgxrepo.Open(ctx, d.DSN)
-		if err != nil {
-			return nil, err
-		}
-		return pgxrepo.StdDB(pool), nil
+	if d.Driver != "pgx" {
+		return nil, fmt.Errorf("yauth: SQL operations require driver=pgx, got %q", d.Driver)
 	}
-	b, err := lookupBackend(d.Driver)
+	pool, err := pgxrepo.Open(ctx, d.DSN)
 	if err != nil {
 		return nil, err
 	}
-	return b.OpenSQLDB(ctx, d)
+	return pgxrepo.StdDB(pool), nil
 }
 
 func listTables(ctx context.Context, db *sql.DB, driver, schema string) ([]string, error) {
@@ -254,16 +245,12 @@ func listTables(ctx context.Context, db *sql.DB, driver, schema string) ([]strin
 		err  error
 	)
 	switch driver {
-	case "sqlite":
-		rows, err = db.QueryContext(ctx, "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'yauth_%'")
 	case "postgres", "pgx":
 		pgSchema := schema
 		if pgSchema == "" {
 			pgSchema = "public"
 		}
 		rows, err = db.QueryContext(ctx, "SELECT tablename FROM pg_tables WHERE schemaname=$1 AND tablename LIKE 'yauth_%'", pgSchema)
-	case "mysql":
-		rows, err = db.QueryContext(ctx, "SELECT TABLE_NAME FROM information_schema.tables WHERE table_schema = DATABASE() AND TABLE_NAME LIKE 'yauth_%'")
 	default:
 		return nil, fmt.Errorf("listTables: unsupported driver %q", driver)
 	}

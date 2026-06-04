@@ -1,6 +1,6 @@
 // Command mfa-example demonstrates the MFA plugin end-to-end.
 //
-// It boots an in-memory SQLite repo, builds yauth-go with both the
+// It boots an in-memory repository, builds yauth-go with both the
 // email-password and MFA plugins, and serves them under /api/auth/.
 // The mfa plugin's event handler intercepts the email-password
 // login.succeeded event for users with verified TOTP secrets, returning
@@ -39,7 +39,6 @@
 package main
 
 import (
-	"context"
 	"crypto/rand"
 	"log"
 	"net/http"
@@ -47,19 +46,11 @@ import (
 	yauth "github.com/yackey-labs/yauth"
 	"github.com/yackey-labs/yauth/plugins/emailpassword"
 	"github.com/yackey-labs/yauth/plugins/mfa"
-	"github.com/yackey-labs/yauth/repo/gormrepo"
+	"github.com/yackey-labs/yauth/repo/memrepo"
 )
 
 func main() {
-	dsn := "file::memory:?cache=shared&_pragma=foreign_keys(1)"
-	db, err := gormrepo.OpenSQLite(dsn)
-	if err != nil {
-		log.Fatalf("open sqlite: %v", err)
-	}
-	if err := gormrepo.Migrate(context.Background(), db); err != nil {
-		log.Fatalf("migrate: %v", err)
-	}
-	repo := gormrepo.New(db)
+	repo := memrepo.New()
 
 	var key [32]byte
 	if _, err := rand.Read(key[:]); err != nil {

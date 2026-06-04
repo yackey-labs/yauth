@@ -485,7 +485,7 @@ var _ repo.Repository = (*fakeRepo)(nil)
 
 // fakeHost is a minimal plugin.PluginHost wired against fakeRepo so the
 // apikey plugin can be exercised end-to-end without depending on the root
-// yauth package or gormrepo.
+// yauth package or a concrete repo backend.
 type fakeHost struct {
 	repo      repo.Repository
 	mw        *middleware.Middleware

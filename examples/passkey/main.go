@@ -1,6 +1,6 @@
 // Command passkey-example demonstrates the WebAuthn / passkey plugin.
 //
-// It boots an in-memory SQLite repo, builds yauth-go with both the
+// It boots an in-memory repository, builds yauth-go with both the
 // email-password and passkey plugins, and serves them under /api/auth/.
 //
 // End-to-end exercise of the passkey ceremonies (register/finish,
@@ -33,26 +33,17 @@
 package main
 
 import (
-	"context"
 	"log"
 	"net/http"
 
 	yauth "github.com/yackey-labs/yauth"
 	"github.com/yackey-labs/yauth/plugins/emailpassword"
 	"github.com/yackey-labs/yauth/plugins/passkey"
-	"github.com/yackey-labs/yauth/repo/gormrepo"
+	"github.com/yackey-labs/yauth/repo/memrepo"
 )
 
 func main() {
-	dsn := "file::memory:?cache=shared&_pragma=foreign_keys(1)"
-	db, err := gormrepo.OpenSQLite(dsn)
-	if err != nil {
-		log.Fatalf("open sqlite: %v", err)
-	}
-	if err := gormrepo.Migrate(context.Background(), db); err != nil {
-		log.Fatalf("migrate: %v", err)
-	}
-	repo := gormrepo.New(db)
+	repo := memrepo.New()
 
 	pkPlugin, err := passkey.New(passkey.Config{
 		RPID:      "localhost",

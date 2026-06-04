@@ -2,18 +2,15 @@ package emailpassword_test
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
-
 	yauth "github.com/yackey-labs/yauth"
 	"github.com/yackey-labs/yauth/plugins/emailpassword"
-	"github.com/yackey-labs/yauth/repo/gormrepo"
+	"github.com/yackey-labs/yauth/repo/memrepo"
 )
 
 // findCookie returns the named cookie from a Set-Cookie response or nil.
@@ -28,15 +25,7 @@ func findCookie(res *http.Response, name string) *http.Cookie {
 
 func newRememberServer(t *testing.T, rememberTTL time.Duration) *httptest.Server {
 	t.Helper()
-	dsn := "file:" + uuid.NewString() + "?mode=memory&cache=shared&_pragma=foreign_keys(1)"
-	db, err := gormrepo.OpenSQLite(dsn)
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if err := gormrepo.Migrate(context.Background(), db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	r := gormrepo.New(db)
+	r := memrepo.New()
 
 	cfg := yauth.NewDefaultConfig()
 	// Force a session TTL distinct from the remember-me TTL so we can tell them

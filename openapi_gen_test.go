@@ -24,7 +24,6 @@
 package yauth_test
 
 import (
-	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -55,7 +54,7 @@ import (
 	"github.com/yackey-labs/yauth/plugins/ssosaml"
 	"github.com/yackey-labs/yauth/plugins/status"
 	"github.com/yackey-labs/yauth/plugins/webhooks"
-	"github.com/yackey-labs/yauth/repo/gormrepo"
+	"github.com/yackey-labs/yauth/repo/memrepo"
 )
 
 // openapiSpecPath is the committed spec at the repo root.
@@ -112,17 +111,7 @@ func TestOpenAPISpecUpToDate(t *testing.T) {
 func buildFullStack(t *testing.T) *yauth.YAuth {
 	t.Helper()
 
-	db, err := gormrepo.OpenSQLite("file::memory:?cache=shared&_pragma=foreign_keys(1)")
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	// Migrate so background workers (e.g. webhooks claimer, which starts in
-	// Routes regardless of WorkerCount) don't log missing-table warnings.
-	// Route registration itself touches no data.
-	if err := gormrepo.Migrate(context.Background(), db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	repo := gormrepo.New(db)
+	repo := memrepo.New()
 
 	// A real RSA key so asymjwt.New (and thus the oidc id_token signer path)
 	// constructs cleanly. The key is regenerated each run but never reaches the

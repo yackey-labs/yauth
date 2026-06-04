@@ -16,7 +16,7 @@ import (
 
 	yauth "github.com/yackey-labs/yauth"
 	"github.com/yackey-labs/yauth/plugins/magiclink"
-	"github.com/yackey-labs/yauth/repo/gormrepo"
+	"github.com/yackey-labs/yauth/repo/memrepo"
 )
 
 // captureMailer records (email, link) pairs in order so tests can assert
@@ -52,14 +52,7 @@ func (m *captureMailer) count() int {
 func newServer(t *testing.T, cfg magiclink.Config) (*httptest.Server, *captureMailer, func()) {
 	t.Helper()
 
-	db, err := gormrepo.OpenSQLite("file::memory:?cache=shared&_pragma=foreign_keys(1)")
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if err := gormrepo.Migrate(context.Background(), db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	repo := gormrepo.New(db)
+	repo := memrepo.New()
 
 	mailer := &captureMailer{}
 	cfg.Mailer = mailer

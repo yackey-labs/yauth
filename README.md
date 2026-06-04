@@ -4,9 +4,9 @@ Modular, plugin-based authentication library for Go (`net/http`) with a
 generated TypeScript client, Vue 3 components, and SolidJS components.
 
 - **Plugin system** — register only the auth methods you want
-- **Three database backends** — native pgx/v5 + sqlc for Postgres (`pgxrepo`),
-  plus GORM for Postgres / SQLite / MySQL (`gormrepo`); all backed by
-  goose migrations — see "Pick a Backend" for the pluggable contract
+- **Two repository backends** — native pgx/v5 + sqlc for Postgres
+  (`pgxrepo`, goose migrations) and an in-memory backend (`memrepo`) for
+  dev/tests; plus an optional Redis cache decorator (`redisrepo`)
 - **Tri-mode auth** — session cookies, JWT bearer tokens, and `X-Api-Key`
   headers, all simultaneous; resolved into one `*domain.AuthUser`
 - **Full OAuth2 / OIDC provider** — authorization code + PKCE, device
@@ -20,7 +20,7 @@ generated TypeScript client, Vue 3 components, and SolidJS components.
 
 ## Try It in 30 Seconds
 
-No external database needed. SQLite + email/password ships first.
+No external database needed — the in-memory backend + email/password ships first.
 
 ```bash
 go get github.com/yackey-labs/yauth@latest
@@ -31,21 +31,16 @@ go mod tidy   # pulls transitive deps for the openapi subpackage (Huma)
 package main
 
 import (
-    "context"
     "log"
     "net/http"
 
     yauth "github.com/yackey-labs/yauth"
     "github.com/yackey-labs/yauth/plugins/emailpassword"
-    "github.com/yackey-labs/yauth/repo/gormrepo"
+    "github.com/yackey-labs/yauth/repo/memrepo"
 )
 
 func main() {
-    db, err := gormrepo.OpenSQLite("file::memory:?cache=shared&_pragma=foreign_keys(1)")
-    if err != nil { log.Fatal(err) }
-    if err := gormrepo.Migrate(context.Background(), db); err != nil { log.Fatal(err) }
-
-    ya, err := yauth.New(gormrepo.New(db), yauth.NewDefaultConfig()).
+    ya, err := yauth.New(memrepo.New(), yauth.NewDefaultConfig()).
         WithPlugin(emailpassword.New(emailpassword.Config{})).
         Build()
     if err != nil { log.Fatal(err) }
@@ -90,12 +85,12 @@ open http://localhost:3000/docs
 > so setting only `HIBPCheck: false` is indistinguishable from "not
 > configured" and the default (enabled) wins.
 
-A runnable copy lives at [`examples/sqlite/main.go`](examples/sqlite/main.go).
+A runnable copy lives at [`examples/apikey/main.go`](examples/apikey/main.go).
 
 ### Try it for real (Vue + Go end-to-end)
 
 `examples/vue` is a full SPA + Go backend wired together. It boots the
-in-memory SQLite repo, the email-password / status / admin plugins, and
+in-memory repo (memrepo), the email-password / status / admin plugins, and
 a Vue 3 frontend that uses `@yackey-labs/yauth-ui-vue` for the
 login/register/dashboard flow. See
 [`examples/vue/README.md`](examples/vue/README.md) for the walkthrough;
@@ -195,11 +190,8 @@ The first non-Continue decision short-circuits the chain.
 | Backend | Constructor | Database | Migrations |
 | --- | --- | --- | --- |
 | **pgx (recommended for Postgres)** | `pgxrepo.New(pool)` | PostgreSQL (pgx/v5, sqlc-generated) | goose |
-| GORM Postgres | `gormrepo.OpenPostgres(dsn)` | PostgreSQL | goose / GORM AutoMigrate |
-| GORM SQLite   | `gormrepo.OpenSQLite(dsn)`   | SQLite (incl. `:memory:`) | goose / GORM AutoMigrate |
-| GORM MySQL    | `gormrepo.OpenMySQL(dsn)`    | MySQL / MariaDB | goose / GORM AutoMigrate |
+| In-memory     | `memrepo.New()`              | — (in-process, non-persistent) | none |
 | Redis cache   | `redisrepo.New(inner, client, opts)` | — wraps any backend | — |
-| In-memory     | `memrepo.New()`              | — no persistence | — |
 
 **Zero-config quickstart with `memrepo`** — no database, no migrations,
 no `context` import needed:
@@ -228,15 +220,14 @@ func main() {
 }
 ```
 
-The Rust crate ships 14 ORM/dialect permutations. yauth-go covers Postgres
-(via native pgx/v5 + sqlc), SQLite, and MySQL (via GORM) and exposes the
+yauth uses Postgres (native pgx/v5 + sqlc) as its only persistent backend,
+with an in-memory backend (`memrepo`) for dev and tests, and exposes the
 `repo.Repository` interface as the extension point. New backends plug in by
-implementing `repo.Repository` + the per-feature sub-interfaces under
-`repo/`. A conformance harness at `repo/conformance/` validates any new
-backend against the full interface contract.
+implementing that interface; the conformance suite (`repo/conformance`)
+validates any backend against the full contract.
 
 **Migrations** are managed by [goose](https://github.com/pressly/goose)
-with embedded SQL files for all three dialects. The `migrate` package is
+with embedded SQL files for Postgres. The `migrate` package is
 the single entry point:
 
 ```go
@@ -246,11 +237,10 @@ import (
 )
 
 pool, _ := pgxrepo.Open(ctx, dsn)
-migrate.Run(ctx, pgxrepo.StdDB(pool), "pgx")   // "pgx", "postgres", "mysql", or "sqlite"
+migrate.Run(ctx, pgxrepo.StdDB(pool), "pgx")   // "pgx"
 ```
 
-Or use the CLI: `yauth migrate up` (see Configuration). GORM `AutoMigrate`
-is still available via `gormrepo.Migrate(ctx, db)` for quick local setups.
+Or use the CLI: `yauth migrate up` (see Configuration).
 
 **Using pgxrepo directly:**
 
@@ -306,8 +296,6 @@ defer yauthPool.Close()
 yauthRepo := pgxrepo.New(yauthPool)
 ```
 
-The same applies to gormrepo — `gormrepo.New(db)` accepts any `*gorm.DB`,
-so you can pass your app's existing GORM instance or open a dedicated one.
 Shared is fine for most apps; a dedicated pool is worth it when auth is
 high-traffic or you need separate connection-limit accounting.
 
@@ -332,19 +320,6 @@ database:
                        # at startup; concurrent replicas will race, so never
                        # use this in production. Default is false.
 ```
-
-> **gorm drivers are opt-in.** The root `yauth` package only links the `pgx`
-> backend, so a pgx-only app never pulls `gorm.io/gorm` (or its mysql/sqlite
-> drivers) into its binary. To use `database.driver = sqlite | postgres | mysql`
-> with `NewFromConfig` / `Migrate` / `SchemaCheck`, add a blank import that
-> registers the gorm backend:
->
-> ```go
-> import _ "github.com/yackey-labs/yauth/repo/gormrepo/gormbackend"
-> ```
->
-> Without it, those drivers fail fast with an actionable "no backend registered"
-> error naming the import to add.
 
 > **Production migration:** `yauth migrate -c yauth.yaml` reads `database.dsn`
 > from `yauth.yaml` (default filename; override with `-c path/to/config.yaml`)
@@ -379,7 +354,7 @@ if _, err := yauthProvider.Up(ctx); err != nil { /* handle */ }
 ```
 
 The raw SQL files are exported as `migrate.MigrationFS` (`embed.FS` with
-subdirectories `postgres/`, `mysql/`, `sqlite/`) if you need to merge them
+the `postgres/` subdirectory) if you need to merge them
 with your own `fs.FS` via standard library tools.
 
 ## Pick Your Plugins
@@ -460,7 +435,7 @@ without changes.
 #### Active-org switcher (yauth #89 / Go #15)
 
 For users with memberships in multiple organizations, every request
-needs to answer "which org am I acting in?". yauth-go answers this
+needs to answer "which org am I acting in?". yauth answers this
 with a per-session **active org** that flows through both cookie and
 JWT identity paths:
 
@@ -499,7 +474,7 @@ if au.ActiveOrgID != nil {
 
 Single-user deployments that never register the `organizations` plugin
 pay zero overhead: `ActiveOrgID` stays nil and the JWT/cookie shapes
-are identical to pre-#89 yauth-go.
+are identical to pre-#89 yauth.
 
 #### Verified domains + JIT membership
 
@@ -726,7 +701,7 @@ The `yauth` CLI (`cmd/yauth`) is the operator-facing companion, mirroring
 go install github.com/yackey-labs/yauth/cmd/yauth@latest
 
 yauth init               # scaffold yauth.yaml
-yauth migrate up         # run goose migrations (pgx) or GORM AutoMigrate (others)
+yauth migrate up         # run goose migrations
                          #   reads yauth.yaml by default; override with -c path/to/config.yaml
 yauth check              # validate yauth.yaml + reachability
 yauth gen-secrets        # cryptographically random session/JWT secrets
@@ -830,10 +805,10 @@ For teams with existing goose pipelines see `migrate.NewProvider` above.
 - Every plugin HTTP handler runs inside a server span
 - Authenticated requests tag the active span with the resolved identity: `user.id` (OTel semantic convention) plus, when the relevant plugins are loaded, `yauth.active_org.id` and `yauth.org.role` (organizations), `yauth.auth.method` (`cookie`/`bearer`/`api_key`), and `yauth.principal.kind` (`user`/`service_account`). Absent context is skipped — a single-user deployment emits only `user.id`. These tags land on whichever span is active, so they enrich a consumer's `otelhttp` span too.
 - Outbound HTTP from the webhooks dispatcher carries `traceparent` headers
-- **Database operations are traced automatically** — pgxrepo emits a child span per SQL query ([otelpgx](https://github.com/exaring/otelpgx)); gormrepo emits spans per Create/Query/Update/Delete ([gorm opentelemetry](https://github.com/go-gorm/opentelemetry))
+- **Database operations are traced automatically** — pgxrepo emits a child span per SQL query ([otelpgx](https://github.com/exaring/otelpgx))
 
 When using `NewFromConfig` with `telemetry.enabled: true`, DB tracing is
-wired automatically for both backends — no extra code needed.
+wired automatically for pgxrepo — no extra code needed.
 
 ### Bring your own OpenTelemetry SDK
 
@@ -903,10 +878,6 @@ defer shutdown(context.Background())
 // pgxrepo: pass WithOTelTracing() — uses global provider set by telemetry.Init
 pool, _ := pgxrepo.Open(ctx, dsn, pgxrepo.WithOTelTracing())
 
-// gormrepo: call ApplyOTel after opening
-db, _ := gormrepo.OpenPostgres(dsn)
-gormrepo.ApplyOTel(db)
-
 ya, _ := yauth.New(repo, cfg).
     WithTelemetry(telemetry.DefaultConfig()).
     WithTelemetryShutdown(shutdown).
@@ -915,7 +886,7 @@ ya, _ := yauth.New(repo, cfg).
 
 ## OpenAPI
 
-The OpenAPI 3.1 spec for every yauth-go route is authored in
+The OpenAPI 3.1 spec for every yauth route is authored in
 `openapi/spec.go` using the
 [Huma](https://github.com/danielgtaylor/huma) primitives — code-first,
 the same philosophy as the Rust `utoipa` integration.
@@ -964,7 +935,7 @@ npm install @yackey-labs/yauth-client @yackey-labs/yauth-ui-vue
 > + import { createYAuthClient } from "@yackey-labs/yauth-client";
 > ```
 
-The `openapi-fresh` CI job keeps yauth-go's checked-in `openapi.json` in sync
+The `openapi-fresh` CI job keeps yauth's checked-in `openapi.json` in sync
 with the live routes (regenerate-and-compare). The Rust backend is archived, so
 there is no longer a cross-language conformance gate.
 
@@ -1024,7 +995,7 @@ const { user } = useSession()
 
 ## Status: Parity Table
 
-| Rust feature           | yauth-go     | Notes                                                                                    |
+| Rust feature           | yauth        | Notes                                                                                    |
 | ---------------------- | ------------ | ---------------------------------------------------------------------------------------- |
 | email-password         | ✅           | Argon2id, dummy-verify on miss to defeat enumeration timing                              |
 | bearer JWT             | ✅           | HS256 access + opaque refresh; family rotation with reuse-revocation                     |
@@ -1058,7 +1029,7 @@ const { user } = useSession()
 | SSO — SAML 2.0 SP      | ✅           | SP-initiated + IdP-initiated; metadata XML; Entra/Okta/ADFS/Auth0/OneLogin/Ping        |
 | SCIM 2.0               | ✅           | RFC 7643/7644 Users + Groups push sync; Okta/Entra/OneLogin; Go-only routes            |
 | audit-export / SIEM    | ✅           | Webhook, syslog TLS, S3, Splunk HEC, Datadog; at-least-once; Go-only routes            |
-| 14 DB backends         | ⚙️ 4 of 14   | pgxrepo (sqlc+pgx, recommended for PG) + GORM PG + SQLite + MySQL; goose migrations for all three dialects |
+| 14 DB backends         | ⚙️ Postgres  | pgxrepo (sqlc+pgx) as the only persistent backend + memrepo (in-memory, dev/tests); goose migrations for Postgres |
 
 `✅ done · ⚙️ partial · ❌ not yet`
 
@@ -1069,10 +1040,9 @@ const { user } = useSession()
 - `events/`            — `AuthEvent`, `Decision`, `Handler`
 - `plugin/`            — `Plugin` and `PluginHost` interfaces
 - `middleware/`        — tri-mode auth resolver + `RequireAuth` / `RequireAdmin` + CORS + rate-limit wrapper
-- `migrate/`           — goose runner with embedded SQL migration files for postgres, mysql, and sqlite
+- `migrate/`           — goose runner with embedded SQL migration files for postgres
 - `repo/`              — repository interface + sub-interfaces
 - `repo/pgxrepo/`      — native pgx/v5 + sqlc-generated backend (Postgres; recommended)
-- `repo/gormrepo/`     — GORM-backed implementation (Postgres + SQLite + MySQL)
 - `repo/redisrepo/`    — Redis caching decorator (sessions, rate limits, revocations)
 - `repo/memrepo/`      — in-memory backend (testing + zero-config quickstart)
 - `repo/conformance/`  — portable conformance harness for any `repo.Repository` implementation
@@ -1161,7 +1131,7 @@ Findings are categorised:
   operation. (Deliberately shallow; nested-object changes are not
   flagged unless cheap to detect.)
 - `DOC`      — description/summary-only differences.
-- `GO-EXTRA` — routes Go ships that Rust does not. yauth-go is
+- `GO-EXTRA` — routes Go ships that Rust does not. yauth is
   intentionally a "Go superset", so these are informational only and do
   not fail the check.
 

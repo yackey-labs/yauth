@@ -61,8 +61,8 @@ jobs:
           version: v2.5.0
           args: --timeout=5m
 
-  test-sqlite:
-    name: Test (sqlite)
+  test:
+    name: Test (memory + redis)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -99,43 +99,10 @@ jobs:
         with:
           go-version: '1.23'
           cache: true
-      - name: Run gormrepo tests with PG
+      - name: Run tests with PG
         env:
           GOTOOLCHAIN: auto
-        run: go test ./repo/gormrepo/... ./...
-
-  test-mysql:
-    name: Test (mysql)
-    runs-on: ubuntu-latest
-    # Marked continue-on-error to keep this job advisory while the
-    # MySQL backend stabilises in CI. Promote to required once it has
-    # ridden green for a release cycle.
-    continue-on-error: true
-    services:
-      mysql:
-        image: mysql:8
-        env:
-          MYSQL_ROOT_PASSWORD: root
-          MYSQL_DATABASE: yauth
-        ports:
-          - 3306:3306
-        options: >-
-          --health-cmd "mysqladmin ping -h localhost -uroot -proot"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 10
-    env:
-      DATABASE_URL_MYSQL: root:root@tcp(127.0.0.1:3306)/yauth?parseTime=true&charset=utf8mb4&collation=utf8mb4_unicode_ci
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
-        with:
-          go-version: '1.23'
-          cache: true
-      - name: Run gormrepo + conformance tests with MySQL
-        env:
-          GOTOOLCHAIN: auto
-        run: go test ./repo/gormrepo/... ./repo/conformance/...
+        run: go test ./...
 
   build-cli:
     name: Build CLI (bin/yauth)
@@ -172,22 +139,21 @@ jobs:
         env:
           GOTOOLCHAIN: auto
         run: go build -o bin/yauth ./cmd/yauth
-      - name: yauth init
-        run: ./bin/yauth init --out yauth.yaml
-      - name: yauth migrate (sqlite)
+      - name: yauth init + CLI smoke (memory)
         run: |
-          # rewrite default DSN to a file-backed sqlite for migrate
-          mkdir -p tmp
-          sed -i 's|dsn:.*|dsn: file:tmp/yauth.db?_pragma=foreign_keys(1)|' yauth.yaml
-          sed -i 's|driver:.*|driver: sqlite|' yauth.yaml
+          ./bin/yauth init --out yauth.yaml
+          # memory driver needs no DB: migrate is a no-op, check passes
+          sed -i 's|driver:.*|driver: memory|' yauth.yaml
+          sed -i 's|dsn:.*|dsn: ""|' yauth.yaml
           ./bin/yauth migrate -c yauth.yaml
-      - name: Build sqlite example
+          ./bin/yauth check -c yauth.yaml
+      - name: Build example (memrepo)
         env:
           GOTOOLCHAIN: auto
-        run: go build -o bin/example-sqlite ./examples/sqlite
-      - name: Run sqlite example + smoke curl
+        run: go build -o bin/example ./examples/apikey
+      - name: Run example + smoke curl
         run: |
-          ./bin/example-sqlite &
+          ./bin/example &
           SERVER_PID=$!
           # give server time to bind
           for i in 1 2 3 4 5 6 7 8 9 10; do
@@ -261,8 +227,7 @@ jobs:
           go-version: '1.23'
           cache: true
       # TestOpenAPISpecUpToDate builds the full plugin stack over an in-memory
-      # sqlite repo (cgo mattn/go-sqlite3, same driver as the test-sqlite job),
-      # so mirror that job's toolchain + cgo-friendly ubuntu-latest environment.
+      # repo (memrepo) and asserts the committed openapi.json matches.
       - name: Verify openapi.json is up to date
         env:
           GOTOOLCHAIN: auto

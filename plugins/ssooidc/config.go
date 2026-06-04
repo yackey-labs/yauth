@@ -182,7 +182,7 @@ type persistedConfig struct {
 // marshalOidcConfig produces the SsoConnection.Config payload from an
 // in-memory OidcConnectionConfig, encrypting ClientSecret with key.
 //
-// The returned bytes are pure JSON — every backend (memrepo, gormrepo)
+// The returned bytes are pure JSON — every backend (memrepo, pgxrepo)
 // stores them verbatim.
 func marshalOidcConfig(key [32]byte, c OidcConnectionConfig) ([]byte, error) {
 	if err := c.validate(); err != nil {

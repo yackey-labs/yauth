@@ -14,7 +14,7 @@ import (
 	"github.com/yackey-labs/yauth/plugins/emailpassword"
 	"github.com/yackey-labs/yauth/plugins/organizations"
 	"github.com/yackey-labs/yauth/repo"
-	"github.com/yackey-labs/yauth/repo/gormrepo"
+	"github.com/yackey-labs/yauth/repo/memrepo"
 )
 
 // newAutoJoinServer wires a yauth instance with both emailpassword and
@@ -22,15 +22,7 @@ import (
 // (yauth #90 / Go #17).
 func newAutoJoinServer(t *testing.T) (*httptest.Server, repo.Repository) {
 	t.Helper()
-	dsn := "file:" + uuid.NewString() + "?mode=memory&cache=shared&_pragma=foreign_keys(1)"
-	db, err := gormrepo.OpenSQLite(dsn)
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if err := gormrepo.Migrate(context.Background(), db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	r := gormrepo.New(db)
+	r := memrepo.New()
 	ya, err := yauth.New(r, yauth.NewDefaultConfig()).
 		WithPlugin(emailpassword.New(emailpassword.Config{
 			MinPasswordLength: 8,

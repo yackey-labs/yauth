@@ -1,10 +1,10 @@
-// Package yauth is the root entry point for yauth-go. It composes a
+// Package yauth is the root entry point for yauth. It composes a
 // repository, a tri-mode authentication middleware, and a slice of
 // plugins into a single mountable http.Handler.
 //
 // Typical usage:
 //
-//	repo := gormrepo.New(db)
+//	repo := memrepo.New() // or pgxrepo.New(pool) for Postgres
 //	ya, err := yauth.New(repo, yauth.NewDefaultConfig()).
 //	    WithPlugin(emailpassword.New(emailpassword.Config{})).
 //	    Build()

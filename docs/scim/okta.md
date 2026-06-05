@@ -22,7 +22,7 @@ Open the new app's **Provisioning** tab → **Integration** → **Edit**.
 
 | Field                    | Value                                                                  |
 |--------------------------|------------------------------------------------------------------------|
-| SCIM connector base URL  | `https://yauth.example.com/api/scim/v2/organizations/{org_id}`         |
+| SCIM connector base URL  | `https://yauth.example.com/api/auth/scim/v2/organizations/{org_id}`         |
 | Unique identifier field for users | `userName`                                                    |
 | Supported provisioning actions | Push New Users, Push Profile Updates, Push Groups (optional)     |
 | Authentication Mode      | **HTTP Header**                                                        |

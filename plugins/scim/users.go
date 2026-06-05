@@ -96,7 +96,7 @@ func buildUserMeta(baseURL, orgID string, u *domain.User) *ResourceMeta {
 		ResourceType: "User",
 		Created:      isoUTC(u.CreatedAt),
 		LastModified: isoUTC(u.UpdatedAt),
-		Location:     fmt.Sprintf("%s/api/scim/v2/organizations/%s/Users/%s", base, orgID, u.ID),
+		Location:     fmt.Sprintf("%s/scim/v2/organizations/%s/Users/%s", base, orgID, u.ID),
 	}
 }
 
@@ -223,7 +223,7 @@ func (p *scimPlugin) handleCreateUser(host plugin.PluginHost) http.HandlerFunc {
 				if m != nil {
 					status = m.Status
 				}
-				out := projectUser(host.BaseURL(), orgID, u, existingExt, status)
+				out := projectUser(p.selfBaseURL(host), orgID, u, existingExt, status)
 				auditScim(ctx, host, principal, "scim_user_create_idempotent", u.ID)
 				writeScimJSON(w, http.StatusOK, out)
 				return
@@ -366,7 +366,7 @@ func (p *scimPlugin) handleCreateUser(host plugin.PluginHost) http.HandlerFunc {
 			writeScimError(w, InternalError())
 			return
 		}
-		out := projectUser(host.BaseURL(), orgID, fresh, extOut, desiredStatus)
+		out := projectUser(p.selfBaseURL(host), orgID, fresh, extOut, desiredStatus)
 		auditScim(ctx, host, principal, "scim_user_created", fresh.ID)
 		writeScimJSON(w, http.StatusCreated, out)
 	}
@@ -454,7 +454,7 @@ func (p *scimPlugin) handleListUsers(host plugin.PluginHost) http.HandlerFunc {
 		page := filtered[skip:end]
 		out := make([]ScimUser, 0, len(page))
 		for _, r := range page {
-			out = append(out, projectUser(host.BaseURL(), orgID, r.User, r.Ext, r.Status))
+			out = append(out, projectUser(p.selfBaseURL(host), orgID, r.User, r.Ext, r.Status))
 		}
 		writeScimJSON(w, http.StatusOK, NewListResponse(total, start, len(out), out))
 	}
@@ -509,7 +509,7 @@ func (p *scimPlugin) handleGetUser(host plugin.PluginHost) http.HandlerFunc {
 			writeScimError(w, scimErr)
 			return
 		}
-		out := projectUser(host.BaseURL(), orgID, user, ext, status)
+		out := projectUser(p.selfBaseURL(host), orgID, user, ext, status)
 		writeScimJSON(w, http.StatusOK, out)
 	}
 }
@@ -649,7 +649,7 @@ func (p *scimPlugin) handlePutUser(host plugin.PluginHost) http.HandlerFunc {
 			writeScimError(w, scimErr)
 			return
 		}
-		out := projectUser(host.BaseURL(), orgID, fresh, ext, desiredStatus)
+		out := projectUser(p.selfBaseURL(host), orgID, fresh, ext, desiredStatus)
 		auditScim(ctx, host, principal, "scim_user_replaced", fresh.ID)
 		writeScimJSON(w, http.StatusOK, out)
 	}
@@ -838,7 +838,7 @@ func (p *scimPlugin) handlePatchUser(host plugin.PluginHost) http.HandlerFunc {
 			writeScimError(w, scimErr)
 			return
 		}
-		out := projectUser(host.BaseURL(), orgID, fresh, ext, status)
+		out := projectUser(p.selfBaseURL(host), orgID, fresh, ext, status)
 		auditScim(ctx, host, principal, "scim_user_patched", fresh.ID)
 		writeScimJSON(w, http.StatusOK, out)
 	}

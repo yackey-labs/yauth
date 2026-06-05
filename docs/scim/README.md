@@ -10,7 +10,7 @@ SCIM endpoints are deliberately **NOT** registered in `openapi.json`. SCIM uses 
 
 ## Endpoint surface
 
-All endpoints live under `/api/scim/v2/organizations/{org_id}/...`. Every request authenticates via `Authorization: Bearer <key>` where `<key>` is an **org-scoped API key** (yauth-go #19) bound to that same `{org_id}`.
+All endpoints live under `<mount>/scim/v2/organizations/{org_id}/...`, where `<mount>` is the prefix the yauth router is mounted under — the ecosystem default `/api/auth` (via `y.Mount`), so the public path is `/api/auth/scim/v2/organizations/{org_id}/...`. The SCIM plugin does **not** bake an `/api` segment into its own paths; that comes from the mount prefix, like every other plugin. Set `scim.Config.BasePath` to that same mount prefix so the `Location` / `$ref` URLs in responses point at where the routes actually live. Every request authenticates via `Authorization: Bearer <key>` where `<key>` is an **org-scoped API key** (yauth-go #19) bound to that same `{org_id}`.
 
 | Method  | Path                              | Effect                                                                   |
 |---------|-----------------------------------|--------------------------------------------------------------------------|
@@ -104,7 +104,7 @@ GET /Users?startIndex=1&count=100
    ```
 
 2. **Mint** an org-scoped API key from the org admin UI (yauth-go #19). The plaintext is `yak_<8hex>_<32hex>` and shown once — paste it into the IdP's SCIM connector config.
-3. **Give** the IdP admin the **SCIM Base URL** for their org: `{base}/api/scim/v2/organizations/{org_id}`.
+3. **Give** the IdP admin the **SCIM Base URL** for their org: `{base}/api/auth/scim/v2/organizations/{org_id}`.
 4. **Per-IdP config**: see [`okta.md`](./okta.md), [`entra.md`](./entra.md), [`onelogin.md`](./onelogin.md).
 
 ## Deliberate non-features (MVP)
@@ -124,12 +124,12 @@ BASE=https://yauth.example.com
 # Discover capabilities
 curl -H "Authorization: Bearer $KEY" \
      -H "Accept: application/scim+json" \
-     "$BASE/api/scim/v2/organizations/$ORG/ServiceProviderConfig"
+     "$BASE/api/auth/scim/v2/organizations/$ORG/ServiceProviderConfig"
 
 # Create a user
 curl -H "Authorization: Bearer $KEY" \
      -H "Content-Type: application/scim+json" \
-     -X POST "$BASE/api/scim/v2/organizations/$ORG/Users" \
+     -X POST "$BASE/api/auth/scim/v2/organizations/$ORG/Users" \
      -d '{
        "schemas": ["urn:ietf:params:scim:schemas:core:2.0:User"],
        "userName": "alice@acme.com",
@@ -141,11 +141,11 @@ curl -H "Authorization: Bearer $KEY" \
 
 # List users
 curl -H "Authorization: Bearer $KEY" \
-     "$BASE/api/scim/v2/organizations/$ORG/Users?count=10"
+     "$BASE/api/auth/scim/v2/organizations/$ORG/Users?count=10"
 
 # Filter
 curl -H "Authorization: Bearer $KEY" \
-     "$BASE/api/scim/v2/organizations/$ORG/Users?filter=userName%20eq%20%22alice@acme.com%22"
+     "$BASE/api/auth/scim/v2/organizations/$ORG/Users?filter=userName%20eq%20%22alice@acme.com%22"
 ```
 
 ## Audit events

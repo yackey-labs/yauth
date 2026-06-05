@@ -1,29 +1,38 @@
 // Package scim — yauth-go #27 / yauth Rust #95 port.
 //
-// Mounts a SCIM 2.0 tree under /api/scim/v2/organizations/{org_id}/...
+// Mounts a SCIM 2.0 tree under {mount}/scim/v2/organizations/{org_id}/...
 // that IdPs (Okta, Entra, OneLogin) use to provision users into a yauth
 // tenant. Authentication is via org-scoped API key from yauth-go #19
 // carried in `Authorization: Bearer <key>` — the IdP admin generates a
 // key bound to their organization, then pastes it into the IdP's SCIM
 // connector config.
 //
-// Endpoints mounted:
+// Paths below are shown relative to the yauth router root; the router is
+// itself mounted under an external prefix (the ecosystem default
+// "/api/auth" via y.Mount), so the publicly reachable path is e.g.
+// /api/auth/scim/v2/organizations/{org_id}/Users. SCIM does NOT bake an
+// "/api" segment into its own paths — that segment comes from the mount
+// prefix, exactly like every other plugin. Set Config.BasePath to that
+// same mount prefix so the absolute Location/$ref URLs in responses match
+// where the routes actually live.
 //
-//	POST   /api/scim/v2/organizations/{org_id}/Users
-//	GET    /api/scim/v2/organizations/{org_id}/Users
-//	GET    /api/scim/v2/organizations/{org_id}/Users/{user_id}
-//	PUT    /api/scim/v2/organizations/{org_id}/Users/{user_id}
-//	PATCH  /api/scim/v2/organizations/{org_id}/Users/{user_id}
-//	DELETE /api/scim/v2/organizations/{org_id}/Users/{user_id}
-//	POST   /api/scim/v2/organizations/{org_id}/Groups
-//	GET    /api/scim/v2/organizations/{org_id}/Groups
-//	GET    /api/scim/v2/organizations/{org_id}/Groups/{group_id}
-//	PUT    /api/scim/v2/organizations/{org_id}/Groups/{group_id}
-//	PATCH  /api/scim/v2/organizations/{org_id}/Groups/{group_id}
-//	DELETE /api/scim/v2/organizations/{org_id}/Groups/{group_id}
-//	GET    /api/scim/v2/organizations/{org_id}/ServiceProviderConfig
-//	GET    /api/scim/v2/organizations/{org_id}/Schemas
-//	GET    /api/scim/v2/organizations/{org_id}/ResourceTypes
+// Endpoints mounted (relative to the router root):
+//
+//	POST   /scim/v2/organizations/{org_id}/Users
+//	GET    /scim/v2/organizations/{org_id}/Users
+//	GET    /scim/v2/organizations/{org_id}/Users/{user_id}
+//	PUT    /scim/v2/organizations/{org_id}/Users/{user_id}
+//	PATCH  /scim/v2/organizations/{org_id}/Users/{user_id}
+//	DELETE /scim/v2/organizations/{org_id}/Users/{user_id}
+//	POST   /scim/v2/organizations/{org_id}/Groups
+//	GET    /scim/v2/organizations/{org_id}/Groups
+//	GET    /scim/v2/organizations/{org_id}/Groups/{group_id}
+//	PUT    /scim/v2/organizations/{org_id}/Groups/{group_id}
+//	PATCH  /scim/v2/organizations/{org_id}/Groups/{group_id}
+//	DELETE /scim/v2/organizations/{org_id}/Groups/{group_id}
+//	GET    /scim/v2/organizations/{org_id}/ServiceProviderConfig
+//	GET    /scim/v2/organizations/{org_id}/Schemas
+//	GET    /scim/v2/organizations/{org_id}/ResourceTypes
 //
 // Auth and content type:
 //
@@ -48,6 +57,7 @@ import (
 	"io"
 	"net/http"
 	"reflect"
+	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -64,6 +74,17 @@ type Config struct {
 	//
 	// Defaults to "yak" (matches the apikey plugin's default).
 	APIKeyPrefix string
+
+	// BasePath is the external URL prefix the yauth router is mounted
+	// under (e.g. "/api/auth" — the same value passed to y.Mount as
+	// APIPrefix and to the oidc/oauth2server plugins as their BasePath).
+	// It is used ONLY to build the absolute Location / members[].$ref
+	// URLs returned in SCIM responses so they point at the path the
+	// routes actually live at: <BaseURL><BasePath>/scim/v2/...  It does
+	// NOT affect route registration (the router is mounted under the
+	// prefix externally). Empty means the router is mounted at the host
+	// root, so self-URLs are <BaseURL>/scim/v2/...
+	BasePath string
 }
 
 // defaultAPIKeyPrefix is the same default the apikey plugin uses. We
@@ -87,6 +108,15 @@ func New(cfg Config) plugin.Plugin {
 // Name implements plugin.Plugin.
 func (p *scimPlugin) Name() string { return "scim" }
 
+// selfBaseURL is the absolute prefix for self-referential SCIM URLs
+// (resource Location headers and members[].$ref). It is the host's public
+// origin joined with Config.BasePath — the external prefix the router is
+// mounted under — so the URLs point at where the routes actually live
+// (<origin><BasePath>/scim/v2/...). Trailing slashes are normalised away.
+func (p *scimPlugin) selfBaseURL(host plugin.PluginHost) string {
+	return strings.TrimRight(host.BaseURL(), "/") + p.cfg.BasePath
+}
+
 // Routes implements plugin.Plugin. Every SCIM route is now huma-native: a
 // huma.Register operation owns the (method, path) so the route is recorded
 // and huma-served, but its handler delegates to the UNCHANGED legacy
@@ -101,7 +131,7 @@ func (p *scimPlugin) Name() string { return "scim" }
 // {org_id}/{user_id}/{group_id} wildcards (via humago), so the legacy
 // handlers' r.PathValue / r.URL.Query / r.Body reads keep working unchanged.
 func (p *scimPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.API, prefix string) {
-	base := prefix + "/api/scim/v2/organizations/{org_id}"
+	base := prefix + "/scim/v2/organizations/{org_id}"
 
 	// Users. The WRITE routes (POST/PUT/PATCH) carry a RawBody + a derived SCIM
 	// request schema (see request.go / scimRegisterBody); GET/DELETE stay

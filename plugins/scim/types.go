@@ -1,6 +1,6 @@
 // Package scim implements SCIM 2.0 provisioning endpoints (yauth Rust #95
 // / yauth-go #27). Mounts a tree of endpoints under
-// /api/scim/v2/organizations/{org_id}/... that IdPs (Okta, Entra,
+// /scim/v2/organizations/{org_id}/... that IdPs (Okta, Entra,
 // OneLogin) use to provision users into yauth.
 //
 // types.go: hand-rolled SCIM wire types (RFC 7643 Core User + Group,

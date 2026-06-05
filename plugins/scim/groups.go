@@ -28,7 +28,7 @@ func groupMeta(baseURL, orgID, groupID string, created, updated time.Time) *Reso
 		ResourceType: "Group",
 		Created:      isoUTC(created),
 		LastModified: isoUTC(updated),
-		Location:     base + "/api/scim/v2/organizations/" + orgID + "/Groups/" + groupID,
+		Location:     base + "/scim/v2/organizations/" + orgID + "/Groups/" + groupID,
 	}
 }
 
@@ -37,6 +37,7 @@ func projectGroup(ctx context.Context, host plugin.PluginHost, baseURL, orgID st
 	if err != nil {
 		return ScimGroup{}, repoToScim(err)
 	}
+	base := strings.TrimRight(baseURL, "/")
 	members := make([]ScimGroupMember, 0, len(users))
 	for _, u := range users {
 		display := u.Email
@@ -47,7 +48,7 @@ func projectGroup(ctx context.Context, host plugin.PluginHost, baseURL, orgID st
 			Value:   u.ID,
 			Display: display,
 			Type:    "User",
-			Ref:     "/api/scim/v2/organizations/" + orgID + "/Users/" + u.ID,
+			Ref:     base + "/scim/v2/organizations/" + orgID + "/Users/" + u.ID,
 		})
 	}
 	ext := ""
@@ -123,7 +124,7 @@ func (p *scimPlugin) handleCreateGroup(host plugin.PluginHost) http.HandlerFunc 
 		// Idempotency: a group with this externalId already exists → return it.
 		if payload.ExternalID != "" {
 			if existing, err := host.Repo().GetGroupByOrgAndExternalID(r.Context(), orgID, payload.ExternalID); err == nil {
-				out, scimErr := projectGroup(r.Context(), host, host.BaseURL(), orgID, existing)
+				out, scimErr := projectGroup(r.Context(), host, p.selfBaseURL(host), orgID, existing)
 				if scimErr != nil {
 					writeScimError(w, scimErr)
 					return
@@ -156,7 +157,7 @@ func (p *scimPlugin) handleCreateGroup(host plugin.PluginHost) http.HandlerFunc 
 		for _, m := range payload.Members {
 			addMemberIfOrgMember(r.Context(), host, orgID, g.ID, m.Value, now)
 		}
-		out, scimErr := projectGroup(r.Context(), host, host.BaseURL(), orgID, &g)
+		out, scimErr := projectGroup(r.Context(), host, p.selfBaseURL(host), orgID, &g)
 		if scimErr != nil {
 			writeScimError(w, scimErr)
 			return
@@ -206,7 +207,7 @@ func (p *scimPlugin) handleListGroups(host plugin.PluginHost) http.HandlerFunc {
 		}
 		groups := make([]ScimGroup, 0, len(all))
 		for _, g := range all {
-			sg, scimErr := projectGroup(r.Context(), host, host.BaseURL(), orgID, g)
+			sg, scimErr := projectGroup(r.Context(), host, p.selfBaseURL(host), orgID, g)
 			if scimErr != nil {
 				writeScimError(w, scimErr)
 				return
@@ -260,7 +261,7 @@ func (p *scimPlugin) handleGetGroup(host plugin.PluginHost) http.HandlerFunc {
 			writeScimError(w, scimErr)
 			return
 		}
-		out, scimErr := projectGroup(r.Context(), host, host.BaseURL(), orgID, g)
+		out, scimErr := projectGroup(r.Context(), host, p.selfBaseURL(host), orgID, g)
 		if scimErr != nil {
 			writeScimError(w, scimErr)
 			return
@@ -341,7 +342,7 @@ func (p *scimPlugin) handlePutGroup(host plugin.PluginHost) http.HandlerFunc {
 				addMemberIfOrgMember(r.Context(), host, orgID, g.ID, uid, now)
 			}
 		}
-		out, scimErr := projectGroup(r.Context(), host, host.BaseURL(), orgID, g)
+		out, scimErr := projectGroup(r.Context(), host, p.selfBaseURL(host), orgID, g)
 		if scimErr != nil {
 			writeScimError(w, scimErr)
 			return
@@ -430,7 +431,7 @@ func (p *scimPlugin) handlePatchGroup(host plugin.PluginHost) http.HandlerFunc {
 				// Unknown ops on Groups are tolerated.
 			}
 		}
-		out, scimErr := projectGroup(r.Context(), host, host.BaseURL(), orgID, g)
+		out, scimErr := projectGroup(r.Context(), host, p.selfBaseURL(host), orgID, g)
 		if scimErr != nil {
 			writeScimError(w, scimErr)
 			return

@@ -210,13 +210,13 @@ func decodeJSON(t *testing.T, resp *http.Response) map[string]any {
 	return m
 }
 
-func usersPath(orgID string) string { return "/api/scim/v2/organizations/" + orgID + "/Users" }
+func usersPath(orgID string) string { return "/scim/v2/organizations/" + orgID + "/Users" }
 func userPath(orgID, uid string) string {
 	return usersPath(orgID) + "/" + uid
 }
-func groupsPath(orgID string) string { return "/api/scim/v2/organizations/" + orgID + "/Groups" }
+func groupsPath(orgID string) string { return "/scim/v2/organizations/" + orgID + "/Groups" }
 func metaPath(orgID, leaf string) string {
-	return "/api/scim/v2/organizations/" + orgID + "/" + leaf
+	return "/scim/v2/organizations/" + orgID + "/" + leaf
 }
 
 // --- Happy-path tests --------------------------------------------------

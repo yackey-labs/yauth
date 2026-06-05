@@ -19,7 +19,7 @@ Open the app → **Provisioning** → **Get started** → set **Provisioning Mod
 
 | Field             | Value                                                                  |
 |-------------------|------------------------------------------------------------------------|
-| Tenant URL        | `https://yauth.example.com/api/scim/v2/organizations/{org_id}`         |
+| Tenant URL        | `https://yauth.example.com/api/auth/scim/v2/organizations/{org_id}`         |
 | Secret Token      | `<your-org-scoped-api-key>`                                            |
 
 Click **Test Connection**. Entra issues `GET /ServiceProviderConfig` followed by a sample `POST /Users`/`DELETE` round-trip. yauth's `ServiceProviderConfig` advertises `patch: supported`, `filter: supported (eq, co, sw, and only)`, `bulk: not supported`. Entra is tolerant of the bulk-unsupported declaration.

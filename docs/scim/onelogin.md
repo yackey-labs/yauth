@@ -20,7 +20,7 @@ Open the app → **Configuration** tab:
 
 | Field         | Value                                                                  |
 |---------------|------------------------------------------------------------------------|
-| SCIM Base URL | `https://yauth.example.com/api/scim/v2/organizations/{org_id}`         |
+| SCIM Base URL | `https://yauth.example.com/api/auth/scim/v2/organizations/{org_id}`         |
 | SCIM JSON Template | Leave at default (Core User)                                      |
 | SCIM Bearer Token | `<your-org-scoped-api-key>`                                        |
 
@@ -61,7 +61,7 @@ If you use OneLogin Roles or Groups to drive yauth's RBAC, configure the yauth-s
 
 1. Under **Users → Applications**, assign individual users to the SCIM app.
 2. Watch the SCIM app's **Logs** tab — every push event surfaces with the HTTP status it got from yauth.
-3. Cross-check the yauth side via `GET /api/scim/v2/organizations/{org_id}/Users` with the same bearer key, or in the yauth admin UI.
+3. Cross-check the yauth side via `GET /api/auth/scim/v2/organizations/{org_id}/Users` with the same bearer key, or in the yauth admin UI.
 
 ## Common gotchas
 

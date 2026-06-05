@@ -107,16 +107,42 @@ IdP degrades silently rather than erroring:
 - **`private_key_jwt` client auth requires `asymjwt`** (it verifies against the
   client's JWKS using the asymmetric path).
 
+## Mounting — `y.Mount`
+
+Mount the built `*YAuth` with `y.Mount(mux, yauth.MountOptions{})`. The default
+layout is the single-tenant-IdP norm: the API under `/api/auth` (the ecosystem
+default the Vue/SolidJS components expect) **plus** the discovery documents
+aliased at the host root. Set `Issuer` to the bare origin and `BasePath` to the
+API prefix (here `/api/auth`) so the root discovery doc's `issuer` matches the
+URL clients fetch it from. See `yauth docs mounting` for the full guide,
+including the `DiscoveryAtRoot` toggle and the issuer-as-identity rule.
+
+```go
+mux := http.NewServeMux()
+y.Mount(mux, yauth.MountOptions{}) // API under /api/auth + discovery at root
+```
+
+The low-level `y.Router()` (mount it yourself under any prefix via
+`http.StripPrefix`) remains available for custom routing.
+
 ## The `.well-known` surface
 
 With `asymjwt` + `oauth2server` + `oidc` mounted under `BasePath` (e.g.
-`/api/auth`):
+`/api/auth`), and root discovery on by default via `y.Mount`:
 
 | Path                                                  | RFC / spec        | Served by      |
 | ----------------------------------------------------- | ----------------- | -------------- |
 | `{BasePath}/.well-known/openid-configuration`         | OIDC Discovery    | `oidc`         |
 | `{BasePath}/.well-known/oauth-authorization-server`   | RFC 8414          | `oauth2server` |
 | `{BasePath}/.well-known/jwks.json`                    | JWK Set           | `asymjwt`      |
+| `/.well-known/openid-configuration` (root alias)      | OIDC Discovery    | `oidc`         |
+| `/.well-known/oauth-authorization-server` (root alias)| RFC 8414          | `oauth2server` |
+| `/.well-known/jwks.json` (root alias)                 | JWK Set           | `asymjwt`      |
+
+The root aliases are byte-identical to the prefixed docs (the documents are built
+from `Issuer`/`BasePath`, not the request path). Disable them by setting
+`MountOptions.DiscoveryAtRoot` to an explicit `false` when the issuer is not the
+bare origin.
 
 (For an MCP server you also expose RFC 9728 protected-resource metadata at the
 *root* via `mcpauth.Mount` — see `yauth docs mcp`.)

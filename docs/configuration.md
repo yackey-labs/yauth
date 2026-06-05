@@ -28,6 +28,17 @@ This is the right tool for "declarative config for the 90%, plus one custom
 thing." For MCP, the same idea applies: build the `*YAuth` (either path) and then
 add Go glue — `mcpauth.Mount`/`Guard` operate on the built instance.
 
+## Mounting the built instance
+
+However you built it, attach the `*YAuth` to your mux with
+`y.Mount(mux, yauth.MountOptions{})`. The default layout is the single-tenant-IdP
+norm: the API under `/api/auth` (the ecosystem default the frontend components
+expect) **plus** OIDC/OAuth discovery + JWKS aliased at the host root. This works
+only when the issuer is the bare origin (see the issuer rule above); toggle the
+root alias off with `MountOptions.DiscoveryAtRoot` set to an explicit `false`.
+The low-level `y.Router()` remains for custom mounting. Full guide:
+`yauth docs mounting`.
+
 ## Precedence — read this to avoid surprises
 
 **Value precedence (highest wins)** — the standard config layering
@@ -55,6 +66,9 @@ yauth also prefers to **fail loudly over silently ignoring** config:
   `server.base_url` (and likewise `base_path` → `server.prefix`). If both plugin
   fields are set to **different** values, `Validate` (hence `yauth check`)
   **errors** — set only one, or `server.base_url`, and the other inherits it.
+  For a single-tenant IdP set the issuer to the **bare origin** (no path) and the
+  base_path to your API prefix — that is what makes root `.well-known` discovery
+  valid. See the mounting note below and `yauth docs mounting`.
 - **HS256 secret.** `bearer.Config.JWTSecret` (set in Go) wins; if empty, the
   host secret from `WithJWTSecret` is used. On the YAML path the host secret is
   seeded from `bearer.jwt_secret_env`.

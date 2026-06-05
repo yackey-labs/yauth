@@ -49,19 +49,20 @@ func (r *Repo) withTx(ctx context.Context, fn func(tx pgx.Tx) error) error {
 
 func (r *Repo) CreateUser(ctx context.Context, input domain.NewUser) (domain.User, error) {
 	row, err := r.q.CreateUser(ctx, pgxgen.CreateUserParams{
-		ID:              input.ID,
-		Email:           input.Email,
-		DisplayName:     input.DisplayName,
-		EmailVerified:   input.EmailVerified,
-		Role:            input.Role,
-		Banned:          input.Banned,
-		BannedReason:    input.BannedReason,
-		BannedUntil:     tsPtr(input.BannedUntil),
-		SuspendedAt:     tsPtr(input.SuspendedAt),
-		SuspendedReason: input.SuspendedReason,
-		ActivatesAt:     tsPtr(input.ActivatesAt),
-		CreatedAt:       ts(input.CreatedAt),
-		UpdatedAt:       ts(input.UpdatedAt),
+		ID:                 input.ID,
+		Email:              input.Email,
+		DisplayName:        input.DisplayName,
+		EmailVerified:      input.EmailVerified,
+		Role:               input.Role,
+		Banned:             input.Banned,
+		BannedReason:       input.BannedReason,
+		BannedUntil:        tsPtr(input.BannedUntil),
+		SuspendedAt:        tsPtr(input.SuspendedAt),
+		SuspendedReason:    input.SuspendedReason,
+		ActivatesAt:        tsPtr(input.ActivatesAt),
+		MustChangePassword: input.MustChangePassword,
+		CreatedAt:          ts(input.CreatedAt),
+		UpdatedAt:          ts(input.UpdatedAt),
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -164,6 +165,21 @@ func (r *Repo) DeleteUser(ctx context.Context, id string) error {
 
 func (r *Repo) AnyUserExists(ctx context.Context) (bool, error) {
 	return r.q.AnyUserExists(ctx)
+}
+
+func (r *Repo) SetUserMustChangePassword(ctx context.Context, userID string, must bool) error {
+	n, err := r.q.SetUserMustChangePassword(ctx, pgxgen.SetUserMustChangePasswordParams{
+		ID:                 userID,
+		MustChangePassword: must,
+		UpdatedAt:          ts(time.Now().UTC()),
+	})
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return yautherr.ErrNotFound
+	}
+	return nil
 }
 
 func (r *Repo) ListUsers(ctx context.Context, search string, limit, offset int) ([]*domain.User, int64, error) {
@@ -2669,19 +2685,20 @@ func (r *Repo) ConsumeSsoLoginState(ctx context.Context, state string) (*domain.
 
 func userToDomain(m pgxgen.YauthUser) domain.User {
 	return domain.User{
-		ID:              m.ID,
-		Email:           m.Email,
-		DisplayName:     m.DisplayName,
-		EmailVerified:   m.EmailVerified,
-		Role:            m.Role,
-		Banned:          m.Banned,
-		BannedReason:    m.BannedReason,
-		BannedUntil:     fromTSPtr(m.BannedUntil),
-		SuspendedAt:     fromTSPtr(m.SuspendedAt),
-		SuspendedReason: m.SuspendedReason,
-		ActivatesAt:     fromTSPtr(m.ActivatesAt),
-		CreatedAt:       fromTS(m.CreatedAt),
-		UpdatedAt:       fromTS(m.UpdatedAt),
+		ID:                 m.ID,
+		Email:              m.Email,
+		DisplayName:        m.DisplayName,
+		EmailVerified:      m.EmailVerified,
+		Role:               m.Role,
+		Banned:             m.Banned,
+		BannedReason:       m.BannedReason,
+		BannedUntil:        fromTSPtr(m.BannedUntil),
+		SuspendedAt:        fromTSPtr(m.SuspendedAt),
+		SuspendedReason:    m.SuspendedReason,
+		ActivatesAt:        fromTSPtr(m.ActivatesAt),
+		MustChangePassword: m.MustChangePassword,
+		CreatedAt:          fromTS(m.CreatedAt),
+		UpdatedAt:          fromTS(m.UpdatedAt),
 	}
 }
 

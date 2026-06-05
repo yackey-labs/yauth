@@ -212,7 +212,7 @@ func (q *Queries) ListClientGroups(ctx context.Context, clientID string) ([]Yaut
 }
 
 const listGroupMembers = `-- name: ListGroupMembers :many
-SELECT u.id, u.email, u.display_name, u.email_verified, u.role, u.banned, u.banned_reason, u.banned_until, u.created_at, u.updated_at, u.suspended_at, u.suspended_reason, u.activates_at FROM yauth_users u
+SELECT u.id, u.email, u.display_name, u.email_verified, u.role, u.banned, u.banned_reason, u.banned_until, u.created_at, u.updated_at, u.suspended_at, u.suspended_reason, u.activates_at, u.must_change_password FROM yauth_users u
 JOIN yauth_group_members gm ON gm.user_id = u.id
 WHERE gm.group_id = $1
 ORDER BY u.email
@@ -241,6 +241,7 @@ func (q *Queries) ListGroupMembers(ctx context.Context, groupID string) ([]Yauth
 			&i.SuspendedAt,
 			&i.SuspendedReason,
 			&i.ActivatesAt,
+			&i.MustChangePassword,
 		); err != nil {
 			return nil, err
 		}

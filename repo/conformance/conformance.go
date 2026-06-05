@@ -200,6 +200,56 @@ var userCases = []testCase{
 			t.Fatalf("expected ErrNotFound, got %v", err)
 		}
 	}},
+	{"create_user_must_change_password_defaults_false", func(t *testing.T, r repo.Repository) {
+		u := mustCreateUser(t, r, "u1", "alice@example.com")
+		if u.MustChangePassword {
+			t.Fatalf("expected MustChangePassword=false by default, got true")
+		}
+		got, err := r.GetUserByID(ctx(), "u1")
+		if err != nil || got == nil || got.MustChangePassword {
+			t.Fatalf("expected stored false; got=%+v err=%v", got, err)
+		}
+	}},
+	{"create_user_must_change_password_true_round_trips", func(t *testing.T, r repo.Repository) {
+		now := nowUTC()
+		u, err := r.CreateUser(ctx(), domain.NewUser{
+			ID: "u1", Email: "alice@example.com", Role: "user",
+			MustChangePassword: true, CreatedAt: now, UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("CreateUser: %v", err)
+		}
+		if !u.MustChangePassword {
+			t.Fatalf("expected MustChangePassword=true on create return")
+		}
+		got, err := r.GetUserByID(ctx(), "u1")
+		if err != nil || got == nil || !got.MustChangePassword {
+			t.Fatalf("expected stored true; got=%+v err=%v", got, err)
+		}
+	}},
+	{"set_user_must_change_password_set_and_clear", func(t *testing.T, r repo.Repository) {
+		mustCreateUser(t, r, "u1", "alice@example.com")
+		if err := r.SetUserMustChangePassword(ctx(), "u1", true); err != nil {
+			t.Fatalf("SetUserMustChangePassword(true): %v", err)
+		}
+		got, err := r.GetUserByID(ctx(), "u1")
+		if err != nil || got == nil || !got.MustChangePassword {
+			t.Fatalf("expected true after set; got=%+v err=%v", got, err)
+		}
+		if err := r.SetUserMustChangePassword(ctx(), "u1", false); err != nil {
+			t.Fatalf("SetUserMustChangePassword(false): %v", err)
+		}
+		got, err = r.GetUserByID(ctx(), "u1")
+		if err != nil || got == nil || got.MustChangePassword {
+			t.Fatalf("expected false after clear; got=%+v err=%v", got, err)
+		}
+	}},
+	{"set_user_must_change_password_not_found", func(t *testing.T, r repo.Repository) {
+		err := r.SetUserMustChangePassword(ctx(), "missing", true)
+		if !errors.Is(err, yautherr.ErrNotFound) {
+			t.Fatalf("expected ErrNotFound, got %v", err)
+		}
+	}},
 	{"delete_user", func(t *testing.T, r repo.Repository) {
 		mustCreateUser(t, r, "u1", "alice@example.com")
 		if err := r.DeleteUser(ctx(), "u1"); err != nil {

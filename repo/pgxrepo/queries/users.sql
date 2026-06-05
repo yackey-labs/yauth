@@ -1,6 +1,6 @@
 -- name: CreateUser :one
-INSERT INTO yauth_users (id, email, display_name, email_verified, role, banned, banned_reason, banned_until, suspended_at, suspended_reason, activates_at, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+INSERT INTO yauth_users (id, email, display_name, email_verified, role, banned, banned_reason, banned_until, suspended_at, suspended_reason, activates_at, must_change_password, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 RETURNING *;
 
 -- name: GetUserByID :one
@@ -25,6 +25,9 @@ SET
     updated_at     = $1
 WHERE id = $2
 RETURNING *;
+
+-- name: SetUserMustChangePassword :execrows
+UPDATE yauth_users SET must_change_password = $2, updated_at = $3 WHERE id = $1;
 
 -- name: RevokeAllUserRefreshTokens :execrows
 UPDATE yauth_refresh_tokens SET revoked = true WHERE user_id = $1 AND revoked = false;

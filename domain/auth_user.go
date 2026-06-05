@@ -31,6 +31,11 @@ type OrgMembershipSummary struct {
 
 // AuthUser is the authenticated principal injected into request context.
 type AuthUser struct {
+	// User is the fully-resolved user row. It carries MustChangePassword,
+	// so middleware-resolved callers can be gated/redirected by the
+	// consuming app (yauth surfaces the flag but does not block); the flag
+	// is cleared automatically when the user changes or resets their
+	// password. See domain.User.MustChangePassword.
 	User    User
 	Session Session
 

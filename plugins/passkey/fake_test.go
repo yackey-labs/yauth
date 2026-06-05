@@ -83,6 +83,17 @@ func (f *fakeRepo) UpdateUser(_ context.Context, _ string, _ domain.UpdateUser) 
 }
 func (f *fakeRepo) DeleteUser(_ context.Context, _ string) error  { return yautherr.ErrInternal }
 func (f *fakeRepo) AnyUserExists(_ context.Context) (bool, error) { return len(f.users) > 0, nil }
+func (f *fakeRepo) SetUserMustChangePassword(_ context.Context, userID string, must bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	u, ok := f.users[userID]
+	if !ok {
+		return yautherr.ErrNotFound
+	}
+	u.MustChangePassword = must
+	f.users[userID] = u
+	return nil
+}
 func (f *fakeRepo) ListUsers(_ context.Context, _ string, _, _ int) ([]*domain.User, int64, error) {
 	return nil, 0, nil
 }

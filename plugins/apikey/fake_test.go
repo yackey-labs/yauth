@@ -205,6 +205,17 @@ func (f *fakeRepo) DeleteUser(_ context.Context, _ string) error {
 func (f *fakeRepo) AnyUserExists(_ context.Context) (bool, error) {
 	panic("fakeRepo: AnyUserExists not implemented")
 }
+func (f *fakeRepo) SetUserMustChangePassword(_ context.Context, userID string, must bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	u, ok := f.users[userID]
+	if !ok {
+		return yautherr.ErrNotFound
+	}
+	u.MustChangePassword = must
+	f.users[userID] = u
+	return nil
+}
 func (f *fakeRepo) ListUsers(_ context.Context, _ string, _, _ int) ([]*domain.User, int64, error) {
 	panic("fakeRepo: ListUsers not implemented")
 }

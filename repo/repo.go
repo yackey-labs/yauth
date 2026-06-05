@@ -22,6 +22,14 @@ type UserRepository interface {
 	// AnyUserExists reports whether at least one user row exists.
 	AnyUserExists(ctx context.Context) (bool, error)
 
+	// SetUserMustChangePassword sets or clears the user's
+	// must_change_password flag — the "forced password change on first
+	// sign-in" primitive. Apps/admins/seeds set it true when provisioning a
+	// credential out-of-band; the email-password change/reset handlers clear
+	// it (false) on a successful password change. Returns
+	// yautherr.ErrNotFound when no user matches userID.
+	SetUserMustChangePassword(ctx context.Context, userID string, must bool) error
+
 	// ListUsers returns a page of users plus the total matching the (optional)
 	// case-insensitive search filter. An empty search string disables the filter.
 	ListUsers(ctx context.Context, search string, limit, offset int) ([]*domain.User, int64, error)

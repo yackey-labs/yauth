@@ -30,20 +30,22 @@ import (
 // pointer fields to their JSON representation explicitly so the response
 // is stable regardless of how domain.User evolves.
 type epUserJSON struct {
-	ID            string  `json:"id"`
-	Email         string  `json:"email"`
-	DisplayName   *string `json:"display_name,omitempty"`
-	EmailVerified bool    `json:"email_verified"`
-	Role          string  `json:"role"`
+	ID                 string  `json:"id"`
+	Email              string  `json:"email"`
+	DisplayName        *string `json:"display_name,omitempty"`
+	EmailVerified      bool    `json:"email_verified"`
+	Role               string  `json:"role"`
+	MustChangePassword bool    `json:"must_change_password"`
 }
 
 func toEPUserJSON(u domain.User) epUserJSON {
 	return epUserJSON{
-		ID:            u.ID,
-		Email:         u.Email,
-		DisplayName:   u.DisplayName,
-		EmailVerified: u.EmailVerified,
-		Role:          u.Role,
+		ID:                 u.ID,
+		Email:              u.Email,
+		DisplayName:        u.DisplayName,
+		EmailVerified:      u.EmailVerified,
+		Role:               u.Role,
+		MustChangePassword: u.MustChangePassword,
 	}
 }
 
@@ -645,14 +647,18 @@ func (p *emailPasswordPlugin) registerLogout(host plugin.PluginHost, api huma.AP
 // keeps the response forward-compatible — adding session metadata like
 // expires_at doesn't move user fields around.
 type sessionUserBody struct {
-	ID            string   `json:"id"`
-	Email         string   `json:"email"`
-	DisplayName   *string  `json:"display_name,omitempty"`
-	EmailVerified bool     `json:"email_verified"`
-	Role          string   `json:"role"`
-	Banned        bool     `json:"banned"`
-	AuthMethod    string   `json:"auth_method"`
-	Scopes        []string `json:"scopes"`
+	ID            string  `json:"id"`
+	Email         string  `json:"email"`
+	DisplayName   *string `json:"display_name,omitempty"`
+	EmailVerified bool    `json:"email_verified"`
+	Role          string  `json:"role"`
+	Banned        bool    `json:"banned"`
+	// MustChangePassword surfaces the forced-password-change flag so a SPA
+	// can redirect the user to a change-password screen after login. yauth
+	// does not block authentication on this flag; enforcement is app-side.
+	MustChangePassword bool     `json:"must_change_password"`
+	AuthMethod         string   `json:"auth_method"`
+	Scopes             []string `json:"scopes"`
 }
 
 // sessionResponse wraps the user under `user`. Future session fields
@@ -668,14 +674,15 @@ func toSessionUserBody(au *domain.AuthUser) sessionUserBody {
 		method = domain.AuthMethodCookie
 	}
 	return sessionUserBody{
-		ID:            au.User.ID,
-		Email:         au.User.Email,
-		DisplayName:   au.User.DisplayName,
-		EmailVerified: au.User.EmailVerified,
-		Role:          au.User.Role,
-		Banned:        au.User.Banned,
-		AuthMethod:    method,
-		Scopes:        []string{},
+		ID:                 au.User.ID,
+		Email:              au.User.Email,
+		DisplayName:        au.User.DisplayName,
+		EmailVerified:      au.User.EmailVerified,
+		Role:               au.User.Role,
+		Banned:             au.User.Banned,
+		MustChangePassword: au.User.MustChangePassword,
+		AuthMethod:         method,
+		Scopes:             []string{},
 	}
 }
 
@@ -809,6 +816,14 @@ func (p *emailPasswordPlugin) registerChangePassword(host plugin.PluginHost, api
 			PasswordHash: newHash,
 		}); err != nil {
 			return nil, huma.Error500InternalServerError("unable to store password")
+		}
+
+		// Clear the forced-password-change flag, if set: the user has now
+		// rotated the out-of-band credential. The password is already
+		// durably stored, so a setter failure must not fail the change —
+		// log and continue (mirrors the reset-password idiom below).
+		if err := repoRef.SetUserMustChangePassword(ctx, au.User.ID, false); err != nil && !errors.Is(err, yautherr.ErrNotFound) {
+			log.Printf("yauth: clear must_change_password after change for %s: %v", au.User.ID, err)
 		}
 
 		// Invalidate every other session for this user, then re-issue a
@@ -1264,6 +1279,14 @@ func (p *emailPasswordPlugin) registerResetPassword(host plugin.PluginHost, api 
 			PasswordHash: newHash,
 		}); err != nil {
 			return nil, huma.Error500InternalServerError("unable to store password")
+		}
+
+		// Clear the forced-password-change flag, if set: an admin-forced
+		// reset followed by the user choosing a new password satisfies the
+		// "must change" requirement. The password is already stored, so a
+		// setter failure must not fail the reset — log and continue.
+		if err := repoRef.SetUserMustChangePassword(ctx, pr.UserID, false); err != nil && !errors.Is(err, yautherr.ErrNotFound) {
+			log.Printf("yauth: clear must_change_password after reset for %s: %v", pr.UserID, err)
 		}
 
 		// Invalidate every session for this user — a /reset-password

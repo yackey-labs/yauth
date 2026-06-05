@@ -110,6 +110,9 @@
           "email_verified": {
             "type": "boolean"
           },
+          "must_change_password": {
+            "type": "boolean"
+          },
           "role": {
             "type": "string"
           }
@@ -1417,6 +1420,9 @@
           "id": {
             "type": "string"
           },
+          "must_change_password": {
+            "type": "boolean"
+          },
           "role": {
             "type": "string"
           }
@@ -1425,7 +1431,8 @@
           "id",
           "email",
           "email_verified",
-          "role"
+          "role",
+          "must_change_password"
         ],
         "type": "object"
       },
@@ -3522,6 +3529,9 @@
           "id": {
             "type": "string"
           },
+          "must_change_password": {
+            "type": "boolean"
+          },
           "role": {
             "type": "string"
           },
@@ -3541,6 +3551,7 @@
           "email_verified",
           "role",
           "banned",
+          "must_change_password",
           "auth_method",
           "scopes"
         ],
@@ -3893,6 +3904,9 @@
           "id": {
             "type": "string"
           },
+          "must_change_password": {
+            "type": "boolean"
+          },
           "role": {
             "type": "string"
           },
@@ -3918,6 +3932,7 @@
           "role",
           "banned",
           "suspended",
+          "must_change_password",
           "created_at",
           "updated_at"
         ],

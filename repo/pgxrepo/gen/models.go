@@ -363,19 +363,20 @@ type YauthUnlockToken struct {
 }
 
 type YauthUser struct {
-	ID              string
-	Email           string
-	DisplayName     *string
-	EmailVerified   bool
-	Role            string
-	Banned          bool
-	BannedReason    *string
-	BannedUntil     pgtype.Timestamptz
-	CreatedAt       pgtype.Timestamptz
-	UpdatedAt       pgtype.Timestamptz
-	SuspendedAt     pgtype.Timestamptz
-	SuspendedReason *string
-	ActivatesAt     pgtype.Timestamptz
+	ID                 string
+	Email              string
+	DisplayName        *string
+	EmailVerified      bool
+	Role               string
+	Banned             bool
+	BannedReason       *string
+	BannedUntil        pgtype.Timestamptz
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+	SuspendedAt        pgtype.Timestamptz
+	SuspendedReason    *string
+	ActivatesAt        pgtype.Timestamptz
+	MustChangePassword bool
 }
 
 type YauthWebauthnCredential struct {

@@ -35,25 +35,26 @@ func (q *Queries) CountUsersSearch(ctx context.Context, dollar_1 string) (int64,
 }
 
 const createUser = `-- name: CreateUser :one
-INSERT INTO yauth_users (id, email, display_name, email_verified, role, banned, banned_reason, banned_until, suspended_at, suspended_reason, activates_at, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-RETURNING id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at, suspended_at, suspended_reason, activates_at
+INSERT INTO yauth_users (id, email, display_name, email_verified, role, banned, banned_reason, banned_until, suspended_at, suspended_reason, activates_at, must_change_password, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+RETURNING id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at, suspended_at, suspended_reason, activates_at, must_change_password
 `
 
 type CreateUserParams struct {
-	ID              string
-	Email           string
-	DisplayName     *string
-	EmailVerified   bool
-	Role            string
-	Banned          bool
-	BannedReason    *string
-	BannedUntil     pgtype.Timestamptz
-	SuspendedAt     pgtype.Timestamptz
-	SuspendedReason *string
-	ActivatesAt     pgtype.Timestamptz
-	CreatedAt       pgtype.Timestamptz
-	UpdatedAt       pgtype.Timestamptz
+	ID                 string
+	Email              string
+	DisplayName        *string
+	EmailVerified      bool
+	Role               string
+	Banned             bool
+	BannedReason       *string
+	BannedUntil        pgtype.Timestamptz
+	SuspendedAt        pgtype.Timestamptz
+	SuspendedReason    *string
+	ActivatesAt        pgtype.Timestamptz
+	MustChangePassword bool
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
 }
 
 func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (YauthUser, error) {
@@ -69,6 +70,7 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (YauthUs
 		arg.SuspendedAt,
 		arg.SuspendedReason,
 		arg.ActivatesAt,
+		arg.MustChangePassword,
 		arg.CreatedAt,
 		arg.UpdatedAt,
 	)
@@ -87,6 +89,7 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (YauthUs
 		&i.SuspendedAt,
 		&i.SuspendedReason,
 		&i.ActivatesAt,
+		&i.MustChangePassword,
 	)
 	return i, err
 }
@@ -104,7 +107,7 @@ func (q *Queries) DeleteUser(ctx context.Context, id string) (int64, error) {
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at, suspended_at, suspended_reason, activates_at FROM yauth_users WHERE email = $1 LIMIT 1
+SELECT id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at, suspended_at, suspended_reason, activates_at, must_change_password FROM yauth_users WHERE email = $1 LIMIT 1
 `
 
 func (q *Queries) GetUserByEmail(ctx context.Context, email string) (YauthUser, error) {
@@ -124,12 +127,13 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (YauthUser, 
 		&i.SuspendedAt,
 		&i.SuspendedReason,
 		&i.ActivatesAt,
+		&i.MustChangePassword,
 	)
 	return i, err
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at, suspended_at, suspended_reason, activates_at FROM yauth_users WHERE id = $1 LIMIT 1
+SELECT id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at, suspended_at, suspended_reason, activates_at, must_change_password FROM yauth_users WHERE id = $1 LIMIT 1
 `
 
 func (q *Queries) GetUserByID(ctx context.Context, id string) (YauthUser, error) {
@@ -149,12 +153,13 @@ func (q *Queries) GetUserByID(ctx context.Context, id string) (YauthUser, error)
 		&i.SuspendedAt,
 		&i.SuspendedReason,
 		&i.ActivatesAt,
+		&i.MustChangePassword,
 	)
 	return i, err
 }
 
 const listUsersSearch = `-- name: ListUsersSearch :many
-SELECT id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at, suspended_at, suspended_reason, activates_at FROM yauth_users
+SELECT id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at, suspended_at, suspended_reason, activates_at, must_change_password FROM yauth_users
 WHERE ($1::text = '' OR LOWER(email) LIKE '%' || LOWER($1::text) || '%' OR LOWER(COALESCE(display_name, '')) LIKE '%' || LOWER($1::text) || '%')
 ORDER BY created_at ASC, id ASC
 LIMIT CASE WHEN $2::int > 0 THEN $2::int ELSE NULL END
@@ -190,6 +195,7 @@ func (q *Queries) ListUsersSearch(ctx context.Context, arg ListUsersSearchParams
 			&i.SuspendedAt,
 			&i.SuspendedReason,
 			&i.ActivatesAt,
+			&i.MustChangePassword,
 		); err != nil {
 			return nil, err
 		}
@@ -213,6 +219,24 @@ func (q *Queries) RevokeAllUserRefreshTokens(ctx context.Context, userID string)
 	return result.RowsAffected(), nil
 }
 
+const setUserMustChangePassword = `-- name: SetUserMustChangePassword :execrows
+UPDATE yauth_users SET must_change_password = $2, updated_at = $3 WHERE id = $1
+`
+
+type SetUserMustChangePasswordParams struct {
+	ID                 string
+	MustChangePassword bool
+	UpdatedAt          pgtype.Timestamptz
+}
+
+func (q *Queries) SetUserMustChangePassword(ctx context.Context, arg SetUserMustChangePasswordParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setUserMustChangePassword, arg.ID, arg.MustChangePassword, arg.UpdatedAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const updateUserFull = `-- name: UpdateUserFull :one
 UPDATE yauth_users
 SET
@@ -228,7 +252,7 @@ SET
     activates_at      = CASE WHEN $17::boolean THEN $18 ELSE activates_at END,
     updated_at     = $1
 WHERE id = $2
-RETURNING id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at, suspended_at, suspended_reason, activates_at
+RETURNING id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at, suspended_at, suspended_reason, activates_at, must_change_password
 `
 
 type UpdateUserFullParams struct {
@@ -288,6 +312,7 @@ func (q *Queries) UpdateUserFull(ctx context.Context, arg UpdateUserFullParams) 
 		&i.SuspendedAt,
 		&i.SuspendedReason,
 		&i.ActivatesAt,
+		&i.MustChangePassword,
 	)
 	return i, err
 }

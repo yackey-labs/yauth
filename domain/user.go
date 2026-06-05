@@ -20,8 +20,15 @@ type User struct {
 	// ActivatesAt schedules a start: while it is in the future the user is
 	// "staged" and cannot authenticate yet (onboarding ahead of a start date).
 	ActivatesAt *time.Time
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	// MustChangePassword marks a credential that was provisioned out-of-band
+	// (admin/seed/bootstrap) and must be rotated by the user before it is
+	// trusted — the "forced password change on first sign-in" primitive. yauth
+	// surfaces it on the resolved AuthUser and clears it automatically when the
+	// user changes or resets their password; it does NOT itself block
+	// authentication. Enforcement (gate/redirect) is the consuming app's choice.
+	MustChangePassword bool
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 // Staged reports whether the user has a scheduled start still in the future.
@@ -37,19 +44,20 @@ func (u User) CanAuthenticate(now time.Time) bool {
 
 // NewUser is the input for creating a user.
 type NewUser struct {
-	ID              string
-	Email           string
-	DisplayName     *string
-	EmailVerified   bool
-	Role            string
-	Banned          bool
-	BannedReason    *string
-	BannedUntil     *time.Time
-	SuspendedAt     *time.Time
-	SuspendedReason *string
-	ActivatesAt     *time.Time
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	ID                 string
+	Email              string
+	DisplayName        *string
+	EmailVerified      bool
+	Role               string
+	Banned             bool
+	BannedReason       *string
+	BannedUntil        *time.Time
+	SuspendedAt        *time.Time
+	SuspendedReason    *string
+	ActivatesAt        *time.Time
+	MustChangePassword bool
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 // UpdateUser is a partial update payload; nil fields are unchanged.

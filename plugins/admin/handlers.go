@@ -26,38 +26,40 @@ func newID() string { return uuid.NewString() }
 // plugin's userJSON but adds the admin-relevant fields (banned, banned_*,
 // timestamps) the admin UI needs.
 type userJSON struct {
-	ID              string     `json:"id"`
-	Email           string     `json:"email"`
-	DisplayName     *string    `json:"display_name,omitempty"`
-	EmailVerified   bool       `json:"email_verified"`
-	Role            string     `json:"role"`
-	Banned          bool       `json:"banned"`
-	BannedReason    *string    `json:"banned_reason,omitempty"`
-	BannedUntil     *time.Time `json:"banned_until,omitempty"`
-	Suspended       bool       `json:"suspended"`
-	SuspendedAt     *time.Time `json:"suspended_at,omitempty"`
-	SuspendedReason *string    `json:"suspended_reason,omitempty"`
-	ActivatesAt     *time.Time `json:"activates_at,omitempty"`
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
+	ID                 string     `json:"id"`
+	Email              string     `json:"email"`
+	DisplayName        *string    `json:"display_name,omitempty"`
+	EmailVerified      bool       `json:"email_verified"`
+	Role               string     `json:"role"`
+	Banned             bool       `json:"banned"`
+	BannedReason       *string    `json:"banned_reason,omitempty"`
+	BannedUntil        *time.Time `json:"banned_until,omitempty"`
+	Suspended          bool       `json:"suspended"`
+	SuspendedAt        *time.Time `json:"suspended_at,omitempty"`
+	SuspendedReason    *string    `json:"suspended_reason,omitempty"`
+	ActivatesAt        *time.Time `json:"activates_at,omitempty"`
+	MustChangePassword bool       `json:"must_change_password"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
 }
 
 func toUserJSON(u domain.User) userJSON {
 	return userJSON{
-		ID:              u.ID,
-		Email:           u.Email,
-		DisplayName:     u.DisplayName,
-		EmailVerified:   u.EmailVerified,
-		Role:            u.Role,
-		Banned:          u.Banned,
-		BannedReason:    u.BannedReason,
-		BannedUntil:     u.BannedUntil,
-		Suspended:       u.SuspendedAt != nil,
-		SuspendedAt:     u.SuspendedAt,
-		SuspendedReason: u.SuspendedReason,
-		ActivatesAt:     u.ActivatesAt,
-		CreatedAt:       u.CreatedAt,
-		UpdatedAt:       u.UpdatedAt,
+		ID:                 u.ID,
+		Email:              u.Email,
+		DisplayName:        u.DisplayName,
+		EmailVerified:      u.EmailVerified,
+		Role:               u.Role,
+		Banned:             u.Banned,
+		BannedReason:       u.BannedReason,
+		BannedUntil:        u.BannedUntil,
+		Suspended:          u.SuspendedAt != nil,
+		SuspendedAt:        u.SuspendedAt,
+		SuspendedReason:    u.SuspendedReason,
+		ActivatesAt:        u.ActivatesAt,
+		MustChangePassword: u.MustChangePassword,
+		CreatedAt:          u.CreatedAt,
+		UpdatedAt:          u.UpdatedAt,
 	}
 }
 
@@ -183,10 +185,15 @@ func (p *adminPlugin) registerListUsers(host plugin.PluginHost, api huma.API, mw
 // --- PATCH/PUT /admin/users/{id} -----------------------------------------
 
 type adminPatchUserRequest struct {
-	DisplayName   *string  `json:"display_name,omitempty"`
-	Role          *string  `json:"role,omitempty"`
-	EmailVerified *bool    `json:"email_verified,omitempty"`
-	_             struct{} `json:"-" additionalProperties:"false"`
+	DisplayName   *string `json:"display_name,omitempty"`
+	Role          *string `json:"role,omitempty"`
+	EmailVerified *bool   `json:"email_verified,omitempty"`
+	// MustChangePassword, when present, sets or clears the forced
+	// password-change flag — used to provision a bootstrap credential the
+	// user must rotate on first sign-in. yauth surfaces the flag and clears
+	// it on a successful password change/reset; enforcement is app-side.
+	MustChangePassword *bool    `json:"must_change_password,omitempty"`
+	_                  struct{} `json:"-" additionalProperties:"false"`
 }
 
 type idInput struct {
@@ -238,6 +245,15 @@ func (p *adminPlugin) registerPatchUser(host plugin.PluginHost, api huma.API, mw
 				return nil, huma.Error404NotFound("user not found")
 			}
 			return nil, huma.Error500InternalServerError("unable to update user")
+		}
+		if req.MustChangePassword != nil {
+			if err := host.Repo().SetUserMustChangePassword(ctx, in.ID, *req.MustChangePassword); err != nil {
+				if errors.Is(err, yautherr.ErrNotFound) {
+					return nil, huma.Error404NotFound("user not found")
+				}
+				return nil, huma.Error500InternalServerError("unable to update user")
+			}
+			u.MustChangePassword = *req.MustChangePassword
 		}
 		return &userOutput{Body: toUserJSON(u)}, nil
 	})

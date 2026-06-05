@@ -34,19 +34,20 @@ func (r *Repo) CreateUser(ctx context.Context, input domain.NewUser) (domain.Use
 	}
 
 	u := &domain.User{
-		ID:              input.ID,
-		Email:           input.Email,
-		DisplayName:     input.DisplayName,
-		EmailVerified:   input.EmailVerified,
-		Role:            input.Role,
-		Banned:          input.Banned,
-		BannedReason:    input.BannedReason,
-		BannedUntil:     input.BannedUntil,
-		SuspendedAt:     input.SuspendedAt,
-		SuspendedReason: input.SuspendedReason,
-		ActivatesAt:     input.ActivatesAt,
-		CreatedAt:       created.UTC(),
-		UpdatedAt:       updated.UTC(),
+		ID:                 input.ID,
+		Email:              input.Email,
+		DisplayName:        input.DisplayName,
+		EmailVerified:      input.EmailVerified,
+		Role:               input.Role,
+		Banned:             input.Banned,
+		BannedReason:       input.BannedReason,
+		BannedUntil:        input.BannedUntil,
+		SuspendedAt:        input.SuspendedAt,
+		SuspendedReason:    input.SuspendedReason,
+		ActivatesAt:        input.ActivatesAt,
+		MustChangePassword: input.MustChangePassword,
+		CreatedAt:          created.UTC(),
+		UpdatedAt:          updated.UTC(),
 	}
 	if u.BannedUntil != nil {
 		t := u.BannedUntil.UTC()
@@ -144,6 +145,19 @@ func (r *Repo) UpdateUser(ctx context.Context, id string, changes domain.UpdateU
 		u.UpdatedAt = changes.UpdatedAt.UTC()
 	}
 	return *cloneUser(u), nil
+}
+
+func (r *Repo) SetUserMustChangePassword(ctx context.Context, userID string, must bool) error {
+	_ = ensureCtx(ctx)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	u, ok := r.users[userID]
+	if !ok {
+		return yautherr.ErrNotFound
+	}
+	u.MustChangePassword = must
+	u.UpdatedAt = time.Now().UTC()
+	return nil
 }
 
 func (r *Repo) DeleteUser(ctx context.Context, id string) error {

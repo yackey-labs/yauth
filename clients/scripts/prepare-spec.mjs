@@ -5,10 +5,14 @@
 // This reads that local file directly — same repo, no network, so a server
 // change and the regenerated client land in one commit.
 //
-// SCIM (`/api/scim/v2/*`) is stripped: it is server-to-server provisioning
-// (Okta/Entra → yauth) the Vue frontend never calls, and its
+// SCIM (`/scim/v2/*` in the router-root spec; served under the mount prefix
+// e.g. `/api/auth/scim/v2/*`) is stripped: it is server-to-server
+// provisioning (Okta/Entra → yauth) the Vue frontend never calls, and its
 // `ScimGroupMemberBody` schema has a property literally named `$ref` (RFC 7643
-// member reference) which orval's reference resolver mishandles.
+// member reference) which orval's reference resolver mishandles. Paths and
+// their Scim* schemas are removed together so no dangling $ref survives —
+// match on the path segment (not a mount prefix) so this keeps working
+// regardless of where the SCIM tree is mounted.
 import { readFileSync, writeFileSync } from "node:fs";
 
 // Run from the workspace root (clients/); the Go-generated spec sits one level
@@ -16,7 +20,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 const spec = JSON.parse(readFileSync("../openapi.json", "utf8"));
 
 for (const path of Object.keys(spec.paths ?? {})) {
-	if (path.startsWith("/api/scim/")) delete spec.paths[path];
+	if (path.includes("/scim/v2/")) delete spec.paths[path];
 }
 for (const name of Object.keys(spec.components?.schemas ?? {})) {
 	if (name.startsWith("Scim")) delete spec.components.schemas[name];

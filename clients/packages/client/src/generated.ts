@@ -48,6 +48,7 @@ export interface AdminDeleteUserRequest {
 export interface AdminPatchUserRequest {
   display_name?: string;
   email_verified?: boolean;
+  must_change_password?: boolean;
   role?: string;
 }
 
@@ -228,14 +229,17 @@ export interface ClientJSON {
   banned: boolean;
   banned_reason?: string;
   client_id: string;
+  client_uri?: string;
   created_at: string;
   enforce_group_assignment: boolean;
   /** @nullable */
   grant_types: string[] | null;
   has_public_key: boolean;
   id: string;
+  initiate_login_uri?: string;
   is_public: boolean;
   jwks_uri?: string;
+  logo_uri?: string;
   name?: string;
   /** @nullable */
   post_logout_redirect_uris: string[] | null;
@@ -282,11 +286,14 @@ export interface ConsentRequest {
 export interface CreateClientRequest {
   backchannel_logout_session_required?: boolean;
   backchannel_logout_uri?: string;
+  client_uri?: string;
   enforce_group_assignment?: boolean;
   /** @nullable */
   grant_types?: string[] | null;
+  initiate_login_uri?: string;
   is_public?: boolean;
   jwks_uri?: string;
+  logo_uri?: string;
   name?: string;
   /** @nullable */
   post_logout_redirect_uris?: string[] | null;
@@ -532,6 +539,7 @@ export interface EpUserJSON {
   email: string;
   email_verified: boolean;
   id: string;
+  must_change_password: boolean;
   role: string;
 }
 
@@ -620,6 +628,7 @@ export interface UserJSON {
   email: string;
   email_verified: boolean;
   id: string;
+  must_change_password: boolean;
   role: string;
   suspended: boolean;
   suspended_at?: string;
@@ -919,7 +928,10 @@ export interface PatchClientRequest {
   backchannel_logout_uri?: string;
   banned?: boolean;
   banned_reason?: string;
+  client_uri?: string;
   enforce_group_assignment?: boolean;
+  initiate_login_uri?: string;
+  logo_uri?: string;
   post_logout_redirect_uris?: string[];
   public_key_pem?: string;
 }
@@ -1070,6 +1082,7 @@ export interface SessionUserBody {
   email: string;
   email_verified: boolean;
   id: string;
+  must_change_password: boolean;
   role: string;
   /** @nullable */
   scopes: string[] | null;

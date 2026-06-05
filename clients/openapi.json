@@ -110,6 +110,9 @@
           "email_verified": {
             "type": "boolean"
           },
+          "must_change_password": {
+            "type": "boolean"
+          },
           "role": {
             "type": "string"
           }
@@ -645,6 +648,9 @@
           "client_id": {
             "type": "string"
           },
+          "client_uri": {
+            "type": "string"
+          },
           "created_at": {
             "format": "date-time",
             "type": "string"
@@ -667,10 +673,16 @@
           "id": {
             "type": "string"
           },
+          "initiate_login_uri": {
+            "type": "string"
+          },
           "is_public": {
             "type": "boolean"
           },
           "jwks_uri": {
+            "type": "string"
+          },
+          "logo_uri": {
             "type": "string"
           },
           "name": {
@@ -812,6 +824,9 @@
           "backchannel_logout_uri": {
             "type": "string"
           },
+          "client_uri": {
+            "type": "string"
+          },
           "enforce_group_assignment": {
             "type": "boolean"
           },
@@ -824,10 +839,16 @@
               "null"
             ]
           },
+          "initiate_login_uri": {
+            "type": "string"
+          },
           "is_public": {
             "type": "boolean"
           },
           "jwks_uri": {
+            "type": "string"
+          },
+          "logo_uri": {
             "type": "string"
           },
           "name": {
@@ -1399,6 +1420,9 @@
           "id": {
             "type": "string"
           },
+          "must_change_password": {
+            "type": "boolean"
+          },
           "role": {
             "type": "string"
           }
@@ -1407,7 +1431,8 @@
           "id",
           "email",
           "email_verified",
-          "role"
+          "role",
+          "must_change_password"
         ],
         "type": "object"
       },
@@ -2793,8 +2818,17 @@
           "banned_reason": {
             "type": "string"
           },
+          "client_uri": {
+            "type": "string"
+          },
           "enforce_group_assignment": {
             "type": "boolean"
+          },
+          "initiate_login_uri": {
+            "type": "string"
+          },
+          "logo_uri": {
+            "type": "string"
           },
           "post_logout_redirect_uris": {
             "items": {
@@ -3428,6 +3462,9 @@
           "id": {
             "type": "string"
           },
+          "must_change_password": {
+            "type": "boolean"
+          },
           "role": {
             "type": "string"
           },
@@ -3447,6 +3484,7 @@
           "email_verified",
           "role",
           "banned",
+          "must_change_password",
           "auth_method",
           "scopes"
         ],
@@ -3799,6 +3837,9 @@
           "id": {
             "type": "string"
           },
+          "must_change_password": {
+            "type": "boolean"
+          },
           "role": {
             "type": "string"
           },
@@ -3824,6 +3865,7 @@
           "role",
           "banned",
           "suspended",
+          "must_change_password",
           "created_at",
           "updated_at"
         ],

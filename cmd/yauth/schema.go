@@ -26,8 +26,8 @@ func newSchemaConfigCmd() *cobra.Command {
 		Use:   "config",
 		Short: "Emit the yauth.yaml config schema as JSON Schema (Draft 2020-12)",
 		Long: "Reflects the config schema from yauthcfg.Config in this exact binary, " +
-			"so the schema always matches what this version parses. Field descriptions " +
-			"live in the source comments / `yauth docs`.",
+			"so the schema always matches what this version parses. Key fields carry " +
+			"inline descriptions/enums; fuller prose lives in `yauth docs`.",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			schema := structSchema(reflect.TypeOf(yauthcfg.Config{}), reflect.ValueOf(*yauthcfg.Default()))
@@ -121,7 +121,23 @@ func structSchema(t reflect.Type, v reflect.Value) map[string]any {
 		if v.IsValid() {
 			fv = v.Field(i)
 		}
-		props[name] = fieldSchema(f.Type, fv)
+		node := fieldSchema(f.Type, fv)
+		// Optional self-documentation: a `doc:"..."` tag becomes the JSON
+		// Schema description and an `enum:"a,b,c"` tag becomes the allowed
+		// value set, so `yauth schema config` is informative on its own (Go
+		// reflection cannot read source comments at runtime).
+		if doc := f.Tag.Get("doc"); doc != "" {
+			node["description"] = doc
+		}
+		if enum := f.Tag.Get("enum"); enum != "" {
+			vals := strings.Split(enum, ",")
+			anyVals := make([]any, len(vals))
+			for j, e := range vals {
+				anyVals[j] = strings.TrimSpace(e)
+			}
+			node["enum"] = anyVals
+		}
+		props[name] = node
 		// A field is "required" only if it has no natural empty form: pointer
 		// fields and omitempty fields are optional by construction.
 		if f.Type.Kind() != reflect.Pointer && !opts["omitempty"] {

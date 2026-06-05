@@ -94,11 +94,19 @@ func newContextCmd() *cobra.Command {
 			fmt.Fprintln(out, "`yauth.NewBuilderFromConfig` then `.WithPlugin(...)`. Precedence rules, env")
 			fmt.Fprintln(out, "handling, and the no-duplicate-plugin rule: `yauth docs configuration`.")
 			fmt.Fprintln(out)
+			fmt.Fprintln(out, "## Email delivery (mailer)")
+			fmt.Fprintln(out)
+			fmt.Fprintln(out, "email-password, magic-link, and lockout send links that carry single-use")
+			fmt.Fprintln(out, "tokens. The DEFAULT `mailer.provider: logging` is dev-only — it writes those")
+			fmt.Fprintln(out, "tokens to the log and sends NO email (a one-time WARN fires at startup when")
+			fmt.Fprintln(out, "it is active). Set `mailer.provider: smtp` for production. See `yauth docs mailer`.")
+			fmt.Fprintln(out)
 			fmt.Fprintln(out, "## Getting started")
 			fmt.Fprintln(out)
 			fmt.Fprintln(out, "1. `yauth init` then edit yauth.yaml (validate fields with `yauth schema config`)")
 			fmt.Fprintln(out, "2. `yauth check -c yauth.yaml` then `yauth migrate -c yauth.yaml`")
-			fmt.Fprintln(out, "3. Frontend: `yauth docs typescript/setup`")
+			fmt.Fprintln(out, "3. Set `mailer.provider: smtp` for prod email (`yauth docs mailer`)")
+			fmt.Fprintln(out, "4. Frontend: `yauth docs typescript/setup`")
 
 			return nil
 		},

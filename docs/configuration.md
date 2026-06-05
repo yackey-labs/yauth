@@ -162,6 +162,7 @@ mailer:
 ```
 
 (Builder path: set `Config.Mailer` on `emailpassword`/`magiclink`/`lockout`.)
+Full guide, including a builder example and custom providers: `yauth docs mailer`.
 
 ## See also
 

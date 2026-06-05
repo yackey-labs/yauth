@@ -121,23 +121,24 @@ type CORSConfig struct {
 }
 
 // MailerConfig selects an outbound mailer for the host. Provider "logging"
-// (the default) writes deliveries to stderr; "smtp" routes through the
-// configured SMTP server.
+// (the default) is a DEV stand-in that writes the would-be email — including
+// verification/reset/magic-link tokens — to the log and sends nothing; use
+// "smtp" in production. See `yauth docs mailer`.
 type MailerConfig struct {
-	Provider string     `yaml:"provider" toml:"provider"`
-	From     string     `yaml:"from" toml:"from"`
-	SMTP     SMTPConfig `yaml:"smtp" toml:"smtp"`
+	Provider string     `yaml:"provider" toml:"provider" enum:"logging,smtp" doc:"Outbound mailer. 'logging' (default) is DEV ONLY: it logs the would-be email body — including single-use verification/reset/magic-link bearer tokens — and sends NO real email. Set 'smtp' for production. See 'yauth docs mailer'."`
+	From     string     `yaml:"from" toml:"from" doc:"Envelope/From address for outbound mail. Required when provider=smtp."`
+	SMTP     SMTPConfig `yaml:"smtp" toml:"smtp" doc:"SMTP connection settings (used when provider=smtp)."`
 }
 
 // SMTPConfig holds SMTP connection details. Username/password are
 // resolved from environment variables to keep the config file safe to
 // commit.
 type SMTPConfig struct {
-	Host        string `yaml:"host" toml:"host"`
-	Port        int    `yaml:"port" toml:"port"`
-	UsernameEnv string `yaml:"username_env" toml:"username_env"`
-	PasswordEnv string `yaml:"password_env" toml:"password_env"`
-	TLS         bool   `yaml:"tls" toml:"tls"`
+	Host        string `yaml:"host" toml:"host" doc:"SMTP server hostname (required when provider=smtp)."`
+	Port        int    `yaml:"port" toml:"port" doc:"SMTP server port, e.g. 587 (required when provider=smtp)."`
+	UsernameEnv string `yaml:"username_env" toml:"username_env" doc:"Name of the env var holding the SMTP username (the value is read at runtime; the var name, not the secret, lives in config)."`
+	PasswordEnv string `yaml:"password_env" toml:"password_env" doc:"Name of the env var holding the SMTP password."`
+	TLS         bool   `yaml:"tls" toml:"tls" doc:"Use TLS for the SMTP connection."`
 }
 
 // SessionConfig mirrors the cookie/session knobs on yauth.YAuthConfig.

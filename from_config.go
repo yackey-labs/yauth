@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -51,12 +52,41 @@ import (
 // app replicas — concurrent AutoMigrate calls race in multi-replica
 // deployments. The optional cfg.Database.AutoMigrate flag overrides
 // this for development only and prints a stderr warning when set.
-func NewFromConfig(ctx context.Context, cfg *yauthcfg.Config) (*YAuth, error) {
-	b, err := NewBuilderFromConfig(ctx, cfg)
+func NewFromConfig(ctx context.Context, cfg *yauthcfg.Config, opts ...ConfigOption) (*YAuth, error) {
+	b, err := NewBuilderFromConfig(ctx, cfg, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return b.Build()
+}
+
+// ConfigOption tweaks how NewFromConfig / NewBuilderFromConfig assemble the
+// instance. It is the yaml-path equivalent of the builder's With* methods for
+// the few things the config file cannot carry (e.g. a live *slog.Logger).
+type ConfigOption func(*configOptions)
+
+type configOptions struct {
+	logger *slog.Logger
+}
+
+func resolveConfigOptions(opts []ConfigOption) configOptions {
+	o := configOptions{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&o)
+		}
+	}
+	if o.logger == nil {
+		o.logger = slog.Default()
+	}
+	return o
+}
+
+// WithConfigLogger sets the structured logger used by the config-built
+// instance — both the startup config advisories below and, via the builder's
+// WithLogger, all runtime logging. Defaults to slog.Default().
+func WithConfigLogger(l *slog.Logger) ConfigOption {
+	return func(o *configOptions) { o.logger = l }
 }
 
 // NewBuilderFromConfig wires a *YAuthBuilder from a yauthcfg.Config — the same
@@ -68,17 +98,19 @@ func NewFromConfig(ctx context.Context, cfg *yauthcfg.Config) (*YAuth, error) {
 //	b, err := yauth.NewBuilderFromConfig(ctx, cfg)
 //	if err != nil { ... }
 //	ya, err := b.WithPlugin(myInHousePlugin).Build()
-func NewBuilderFromConfig(ctx context.Context, cfg *yauthcfg.Config) (*YAuthBuilder, error) {
+func NewBuilderFromConfig(ctx context.Context, cfg *yauthcfg.Config, opts ...ConfigOption) (*YAuthBuilder, error) {
 	if cfg == nil {
 		return nil, errors.New("yauth: NewFromConfig requires a non-nil config")
 	}
+	o := resolveConfigOptions(opts)
+	logger := o.logger
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("yauth: invalid config: %w", err)
 	}
 	// Surface deprecated-but-set config fields at startup (same channel as the
 	// auto_migrate warning below). Non-fatal; they are ignored.
 	for _, warn := range cfg.DeprecationWarnings() {
-		fmt.Fprintln(os.Stderr, "yauth: WARNING "+warn)
+		logger.Warn("yauth: deprecated config field set (ignored)", "detail", warn)
 	}
 
 	var repo yauthrepo.Repository
@@ -102,7 +134,7 @@ func NewBuilderFromConfig(ctx context.Context, cfg *yauthcfg.Config) (*YAuthBuil
 			return nil, fmt.Errorf("yauth: database unreachable: %w", err)
 		}
 		if cfg.Database.AutoMigrate {
-			fmt.Fprintln(os.Stderr, "yauth: WARNING database.auto_migrate=true is for DEV/TEST only — use `yauth migrate` in production")
+			logger.Warn("yauth: database.auto_migrate=true is for DEV/TEST only — use `yauth migrate` in production")
 			if err := yauthMigrate.Run(ctx, pgxrepo.StdDB(pool), "pgx"); err != nil {
 				return nil, fmt.Errorf("yauth: auto_migrate failed: %w", err)
 			}
@@ -118,7 +150,7 @@ func NewBuilderFromConfig(ctx context.Context, cfg *yauthcfg.Config) (*YAuthBuil
 		}
 		repo = decorated
 	}
-	builder := New(repo, configToYAuthConfig(cfg))
+	builder := New(repo, configToYAuthConfig(cfg)).WithLogger(logger)
 
 	// Build the host's mailer once and share it across plugins. Each
 	// plugin satisfies its own Mailer interface structurally — *smtp.Mailer

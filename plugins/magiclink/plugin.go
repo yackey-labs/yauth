@@ -13,6 +13,7 @@
 package magiclink
 
 import (
+	"log/slog"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -44,7 +45,8 @@ type Config struct {
 const defaultTokenTTL = 15 * time.Minute
 
 type magicLinkPlugin struct {
-	cfg Config
+	cfg    Config
+	logger *slog.Logger
 }
 
 // New constructs the magic-link plugin.
@@ -53,7 +55,7 @@ func New(cfg Config) plugin.Plugin {
 		cfg.TokenTTL = defaultTokenTTL
 	}
 	if cfg.Mailer == nil {
-		cfg.Mailer = LoggingMailer{}
+		cfg.Mailer = &LoggingMailer{}
 	}
 	return &magicLinkPlugin{cfg: cfg}
 }
@@ -70,6 +72,11 @@ func (p *magicLinkPlugin) Name() string { return "magic-link" }
 // retained in the signature for plugins that still register raw net/http routes;
 // magic-link no longer uses it.
 func (p *magicLinkPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.API, prefix string) {
+	p.logger = host.Logger()
+	if lm, ok := p.cfg.Mailer.(*LoggingMailer); ok {
+		lm.logger = p.logger
+		p.logger.Warn("magic-link: using the console LoggingMailer — login links (single-use tokens) are written to logs and NO email is sent; set Config.Mailer for production")
+	}
 	p.registerSend(host, api, prefix)
 	p.registerVerify(host, api, prefix)
 }

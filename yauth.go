@@ -15,6 +15,7 @@ package yauth
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -44,6 +45,7 @@ type YAuth struct {
 	authResolvers []plugin.AuthResolver
 	jwtSigner     plugin.JWTSigner
 	jwtSecret     []byte
+	logger        *slog.Logger
 
 	// humaAPI is the huma API every plugin registered its routes on. Its
 	// auto-derived OpenAPI is exposed via OpenAPI() — the published spec source.
@@ -59,6 +61,7 @@ type YAuthBuilder struct {
 	traceMiddleware *bool
 	telemetryShut   func(context.Context) error
 	jwtSecret       []byte
+	logger          *slog.Logger
 }
 
 // New starts a new builder bound to the supplied repository and config.
@@ -122,6 +125,17 @@ func (b *YAuthBuilder) WithJWTSecret(secret []byte) *YAuthBuilder {
 	return b
 }
 
+// WithLogger sets the structured logger yauth uses for ALL of its internal
+// logging — middleware warnings, plugin error logs, the console mailer's
+// dev output, and config advisories. Pass your application's *slog.Logger
+// so yauth's output shares the app's handler (level, JSON/text format,
+// trace correlation, redaction). If never called, yauth uses
+// slog.Default(). The logger is exposed to plugins via PluginHost.Logger().
+func (b *YAuthBuilder) WithLogger(l *slog.Logger) *YAuthBuilder {
+	b.logger = l
+	return b
+}
+
 // Build produces a YAuth ready to be mounted. It instantiates the
 // middleware, asks each plugin to register its routes onto an internal
 // ServeMux, and returns the assembled object.
@@ -150,6 +164,14 @@ func (b *YAuthBuilder) Build() (*YAuth, error) {
 			break
 		}
 	}
+	// Resolve the logger once: the consumer's via WithLogger, else the
+	// process default. Every yauth subsystem (middleware, plugins, the
+	// console mailer) logs through this one logger.
+	logger := b.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+
 	mw := middleware.New(b.repo, middleware.Config{
 		CookieName:               b.cfg.CookieName,
 		BindIP:                   b.cfg.SessionBinding.BindIP,
@@ -158,6 +180,7 @@ func (b *YAuthBuilder) Build() (*YAuth, error) {
 		UAMismatchAction:         b.cfg.SessionBinding.UAMismatchAction,
 		AllowAdminMachineCallers: b.cfg.AllowAdminMachineCallers,
 		EnableOrgHydration:       enableOrgHydration,
+		Logger:                   logger,
 	})
 	mux := http.NewServeMux()
 
@@ -176,6 +199,7 @@ func (b *YAuthBuilder) Build() (*YAuth, error) {
 		traceMiddleware:  traceMiddleware,
 		telemetryShut:    b.telemetryShut,
 		jwtSecret:        b.jwtSecret,
+		logger:           logger,
 	}
 
 	// Every plugin is huma-native: the huma.API is built over the bare mux
@@ -236,6 +260,10 @@ func (y *YAuth) TelemetryShutdown(ctx context.Context) error {
 // Middleware returns the auth middleware so callers can guard their own
 // routes outside the YAuth router.
 func (y *YAuth) Middleware() *middleware.Middleware { return y.mw }
+
+// Logger implements plugin.PluginHost. It returns the resolved structured
+// logger (WithLogger's value, or slog.Default()). Never nil.
+func (y *YAuth) Logger() *slog.Logger { return y.logger }
 
 // Repo returns the repository plugin handlers persist against.
 func (y *YAuth) Repo() repo.Repository { return y.repo }

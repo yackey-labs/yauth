@@ -2,8 +2,7 @@ package emailpassword
 
 import (
 	"context"
-	"fmt"
-	"os"
+	"log/slog"
 )
 
 // Mailer delivers email-password lifecycle messages: address
@@ -20,24 +19,42 @@ type Mailer interface {
 }
 
 // LoggingMailer is the default Mailer used when Config.Mailer is nil.
-// It prints the link / notice to stderr so a developer can copy-paste
-// it without running an SMTP relay.
-type LoggingMailer struct{}
+// It logs the link / notice (via the host's structured logger) so a
+// developer can copy-paste it without running an SMTP relay.
+//
+// It does NOT send real email and writes single-use tokens to the log —
+// dev/test only. The email-password plugin emits a one-time WARN at
+// startup when this mailer is active so a production misconfiguration is
+// visible. Configure a real Mailer (or mailer.provider=smtp on the YAML
+// path) for any deployment that actually delivers email.
+type LoggingMailer struct {
+	// logger is injected by the plugin at Routes time (from
+	// PluginHost.Logger()). Nil falls back to slog.Default() so a
+	// directly-constructed LoggingMailer still works.
+	logger *slog.Logger
+}
+
+func (m *LoggingMailer) log() *slog.Logger {
+	if m.logger != nil {
+		return m.logger
+	}
+	return slog.Default()
+}
 
 // SendVerification implements Mailer.
-func (LoggingMailer) SendVerification(_ context.Context, email, link string) error {
-	fmt.Fprintf(os.Stderr, "yauth: verification link for %s: %s\n", email, link)
+func (m *LoggingMailer) SendVerification(ctx context.Context, email, link string) error {
+	m.log().WarnContext(ctx, "email-password: [console mailer] verification link (would be emailed)", "email", email, "link", link)
 	return nil
 }
 
 // SendPasswordReset implements Mailer.
-func (LoggingMailer) SendPasswordReset(_ context.Context, email, link string) error {
-	fmt.Fprintf(os.Stderr, "yauth: password-reset link for %s: %s\n", email, link)
+func (m *LoggingMailer) SendPasswordReset(ctx context.Context, email, link string) error {
+	m.log().WarnContext(ctx, "email-password: [console mailer] password-reset link (would be emailed)", "email", email, "link", link)
 	return nil
 }
 
 // SendAccountExists implements Mailer.
-func (LoggingMailer) SendAccountExists(_ context.Context, email string) error {
-	fmt.Fprintf(os.Stderr, "yauth: register-attempted-on-existing-account for %s\n", email)
+func (m *LoggingMailer) SendAccountExists(ctx context.Context, email string) error {
+	m.log().InfoContext(ctx, "email-password: [console mailer] register-attempted-on-existing-account notice (would be emailed)", "email", email)
 	return nil
 }

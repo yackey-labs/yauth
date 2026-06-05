@@ -9,7 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -105,10 +105,10 @@ type mfaSetupOutput struct {
 // renderQRDataURL turns an otpauth URL into a `data:image/png;base64,…`
 // string. Returns "" on render failure (caller falls back silently —
 // the otpauth_url field is always present).
-func renderQRDataURL(otpauthURL string) string {
+func renderQRDataURL(otpauthURL string, logger *slog.Logger) string {
 	png, err := qrcode.Encode(otpauthURL, qrcode.Medium, 256)
 	if err != nil {
-		log.Printf("yauth/mfa: qrcode encode failed: %v", err)
+		logger.Warn("mfa: qrcode encode failed", "err", err)
 		return ""
 	}
 	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
@@ -175,7 +175,7 @@ func (p *mfaPlugin) handleSetup(host plugin.PluginHost) func(context.Context, *s
 		return &mfaSetupOutput{Body: mfaSetupResponse{
 			Secret:      secret,
 			OTPAuthURL:  key.URL(),
-			QRCode:      renderQRDataURL(key.URL()),
+			QRCode:      renderQRDataURL(key.URL(), host.Logger()),
 			BackupCodes: plain,
 		}}, nil
 	}

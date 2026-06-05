@@ -17,6 +17,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"context"
+	"log/slog"
 	"time"
 
 	"github.com/yackey-labs/yauth/plugin"
@@ -30,13 +31,25 @@ type Mailer interface {
 }
 
 // LoggingMailer is the default Mailer used when Config.Mailer is nil. It
-// prints the generated unlock link to stderr, matching magic-link's dev
-// behaviour.
-type LoggingMailer struct{}
+// logs the generated unlock link (via the host's structured logger),
+// matching magic-link's dev behaviour.
+//
+// It sends NO real email and writes a single-use unlock token to the log —
+// dev/test only. The lockout plugin emits a one-time WARN at startup when
+// this mailer is active so a production misconfiguration is visible.
+type LoggingMailer struct {
+	// logger is injected by the plugin at Routes time (from
+	// PluginHost.Logger()). Nil falls back to slog.Default().
+	logger *slog.Logger
+}
 
-// SendUnlockToken writes a single line to stderr.
-func (LoggingMailer) SendUnlockToken(_ context.Context, email, link string) error {
-	logf("yauth: unlock-token for %s: %s", email, link)
+// SendUnlockToken logs the unlock link (email + link) at WARN.
+func (m *LoggingMailer) SendUnlockToken(ctx context.Context, email, link string) error {
+	l := m.logger
+	if l == nil {
+		l = slog.Default()
+	}
+	l.WarnContext(ctx, "lockout: [console mailer] unlock link (would be emailed)", "email", email, "link", link)
 	return nil
 }
 
@@ -101,7 +114,7 @@ func (c *Config) applyDefaults() {
 		c.MaxLockoutDuration = 1 * time.Hour
 	}
 	if c.Mailer == nil {
-		c.Mailer = LoggingMailer{}
+		c.Mailer = &LoggingMailer{}
 	}
 }
 
@@ -115,7 +128,8 @@ func (c *Config) autoUnlock() bool {
 }
 
 type lockoutPlugin struct {
-	cfg Config
+	cfg    Config
+	logger *slog.Logger
 }
 
 // New constructs the lockout plugin.
@@ -141,6 +155,12 @@ func (p *lockoutPlugin) Name() string { return "lockout" }
 // The mux is retained in the signature for plugins that still register raw
 // net/http routes; lockout no longer uses it.
 func (p *lockoutPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.API, prefix string) {
+	p.logger = host.Logger()
+	if lm, ok := p.cfg.Mailer.(*LoggingMailer); ok {
+		lm.logger = p.logger
+		p.logger.Warn("lockout: using the console LoggingMailer — unlock links (single-use tokens) are written to logs and NO email is sent; set Config.Mailer for production")
+	}
+
 	host.RegisterEventHandler(&loginEventHandler{cfg: p.cfg, host: host})
 
 	mw := host.Middleware()

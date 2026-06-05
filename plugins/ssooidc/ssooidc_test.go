@@ -14,6 +14,7 @@ package ssooidc
 
 import (
 	"github.com/yackey-labs/yauth/humaapi"
+	"log/slog"
 
 	"bytes"
 	"context"
@@ -827,3 +828,5 @@ func callback(t *testing.T, srv *httptest.Server, state string) *http.Response {
 	}
 	return resp
 }
+
+func (*fakeHost) Logger() *slog.Logger { return slog.Default() }

@@ -18,6 +18,7 @@ package emailpassword
 import (
 	"github.com/danielgtaylor/huma/v2"
 
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -96,6 +97,7 @@ const (
 type emailPasswordPlugin struct {
 	cfg     Config
 	checker *hibp.Checker
+	logger  *slog.Logger
 }
 
 // New constructs the email-password plugin.
@@ -113,7 +115,7 @@ func New(cfg Config) plugin.Plugin {
 		cfg.PasswordResetTokenTTL = defaultPasswordResetTokenTTL
 	}
 	if cfg.Mailer == nil {
-		cfg.Mailer = LoggingMailer{}
+		cfg.Mailer = &LoggingMailer{}
 	}
 	if !cfg.HIBPCheckSet {
 		cfg.HIBPCheck = true
@@ -146,6 +148,16 @@ func (p *emailPasswordPlugin) Name() string { return "email-password" }
 // of the operator's config; the RateLimitHuma bridge preserves the plain-text
 // 429 and X-RateLimit-* headers on block (NOT problem+json).
 func (p *emailPasswordPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.API, prefix string) {
+	p.logger = host.Logger()
+	// If the default console mailer is in use, give it the host logger and
+	// warn loudly: it prints verification/reset links (which carry bearer
+	// tokens) to the log and sends NO real email — safe for dev, a
+	// credential-leak in prod. Configure a real Mailer / mailer.provider=smtp.
+	if lm, ok := p.cfg.Mailer.(*LoggingMailer); ok {
+		lm.logger = p.logger
+		p.logger.Warn("email-password: using the console LoggingMailer — verification & password-reset links (bearer tokens) are written to logs and NO email is sent; set Config.Mailer or mailer.provider=smtp for production")
+	}
+
 	mw := host.Middleware()
 
 	registerRL := host.RateLimit("emailpassword.register", 10, 60*time.Second)

@@ -2,6 +2,7 @@ package organizations
 
 import (
 	"github.com/yackey-labs/yauth/humaapi"
+	"log/slog"
 
 	"bytes"
 	"context"
@@ -417,3 +418,5 @@ func newTestServerWithSharedRepo(t *testing.T, user domain.User, r repo.Reposito
 	t.Cleanup(srv.Close)
 	return srv
 }
+
+func (*fakeHost) Logger() *slog.Logger { return slog.Default() }

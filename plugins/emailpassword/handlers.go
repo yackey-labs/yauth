@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -242,7 +241,7 @@ func (p *emailPasswordPlugin) registerRegister(host plugin.PluginHost, api huma.
 		if existing, err := repo.GetUserByEmail(ctx, req.Email); err == nil && existing != nil {
 			go func(email string) {
 				if err := p.cfg.Mailer.SendAccountExists(context.Background(), email); err != nil {
-					log.Printf("yauth: SendAccountExists failed for %s: %v", email, err)
+					p.logger.ErrorContext(context.Background(), "email-password: send account-exists notice failed", "email", redactEmail(email), "err", err)
 				}
 			}(req.Email)
 			return pendingRegisterOutput(), nil
@@ -285,7 +284,7 @@ func (p *emailPasswordPlugin) registerRegister(host plugin.PluginHost, api huma.
 				// enumeration resistance by responding success.
 				go func(email string) {
 					if err := p.cfg.Mailer.SendAccountExists(context.Background(), email); err != nil {
-						log.Printf("yauth: SendAccountExists failed for %s: %v", email, err)
+						p.logger.ErrorContext(context.Background(), "email-password: send account-exists notice failed", "email", redactEmail(email), "err", err)
 					}
 				}(req.Email)
 				return pendingRegisterOutput(), nil
@@ -308,7 +307,7 @@ func (p *emailPasswordPlugin) registerRegister(host plugin.PluginHost, api huma.
 		// logged but never bubble up — the account is usable, the user
 		// can request a fresh link via /resend-verification.
 		if err := p.issueVerificationEmail(ctx, repo, user.ID, user.Email); err != nil {
-			log.Printf("yauth: issue verification email for %s: %v", user.Email, err)
+			p.logger.ErrorContext(ctx, "email-password: issue verification email failed", "user_id", user.ID, "err", err)
 		}
 
 		// JIT-membership auto-join (yauth #90 port). The hook is
@@ -317,7 +316,7 @@ func (p *emailPasswordPlugin) registerRegister(host plugin.PluginHost, api huma.
 		// are logged but never bubble up — a transient repo failure
 		// here shouldn't block the registration.
 		if results, err := auth.AutoJoinFromEmail(ctx, repo, user.ID, user.Email, user.EmailVerified, now); err != nil {
-			log.Printf("yauth: auto-join from email for %s: %v", user.Email, err)
+			p.logger.ErrorContext(ctx, "email-password: auto-join from email failed", "user_id", user.ID, "err", err)
 		} else {
 			for _, res := range results {
 				if res.AlreadyMember {
@@ -823,7 +822,7 @@ func (p *emailPasswordPlugin) registerChangePassword(host plugin.PluginHost, api
 		// durably stored, so a setter failure must not fail the change —
 		// log and continue (mirrors the reset-password idiom below).
 		if err := repoRef.SetUserMustChangePassword(ctx, au.User.ID, false); err != nil && !errors.Is(err, yautherr.ErrNotFound) {
-			log.Printf("yauth: clear must_change_password after change for %s: %v", au.User.ID, err)
+			p.logger.ErrorContext(ctx, "email-password: clear must_change_password after change failed", "user_id", au.User.ID, "err", err)
 		}
 
 		// Invalidate every other session for this user, then re-issue a
@@ -1012,7 +1011,7 @@ func (p *emailPasswordPlugin) registerVerifyEmail(host plugin.PluginHost, api hu
 		// shouldn't be penalized by a transient repo failure.
 		if u, lookupErr := repoRef.GetUserByID(ctx, ev.UserID); lookupErr == nil && u != nil {
 			if results, err := auth.AutoJoinFromEmail(ctx, repoRef, u.ID, u.Email, true, now); err != nil {
-				log.Printf("yauth: auto-join after email-verify for %s: %v", u.Email, err)
+				p.logger.ErrorContext(ctx, "email-password: auto-join after email-verify failed", "user_id", u.ID, "err", err)
 			} else {
 				for _, res := range results {
 					if res.AlreadyMember {
@@ -1099,7 +1098,7 @@ func (p *emailPasswordPlugin) registerResendVerification(host plugin.PluginHost,
 			return ok, nil
 		}
 		if err := p.issueVerificationEmail(ctx, repoRef, user.ID, user.Email); err != nil {
-			log.Printf("yauth: issue verification email for %s: %v", user.Email, err)
+			p.logger.ErrorContext(ctx, "email-password: issue verification email failed", "user_id", user.ID, "err", err)
 		}
 		return ok, nil
 	})
@@ -1178,7 +1177,7 @@ func (p *emailPasswordPlugin) registerForgotPassword(host plugin.PluginHost, api
 		}
 		link := buildLink(p.cfg.PasswordResetLinkBaseURL, raw)
 		if err := p.cfg.Mailer.SendPasswordReset(ctx, user.Email, link); err != nil {
-			log.Printf("yauth: SendPasswordReset for %s: %v", user.Email, err)
+			p.logger.ErrorContext(ctx, "email-password: send password-reset email failed", "user_id", user.ID, "err", err)
 		}
 		return ok, nil
 	})
@@ -1286,13 +1285,13 @@ func (p *emailPasswordPlugin) registerResetPassword(host plugin.PluginHost, api 
 		// "must change" requirement. The password is already stored, so a
 		// setter failure must not fail the reset — log and continue.
 		if err := repoRef.SetUserMustChangePassword(ctx, pr.UserID, false); err != nil && !errors.Is(err, yautherr.ErrNotFound) {
-			log.Printf("yauth: clear must_change_password after reset for %s: %v", pr.UserID, err)
+			p.logger.ErrorContext(ctx, "email-password: clear must_change_password after reset failed", "user_id", pr.UserID, "err", err)
 		}
 
 		// Invalidate every session for this user — a /reset-password
 		// caller has not authenticated, so no session is preserved.
 		if _, err := repoRef.DeleteUserSessions(ctx, pr.UserID); err != nil {
-			log.Printf("yauth: delete sessions after reset for %s: %v", pr.UserID, err)
+			p.logger.ErrorContext(ctx, "email-password: delete sessions after reset failed", "user_id", pr.UserID, "err", err)
 		}
 
 		uid := pr.UserID
@@ -1377,6 +1376,21 @@ func (p *emailPasswordPlugin) validatePasswordComplexity(password string) error 
 	return nil
 }
 
+// redactEmail masks the local part of an address for logging so error
+// logs stay debuggable (domain + first char) without recording full PII.
+// "alice@example.com" -> "a***@example.com"; malformed input -> "***".
+func redactEmail(email string) string {
+	at := strings.LastIndexByte(email, '@')
+	if at <= 0 {
+		return "***"
+	}
+	local, domain := email[:at], email[at:]
+	if len(local) == 1 {
+		return "*" + domain
+	}
+	return local[:1] + "***" + domain
+}
+
 // checkHIBP returns (true, message) when HIBPCheck is enabled, the
 // remote API responds, and the password is in a breach. Network
 // errors fail-open: callers receive (false, "") and a log line is
@@ -1387,7 +1401,7 @@ func (p *emailPasswordPlugin) checkHIBP(ctx context.Context, password string) (b
 	}
 	count, err := p.checker.CheckPwned(ctx, password)
 	if err != nil {
-		log.Printf("yauth: HIBP check failed (fail-open): %v", err)
+		p.logger.WarnContext(ctx, "email-password: HIBP check failed (fail-open)", "err", err)
 		return false, ""
 	}
 	if count <= 0 {
@@ -1444,10 +1458,10 @@ func (p *emailPasswordPlugin) recordHistory(ctx context.Context, repoRef interfa
 		PasswordHash: oldHash,
 		CreatedAt:    now,
 	}); err != nil {
-		log.Printf("yauth: append password history for %s: %v", userID, err)
+		p.logger.ErrorContext(ctx, "email-password: append password history failed", "user_id", userID, "err", err)
 		return
 	}
 	if _, err := repoRef.TrimPasswordHistory(ctx, userID, n); err != nil {
-		log.Printf("yauth: trim password history for %s: %v", userID, err)
+		p.logger.ErrorContext(ctx, "email-password: trim password history failed", "user_id", userID, "err", err)
 	}
 }

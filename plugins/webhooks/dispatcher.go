@@ -10,10 +10,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"math/rand/v2"
 	"net/http"
-	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -147,10 +148,28 @@ func NewDispatcher(r repo.Repository, client *http.Client, workers int, retry Re
 		jobs:        make(chan *deliveryJob, workers*8),
 		claimerStop: make(chan struct{}),
 		claimerDone: make(chan struct{}),
-		logf: func(format string, args ...any) {
-			fmt.Fprintf(os.Stderr, format, args...)
-		},
+		logf:        slogLogf(slog.Default()),
 	}
+}
+
+// slogLogf adapts the dispatcher's printf-style logf onto a structured
+// logger: the formatted message is emitted at WARN (trailing newline
+// trimmed) through the supplied logger, so webhook delivery diagnostics
+// route through the host's configured handler instead of raw stderr.
+func slogLogf(l *slog.Logger) func(string, ...any) {
+	return func(format string, args ...any) {
+		l.Warn(strings.TrimRight(fmt.Sprintf(format, args...), "\n"))
+	}
+}
+
+// useLogger redirects the dispatcher's diagnostics to l. Called by the
+// plugin at Routes time with PluginHost.Logger() so all webhook output
+// shares the application's logger. No-op when l is nil.
+func (d *Dispatcher) useLogger(l *slog.Logger) {
+	if l == nil {
+		return
+	}
+	d.logf = slogLogf(l)
 }
 
 // Start spawns the worker goroutines and the claimer goroutine. Safe to

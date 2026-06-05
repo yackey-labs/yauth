@@ -2,6 +2,7 @@ package bearer
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -658,3 +659,5 @@ func (f *fakeRepo) CreateSsoLoginState(_ context.Context, _ domain.NewSsoLoginSt
 func (f *fakeRepo) ConsumeSsoLoginState(_ context.Context, _ string) (*domain.SsoLoginState, error) {
 	return nil, nil
 }
+
+func (*fakeHost) Logger() *slog.Logger { return slog.Default() }

@@ -8,6 +8,7 @@ package plugin
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -36,6 +37,14 @@ type AuthResolver = middleware.AuthResolver
 type PluginHost interface {
 	Repo() repo.Repository
 	Middleware() *middleware.Middleware
+
+	// Logger returns the host's structured logger — the one the consumer
+	// injected via Builder.WithLogger (or slog.Default() if none was set).
+	// Plugins MUST log through this rather than the standard log package,
+	// slog package-level functions, or os.Stderr, so all yauth output
+	// routes through the app's configured handler (level, format, trace
+	// correlation). Never nil.
+	Logger() *slog.Logger
 
 	SessionTTL() time.Duration
 	CookieName() string

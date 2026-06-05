@@ -2,6 +2,7 @@ package asymjwt_test
 
 import (
 	"github.com/yackey-labs/yauth/humaapi"
+	"log/slog"
 
 	"context"
 	"crypto/ecdsa"
@@ -309,3 +310,5 @@ func TestPlugin_New_RejectsMissingKey(t *testing.T) {
 		t.Fatalf("expected error when no key configured")
 	}
 }
+
+func (*captureHost) Logger() *slog.Logger { return slog.Default() }

@@ -154,6 +154,7 @@ func (p *webhooksPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api h
 		ClaimerInterval:   p.cfg.ClaimerInterval,
 		ClaimerBatchSize:  p.cfg.ClaimerBatchSize,
 	}, deriveWebhookKey(host.JWTSecret()))
+	p.dispatcher.useLogger(host.Logger())
 	p.dispatcher.Start()
 
 	host.RegisterEventHandler(newEventHandler(host.Repo(), p.dispatcher))

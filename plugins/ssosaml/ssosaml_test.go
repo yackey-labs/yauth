@@ -23,6 +23,7 @@ package ssosaml
 
 import (
 	"github.com/yackey-labs/yauth/humaapi"
+	"log/slog"
 
 	"context"
 	"crypto/rand"
@@ -1304,3 +1305,5 @@ func decode(t *testing.T, resp *http.Response, dst any) {
 		t.Fatalf("decode: %v", err)
 	}
 }
+
+func (*fakeHost) Logger() *slog.Logger { return slog.Default() }

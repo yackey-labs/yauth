@@ -61,6 +61,11 @@ type Config struct {
 	// single-user deployments pay zero overhead per request. yauth
 	// Rust #89 / Go #15.
 	EnableOrgHydration bool
+
+	// Logger is the structured logger the middleware uses for its
+	// session-binding warnings and audit-failure notices. Nil falls back
+	// to slog.Default(). Set by the YAuth builder from WithLogger.
+	Logger *slog.Logger
 }
 
 // Mismatch action constants. Empty string is treated as MismatchActionWarn.
@@ -96,6 +101,7 @@ type Middleware struct {
 	repo      repo.Repository
 	cfg       Config
 	resolvers []AuthResolver
+	logger    *slog.Logger
 }
 
 // New returns a Middleware bound to the supplied repo, config, and the
@@ -104,7 +110,11 @@ type Middleware struct {
 // order supplied. Additional resolvers may be appended later via
 // AddResolver during plugin registration.
 func New(r repo.Repository, cfg Config, resolvers ...AuthResolver) *Middleware {
-	return &Middleware{repo: r, cfg: cfg, resolvers: resolvers}
+	logger := cfg.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &Middleware{repo: r, cfg: cfg, resolvers: resolvers, logger: logger}
 }
 
 // AddResolver appends an AuthResolver to the middleware's resolver list.
@@ -366,7 +376,7 @@ func clientIP(r *http.Request) string {
 }
 
 func (m *Middleware) warnMismatch(ctx context.Context, sess *domain.Session, eventType, sessionVal, reqVal, kind string) {
-	slog.WarnContext(ctx, "yauth: session binding mismatch",
+	m.logger.WarnContext(ctx, "yauth: session binding mismatch",
 		"event", eventType,
 		"session_id", sess.ID,
 		"user_id", sess.UserID,
@@ -376,14 +386,14 @@ func (m *Middleware) warnMismatch(ctx context.Context, sess *domain.Session, eve
 }
 
 func (m *Middleware) invalidateAndAudit(ctx context.Context, sess *domain.Session, tokenHash, eventType, sessionVal, reqVal, kind string) {
-	slog.WarnContext(ctx, "yauth: invalidating session on binding mismatch",
+	m.logger.WarnContext(ctx, "yauth: invalidating session on binding mismatch",
 		"event", eventType,
 		"session_id", sess.ID,
 		"user_id", sess.UserID,
 		"kind", kind,
 	)
 	if _, err := m.repo.DeleteSession(ctx, tokenHash); err != nil {
-		slog.WarnContext(ctx, "yauth: failed to delete invalidated session", "err", err)
+		m.logger.WarnContext(ctx, "yauth: failed to delete invalidated session", "err", err)
 	}
 	m.auditMismatch(ctx, sess, eventType, sessionVal, reqVal, kind)
 }
@@ -403,7 +413,7 @@ func (m *Middleware) auditMismatch(ctx context.Context, sess *domain.Session, ev
 		Metadata:  meta,
 		CreatedAt: time.Now().UTC(),
 	}); err != nil {
-		slog.WarnContext(ctx, "yauth: failed to write binding-mismatch audit row", "err", err)
+		m.logger.WarnContext(ctx, "yauth: failed to write binding-mismatch audit row", "err", err)
 	}
 }
 

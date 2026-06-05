@@ -107,6 +107,62 @@ Two complementary mechanisms:
 or by hand skip them (they are tier 1 — explicit code). See the precedence
 ladder above.
 
+## Logging
+
+yauth routes **all** of its internal logging through one `*slog.Logger`:
+middleware session-binding warnings, plugin error logs, config advisories,
+and the console mailer's dev output. Inject your application's logger so
+yauth's output shares your handler (level, JSON/text format, trace
+correlation):
+
+```go
+ya, err := yauth.New(repo, cfg).
+    WithLogger(slog.Default()). // or any *slog.Logger
+    WithPlugin(/* ... */).
+    Build()
+```
+
+On the YAML path, pass it as an option (the file cannot carry a live
+logger):
+
+```go
+ya, err := yauth.NewFromConfig(ctx, cfg, yauth.WithConfigLogger(logger))
+```
+
+If you never set one, yauth uses `slog.Default()`. Plugins reach the same
+logger via `PluginHost.Logger()` — yauth never writes to the standard `log`
+package, `slog`'s package-level functions, or `os.Stderr` directly.
+
+**PII:** error logs key on `user_id`, not email; where only an address is
+available it is masked (`a***@example.com`). Set your handler's level to
+taste — none of yauth's own lines carry secrets.
+
+### The console mailer is a logging hazard in production
+
+When no `Mailer` is configured (builder) / `mailer.provider` is left at the
+default `logging` (YAML), each email-sending plugin uses a **console
+mailer** that *logs the message it would have emailed* — including the
+verification / password-reset / magic-link / unlock **link, which carries a
+single-use bearer token** — and sends no real email. That's a convenience
+for local dev; in production it writes account-takeover tokens to your logs.
+
+To make a misconfiguration impossible to miss, each such plugin emits a
+one-time `WARN` at startup ("using the console LoggingMailer …") when the
+default mailer is active. Silence it the right way: configure a real mailer.
+
+```yaml
+mailer:
+  provider: smtp
+  from: "no-reply@example.com"
+  smtp:
+    host: smtp.example.com
+    port: 587
+    username_env: SMTP_USER
+    password_env: SMTP_PASS
+```
+
+(Builder path: set `Config.Mailer` on `emailpassword`/`magiclink`/`lockout`.)
+
 ## See also
 
 - `yauth docs plugins/oidc-provider` — the OIDC IdP stack (both paths)

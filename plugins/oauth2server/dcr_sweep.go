@@ -3,7 +3,6 @@ package oauth2server
 import (
 	"context"
 	"encoding/json"
-	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -35,13 +34,13 @@ func (p *oauth2Plugin) sweepStaleClients(host plugin.PluginHost) {
 	cutoff := time.Now().UTC().Add(-p.cfg.DCRStaleClientTTL)
 	swept, err := host.Repo().PurgeStaleDynamicClients(ctx, cutoff)
 	if err != nil {
-		slog.Error("oauth2: stale DCR client sweep failed", "error", err)
+		host.Logger().ErrorContext(ctx, "oauth2: stale DCR client sweep failed", "err", err)
 		return
 	}
 	if len(swept) == 0 {
 		return
 	}
-	slog.Info("oauth2: swept stale DCR clients", "count", len(swept), "ttl", p.cfg.DCRStaleClientTTL)
+	host.Logger().InfoContext(ctx, "oauth2: swept stale DCR clients", "count", len(swept), "ttl", p.cfg.DCRStaleClientTTL)
 	meta, _ := json.Marshal(map[string]any{
 		"count":      len(swept),
 		"client_ids": swept,

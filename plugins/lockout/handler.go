@@ -3,9 +3,7 @@ package lockout
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/google/uuid"
@@ -170,10 +168,4 @@ func (h *loginEventHandler) applyLock(ctx context.Context, lockID string, prevLo
 		LockCount:    prevLockCount + 1,
 	}
 	return h.host.Repo().SetAccountLockState(ctx, lockID, state, now)
-}
-
-// logf writes a single formatted line to stderr. Used by the default
-// LoggingMailer. Centralising the writer makes tests easier later.
-func logf(format string, args ...any) {
-	fmt.Fprintln(os.Stderr, fmt.Sprintf(format, args...))
 }

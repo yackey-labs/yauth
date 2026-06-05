@@ -7,6 +7,7 @@ package scim
 
 import (
 	"github.com/yackey-labs/yauth/humaapi"
+	"log/slog"
 
 	"bytes"
 	"context"
@@ -593,3 +594,5 @@ func TestParseAPIKeyToken_RejectsWrongPrefix(t *testing.T) {
 // Touch a few signatures we want to keep compiling without referencing
 // them above; avoids dead-imports breaking the build.
 var _ = fmt.Sprintf
+
+func (*fakeHost) Logger() *slog.Logger { return slog.Default() }

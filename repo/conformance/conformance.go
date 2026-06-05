@@ -1047,14 +1047,72 @@ var oauth2ClientCases = []testCase{
 		now := nowUTC()
 		_ = r.CreateOAuth2Client(ctx(), domain.NewOAuth2Client{
 			ID: "c1", ClientID: "client_abc",
-			RedirectURIs: json.RawMessage(`["http://a"]`),
-			GrantTypes:   json.RawMessage(`["authorization_code"]`),
-			Scopes:       json.RawMessage(`["read"]`),
-			CreatedAt:    now,
+			RedirectURIs:     json.RawMessage(`["http://a"]`),
+			GrantTypes:       json.RawMessage(`["authorization_code"]`),
+			Scopes:           json.RawMessage(`["read"]`),
+			CreatedAt:        now,
+			InitiateLoginURI: ptr("https://app.example.com/launch"),
+			ClientURI:        ptr("https://app.example.com"),
+			LogoURI:          ptr("https://app.example.com/logo.png"),
 		})
 		got, err := r.GetOAuth2ClientByClientID(ctx(), "client_abc")
 		if err != nil || got == nil || got.ClientID != "client_abc" {
 			t.Fatalf("unexpected: %+v err=%v", got, err)
+		}
+		if got.InitiateLoginURI == nil || *got.InitiateLoginURI != "https://app.example.com/launch" {
+			t.Fatalf("initiate_login_uri round-trip: got %v", got.InitiateLoginURI)
+		}
+		if got.ClientURI == nil || *got.ClientURI != "https://app.example.com" {
+			t.Fatalf("client_uri round-trip: got %v", got.ClientURI)
+		}
+		if got.LogoURI == nil || *got.LogoURI != "https://app.example.com/logo.png" {
+			t.Fatalf("logo_uri round-trip: got %v", got.LogoURI)
+		}
+	}},
+	{"launch_metadata_nil_by_default", func(t *testing.T, r repo.Repository) {
+		now := nowUTC()
+		_ = r.CreateOAuth2Client(ctx(), domain.NewOAuth2Client{
+			ID: "c1", ClientID: "client_bare",
+			RedirectURIs: json.RawMessage(`[]`), GrantTypes: json.RawMessage(`[]`), Scopes: json.RawMessage(`[]`),
+			CreatedAt: now,
+		})
+		got, err := r.GetOAuth2ClientByClientID(ctx(), "client_bare")
+		if err != nil || got == nil {
+			t.Fatalf("get: %+v err=%v", got, err)
+		}
+		if got.InitiateLoginURI != nil || got.ClientURI != nil || got.LogoURI != nil {
+			t.Fatalf("expected nil launch metadata; got %+v / %+v / %+v", got.InitiateLoginURI, got.ClientURI, got.LogoURI)
+		}
+	}},
+	{"set_launch_metadata", func(t *testing.T, r repo.Repository) {
+		now := nowUTC()
+		_ = r.CreateOAuth2Client(ctx(), domain.NewOAuth2Client{
+			ID: "c1", ClientID: "client_lm",
+			RedirectURIs: json.RawMessage(`[]`), GrantTypes: json.RawMessage(`[]`), Scopes: json.RawMessage(`[]`),
+			CreatedAt: now,
+		})
+		ok, err := r.SetOAuth2ClientLaunchMetadata(ctx(), "client_lm",
+			ptr("https://x.example.com/login"), ptr("https://x.example.com"), ptr("https://x.example.com/i.png"))
+		if err != nil || !ok {
+			t.Fatalf("set: ok=%v err=%v", ok, err)
+		}
+		got, _ := r.GetOAuth2ClientByClientID(ctx(), "client_lm")
+		if got == nil || got.InitiateLoginURI == nil || *got.InitiateLoginURI != "https://x.example.com/login" {
+			t.Fatalf("after set: %+v", got)
+		}
+		// Clearing: nil values null out the columns.
+		ok, err = r.SetOAuth2ClientLaunchMetadata(ctx(), "client_lm", nil, nil, nil)
+		if err != nil || !ok {
+			t.Fatalf("clear: ok=%v err=%v", ok, err)
+		}
+		got, _ = r.GetOAuth2ClientByClientID(ctx(), "client_lm")
+		if got == nil || got.InitiateLoginURI != nil || got.ClientURI != nil || got.LogoURI != nil {
+			t.Fatalf("expected cleared; got %+v", got)
+		}
+		// Unknown client → ok=false.
+		ok, err = r.SetOAuth2ClientLaunchMetadata(ctx(), "nope", ptr("https://y/z"), nil, nil)
+		if err != nil || ok {
+			t.Fatalf("unknown client: ok=%v err=%v", ok, err)
 		}
 	}},
 	{"set_banned_clears", func(t *testing.T, r repo.Repository) {

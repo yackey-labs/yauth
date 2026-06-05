@@ -29,6 +29,9 @@ type dcrRegisterRequest struct {
 	ResponseTypes           []string `json:"response_types,omitempty"`
 	Scope                   *string  `json:"scope,omitempty"`
 	TokenEndpointAuthMethod *string  `json:"token_endpoint_auth_method,omitempty"`
+	ClientURI               *string  `json:"client_uri,omitempty"`
+	LogoURI                 *string  `json:"logo_uri,omitempty"`
+	InitiateLoginURI        *string  `json:"initiate_login_uri,omitempty"`
 }
 
 // dcrRegisterResponse is the RFC 7591 §3.2.1 success body.
@@ -43,6 +46,9 @@ type dcrRegisterResponse struct {
 	ResponseTypes           []string `json:"response_types"`
 	Scope                   string   `json:"scope,omitempty"`
 	TokenEndpointAuthMethod string   `json:"token_endpoint_auth_method"`
+	ClientURI               string   `json:"client_uri,omitempty"`
+	LogoURI                 string   `json:"logo_uri,omitempty"`
+	InitiateLoginURI        string   `json:"initiate_login_uri,omitempty"`
 	RegistrationAccessToken string   `json:"registration_access_token"`
 	RegistrationClientURI   string   `json:"registration_client_uri"`
 }
@@ -148,6 +154,16 @@ func (p *oauth2Plugin) handleDCRRegister(host plugin.PluginHost, prefix string) 
 			scopes = splitScopes(*req.Scope)
 		}
 
+		// RFC 7591 / OIDC launcher metadata: parse + validate the optional
+		// client_uri, logo_uri and initiate_login_uri. initiate_login_uri must
+		// be https; the other two must be absolute URLs. Empty values are
+		// treated as unset.
+		initiateLoginURI, clientURI, logoURI, metaReason := normalizeLaunchMetadata(req.InitiateLoginURI, req.ClientURI, req.LogoURI)
+		if metaReason != "" {
+			writeDCRError(w, http.StatusBadRequest, "invalid_client_metadata", metaReason)
+			return
+		}
+
 		isPublic := authMethod == "none"
 
 		// Registration policy (see Config.DCREnabled): a public client whose
@@ -207,6 +223,9 @@ func (p *oauth2Plugin) handleDCRRegister(host plugin.PluginHost, prefix string) 
 			// Mark as DCR-created so the stale-client sweep may reclaim it; never
 			// touches admin-provisioned clients.
 			DynamicallyRegistered: true,
+			InitiateLoginURI:      initiateLoginURI,
+			ClientURI:             clientURI,
+			LogoURI:               logoURI,
 		}
 		if err := host.Repo().CreateOAuth2Client(r.Context(), newClient); err != nil {
 			writeDCRError(w, http.StatusInternalServerError, "server_error", "create client: "+sanitizeErr(err)) // nosemgrep: go.lang.security.injection.tainted-sql-string.tainted-sql-string
@@ -245,11 +264,22 @@ func (p *oauth2Plugin) handleDCRRegister(host plugin.PluginHost, prefix string) 
 			ResponseTypes:           responseTypes,
 			Scope:                   strings.Join(scopes, " "),
 			TokenEndpointAuthMethod: authMethod,
+			ClientURI:               derefString(clientURI),
+			LogoURI:                 derefString(logoURI),
+			InitiateLoginURI:        derefString(initiateLoginURI),
 			RegistrationAccessToken: regToken,
 			RegistrationClientURI:   buildRegistrationClientURI(p.cfg, prefix, clientID),
 		}
 		writeJSON(w, http.StatusCreated, resp)
 	}
+}
+
+// derefString returns the pointed-to string, or "" when p is nil.
+func derefString(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }
 
 // dcrAuthMethodSupported mirrors the RFC 8414 metadata advertisement.
@@ -296,6 +326,73 @@ func redirectURISchemeReason(raw string) string {
 // isLoopbackHost reports whether host is a loopback address per RFC 8252 §7.3.
 func isLoopbackHost(host string) bool {
 	return host == "localhost" || host == "127.0.0.1" || host == "::1"
+}
+
+// absoluteURLReason validates that raw is a valid absolute URL (scheme + host)
+// for an RFC 7591 metadata field (client_uri / logo_uri). It returns "" when
+// acceptable, or a human-readable rejection reason naming field.
+func absoluteURLReason(field, raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return field + " must be a valid absolute URL"
+	}
+	if u.Scheme == "" || u.Host == "" {
+		return field + " must be an absolute URL with a scheme and host"
+	}
+	return ""
+}
+
+// initiateLoginURIReason validates the OIDC initiate_login_uri: it must be a
+// valid absolute URL whose scheme is https (the launcher hands it to the user's
+// browser, so a plaintext or relative target is rejected). Returns "" when
+// acceptable, or a human-readable rejection reason.
+func initiateLoginURIReason(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "initiate_login_uri must be a valid absolute URL"
+	}
+	if strings.ToLower(u.Scheme) != "https" || u.Host == "" {
+		return "initiate_login_uri must be an https URL with a host"
+	}
+	return ""
+}
+
+// normalizeLaunchMetadata sanitizes and validates the three launcher metadata
+// fields. Each input is trimmed; an empty/whitespace-only or nil value becomes
+// nil (the field is cleared / left unset). A non-empty value is validated:
+// initiate_login_uri must be https; client_uri and logo_uri must be absolute
+// URLs. On the first validation failure it returns a non-empty reason; the
+// returned pointers are only meaningful when reason == "".
+func normalizeLaunchMetadata(initiateLoginURI, clientURI, logoURI *string) (outInitiate, outClient, outLogo *string, reason string) {
+	clean := func(p *string) *string {
+		if p == nil {
+			return nil
+		}
+		s := strings.TrimSpace(sanitizeURL(*p))
+		if s == "" {
+			return nil
+		}
+		return &s
+	}
+	outInitiate = clean(initiateLoginURI)
+	outClient = clean(clientURI)
+	outLogo = clean(logoURI)
+	if outInitiate != nil {
+		if r := initiateLoginURIReason(*outInitiate); r != "" {
+			return nil, nil, nil, r
+		}
+	}
+	if outClient != nil {
+		if r := absoluteURLReason("client_uri", *outClient); r != "" {
+			return nil, nil, nil, r
+		}
+	}
+	if outLogo != nil {
+		if r := absoluteURLReason("logo_uri", *outLogo); r != "" {
+			return nil, nil, nil, r
+		}
+	}
+	return outInitiate, outClient, outLogo, ""
 }
 
 // redirectURIIsLoopback reports whether raw parses to a redirect_uri whose

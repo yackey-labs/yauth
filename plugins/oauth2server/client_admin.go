@@ -39,6 +39,11 @@ type clientJSON struct {
 	PostLogoutRedirectURIs           []string `json:"post_logout_redirect_uris"`
 	BackchannelLogoutURI             *string  `json:"backchannel_logout_uri,omitempty"`
 	BackchannelLogoutSessionRequired bool     `json:"backchannel_logout_session_required"`
+
+	// App-launcher metadata (OIDC / RFC 7591). All optional.
+	InitiateLoginURI *string `json:"initiate_login_uri,omitempty"`
+	ClientURI        *string `json:"client_uri,omitempty"`
+	LogoURI          *string `json:"logo_uri,omitempty"`
 }
 
 // createClientRequest is the body for POST /oauth2/clients. It is a native
@@ -64,6 +69,12 @@ type createClientRequest struct {
 	PostLogoutRedirectURIs           []string `json:"post_logout_redirect_uris,omitempty"`
 	BackchannelLogoutURI             *string  `json:"backchannel_logout_uri,omitempty"`
 	BackchannelLogoutSessionRequired bool     `json:"backchannel_logout_session_required,omitempty"`
+
+	// App-launcher metadata (OIDC / RFC 7591). All optional. initiate_login_uri
+	// must be https; client_uri and logo_uri must be absolute URLs.
+	InitiateLoginURI *string `json:"initiate_login_uri,omitempty"`
+	ClientURI        *string `json:"client_uri,omitempty"`
+	LogoURI          *string `json:"logo_uri,omitempty"`
 
 	_ struct{} `json:"-" additionalProperties:"false"`
 }
@@ -97,6 +108,13 @@ type patchClientRequest struct {
 	PostLogoutRedirectURIs           *[]string `json:"post_logout_redirect_uris,omitempty"`
 	BackchannelLogoutURI             *string   `json:"backchannel_logout_uri,omitempty"`
 	BackchannelLogoutSessionRequired *bool     `json:"backchannel_logout_session_required,omitempty"`
+
+	// App-launcher metadata (OIDC / RFC 7591). Any non-nil field triggers a
+	// launch-metadata update (merged with the client's current values for the
+	// fields left nil). An explicit empty string clears the field.
+	InitiateLoginURI *string `json:"initiate_login_uri,omitempty"`
+	ClientURI        *string `json:"client_uri,omitempty"`
+	LogoURI          *string `json:"logo_uri,omitempty"`
 
 	_ struct{} `json:"-" additionalProperties:"false"`
 }
@@ -134,6 +152,10 @@ func toClientJSON(c domain.OAuth2Client) clientJSON {
 		PostLogoutRedirectURIs:           decodeScopes(c.PostLogoutRedirectURIs),
 		BackchannelLogoutURI:             c.BackchannelLogoutURI,
 		BackchannelLogoutSessionRequired: c.BackchannelLogoutSessionRequired,
+
+		InitiateLoginURI: c.InitiateLoginURI,
+		ClientURI:        c.ClientURI,
+		LogoURI:          c.LogoURI,
 	}
 }
 
@@ -167,6 +189,13 @@ func (p *oauth2Plugin) handleCreateClient(host plugin.PluginHost) func(context.C
 		if req.BackchannelLogoutURI != nil {
 			s := sanitizeURL(*req.BackchannelLogoutURI)
 			req.BackchannelLogoutURI = &s
+		}
+
+		// Validate the optional launcher metadata: initiate_login_uri must be
+		// https; client_uri and logo_uri must be absolute URLs.
+		initiateLoginURI, clientURI, logoURI, metaReason := normalizeLaunchMetadata(req.InitiateLoginURI, req.ClientURI, req.LogoURI)
+		if metaReason != "" {
+			return nil, huma.Error400BadRequest(metaReason)
 		}
 
 		clientID, err := randomHex(16)
@@ -207,6 +236,9 @@ func (p *oauth2Plugin) handleCreateClient(host plugin.PluginHost) func(context.C
 			PostLogoutRedirectURIs:           rawJSON(req.PostLogoutRedirectURIs),
 			BackchannelLogoutURI:             req.BackchannelLogoutURI,
 			BackchannelLogoutSessionRequired: req.BackchannelLogoutSessionRequired,
+			InitiateLoginURI:                 initiateLoginURI,
+			ClientURI:                        clientURI,
+			LogoURI:                          logoURI,
 		}
 		if err := host.Repo().CreateOAuth2Client(ctx, newClient); err != nil {
 			return nil, huma.Error500InternalServerError("create client: " + sanitizeErr(err))
@@ -330,6 +362,38 @@ func (p *oauth2Plugin) handlePatchClient(host plugin.PluginHost) func(context.Co
 				sessReq = *req.BackchannelLogoutSessionRequired
 			}
 			if _, err := host.Repo().SetOAuth2ClientLogout(ctx, id, plru, bclURI, sessReq); err != nil {
+				return nil, huma.Error500InternalServerError(err.Error())
+			}
+		}
+		if req.InitiateLoginURI != nil || req.ClientURI != nil || req.LogoURI != nil {
+			// Merge against current values for the launcher fields not provided.
+			// A provided empty string clears the field; a non-empty value is
+			// validated (initiate_login_uri must be https; client_uri/logo_uri
+			// must be absolute URLs).
+			cur, err := host.Repo().GetOAuth2ClientByClientID(ctx, id)
+			if err != nil {
+				if errors.Is(err, yautherr.ErrNotFound) {
+					return nil, huma.Error400BadRequest("client not found")
+				}
+				return nil, huma.Error500InternalServerError(err.Error())
+			}
+			initiate := cur.InitiateLoginURI
+			if req.InitiateLoginURI != nil {
+				initiate = req.InitiateLoginURI
+			}
+			clientURI := cur.ClientURI
+			if req.ClientURI != nil {
+				clientURI = req.ClientURI
+			}
+			logoURI := cur.LogoURI
+			if req.LogoURI != nil {
+				logoURI = req.LogoURI
+			}
+			nInitiate, nClient, nLogo, metaReason := normalizeLaunchMetadata(initiate, clientURI, logoURI)
+			if metaReason != "" {
+				return nil, huma.Error400BadRequest(metaReason)
+			}
+			if _, err := host.Repo().SetOAuth2ClientLaunchMetadata(ctx, id, nInitiate, nClient, nLogo); err != nil {
 				return nil, huma.Error500InternalServerError(err.Error())
 			}
 		}

@@ -502,6 +502,9 @@ func cloneOAuth2Client(o *domain.OAuth2Client) *domain.OAuth2Client {
 		t := *o.LastUsedAt
 		c.LastUsedAt = &t
 	}
+	c.InitiateLoginURI = strPtrCopy(o.InitiateLoginURI)
+	c.ClientURI = strPtrCopy(o.ClientURI)
+	c.LogoURI = strPtrCopy(o.LogoURI)
 	return &c
 }
 

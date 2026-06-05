@@ -44,6 +44,15 @@ type OAuth2Client struct {
 	// (auth_code exchange or refresh grant). nil → never used since creation;
 	// the sweep falls back to CreatedAt. Keeps an actively-used client alive.
 	LastUsedAt *time.Time
+	// InitiateLoginURI is the OIDC third-party / IdP-initiated login URL — the
+	// launch target an app-launcher tile points at. MUST be https when set
+	// (enforced at the API layer). nil → not configured.
+	InitiateLoginURI *string
+	// ClientURI is the RFC 7591 client home page URL. nil → not configured.
+	ClientURI *string
+	// LogoURI is the RFC 7591 logo URL (the launcher tile icon). nil → not
+	// configured.
+	LogoURI *string
 }
 
 // NewOAuth2Client is the input for registering an OAuth2 client.
@@ -65,6 +74,9 @@ type NewOAuth2Client struct {
 	BackchannelLogoutURI             *string
 	BackchannelLogoutSessionRequired bool
 	DynamicallyRegistered            bool
+	InitiateLoginURI                 *string
+	ClientURI                        *string
+	LogoURI                          *string
 }
 
 // AuthorizationCode is a single-use OAuth2 authorization code (RFC 6749).

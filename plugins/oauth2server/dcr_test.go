@@ -535,3 +535,83 @@ func TestDCR_RedirectURI_NewlineSanitized(t *testing.T) {
 		t.Fatalf("redirect_uri should be sanitized to a single line, got %v", b["redirect_uris"])
 	}
 }
+
+func TestDCR_LaunchMetadata_PersistedAndEchoed(t *testing.T) {
+	h := newDCRHarness(t, true)
+	body := `{"redirect_uris":["http://127.0.0.1:53517/cb"],"token_endpoint_auth_method":"none",` +
+		`"client_uri":"https://app.example.com",` +
+		`"logo_uri":"https://app.example.com/logo.png",` +
+		`"initiate_login_uri":"https://app.example.com/launch"}`
+	status, b := h.register(t, body, "")
+	if status != http.StatusCreated {
+		t.Fatalf("expected 201, got %d body=%v", status, b)
+	}
+	// Echoed in the registration response.
+	if got, _ := b["client_uri"].(string); got != "https://app.example.com" {
+		t.Fatalf("client_uri echo: %q", got)
+	}
+	if got, _ := b["logo_uri"].(string); got != "https://app.example.com/logo.png" {
+		t.Fatalf("logo_uri echo: %q", got)
+	}
+	if got, _ := b["initiate_login_uri"].(string); got != "https://app.example.com/launch" {
+		t.Fatalf("initiate_login_uri echo: %q", got)
+	}
+	// Persisted on the client row.
+	clientID, _ := b["client_id"].(string)
+	c, err := h.repo.GetOAuth2ClientByClientID(context.Background(), clientID)
+	if err != nil || c == nil {
+		t.Fatalf("get client: %v", err)
+	}
+	if c.ClientURI == nil || *c.ClientURI != "https://app.example.com" {
+		t.Fatalf("client_uri persist: %v", c.ClientURI)
+	}
+	if c.LogoURI == nil || *c.LogoURI != "https://app.example.com/logo.png" {
+		t.Fatalf("logo_uri persist: %v", c.LogoURI)
+	}
+	if c.InitiateLoginURI == nil || *c.InitiateLoginURI != "https://app.example.com/launch" {
+		t.Fatalf("initiate_login_uri persist: %v", c.InitiateLoginURI)
+	}
+}
+
+func TestDCR_LaunchMetadata_Absent_StoresNil(t *testing.T) {
+	h := newDCRHarness(t, true)
+	body := `{"redirect_uris":["http://127.0.0.1:53517/cb"],"token_endpoint_auth_method":"none"}`
+	status, b := h.register(t, body, "")
+	if status != http.StatusCreated {
+		t.Fatalf("expected 201, got %d body=%v", status, b)
+	}
+	if _, present := b["initiate_login_uri"]; present {
+		t.Fatalf("initiate_login_uri should be omitted when unset; body=%v", b)
+	}
+	clientID, _ := b["client_id"].(string)
+	c, _ := h.repo.GetOAuth2ClientByClientID(context.Background(), clientID)
+	if c == nil || c.InitiateLoginURI != nil || c.ClientURI != nil || c.LogoURI != nil {
+		t.Fatalf("expected nil launch metadata; got %+v", c)
+	}
+}
+
+func TestDCR_InitiateLoginURI_NonHTTPS_Rejected(t *testing.T) {
+	h := newDCRHarness(t, true)
+	body := `{"redirect_uris":["http://127.0.0.1:53517/cb"],"token_endpoint_auth_method":"none",` +
+		`"initiate_login_uri":"http://app.example.com/launch"}`
+	status, b := h.register(t, body, "")
+	if status != http.StatusBadRequest {
+		t.Fatalf("expected 400 for non-https initiate_login_uri, got %d body=%v", status, b)
+	}
+	if errCode, _ := b["error"].(string); errCode != "invalid_client_metadata" {
+		t.Fatalf("expected invalid_client_metadata, got %q (body=%v)", errCode, b)
+	}
+}
+
+func TestDCR_ClientURI_NotAbsolute_Rejected(t *testing.T) {
+	h := newDCRHarness(t, true)
+	body := `{"redirect_uris":["http://127.0.0.1:53517/cb"],"token_endpoint_auth_method":"none",` +
+		`"client_uri":"/relative/path"}`
+	status, b := h.register(t, body, "")
+	if status != http.StatusBadRequest {
+		t.Fatalf("expected 400 for relative client_uri, got %d body=%v", status, b)
+	}
+	if errCode, _ := b["error"].(string); errCode != "invalid_client_metadata" {
+		t.Fatalf("expected invalid_client_metadata, got %q (body=%v)", errCode, b)
+	}
+}

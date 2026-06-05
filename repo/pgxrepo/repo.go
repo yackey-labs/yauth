@@ -1099,6 +1099,9 @@ func (r *Repo) CreateOAuth2Client(ctx context.Context, input domain.NewOAuth2Cli
 		BackchannelLogoutUri:             input.BackchannelLogoutURI,
 		BackchannelLogoutSessionRequired: input.BackchannelLogoutSessionRequired,
 		DynamicallyRegistered:            input.DynamicallyRegistered,
+		InitiateLoginUri:                 input.InitiateLoginURI,
+		ClientUri:                        input.ClientURI,
+		LogoUri:                          input.LogoURI,
 	})
 }
 
@@ -1177,6 +1180,21 @@ func (r *Repo) SetOAuth2ClientLogout(ctx context.Context, clientID string, postL
 		PostLogoutRedirectUris:           jsonArrayOrEmpty(postLogoutRedirectURIs),
 		BackchannelLogoutUri:             backchannelLogoutURI,
 		BackchannelLogoutSessionRequired: sessionRequired,
+	})
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+// SetOAuth2ClientLaunchMetadata updates a client's app-launcher metadata
+// (initiate_login_uri, client_uri, logo_uri). A nil value clears the column.
+func (r *Repo) SetOAuth2ClientLaunchMetadata(ctx context.Context, clientID string, initiateLoginURI, clientURI, logoURI *string) (bool, error) {
+	n, err := r.q.SetOAuth2ClientLaunchMetadata(ctx, pgxgen.SetOAuth2ClientLaunchMetadataParams{
+		ClientID:         clientID,
+		InitiateLoginUri: initiateLoginURI,
+		ClientUri:        clientURI,
+		LogoUri:          logoURI,
 	})
 	if err != nil {
 		return false, err
@@ -2758,6 +2776,9 @@ func oauth2ClientToDomain(m pgxgen.YauthOauth2Client) domain.OAuth2Client {
 		BackchannelLogoutSessionRequired: m.BackchannelLogoutSessionRequired,
 		DynamicallyRegistered:            m.DynamicallyRegistered,
 		LastUsedAt:                       fromTSPtr(m.LastUsedAt),
+		InitiateLoginURI:                 m.InitiateLoginUri,
+		ClientURI:                        m.ClientUri,
+		LogoURI:                          m.LogoUri,
 	}
 }
 

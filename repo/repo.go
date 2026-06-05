@@ -245,6 +245,10 @@ type OAuth2ClientRepository interface {
 	// (post_logout_redirect_uris, backchannel_logout_uri, session_required).
 	// Returns true if a row was updated.
 	SetOAuth2ClientLogout(ctx context.Context, clientID string, postLogoutRedirectURIs json.RawMessage, backchannelLogoutURI *string, sessionRequired bool) (bool, error)
+	// SetOAuth2ClientLaunchMetadata updates a client's app-launcher metadata
+	// (initiate_login_uri, client_uri, logo_uri). A nil value clears the column.
+	// Returns true if a row was updated.
+	SetOAuth2ClientLaunchMetadata(ctx context.Context, clientID string, initiateLoginURI, clientURI, logoURI *string) (bool, error)
 	// ListOAuth2ClientsWithBackchannelLogoutURI returns clients that registered
 	// a back-channel logout endpoint, for logout_token fan-out.
 	ListOAuth2ClientsWithBackchannelLogoutURI(ctx context.Context) ([]*domain.OAuth2Client, error)

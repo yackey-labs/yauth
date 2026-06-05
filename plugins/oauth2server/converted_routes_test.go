@@ -253,3 +253,97 @@ func TestConvertedCreateClient_ResponseShape(t *testing.T) {
 		t.Fatalf("confidential client response missing 'client_secret': keys=%v", out)
 	}
 }
+
+// adminReqJSON sends a JSON request with the admin cookie and returns the
+// status plus the decoded JSON object body (empty map on a non-JSON body).
+func (h *harness) adminReqJSON(t *testing.T, method, path, adminCookie, body string) (int, map[string]any) {
+	t.Helper()
+	req, _ := http.NewRequest(method, h.srv.URL+path, strings.NewReader(body))
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	req.AddCookie(&http.Cookie{Name: "yauth_session", Value: adminCookie})
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, path, err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	var out map[string]any
+	_ = json.NewDecoder(res.Body).Decode(&out)
+	return res.StatusCode, out
+}
+
+// TestAdminClient_LaunchMetadata_CreateGetPatch exercises the admin client
+// endpoints for the OIDC / RFC 7591 launcher metadata: create persists + echoes
+// the three fields, GET returns them, PATCH updates one and clears another via
+// an explicit empty string, and a non-https initiate_login_uri is rejected 400.
+func TestAdminClient_LaunchMetadata_CreateGetPatch(t *testing.T) {
+	h := newHarness(t)
+	_, adminCookie := h.seedUser(t, "admin@idp.test", "admin")
+
+	body := `{"name":"launcher","redirect_uris":["https://app.example/cb"],` +
+		`"grant_types":["authorization_code"],"scopes":["openid"],"is_public":false,` +
+		`"token_endpoint_auth_method":"client_secret_post",` +
+		`"client_uri":"https://app.example.com",` +
+		`"logo_uri":"https://app.example.com/logo.png",` +
+		`"initiate_login_uri":"https://app.example.com/launch"}`
+	clientID, _, client := h.createClient(t, adminCookie, body)
+	if got, _ := client["client_uri"].(string); got != "https://app.example.com" {
+		t.Fatalf("create echo client_uri: %q", got)
+	}
+	if got, _ := client["initiate_login_uri"].(string); got != "https://app.example.com/launch" {
+		t.Fatalf("create echo initiate_login_uri: %q", got)
+	}
+
+	// GET returns the metadata.
+	st, got := h.adminReqJSON(t, http.MethodGet, "/api/auth/oauth2/clients/"+clientID, adminCookie, "")
+	if st != http.StatusOK {
+		t.Fatalf("get client: status=%d", st)
+	}
+	if v, _ := got["logo_uri"].(string); v != "https://app.example.com/logo.png" {
+		t.Fatalf("get logo_uri: %q", v)
+	}
+
+	// PATCH: change initiate_login_uri, clear logo_uri (explicit empty string),
+	// leave client_uri untouched.
+	st, _ = h.adminReqJSON(t, http.MethodPatch, "/api/auth/oauth2/clients/"+clientID, adminCookie,
+		`{"initiate_login_uri":"https://app.example.com/launch2","logo_uri":""}`)
+	if st != http.StatusOK {
+		t.Fatalf("patch: status=%d", st)
+	}
+	c, err := h.repo.GetOAuth2ClientByClientID(context.Background(), clientID)
+	if err != nil || c == nil {
+		t.Fatalf("repo get: %v", err)
+	}
+	if c.InitiateLoginURI == nil || *c.InitiateLoginURI != "https://app.example.com/launch2" {
+		t.Fatalf("patched initiate_login_uri: %v", c.InitiateLoginURI)
+	}
+	if c.LogoURI != nil {
+		t.Fatalf("logo_uri should be cleared by empty string; got %v", *c.LogoURI)
+	}
+	if c.ClientURI == nil || *c.ClientURI != "https://app.example.com" {
+		t.Fatalf("client_uri should be untouched; got %v", c.ClientURI)
+	}
+}
+
+// TestAdminClient_InitiateLoginURI_NonHTTPS_Rejected proves the https-only
+// rule is enforced on both the admin create and patch paths.
+func TestAdminClient_InitiateLoginURI_NonHTTPS_Rejected(t *testing.T) {
+	h := newHarness(t)
+	_, adminCookie := h.seedUser(t, "admin@idp.test", "admin")
+
+	// Create with a plaintext initiate_login_uri → 400.
+	body := `{"name":"bad","redirect_uris":[],"grant_types":["client_credentials"],"scopes":["read"],` +
+		`"is_public":false,"initiate_login_uri":"http://app.example.com/launch"}`
+	if st := h.adminReq(t, http.MethodPost, "/api/auth/oauth2/clients", adminCookie, body); st != http.StatusBadRequest {
+		t.Fatalf("create non-https initiate_login_uri: expected 400, got %d", st)
+	}
+
+	// Create a valid client, then PATCH with a plaintext initiate_login_uri → 400.
+	ok := `{"name":"ok","redirect_uris":[],"grant_types":["client_credentials"],"scopes":["read"],"is_public":false}`
+	clientID, _, _ := h.createClient(t, adminCookie, ok)
+	if st := h.adminReq(t, http.MethodPatch, "/api/auth/oauth2/clients/"+clientID, adminCookie,
+		`{"initiate_login_uri":"http://app.example.com/launch"}`); st != http.StatusBadRequest {
+		t.Fatalf("patch non-https initiate_login_uri: expected 400, got %d", st)
+	}
+}

@@ -41,6 +41,9 @@ func (r *Repo) CreateOAuth2Client(ctx context.Context, input domain.NewOAuth2Cli
 		BackchannelLogoutURI:             input.BackchannelLogoutURI,
 		BackchannelLogoutSessionRequired: input.BackchannelLogoutSessionRequired,
 		DynamicallyRegistered:            input.DynamicallyRegistered,
+		InitiateLoginURI:                 input.InitiateLoginURI,
+		ClientURI:                        input.ClientURI,
+		LogoURI:                          input.LogoURI,
 	}
 	if len(input.PostLogoutRedirectURIs) > 0 {
 		c.PostLogoutRedirectURIs = append([]byte(nil), input.PostLogoutRedirectURIs...)
@@ -156,6 +159,21 @@ func (r *Repo) SetOAuth2ClientLogout(ctx context.Context, clientID string, postL
 		c.BackchannelLogoutURI = nil
 	}
 	c.BackchannelLogoutSessionRequired = sessionRequired
+	return true, nil
+}
+
+func (r *Repo) SetOAuth2ClientLaunchMetadata(ctx context.Context, clientID string, initiateLoginURI, clientURI, logoURI *string) (bool, error) {
+	_ = ensureCtx(ctx)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	id, ok := r.oauth2ClientIDIdx[clientID]
+	if !ok {
+		return false, nil
+	}
+	c := r.oauth2Clients[id]
+	c.InitiateLoginURI = strPtrCopy(initiateLoginURI)
+	c.ClientURI = strPtrCopy(clientURI)
+	c.LogoURI = strPtrCopy(logoURI)
 	return true, nil
 }
 

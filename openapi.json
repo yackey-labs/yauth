@@ -645,6 +645,9 @@
           "client_id": {
             "type": "string"
           },
+          "client_uri": {
+            "type": "string"
+          },
           "created_at": {
             "format": "date-time",
             "type": "string"
@@ -667,10 +670,16 @@
           "id": {
             "type": "string"
           },
+          "initiate_login_uri": {
+            "type": "string"
+          },
           "is_public": {
             "type": "boolean"
           },
           "jwks_uri": {
+            "type": "string"
+          },
+          "logo_uri": {
             "type": "string"
           },
           "name": {
@@ -812,6 +821,9 @@
           "backchannel_logout_uri": {
             "type": "string"
           },
+          "client_uri": {
+            "type": "string"
+          },
           "enforce_group_assignment": {
             "type": "boolean"
           },
@@ -824,10 +836,16 @@
               "null"
             ]
           },
+          "initiate_login_uri": {
+            "type": "string"
+          },
           "is_public": {
             "type": "boolean"
           },
           "jwks_uri": {
+            "type": "string"
+          },
+          "logo_uri": {
             "type": "string"
           },
           "name": {
@@ -2793,8 +2811,17 @@
           "banned_reason": {
             "type": "string"
           },
+          "client_uri": {
+            "type": "string"
+          },
           "enforce_group_assignment": {
             "type": "boolean"
+          },
+          "initiate_login_uri": {
+            "type": "string"
+          },
+          "logo_uri": {
+            "type": "string"
           },
           "post_logout_redirect_uris": {
             "items": {

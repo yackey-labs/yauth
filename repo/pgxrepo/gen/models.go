@@ -196,6 +196,9 @@ type YauthOauth2Client struct {
 	BackchannelLogoutSessionRequired bool
 	DynamicallyRegistered            bool
 	LastUsedAt                       pgtype.Timestamptz
+	InitiateLoginUri                 *string
+	ClientUri                        *string
+	LogoUri                          *string
 }
 
 type YauthOauthAccount struct {

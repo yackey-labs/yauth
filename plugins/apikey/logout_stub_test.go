@@ -19,6 +19,10 @@ func (*fakeRepo) SetOAuth2ClientLogout(context.Context, string, json.RawMessage,
 	return false, nil
 }
 
+func (*fakeRepo) SetOAuth2ClientLaunchMetadata(context.Context, string, *string, *string, *string) (bool, error) {
+	return false, nil
+}
+
 func (*fakeRepo) ListOAuth2ClientsWithBackchannelLogoutURI(context.Context) ([]*domain.OAuth2Client, error) {
 	return nil, nil
 }

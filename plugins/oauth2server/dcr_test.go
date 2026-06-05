@@ -615,3 +615,29 @@ func TestDCR_ClientURI_NotAbsolute_Rejected(t *testing.T) {
 		t.Fatalf("expected invalid_client_metadata, got %q (body=%v)", errCode, b)
 	}
 }
+
+// Dangerous URL schemes carry a host, so they pass a scheme!="" && host!=""
+// check — but client_uri/logo_uri become a link href / img src in a launcher,
+// so non-http(s) schemes must be rejected to prevent stored XSS.
+func TestDCR_LaunchMetadata_DangerousScheme_Rejected(t *testing.T) {
+	for _, tc := range []struct{ field, val string }{
+		{"client_uri", "javascript://x/%0Aalert(1)"},
+		{"client_uri", "vbscript://x/foo"},
+		{"client_uri", "data://x/text/html,<script>1</script>"},
+		{"logo_uri", "javascript://x/%0Aalert(1)"},
+		{"logo_uri", "data://x/image"},
+	} {
+		t.Run(tc.field+"_"+tc.val, func(t *testing.T) {
+			h := newDCRHarness(t, true)
+			body := `{"redirect_uris":["http://127.0.0.1:53517/cb"],"token_endpoint_auth_method":"none",` +
+				`"` + tc.field + `":"` + tc.val + `"}`
+			status, b := h.register(t, body, "")
+			if status != http.StatusBadRequest {
+				t.Fatalf("expected 400 for %s=%s, got %d body=%v", tc.field, tc.val, status, b)
+			}
+			if errCode, _ := b["error"].(string); errCode != "invalid_client_metadata" {
+				t.Fatalf("expected invalid_client_metadata, got %q (body=%v)", errCode, b)
+			}
+		})
+	}
+}

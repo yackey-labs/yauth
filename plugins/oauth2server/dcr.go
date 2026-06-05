@@ -336,8 +336,11 @@ func absoluteURLReason(field, raw string) string {
 	if err != nil {
 		return field + " must be a valid absolute URL"
 	}
-	if u.Scheme == "" || u.Host == "" {
-		return field + " must be an absolute URL with a scheme and host"
+	// Restrict to http/https. A scheme like javascript:/data:/vbscript: with a
+	// host would otherwise pass and become a stored-XSS sink when a launcher
+	// renders client_uri as a link or logo_uri as an image src.
+	if scheme := strings.ToLower(u.Scheme); (scheme != "http" && scheme != "https") || u.Host == "" {
+		return field + " must be an http(s) absolute URL with a host"
 	}
 	return ""
 }

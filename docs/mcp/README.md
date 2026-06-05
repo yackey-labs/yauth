@@ -45,7 +45,7 @@ the root mux. That is the root cause of every "little issue" people hit. The
 | 4 | 401 has no `WWW-Authenticate` and is `text/plain` | Client can't auto-discover; MCP client can't parse the error | `mcpauth.Guard` adds `WWW-Authenticate: Bearer resource_metadata="…"` and answers JSON |
 | 5 | The consent step has no UI | yauth returns a JSON consent *payload*, not a page | SPA `OAuthConsentPage`/`ConsentScreen`, or `mcpauth.HTMLConsentHandler` for non-SPA servers |
 | 6 | App routes not all under `/api`, `/mcp` has no trailing-slash route, SPA catch-all registered first | `/mcp/` returns your SPA's `index.html`; OAuth routes get swallowed | Register `/mcp` **and** `/mcp/`, keep the SPA catch-all **last** (see [Routing](#routing-checklist)) |
-| 7 | MCP clients register dynamically (RFC 7591), anonymously | First connect fails: `401 initial access token required` (or "client not found") | Set `DCREnabled: true` **and** `DCRRequireInitialAccessToken: &openDCR` (`openDCR := false`) — `DCREnabled` alone still requires an admin token |
+| 7 | MCP clients register dynamically (RFC 7591), anonymously | First connect fails: registration rejected ("client not found" / admin required) | Set `DCREnabled: true` — public **loopback-only** clients (localhost/127.0.0.1/::1) then self-register anonymously, exactly what local MCP clients need. (`DCRRequireAdminForLoopback: true` restores admin-gated registration.) |
 | 8 | `Issuer` ≠ the host clients actually use | Strict clients reject the metadata; `token_endpoint` points at the wrong host | Set oauth2server `Issuer` to the exact public origin (see [Issuer gotcha](#issuer-must-match-the-public-origin)) |
 
 ## Wiring
@@ -56,29 +56,50 @@ import (
 
 	yauth "github.com/yackey-labs/yauth"
 	"github.com/yackey-labs/yauth/mcpauth"
+	"github.com/yackey-labs/yauth/plugins/asymjwt"
 	"github.com/yackey-labs/yauth/plugins/bearer"
 	"github.com/yackey-labs/yauth/plugins/emailpassword"
 	"github.com/yackey-labs/yauth/plugins/oauth2server"
+	"github.com/yackey-labs/yauth/plugins/oidc"
 )
 
-func newYAuth(repo /* repo.Repository */) (*yauth.YAuth, error) {
-	// MCP clients register *anonymously* via DCR. DCREnabled alone is NOT
-	// enough: DCRRequireInitialAccessToken defaults to true, so an anonymous
-	// register returns `401 initial access token required`. Open it explicitly.
-	openDCR := false
+func newYAuth(repo /* repo.Repository */, privKeyPath, pubKeyPath string, secret []byte) (*yauth.YAuth, error) {
+	// asymjwt gives RS256 signing + /.well-known/jwks.json so clients can verify
+	// id_tokens / access tokens against a public key. Without it the provider
+	// falls back to HS256 and serves no JWKS. asymjwt.New returns an error, so
+	// build it first rather than inline in the chain.
+	asym, err := asymjwt.New(asymjwt.Config{
+		KeyType:        "RS256",
+		PrivateKeyPath: privKeyPath,
+		PublicKeyPath:  pubKeyPath,
+		KID:            "yauth-key-1",
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	return yauth.New(repo, yauth.NewDefaultConfig()).
 		WithJWTSecret(secret).
-		WithPlugin(emailpassword.New(emailpassword.Config{})).
-		WithPlugin(bearer.New(bearer.Config{})). // resolves the access token on /mcp
+		WithPlugin(emailpassword.New(emailpassword.Config{})). // the login the user completes before consent
+		WithPlugin(bearer.New(bearer.Config{})).               // resolves the access token on /mcp
+		WithPlugin(asym).                                      // RS256 + JWKS
 		WithPlugin(oauth2server.New(oauth2server.Config{
 			// Issuer MUST be the exact public origin clients reach (scheme+host,
 			// no trailing slash). yauth builds token_endpoint / the metadata
 			// `issuer` from it; if it disagrees with the host the client used,
 			// strict OAuth clients reject the metadata. See the gotcha below.
-			Issuer:                       "https://mcp.example.com",
-			BasePath:                     "/api/auth", // MUST match the StripPrefix mount below
-			DCREnabled:                   true,        // footgun #7: MCP clients self-register (RFC 7591)
-			DCRRequireInitialAccessToken: &openDCR,    // footgun #7: allow anonymous registration
+			Issuer:     "https://mcp.example.com",
+			BasePath:   "/api/auth", // MUST match the StripPrefix mount below
+			DCREnabled: true,        // footgun #7: MCP clients self-register (RFC 7591).
+			// DCREnabled alone lets PUBLIC LOOPBACK-ONLY clients (localhost /
+			// 127.0.0.1 / ::1) register anonymously — exactly what local MCP
+			// clients (e.g. Claude Code) need. Non-loopback or confidential
+			// registrations still require an admin. Set
+			// DCRRequireAdminForLoopback: true to gate everything behind an admin.
+		})).
+		WithPlugin(oidc.New(oidc.Config{ // OIDC discovery doc + /userinfo
+			Issuer:   "https://mcp.example.com",
+			BasePath: "/api/auth",
 		})).
 		Build()
 }
@@ -113,7 +134,19 @@ func router(ya *yauth.YAuth, mcpHandler http.Handler, spa http.Handler) http.Han
 }
 ```
 
-That's the whole server side. `mcpauth.Mount` registers:
+That's the whole server side (the auth wiring). The snippet above shows the
+two functions that matter; for a **complete, runnable program** — `func main`,
+an in-memory repo (`memrepo.New()`), and key generation — copy from the
+CI-tested `examples/oidc` and `examples/oauth2server`, which build the same
+plugin stack.
+
+> `newYAuth` above uses the builder API, but you can equally build the YAuth
+> instance from `yauth.yaml` with `yauth.NewFromConfig(ctx, cfg)` (the
+> `oauth2_server`/`oidc`/`asym_jwt` sections wire the same stack, including
+> `dcr_enabled` — see `yauth docs plugins/oidc-provider`). `mcpauth.Mount`/`Guard`
+> stay Go since they configure scopes, the consent path, and the MCP route.
+
+`mcpauth.Mount` registers:
 
 ```
 GET /.well-known/oauth-protected-resource           RFC 9728 (new)
@@ -260,10 +293,16 @@ symptom in local testing: hitting `127.0.0.1` while `Issuer` says `localhost`
 makes `token_endpoint` (localhost) and `authorization_endpoint` (127.0.0.1)
 disagree — use one hostname consistently.
 
-> OIDC is optional. `mcpauth.Mount` aliases `/.well-known/openid-configuration`
-> to root, but it only returns a document if you also load the `oidc` plugin;
-> without it the alias passes through yauth's 404. Pure OAuth 2.1 MCP clients use
-> `oauth-authorization-server`, not `openid-configuration`, so this is fine.
+> OIDC is optional for pure OAuth 2.1 MCP clients (they use
+> `oauth-authorization-server`, not `openid-configuration`). The wiring above
+> loads `oidc` + `asymjwt` anyway so you also get the OIDC discovery doc,
+> `id_token`s, and a verifiable JWKS at `{BasePath}/.well-known/jwks.json` —
+> useful for OIDC-capable clients and for RPs that verify tokens against the
+> public key. `mcpauth.Mount` aliases `/.well-known/openid-configuration` to
+> root; it returns a document only when the `oidc` plugin is loaded.
+>
+> For the OIDC/OAuth2/signing-key triad on its own (outside MCP), see
+> `yauth docs plugins/oidc-provider`.
 
 ## Verify it
 

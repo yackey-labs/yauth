@@ -18,6 +18,9 @@ func newRootCmd() *cobra.Command {
 		SilenceErrors: true,
 	}
 	root.AddCommand(
+		newContextCmd(),
+		newDocsCmd(),
+		newSchemaCmd(),
 		newInitCmd(),
 		newStatusCmd(),
 		newMigrateCmd(),

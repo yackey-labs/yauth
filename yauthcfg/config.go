@@ -277,11 +277,18 @@ type BearerPluginConfig struct {
 	Issuer       string        `yaml:"issuer" toml:"issuer"`
 }
 
-// APIKeyPluginConfig configures the api-key plugin.
+// APIKeyPluginConfig configures the api-key plugin. The credential is always
+// read from the fixed X-Api-Key header.
 type APIKeyPluginConfig struct {
-	Enabled    bool   `yaml:"enabled" toml:"enabled"`
-	HeaderName string `yaml:"header_name" toml:"header_name"`
-	Prefix     string `yaml:"prefix" toml:"prefix"`
+	Enabled bool `yaml:"enabled" toml:"enabled"`
+	// Prefix is the leading identifier in "<prefix>_<8hex>_<32hex>". Default "yak".
+	Prefix string `yaml:"prefix" toml:"prefix"`
+	// MaxKeysPerUser caps how many keys one user may own. Default 25.
+	MaxKeysPerUser int `yaml:"max_keys_per_user" toml:"max_keys_per_user"`
+	// HeaderName is accepted for backward compatibility but ignored — the
+	// credential header is always X-Api-Key.
+	// Deprecated: ignored; will be removed in a future release.
+	HeaderName string `yaml:"header_name,omitempty" toml:"header_name,omitempty"`
 }
 
 // MagicLinkPluginConfig configures the magic-link plugin.
@@ -352,15 +359,23 @@ type OAuthProvider struct {
 
 // OAuthPluginConfig configures the OAuth client plugin (multi-provider).
 type OAuthPluginConfig struct {
-	Enabled   bool                     `yaml:"enabled" toml:"enabled"`
-	Providers map[string]OAuthProvider `yaml:"providers" toml:"providers"`
+	Enabled bool `yaml:"enabled" toml:"enabled"`
+	// EncryptionKeyEnv names the env var holding the base64-encoded 32-byte
+	// AES-256 key used to encrypt upstream tokens at rest. Required when
+	// enabled. Generate one with `yauth gen-secrets`.
+	EncryptionKeyEnv string                   `yaml:"encryption_key_env" toml:"encryption_key_env"`
+	Providers        map[string]OAuthProvider `yaml:"providers" toml:"providers"`
 }
 
-// WebhooksPluginConfig configures outbound webhook delivery.
+// WebhooksPluginConfig configures outbound webhook delivery. Per-webhook HMAC
+// secrets are issued by the create endpoint; there is no global secret here.
 type WebhooksPluginConfig struct {
-	Enabled          bool   `yaml:"enabled" toml:"enabled"`
-	DefaultSecretEnv string `yaml:"default_secret_env" toml:"default_secret_env"`
-	MaxAttempts      int    `yaml:"max_attempts" toml:"max_attempts"`
+	Enabled     bool `yaml:"enabled" toml:"enabled"`
+	MaxAttempts int  `yaml:"max_attempts" toml:"max_attempts"`
+	// DefaultSecretEnv is accepted for backward compatibility but ignored —
+	// webhook signing secrets are issued per-endpoint at creation time.
+	// Deprecated: ignored; will be removed in a future release.
+	DefaultSecretEnv string `yaml:"default_secret_env,omitempty" toml:"default_secret_env,omitempty"`
 }
 
 // AsymJWTPluginConfig configures asymmetric (RS256/ES256) JWT signing.
@@ -389,8 +404,13 @@ type AsymJWTPluginConfig struct {
 
 // OIDCPluginConfig configures the OIDC discovery + JWKS plugin.
 type OIDCPluginConfig struct {
-	Enabled bool   `yaml:"enabled" toml:"enabled"`
-	Issuer  string `yaml:"issuer" toml:"issuer"`
+	Enabled bool `yaml:"enabled" toml:"enabled"`
+	// Issuer is the OIDC "iss" value and the origin for absolute URLs in the
+	// discovery doc. Empty falls back to server.base_url.
+	Issuer string `yaml:"issuer" toml:"issuer"`
+	// BasePath is the external path prefix the router is mounted under, e.g.
+	// "/api/auth". Empty falls back to server.prefix.
+	BasePath string `yaml:"base_path" toml:"base_path"`
 
 	// IDTokenTTL is the lifetime stamped onto id_tokens minted by the
 	// oauth2-server when oidc is loaded. Defaults to 1h when zero. The
@@ -405,20 +425,58 @@ type OIDCPluginConfig struct {
 	ClaimsSupported []string `yaml:"claims_supported" toml:"claims_supported"`
 }
 
-// OAuth2ServerPluginConfig configures the embedded RFC 6749 server.
+// OAuth2ServerPluginConfig configures the embedded RFC 6749 / 6750 / 7591 /
+// 7636 / 8414 / 8628 authorization server. PKCE (S256) is always required for
+// the authorization-code flow — there is no knob to disable it.
 type OAuth2ServerPluginConfig struct {
-	Enabled              bool          `yaml:"enabled" toml:"enabled"`
+	Enabled bool `yaml:"enabled" toml:"enabled"`
+	// Issuer is the JWT "iss" and the origin for absolute metadata URLs. Set it
+	// to the exact public origin clients reach. Empty falls back to server.base_url.
+	Issuer string `yaml:"issuer" toml:"issuer"`
+	// BasePath is the external path prefix the router is mounted under, e.g.
+	// "/api/auth". Empty falls back to server.prefix.
+	BasePath             string        `yaml:"base_path" toml:"base_path"`
 	AuthorizationCodeTTL time.Duration `yaml:"authorization_code_ttl" toml:"authorization_code_ttl"`
 	DeviceCodeTTL        time.Duration `yaml:"device_code_ttl" toml:"device_code_ttl"`
-	RequirePKCE          bool          `yaml:"require_pkce" toml:"require_pkce"`
-	// AccessTTL is the lifetime of issued OAuth2/OIDC access tokens. Shorter is
-	// better for instant termination: it bounds how long a suspended/banned
-	// user's token stays usable at RPs that validate the JWT locally (rather
-	// than introspecting). Empty → the oauth2server plugin default (15m).
+	// DevicePollInterval is the seconds clients should poll the token endpoint
+	// during the device flow. Default 5.
+	DevicePollInterval int `yaml:"device_poll_interval" toml:"device_poll_interval"`
+	// VerificationURI is the user-facing device-flow entry URL. Default "/oauth/device".
+	VerificationURI string `yaml:"verification_uri" toml:"verification_uri"`
+	// ConsentRequired forces the consent prompt even when a prior grant exists.
+	ConsentRequired bool `yaml:"consent_required" toml:"consent_required"`
+	// AccessTTL is the lifetime of issued access tokens. Empty → plugin default (15m).
 	AccessTTL time.Duration `yaml:"access_ttl" toml:"access_ttl"`
+	// RefreshTTL is the lifetime of issued refresh tokens. Empty → plugin default (30d).
+	RefreshTTL time.Duration `yaml:"refresh_ttl" toml:"refresh_ttl"`
 	// BackchannelLogoutTimeout bounds each OIDC Back-Channel Logout delivery
 	// (the OP→RP logout_token POST). Empty → the plugin default (5s).
 	BackchannelLogoutTimeout time.Duration `yaml:"backchannel_logout_timeout" toml:"backchannel_logout_timeout"`
+
+	// RequirePKCE is accepted for backward compatibility but ignored — PKCE
+	// (S256) is always required for the authorization-code flow.
+	// Deprecated: ignored; will be removed in a future release.
+	RequirePKCE bool `yaml:"require_pkce,omitempty" toml:"require_pkce,omitempty"`
+
+	// DCREnabled turns on the RFC 7591 dynamic client registration endpoint
+	// (POST /oauth/register). When true, public loopback-only clients
+	// (localhost/127.0.0.1/::1) may self-register anonymously — what local MCP
+	// clients need. Non-loopback / confidential registrations require an admin.
+	DCREnabled bool `yaml:"dcr_enabled" toml:"dcr_enabled"`
+	// DCRRequireAdminForLoopback gates EVERY registration behind an admin,
+	// including loopback-only public clients.
+	DCRRequireAdminForLoopback bool `yaml:"dcr_require_admin_for_loopback" toml:"dcr_require_admin_for_loopback"`
+	// DCRAllowConfidentialClients lets DCR create confidential clients (default
+	// is public/PKCE only).
+	DCRAllowConfidentialClients bool `yaml:"dcr_allow_confidential_clients" toml:"dcr_allow_confidential_clients"`
+	// AllowPrivateNetworkJWKSURI permits private_key_jwt clients to use loopback
+	// / RFC 1918 jwks_uri (SSRF protection off). Dev/test only.
+	AllowPrivateNetworkJWKSURI bool `yaml:"allow_private_network_jwks_uri" toml:"allow_private_network_jwks_uri"`
+	// DCRStaleClientTTL enables the sweep of unused dynamically-registered
+	// clients older than this. 0 (default) disables the sweep.
+	DCRStaleClientTTL time.Duration `yaml:"dcr_stale_client_ttl" toml:"dcr_stale_client_ttl"`
+	// DCRStaleSweepInterval is how often the stale-client sweep runs. Default 24h.
+	DCRStaleSweepInterval time.Duration `yaml:"dcr_stale_sweep_interval" toml:"dcr_stale_sweep_interval"`
 }
 
 // Default returns a Config populated with sensible development defaults

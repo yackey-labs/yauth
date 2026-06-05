@@ -663,9 +663,24 @@ SIGTERM-aware setup with an in-process receiver.
 
 `yauth.YAuthConfig` is the runtime config shape (cookie name/domain,
 session TTL, etc.). The companion package `yauthcfg` parses an external
-YAML/TOML config + `YAUTH_*` environment variables into a fully-resolved
-`yauth.YAuthConfig`. Use it whenever you want config-driven setups
-(twelve-factor, k8s ConfigMap-backed, etc.).
+YAML/TOML config into a fully-resolved `yauth.YAuthConfig`. Use it whenever
+you want config-driven setups (twelve-factor, k8s ConfigMap-backed, etc.).
+
+**Two ways to assemble a server (mixable):** declarative —
+`yauth.NewFromConfig(ctx, cfg)` wires every enabled plugin from `yauth.yaml`;
+or programmatic — `yauth.New(repo, cfg).WithPlugin(...).Build()`. Mix with
+`yauth.NewBuilderFromConfig(ctx, cfg)` then `.WithPlugin(custom).Build()`.
+Precedence, env handling, and the no-duplicate-plugin rule are documented in
+[docs/configuration.md](docs/configuration.md) (or `yauth docs configuration`).
+
+**Environment variables.** When config is loaded via `yauthcfg.Load` (the CLI,
+and the standard `Load` + `NewFromConfig` flow), any scalar field can be
+overridden with a `YAUTH_*` env var (env wins over the file, but not over
+explicit Go values) — e.g. `YAUTH_SERVER_ADDR=:8080`, `YAUTH_SESSION_TTL=24h`,
+`YAUTH_PLUGINS_BEARER_ENABLED=true`. The var name is `YAUTH_` + the uppercased
+YAML path joined by `_`. In addition, `database.dsn: env:VAR` reads the DSN from
+`VAR`, and `*_env` fields name the env var holding a secret/key. Full precedence
+ladder: [docs/configuration.md](docs/configuration.md).
 
 Notable fields beyond cookie/session settings:
 
@@ -710,6 +725,75 @@ yauth status             # ping the running yauth instance
 yauth dump-schema        # emit the table layout
 yauth version            # version info
 ```
+
+### Agent / AI context (version-exact, embedded)
+
+The CLI embeds its own documentation and config schema, so an AI agent (or a
+human) can learn this **exact version** of yauth from the binary — no doc site,
+no MCP server, no skill file to keep in sync. Because the docs ship inside the
+same artifact as the code (and, via `go tool`, the same version as the library
+you link), they cannot drift from what the binary actually does.
+
+```bash
+go tool yauth context                 # llms.txt-style index: commands, doc topics, plugins — start here
+go tool yauth docs                    # list embedded doc topics
+go tool yauth docs scim/okta          # print one topic (README + everything under docs/)
+go tool yauth docs typescript/setup   # frontend: TypeScript / Vue / SolidJS
+go tool yauth schema config           # JSON Schema (Draft 2020-12) for yauth.yaml, reflected from this binary
+```
+
+(Installed via [`go tool`](#install-as-a-go-tool), shown above — these stay
+pinned to the yauth version your app links. If you `go install`ed the binary
+onto your PATH instead, drop the `go tool` prefix: `yauth context`.)
+
+`go tool yauth schema config` is reflected from the real `yauthcfg.Config`
+structs at runtime, so field names, types, and defaults always match what this
+version parses.
+
+**Point your coding agent at it.** Add this one line to your project's
+`AGENTS.md` (or `CLAUDE.md`) and any agent starts from the version-exact source:
+
+> When working with yauth, run `go tool yauth context` first — it prints the
+> version-exact commands, doc topics, and config schema for the installed
+> version. Use `go tool yauth schema config` to author/validate `yauth.yaml`,
+> `go tool yauth docs <topic>` for guides, and `go tool yauth docs typescript/setup`
+> for the TypeScript / Vue / SolidJS frontend.
+
+That one-liner is the portable, tool-agnostic way to wire in agent context —
+nothing to install or keep in sync, because it points back at the binary. (A
+thin skill at `.claude/skills/yauth/` does the same for contributors working in
+this repo, auto-discovered by Claude Code.)
+
+### Install as a Go tool
+
+If you already depend on `yauth` as a library, pin the CLI as a
+[Go tool](https://go.dev/doc/modules/managing-dependencies#tools)
+(Go 1.24+) instead of installing a loose binary. From inside your module:
+
+```bash
+go get -tool github.com/yackey-labs/yauth/cmd/yauth
+```
+
+This adds a `tool` directive to your `go.mod`. Run it through `go tool`:
+
+```bash
+go tool yauth migrate -c yauth.yaml
+go tool yauth version
+```
+
+**Version is locked to the library automatically.** `cmd/yauth` lives in the
+same module as the `yauth` package, and Go modules resolve a single version
+per module (MVS). So the `tool` directive and your
+`require github.com/yackey-labs/yauth vX.Y.Z` always point at the same
+version — the CLI can never drift from the library you build against. To move
+both in lockstep, bump the one module:
+
+```bash
+go get github.com/yackey-labs/yauth@v1.2.3   # updates library + tool together
+```
+
+This is the recommended pattern for CI/CD: the migration tool is guaranteed to
+match the schema embedded in the exact `yauth` version your app links.
 
 ## Running Migrations in CI/CD
 

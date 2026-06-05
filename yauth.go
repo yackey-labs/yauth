@@ -14,6 +14,7 @@ package yauth
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -125,6 +126,19 @@ func (b *YAuthBuilder) WithJWTSecret(secret []byte) *YAuthBuilder {
 // middleware, asks each plugin to register its routes onto an internal
 // ServeMux, and returns the assembled object.
 func (b *YAuthBuilder) Build() (*YAuth, error) {
+	// Reject duplicate plugins up front with a clear error rather than letting
+	// huma panic on colliding route registrations. This is the guard for the
+	// mix-and-match footgun: the same plugin wired via both NewBuilderFromConfig
+	// (yaml) and WithPlugin (builder). One plugin name = one registration.
+	seen := make(map[string]bool, len(b.plugins))
+	for _, p := range b.plugins {
+		name := p.Name()
+		if seen[name] {
+			return nil, fmt.Errorf("yauth: duplicate plugin %q — it is registered twice (likely enabled in yaml AND added via WithPlugin); remove one", name)
+		}
+		seen[name] = true
+	}
+
 	// yauth #89 / Go #15: enable active-org hydration on the
 	// middleware iff the organizations plugin is registered. Without
 	// the plugin the AuthUser stays in legacy single-user shape with

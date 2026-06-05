@@ -29,6 +29,9 @@ func newStatusCmd() *cobra.Command {
 			} else {
 				fmt.Fprintf(out, "plugins:   %s\n", strings.Join(plugins, ", "))
 			}
+			for _, warn := range cfg.DeprecationWarnings() {
+				fmt.Fprintln(cmd.ErrOrStderr(), "warning: "+warn)
+			}
 			return nil
 		},
 	}

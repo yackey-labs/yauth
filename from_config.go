@@ -3,17 +3,33 @@ package yauth
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 
 	"github.com/yackey-labs/yauth/auth/passwordpolicy"
 	yauthMigrate "github.com/yackey-labs/yauth/migrate"
+	"github.com/yackey-labs/yauth/plugins/admin"
+	"github.com/yackey-labs/yauth/plugins/apikey"
+	"github.com/yackey-labs/yauth/plugins/asymjwt"
+	"github.com/yackey-labs/yauth/plugins/bearer"
 	"github.com/yackey-labs/yauth/plugins/emailpassword"
+	"github.com/yackey-labs/yauth/plugins/lockout"
+	"github.com/yackey-labs/yauth/plugins/magiclink"
 	smtpmailer "github.com/yackey-labs/yauth/plugins/mailer/smtp"
+	"github.com/yackey-labs/yauth/plugins/mfa"
+	"github.com/yackey-labs/yauth/plugins/oauth"
+	"github.com/yackey-labs/yauth/plugins/oauth/providers"
+	"github.com/yackey-labs/yauth/plugins/oauth2server"
+	"github.com/yackey-labs/yauth/plugins/oidc"
+	"github.com/yackey-labs/yauth/plugins/passkey"
+	"github.com/yackey-labs/yauth/plugins/status"
+	"github.com/yackey-labs/yauth/plugins/webhooks"
 	yauthrepo "github.com/yackey-labs/yauth/repo"
 	"github.com/yackey-labs/yauth/repo/memrepo"
 	"github.com/yackey-labs/yauth/repo/pgxrepo"
@@ -22,23 +38,47 @@ import (
 	"github.com/yackey-labs/yauth/yauthcfg"
 )
 
-// NewFromConfig builds a fully-wired *YAuth from a yauthcfg.Config.
+// NewFromConfig builds a fully-wired *YAuth from a yauthcfg.Config. It wires
+// every enabled plugin (resolving secrets/keys from the config's *_env / *_path
+// fields) and returns a ready-to-mount instance — it is exactly
+// [NewBuilderFromConfig] followed by Build().
+//
+// Use this for the all-declarative path. To start from yaml and ALSO add your
+// own plugins in Go, use [NewBuilderFromConfig] instead.
 //
 // Migration policy: NewFromConfig NEVER calls AutoMigrate by default.
 // Run `yauth migrate` (cmd/yauth) as a one-shot job before rolling out
 // app replicas — concurrent AutoMigrate calls race in multi-replica
 // deployments. The optional cfg.Database.AutoMigrate flag overrides
 // this for development only and prints a stderr warning when set.
-//
-// Supported plugins for NewFromConfig today: email_password, telemetry.
-// Bearer/api-key/etc. land in subsequent tasks (#10–#19) and will be
-// wired into the same switch-by-section structure below.
 func NewFromConfig(ctx context.Context, cfg *yauthcfg.Config) (*YAuth, error) {
+	b, err := NewBuilderFromConfig(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return b.Build()
+}
+
+// NewBuilderFromConfig wires a *YAuthBuilder from a yauthcfg.Config — the same
+// repo, telemetry, mailer, and plugin wiring NewFromConfig performs — but stops
+// short of Build() so callers can extend it. This is the mix-and-match entry
+// point: declarative yaml for the standard plugins, plus the builder API for
+// anything custom or programmatic.
+//
+//	b, err := yauth.NewBuilderFromConfig(ctx, cfg)
+//	if err != nil { ... }
+//	ya, err := b.WithPlugin(myInHousePlugin).Build()
+func NewBuilderFromConfig(ctx context.Context, cfg *yauthcfg.Config) (*YAuthBuilder, error) {
 	if cfg == nil {
 		return nil, errors.New("yauth: NewFromConfig requires a non-nil config")
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("yauth: invalid config: %w", err)
+	}
+	// Surface deprecated-but-set config fields at startup (same channel as the
+	// auto_migrate warning below). Non-fatal; they are ignored.
+	for _, warn := range cfg.DeprecationWarnings() {
+		fmt.Fprintln(os.Stderr, "yauth: WARNING "+warn)
 	}
 
 	var repo yauthrepo.Repository
@@ -144,18 +184,240 @@ func NewFromConfig(ctx context.Context, cfg *yauthcfg.Config) (*YAuth, error) {
 		builder = builder.WithPlugin(emailpassword.New(epCfg))
 	}
 
-	// TODO(#10) bearer plugin wiring
-	// TODO(#11) api-key plugin wiring
-	// TODO(#12) magic-link / account-lock plugin wiring
-	// TODO(#13) status / admin plugin wiring
-	// TODO(#14) mfa plugin wiring
-	// TODO(#15) passkey plugin wiring
-	// TODO(#16) oauth client plugin wiring
-	// TODO(#17) webhooks plugin wiring
-	// TODO(#18) asym-jwt / oidc plugin wiring
-	// TODO(#19) oauth2-server plugin wiring
+	builder, err = addAuthPlugins(builder, cfg, mailer)
+	if err != nil {
+		return nil, err
+	}
 
-	return builder.Build()
+	return builder, nil
+}
+
+// firstNonEmpty returns a if it is non-empty, else b.
+func firstNonEmpty(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
+}
+
+// resolveAESKey loads a 32-byte AES key from the named env var. It accepts the
+// base64-std form emitted by `yauth gen-secrets`, or a raw 32-byte value.
+func resolveAESKey(envName string) ([32]byte, error) {
+	var key [32]byte
+	raw := os.Getenv(envName)
+	if raw == "" {
+		return key, fmt.Errorf("env %q is empty or unset", envName)
+	}
+	if b, err := base64.StdEncoding.DecodeString(raw); err == nil && len(b) == 32 {
+		copy(key[:], b)
+		return key, nil
+	}
+	if len(raw) == 32 {
+		copy(key[:], raw)
+		return key, nil
+	}
+	return key, fmt.Errorf("env %q must hold a base64-encoded 32-byte key (or 32 raw bytes)", envName)
+}
+
+// buildOAuthProviders maps the yaml provider catalog onto concrete
+// oauth.Provider implementations, resolving client credentials from env. The
+// map key is the provider slug: "google" and "github" use the built-in
+// constructors; any other name is treated as a generic OIDC provider whose
+// endpoints are discovered from issuer_url.
+func buildOAuthProviders(c yauthcfg.OAuthPluginConfig) ([]oauth.Provider, error) {
+	var provs []oauth.Provider
+	for name, pc := range c.Providers {
+		if !pc.Enabled {
+			continue
+		}
+		clientID := os.Getenv(pc.ClientIDEnv)
+		clientSecret := os.Getenv(pc.ClientSecretEnv)
+		switch name {
+		case "google":
+			provs = append(provs, providers.Google(providers.GoogleConfig{
+				ClientID: clientID, ClientSecret: clientSecret,
+				RedirectURL: pc.RedirectURL, Scopes: pc.Scopes,
+			}))
+		case "github":
+			provs = append(provs, providers.GitHub(providers.GitHubConfig{
+				ClientID: clientID, ClientSecret: clientSecret,
+				RedirectURL: pc.RedirectURL, Scopes: pc.Scopes,
+			}))
+		default:
+			p, err := providers.OIDC(providers.OIDCConfig{
+				ProviderName: name, ClientID: clientID, ClientSecret: clientSecret,
+				RedirectURL: pc.RedirectURL, Scopes: pc.Scopes, DiscoveryURL: pc.IssuerURL,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("yauth: oauth provider %q: %w", name, err)
+			}
+			provs = append(provs, p)
+		}
+	}
+	return provs, nil
+}
+
+// addAuthPlugins wires every enabled plugin beyond email_password from the
+// declarative config onto the builder, resolving secrets/keys from the
+// environment. Returns the first construction error. Plugins are added in the
+// same order as yauthcfg.EnabledPlugins so asymjwt's signer is registered
+// before oidc/oauth2server (which read it).
+func addAuthPlugins(builder *YAuthBuilder, cfg *yauthcfg.Config, mailer *smtpmailer.Mailer) (*YAuthBuilder, error) {
+	p := &cfg.Plugins
+
+	// One IdP issuer/base-path, applied to both oidc and oauth2server so their
+	// metadata can never disagree. Either plugin's field, or server.*, sets it.
+	idpIssuer := firstNonEmpty(firstNonEmpty(p.OAuth2Server.Issuer, p.OIDC.Issuer), cfg.Server.BaseURL)
+	idpBasePath := firstNonEmpty(firstNonEmpty(p.OAuth2Server.BasePath, p.OIDC.BasePath), cfg.Server.Prefix)
+
+	if p.Bearer.Enabled {
+		secret := []byte(os.Getenv(p.Bearer.JWTSecretEnv))
+		if len(secret) == 0 {
+			return nil, fmt.Errorf("yauth: bearer enabled but env %q is empty or unset", p.Bearer.JWTSecretEnv)
+		}
+		builder = builder.WithJWTSecret(secret)
+		builder = builder.WithPlugin(bearer.New(bearer.Config{
+			AccessTTL:  p.Bearer.AccessTTL,
+			RefreshTTL: p.Bearer.RefreshTTL,
+			Issuer:     p.Bearer.Issuer,
+		}))
+	}
+
+	if p.APIKey.Enabled {
+		builder = builder.WithPlugin(apikey.New(apikey.Config{
+			Prefix:         p.APIKey.Prefix,
+			MaxKeysPerUser: p.APIKey.MaxKeysPerUser,
+		}))
+	}
+
+	if p.MagicLink.Enabled {
+		mlCfg := magiclink.Config{TokenTTL: p.MagicLink.TTL}
+		if mailer != nil {
+			mlCfg.Mailer = mailer
+		}
+		builder = builder.WithPlugin(magiclink.New(mlCfg))
+	}
+
+	if p.AccountLock.Enabled {
+		lkCfg := lockout.Config{
+			MaxAttempts:        p.AccountLock.MaxAttempts,
+			MaxLockoutDuration: p.AccountLock.MaxLockoutDuration,
+			AutoUnlock:         p.AccountLock.AutoUnlock,
+		}
+		if p.AccountLock.LockoutDuration > 0 {
+			lkCfg.LockoutDurations = []time.Duration{p.AccountLock.LockoutDuration}
+		}
+		if mailer != nil {
+			lkCfg.Mailer = mailer
+		}
+		builder = builder.WithPlugin(lockout.New(lkCfg))
+	}
+
+	if p.Status.Enabled {
+		builder = builder.WithPlugin(status.New())
+	}
+
+	if p.Admin.Enabled {
+		builder = builder.WithPlugin(admin.New())
+	}
+
+	if p.MFA.Enabled {
+		key, err := resolveAESKey(p.MFA.EncryptionKeyEnv)
+		if err != nil {
+			return nil, fmt.Errorf("yauth: mfa encryption key: %w", err)
+		}
+		plug, err := mfa.New(mfa.Config{EncryptionKey: key, Issuer: p.MFA.Issuer})
+		if err != nil {
+			return nil, fmt.Errorf("yauth: mfa: %w", err)
+		}
+		builder = builder.WithPlugin(plug)
+	}
+
+	if p.Passkey.Enabled {
+		plug, err := passkey.New(passkey.Config{
+			RPID:      p.Passkey.RPID,
+			RPName:    p.Passkey.RPName,
+			RPOrigins: []string{p.Passkey.RPOrigin},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("yauth: passkey: %w", err)
+		}
+		builder = builder.WithPlugin(plug)
+	}
+
+	if p.OAuth.Enabled {
+		key, err := resolveAESKey(p.OAuth.EncryptionKeyEnv)
+		if err != nil {
+			return nil, fmt.Errorf("yauth: oauth encryption key: %w", err)
+		}
+		provs, err := buildOAuthProviders(p.OAuth)
+		if err != nil {
+			return nil, err
+		}
+		plug, err := oauth.New(oauth.Config{EncryptionKey: key, Providers: provs})
+		if err != nil {
+			return nil, fmt.Errorf("yauth: oauth: %w", err)
+		}
+		builder = builder.WithPlugin(plug)
+	}
+
+	if p.Webhooks.Enabled {
+		builder = builder.WithPlugin(webhooks.New(webhooks.Config{
+			MaxAttempts: p.Webhooks.MaxAttempts,
+		}))
+	}
+
+	if p.AsymJWT.Enabled {
+		asymCfg := asymjwt.Config{
+			KeyType:        strings.ToUpper(p.AsymJWT.KeyType), // builder wants JWS-canonical uppercase
+			KID:            p.AsymJWT.KeyID,
+			PrivateKeyPath: p.AsymJWT.PrivateKeyPath,
+			PublicKeyPath:  p.AsymJWT.PublicKeyPath,
+		}
+		if p.AsymJWT.PrivateKeyPEMEnv != "" {
+			asymCfg.PrivateKeyPEM = []byte(os.Getenv(p.AsymJWT.PrivateKeyPEMEnv))
+		}
+		if p.AsymJWT.PublicKeyPEMEnv != "" {
+			asymCfg.PublicKeyPEM = []byte(os.Getenv(p.AsymJWT.PublicKeyPEMEnv))
+		}
+		plug, err := asymjwt.New(asymCfg)
+		if err != nil {
+			return nil, fmt.Errorf("yauth: asym_jwt: %w", err)
+		}
+		builder = builder.WithPlugin(plug)
+	}
+
+	if p.OIDC.Enabled {
+		builder = builder.WithPlugin(oidc.New(oidc.Config{
+			Issuer:          idpIssuer,
+			BasePath:        idpBasePath,
+			IDTokenTTL:      p.OIDC.IDTokenTTL,
+			ClaimsSupported: p.OIDC.ClaimsSupported,
+		}))
+	}
+
+	if p.OAuth2Server.Enabled {
+		builder = builder.WithPlugin(oauth2server.New(oauth2server.Config{
+			Issuer:                      idpIssuer,
+			BasePath:                    idpBasePath,
+			AccessTTL:                   p.OAuth2Server.AccessTTL,
+			RefreshTTL:                  p.OAuth2Server.RefreshTTL,
+			AuthCodeTTL:                 p.OAuth2Server.AuthorizationCodeTTL,
+			DeviceCodeTTL:               p.OAuth2Server.DeviceCodeTTL,
+			DevicePollInterval:          p.OAuth2Server.DevicePollInterval,
+			VerificationURI:             p.OAuth2Server.VerificationURI,
+			ConsentRequired:             p.OAuth2Server.ConsentRequired,
+			DCREnabled:                  p.OAuth2Server.DCREnabled,
+			DCRRequireAdminForLoopback:  p.OAuth2Server.DCRRequireAdminForLoopback,
+			DCRAllowConfidentialClients: p.OAuth2Server.DCRAllowConfidentialClients,
+			AllowPrivateNetworkJWKSURI:  p.OAuth2Server.AllowPrivateNetworkJWKSURI,
+			BackchannelLogoutTimeout:    p.OAuth2Server.BackchannelLogoutTimeout,
+			DCRStaleClientTTL:           p.OAuth2Server.DCRStaleClientTTL,
+			DCRStaleSweepInterval:       p.OAuth2Server.DCRStaleSweepInterval,
+		}))
+	}
+
+	return builder, nil
 }
 
 // Migrate opens the database described by cfg and applies all pending

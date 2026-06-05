@@ -1,6 +1,9 @@
 package yauthcfg
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // Validate walks the config and returns the first error encountered.
 // A non-nil result means the config is unsuitable for NewFromConfig.
@@ -44,7 +47,10 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("plugins.mfa.encryption_key_env is required when mfa is enabled")
 	}
 	if p.AsymJWT.Enabled {
-		switch p.AsymJWT.KeyType {
+		// Accept either case: the Go builder uses the JWS-canonical uppercase
+		// ("RS256"/"ES256"), so authors who copy that into yaml shouldn't be
+		// rejected for casing.
+		switch strings.ToLower(p.AsymJWT.KeyType) {
 		case "rs256", "es256":
 		default:
 			return fmt.Errorf("plugins.asym_jwt.key_type %q invalid (rs256 | es256)", p.AsymJWT.KeyType)
@@ -69,10 +75,25 @@ func (c *Config) Validate() error {
 	if p.Passkey.Enabled && (p.Passkey.RPID == "" || p.Passkey.RPOrigin == "") {
 		return fmt.Errorf("plugins.passkey requires rp_id and rp_origin")
 	}
+	if p.OAuth.Enabled && p.OAuth.EncryptionKeyEnv == "" {
+		return fmt.Errorf("plugins.oauth.encryption_key_env is required when oauth is enabled")
+	}
 	if p.OAuth2Server.Enabled {
 		if p.OAuth2Server.AccessTTL < 0 || p.OAuth2Server.BackchannelLogoutTimeout < 0 ||
 			p.OAuth2Server.AuthorizationCodeTTL < 0 || p.OAuth2Server.DeviceCodeTTL < 0 {
 			return fmt.Errorf("plugins.oauth2_server TTL/timeout values must be non-negative")
+		}
+	}
+	// oidc and oauth2_server are one IdP: their issuer / base_path must agree.
+	// NewFromConfig shares a single resolved value across both, so a config that
+	// sets them to conflicting values is a bug — reject it rather than silently
+	// picking one. Setting only one (or neither, falling back to server.*) is fine.
+	if p.OIDC.Enabled && p.OAuth2Server.Enabled {
+		if p.OIDC.Issuer != "" && p.OAuth2Server.Issuer != "" && p.OIDC.Issuer != p.OAuth2Server.Issuer {
+			return fmt.Errorf("plugins.oidc.issuer (%q) and plugins.oauth2_server.issuer (%q) must match — set only one (or server.base_url) and the other inherits it", p.OIDC.Issuer, p.OAuth2Server.Issuer)
+		}
+		if p.OIDC.BasePath != "" && p.OAuth2Server.BasePath != "" && p.OIDC.BasePath != p.OAuth2Server.BasePath {
+			return fmt.Errorf("plugins.oidc.base_path (%q) and plugins.oauth2_server.base_path (%q) must match — set only one (or server.prefix)", p.OIDC.BasePath, p.OAuth2Server.BasePath)
 		}
 	}
 
@@ -90,6 +111,26 @@ func (c *Config) Validate() error {
 	}
 
 	return nil
+}
+
+// DeprecationWarnings returns advisories for deprecated config fields that are
+// SET to a meaningful (non-zero) value. They are accepted for backward
+// compatibility but ignored, so flag them rather than silently dropping intent.
+// A zero/absent value (e.g. the `require_pkce: false` older scaffolds wrote)
+// produces no warning. Surfaced by `yauth check`/`status` and at NewFromConfig
+// startup; never fatal.
+func (c *Config) DeprecationWarnings() []string {
+	var w []string
+	if c.Plugins.OAuth2Server.RequirePKCE {
+		w = append(w, "plugins.oauth2_server.require_pkce is deprecated and ignored — PKCE (S256) is always enforced; remove it")
+	}
+	if c.Plugins.APIKey.HeaderName != "" {
+		w = append(w, "plugins.api_key.header_name is deprecated and ignored — the credential header is always X-Api-Key; remove it")
+	}
+	if c.Plugins.Webhooks.DefaultSecretEnv != "" {
+		w = append(w, "plugins.webhooks.default_secret_env is deprecated and ignored — webhook secrets are issued per-endpoint; remove it")
+	}
+	return w
 }
 
 // EnabledPlugins returns the names of plugins whose `enabled` flag is

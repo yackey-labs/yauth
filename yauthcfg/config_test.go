@@ -3,6 +3,7 @@ package yauthcfg
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -269,6 +270,98 @@ func TestEnabledPluginsOrder(t *testing.T) {
 	for i := range want {
 		if got[i] != want[i] {
 			t.Errorf("[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestValidateRejectsDivergentIdPIssuer(t *testing.T) {
+	c := Default()
+	c.Plugins.OIDC.Enabled = true
+	c.Plugins.OAuth2Server.Enabled = true
+
+	// Matching issuers (or only one set) are fine.
+	c.Plugins.OIDC.Issuer = "https://idp.example.com"
+	c.Plugins.OAuth2Server.Issuer = "https://idp.example.com"
+	if err := c.Validate(); err != nil {
+		t.Fatalf("matching issuers should validate: %v", err)
+	}
+
+	// Divergent issuers are a misconfiguration (one would be silently ignored).
+	c.Plugins.OAuth2Server.Issuer = "https://other.example.com"
+	if err := c.Validate(); err == nil {
+		t.Fatal("expected error for divergent oidc/oauth2_server issuers, got nil")
+	}
+}
+
+func TestEnvOverrides(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "yauth.yaml")
+	body := "database:\n  driver: memory\nserver:\n  addr: \":3000\"\nsession:\n  ttl: 1h\nplugins:\n  email_password:\n    enabled: true\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("YAUTH_SERVER_ADDR", ":8080")           // string, nested
+	t.Setenv("YAUTH_SESSION_TTL", "24h")             // duration
+	t.Setenv("YAUTH_PLUGINS_BEARER_ENABLED", "true") // deep nested bool
+	t.Setenv("YAUTH_PLUGINS_BEARER_JWT_SECRET_ENV", "JS")
+
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.Server.Addr != ":8080" {
+		t.Errorf("server.addr = %q, want :8080 (env override)", c.Server.Addr)
+	}
+	if c.Session.TTL != 24*time.Hour {
+		t.Errorf("session.ttl = %v, want 24h (env override)", c.Session.TTL)
+	}
+	if !c.Plugins.Bearer.Enabled {
+		t.Error("plugins.bearer.enabled should be true from env override")
+	}
+}
+
+// TestEnvDSNUnified shows the DSN is overridable the same generic way as any
+// field (YAUTH_DATABASE_DSN), and that it wins over the `env:` indirection.
+func TestEnvDSNUnified(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "yauth.yaml")
+	body := "database:\n  driver: pgx\n  dsn: env:PLATFORM_DB_URL\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PLATFORM_DB_URL", "postgres://from-indirection")
+	t.Setenv("YAUTH_DATABASE_DSN", "postgres://from-generic-override")
+
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.Database.DSN != "postgres://from-generic-override" {
+		t.Errorf("dsn = %q, want the YAUTH_DATABASE_DSN override to win", c.Database.DSN)
+	}
+}
+
+func TestDeprecationWarnings(t *testing.T) {
+	// Zero/absent deprecated fields → no noise (the common scaffolded case).
+	c := Default()
+	c.Plugins.OAuth2Server.Enabled = true // require_pkce defaults false → quiet
+	if w := c.DeprecationWarnings(); len(w) != 0 {
+		t.Fatalf("expected no warnings for default config, got %v", w)
+	}
+
+	// Meaningfully-set deprecated fields → one warning each, naming the field.
+	c.Plugins.OAuth2Server.RequirePKCE = true
+	c.Plugins.APIKey.HeaderName = "X-Custom"
+	c.Plugins.Webhooks.DefaultSecretEnv = "WH"
+	w := c.DeprecationWarnings()
+	if len(w) != 3 {
+		t.Fatalf("expected 3 deprecation warnings, got %d: %v", len(w), w)
+	}
+	joined := strings.Join(w, "\n")
+	for _, field := range []string{"require_pkce", "header_name", "default_secret_env"} {
+		if !strings.Contains(joined, field) {
+			t.Errorf("warnings should mention %q; got:\n%s", field, joined)
 		}
 	}
 }

@@ -25,6 +25,12 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("decode %q: %w", path, err)
 	}
 
+	// YAUTH_* env vars override file values (env wins). Applied before DSN
+	// env: resolution and validation.
+	if err := applyEnvOverrides(cfg); err != nil {
+		return nil, fmt.Errorf("apply env overrides for %q: %w", path, err)
+	}
+
 	if err := cfg.resolveEnv(); err != nil {
 		return nil, fmt.Errorf("resolve env in %q: %w", path, err)
 	}

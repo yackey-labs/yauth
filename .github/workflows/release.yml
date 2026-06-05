@@ -5,7 +5,9 @@ name: Release npm packages
 # Versioning is unified with the Go module: a single `vX.Y.Z` tag triggers
 # BOTH this workflow (npm) and goreleaser.yml (Go binaries + Docker), so the
 # npm packages and the server release at the same version. workflow_dispatch
-# is provided for the first publish under this repo.
+# (optional `version` input, defaults to the latest tag) re-runs the publish;
+# already-published packages are skipped, so it safely fills in whatever a
+# partial failure missed.
 #
 # Auth: npm OIDC **trusted publishing** (no token). The trusted-publisher
 # config on npm is pinned to repo `yackey-labs/yauth` + workflow `release.yml`,
@@ -21,6 +23,11 @@ on:
     tags:
       - 'v*.*.*'
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish (e.g. 0.24.0). Defaults to the latest git tag. Already-published packages are skipped, so this safely re-publishes only what is missing.'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -39,6 +46,8 @@ jobs:
         working-directory: clients
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # need tags for the latest-tag version fallback
 
       - uses: pnpm/action-setup@v4
         with:
@@ -57,12 +66,33 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Set package versions from tag
-        if: startsWith(github.ref, 'refs/tags/v')
+      # Resolve the version to publish: from the tag (tag push), else the
+      # workflow_dispatch input, else the latest git tag. INPUT_VERSION is
+      # passed via env (untrusted dispatch input) and the result is validated
+      # against a strict semver pattern before it touches any shell command.
+      - name: Resolve version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          echo "Publishing npm packages at $VERSION"
-          pnpm -r exec -- npm version "$VERSION" --no-git-tag-version --allow-same-version
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            V="${GITHUB_REF_NAME#v}"
+          elif [ -n "${INPUT_VERSION}" ]; then
+            V="${INPUT_VERSION#v}"
+          else
+            V="$(git describe --tags --abbrev=0 | sed 's/^v//')"
+          fi
+          if ! [[ "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+.][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::resolved version '$V' is not a valid semver"
+            exit 1
+          fi
+          echo "RELEASE_VERSION=$V" >> "$GITHUB_ENV"
+          echo "Resolved release version: $V"
+
+      - name: Set package versions
+        run: |
+          echo "Setting npm package versions to ${RELEASE_VERSION}"
+          pnpm -r exec -- npm version "${RELEASE_VERSION}" --no-git-tag-version --allow-same-version
 
       # Regenerate the client from the committed spec so the published artifact
       # always matches this commit's openapi.json.
@@ -75,19 +105,32 @@ jobs:
       # Publish each package from its directory via OIDC trusted publishing.
       # --provenance attests the build via id-token. workspace:* deps are
       # substituted in-place with the concrete version first.
+      # Idempotent publish: each package is skipped if its version is already on
+      # the registry, so a re-run (or workflow_dispatch) after a partial failure
+      # publishes only what is missing instead of aborting on the first
+      # already-published package.
       - name: Publish to npm (OIDC trusted publishing + provenance)
         run: |
           set -euo pipefail
           # setup-node leaves an empty NODE_AUTH_TOKEN in the env; even empty it
           # blocks OIDC, so unset it to let trusted publishing engage.
           unset NODE_AUTH_TOKEN || true
-          VER=$(node -p "require('./packages/shared/package.json').version")
+          VER="${RELEASE_VERSION}"
           echo "publishing version: $VER"
           for p in shared client ui-vue; do
             sed -i "s/\"workspace:\*\"/\"$VER\"/g" "packages/$p/package.json"
           done
+          published=0 skipped=0
           for p in shared client ui-vue; do
-            echo "::group::npm publish $p"
+            pkg="@yackey-labs/yauth-$p"
+            if npm view "${pkg}@${VER}" version >/dev/null 2>&1; then
+              echo "::notice::${pkg}@${VER} already published — skipping"
+              skipped=$((skipped+1))
+              continue
+            fi
+            echo "::group::npm publish $p ($VER)"
             ( cd "packages/$p" && npm publish --provenance --access public )
             echo "::endgroup::"
+            published=$((published+1))
           done
+          echo "published=$published skipped=$skipped"

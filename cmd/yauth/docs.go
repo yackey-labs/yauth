@@ -58,7 +58,7 @@ func titleOf(p string) string {
 	if err != nil {
 		return slugFor(p)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
@@ -94,7 +94,7 @@ func newDocsCmd() *cobra.Command {
 					if err != nil {
 						return err
 					}
-					out.Write(b)
+					_, _ = out.Write(b)
 				}
 				return nil
 			}
@@ -122,7 +122,7 @@ func newDocsCmd() *cobra.Command {
 					if err != nil {
 						return err
 					}
-					out.Write(b)
+					_, _ = out.Write(b)
 					return nil
 				}
 			}

@@ -20,17 +20,12 @@ const props = defineProps<{
 }>();
 
 /**
- * The consent payload from GET /oauth/authorize. The two yauth servers spell it
- * slightly differently — yauth-go nests `client` and returns a `scopes` array;
- * Rust yauth returns flat `client_id`/`client_name` and a space-delimited
- * `scope` string — so both shapes are optional here and normalized below.
+ * The consent payload from GET /oauth/authorize: a nested `client` object and a
+ * `scopes` array, per the huma-native Go server's consent response.
  */
 interface ConsentPayload {
 	client?: { id: string; name?: string };
-	client_id?: string;
-	client_name?: string;
 	scopes?: string[];
-	scope?: string;
 	csrf_token: string;
 	request_id: string;
 	redirect_url?: string;
@@ -40,14 +35,9 @@ const baseUrl = props.authBaseUrl ?? "/api/auth";
 const payload = ref<ConsentPayload | null>(null);
 const error = ref<string | null>(null);
 
-const clientIdOf = (p: ConsentPayload) => p.client?.id ?? p.client_id;
-const clientNameOf = (p: ConsentPayload) => p.client?.name ?? p.client_name;
-const scopesOf = (p: ConsentPayload): string[] =>
-	Array.isArray(p.scopes)
-		? p.scopes
-		: typeof p.scope === "string" && p.scope.length > 0
-			? p.scope.split(/\s+/)
-			: [];
+const clientIdOf = (p: ConsentPayload) => p.client?.id;
+const clientNameOf = (p: ConsentPayload) => p.client?.name;
+const scopesOf = (p: ConsentPayload): string[] => (Array.isArray(p.scopes) ? p.scopes : []);
 
 onMounted(async () => {
 	const here = window.location.pathname + window.location.search;

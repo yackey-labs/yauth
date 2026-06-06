@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
 import type { Mock } from "vitest";
 import { createYAuthClient, YAuthError } from "./index";
+import { configureClient, customFetch } from "./mutator";
 
 type MockFetch = Mock<(...args: unknown[]) => unknown>;
 
@@ -194,7 +195,7 @@ describe("createYAuthClient", () => {
 
     await client.getSession();
     const [, opts] = firstCall(fetchFn);
-    expect((opts.headers as Record<string, string>).Authorization).toBe("Bearer my-jwt-token");
+    expect((opts.headers as Headers).get("Authorization")).toBe("Bearer my-jwt-token");
   });
 
   test("updateProfile sends PATCH to /me", async () => {
@@ -364,5 +365,165 @@ describe("empty response handling", () => {
 
     const result = await client.logout();
     expect(result).toBeUndefined();
+  });
+});
+
+describe("customFetch mutator", () => {
+  function okResponse(body: unknown = {}) {
+    return vi.fn(async (_url: unknown, _init?: RequestInit) => ({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify(body),
+    })) as unknown as typeof fetch;
+  }
+
+  test("preserves a Headers instance passed via init.headers", async () => {
+    const fetchFn = okResponse();
+    configureClient({ baseUrl: "http://x", fetch: fetchFn });
+
+    await customFetch("/thing", {
+      headers: new Headers({ "X-Custom": "abc", Accept: "application/xml" }),
+    });
+
+    const [, opts] = (fetchFn as unknown as MockFetch).mock.calls[0] as [string, RequestInit];
+    const headers = opts.headers as Headers;
+    expect(headers.get("X-Custom")).toBe("abc");
+    expect(headers.get("Accept")).toBe("application/xml");
+  });
+
+  test("transport failure becomes a YAuthError (status 0) and calls onError", async () => {
+    const onError = vi.fn();
+    const fetchFn = vi.fn(async () => {
+      throw new TypeError("Failed to fetch");
+    }) as unknown as typeof fetch;
+    configureClient({ baseUrl: "http://x", fetch: fetchFn, onError });
+
+    await expect(customFetch("/thing")).rejects.toMatchObject({
+      name: "YAuthError",
+      status: 0,
+      message: "Failed to fetch",
+    });
+    expect(onError).toHaveBeenCalledTimes(1);
+  });
+
+  test("non-JSON 2xx body becomes a YAuthError and calls onError", async () => {
+    const onError = vi.fn();
+    const fetchFn = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      text: async () => "<html>not json</html>",
+    })) as unknown as typeof fetch;
+    configureClient({ baseUrl: "http://x", fetch: fetchFn, onError });
+
+    await expect(customFetch("/thing")).rejects.toBeInstanceOf(YAuthError);
+    expect(onError).toHaveBeenCalledTimes(1);
+  });
+
+  test("empty 2xx body resolves to undefined", async () => {
+    const fetchFn = vi.fn(async () => ({
+      ok: true,
+      status: 204,
+      text: async () => "",
+    })) as unknown as typeof fetch;
+    configureClient({ baseUrl: "http://x", fetch: fetchFn });
+
+    await expect(customFetch("/thing")).resolves.toBeUndefined();
+  });
+
+  test("getHeaders is injected into the request", async () => {
+    const fetchFn = okResponse();
+    configureClient({
+      baseUrl: "http://x",
+      fetch: fetchFn,
+      getHeaders: async () => ({ traceparent: "00-trace-span-01" }),
+    });
+
+    await customFetch("/thing");
+    const [, opts] = (fetchFn as unknown as MockFetch).mock.calls[0] as [string, RequestInit];
+    expect((opts.headers as Headers).get("traceparent")).toBe("00-trace-span-01");
+  });
+
+  test("caller init.headers win over getHeaders on conflict", async () => {
+    const fetchFn = okResponse();
+    configureClient({
+      baseUrl: "http://x",
+      fetch: fetchFn,
+      getHeaders: () => ({ "X-Tenant": "from-hook" }),
+    });
+
+    await customFetch("/thing", { headers: { "X-Tenant": "from-caller" } });
+    const [, opts] = (fetchFn as unknown as MockFetch).mock.calls[0] as [string, RequestInit];
+    expect((opts.headers as Headers).get("X-Tenant")).toBe("from-caller");
+  });
+
+  test("default timeout aborts the request", async () => {
+    vi.useFakeTimers();
+    try {
+      const onError = vi.fn();
+      const fetchFn = vi.fn((_url: unknown, init?: RequestInit) => {
+        return new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () =>
+            reject(init.signal?.reason ?? new Error("aborted")),
+          );
+        });
+      }) as unknown as typeof fetch;
+      configureClient({ baseUrl: "http://x", fetch: fetchFn, onError, timeoutMs: 5 });
+
+      const promise = customFetch("/thing");
+      const assertion = expect(promise).rejects.toBeInstanceOf(YAuthError);
+      await vi.advanceTimersByTimeAsync(10);
+      await assertion;
+      expect(onError).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("caller-provided signal still cancels the request", async () => {
+    const controller = new AbortController();
+    const fetchFn = vi.fn((_url: unknown, init?: RequestInit) => {
+      return new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () =>
+          reject(init.signal?.reason ?? new Error("aborted")),
+        );
+      });
+    }) as unknown as typeof fetch;
+    // Disable the timeout so the only abort source is the caller's signal.
+    configureClient({ baseUrl: "http://x", fetch: fetchFn, timeoutMs: 0 });
+
+    const promise = customFetch("/thing", { signal: controller.signal });
+    controller.abort(new Error("caller cancelled"));
+    await expect(promise).rejects.toBeInstanceOf(YAuthError);
+  });
+
+  test("unwraps the nested SAML protocol {error:{code,message}} envelope", async () => {
+    const fetchFn = vi.fn(async () => ({
+      ok: false,
+      status: 400,
+      text: async () => JSON.stringify({ error: { code: "saml_error", message: "Bad assertion" } }),
+    })) as unknown as typeof fetch;
+    configureClient({ baseUrl: "http://x", fetch: fetchFn });
+
+    await expect(customFetch("/sso/saml/acs")).rejects.toMatchObject({
+      status: 400,
+      message: "Bad assertion",
+      code: "saml_error",
+    });
+  });
+
+  test("parses the OAuth2 RFC 6749 flat {error,error_description} shape", async () => {
+    const fetchFn = vi.fn(async () => ({
+      ok: false,
+      status: 400,
+      text: async () =>
+        JSON.stringify({ error: "invalid_grant", error_description: "Code expired" }),
+    })) as unknown as typeof fetch;
+    configureClient({ baseUrl: "http://x", fetch: fetchFn });
+
+    await expect(customFetch("/oauth2/token")).rejects.toMatchObject({
+      status: 400,
+      message: "Code expired",
+      code: "invalid_grant",
+    });
   });
 });

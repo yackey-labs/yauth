@@ -14,9 +14,9 @@
 // application — not by library code, which must not clobber the global):
 //
 //   - Init: build a real OTLP tracer provider over gRPC or HTTP (selectable
-//     via Config.Protocol / OTEL_EXPORTER_OTLP_PROTOCOL), register the W3C
-//     TraceContext propagator, set it as the global provider, and return a
-//     shutdown func that flushes spans. Call this only when yauth owns
+//     via Config.Protocol / OTEL_EXPORTER_OTLP_PROTOCOL), register a composite
+//     W3C TraceContext + Baggage propagator, set it as the global provider, and
+//     return a shutdown func that flushes spans. Call this only when yauth owns
 //     telemetry setup; if your app already configured OpenTelemetry, skip
 //     Init so you don't replace its provider with a second export stream.
 //   - InitNoop: install a no-op tracer provider so callers (and tests) can
@@ -129,7 +129,14 @@ func Init(ctx context.Context, cfg Config) (func(context.Context) error, error) 
 	)
 
 	otel.SetTracerProvider(tp)
-	otel.SetTextMapPropagator(propagation.TraceContext{})
+	// Register a composite propagator so both W3C TraceContext (trace
+	// correlation) and W3C Baggage (e.g. carrying user.id to descendant spans
+	// and downstream services) propagate out of the box. Baggage is additive:
+	// it only travels when a caller explicitly puts members in it.
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
+		propagation.TraceContext{},
+		propagation.Baggage{},
+	))
 
 	return tp.Shutdown, nil
 }

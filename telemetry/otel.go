@@ -6,6 +6,7 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/baggage"
 	"go.opentelemetry.io/otel/codes"
 	semconv "go.opentelemetry.io/otel/semconv/v1.41.0"
 	"go.opentelemetry.io/otel/trace"
@@ -46,6 +47,31 @@ func SetUserID(ctx context.Context, id string) {
 		return
 	}
 	trace.SpanFromContext(ctx).SetAttributes(semconv.UserID(id))
+}
+
+// SetUserBaggage returns a context that carries the authenticated user's
+// identifier as a W3C baggage member under the `user.id` key. Unlike SetUserID
+// — which records user.id on the *current* span only — baggage rides the
+// context across span and service boundaries (via the Baggage propagator that
+// Init registers), so descendant spans and downstream services can read it and
+// enrich their own telemetry.
+//
+// It returns the input ctx unchanged when id is empty or when id violates the
+// W3C baggage value restrictions (so it never panics or drops the existing
+// context). Reading it back is standard OTel: walk baggage.FromContext(ctx).
+func SetUserBaggage(ctx context.Context, id string) context.Context {
+	if id == "" {
+		return ctx
+	}
+	member, err := baggage.NewMember(string(semconv.UserIDKey), id)
+	if err != nil {
+		return ctx
+	}
+	bag, err := baggage.FromContext(ctx).SetMember(member)
+	if err != nil {
+		return ctx
+	}
+	return baggage.ContextWithBaggage(ctx, bag)
 }
 
 // SetAttribute sets a single attribute on the current span. Accepts the

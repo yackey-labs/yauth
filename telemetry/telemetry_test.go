@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/baggage"
+	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
@@ -16,6 +18,49 @@ import (
 	"github.com/yackey-labs/yauth/middleware"
 	"github.com/yackey-labs/yauth/telemetry"
 )
+
+// TestInit_RegistersTraceContextAndBaggage asserts that Init registers a
+// composite propagator carrying BOTH W3C TraceContext and W3C Baggage, so
+// baggage (e.g. user.id) propagates out of the box. We assert via Fields()
+// (the propagator's injected header set) and via an extract round-trip.
+func TestInit_RegistersTraceContextAndBaggage(t *testing.T) {
+	prev := otel.GetTracerProvider()
+	prevProp := otel.GetTextMapPropagator()
+	t.Cleanup(func() {
+		otel.SetTracerProvider(prev)
+		otel.SetTextMapPropagator(prevProp)
+	})
+
+	shutdown, err := telemetry.Init(context.Background(), telemetry.Config{Enabled: true})
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = shutdown(ctx)
+	}()
+
+	prop := otel.GetTextMapPropagator()
+	fields := map[string]bool{}
+	for _, f := range prop.Fields() {
+		fields[f] = true
+	}
+	if !fields["traceparent"] {
+		t.Errorf("propagator missing traceparent field; got %v", prop.Fields())
+	}
+	if !fields["baggage"] {
+		t.Errorf("propagator missing baggage field; got %v", prop.Fields())
+	}
+
+	// Round-trip: a carrier with a baggage header must extract into a member
+	// the Baggage propagator can read back, confirming it is actually wired.
+	carrier := propagation.MapCarrier{"baggage": "user.id=user-123"}
+	ctx := prop.Extract(context.Background(), carrier)
+	if got := baggage.FromContext(ctx).Member("user.id").Value(); got != "user-123" {
+		t.Errorf("extracted baggage user.id = %q, want %q", got, "user-123")
+	}
+}
 
 func TestInitNoop_HelpersDoNotPanic(t *testing.T) {
 	telemetry.InitNoop()
@@ -190,6 +235,23 @@ func TestSetUserID_RecordsUserIDAttribute(t *testing.T) {
 	}
 	if got != "user-123" {
 		t.Errorf("user.id = %q, want %q", got, "user-123")
+	}
+}
+
+func TestSetUserBaggage_RoundTrips(t *testing.T) {
+	ctx := telemetry.SetUserBaggage(context.Background(), "user-123")
+	if got := baggage.FromContext(ctx).Member("user.id").Value(); got != "user-123" {
+		t.Errorf("baggage user.id = %q, want %q", got, "user-123")
+	}
+
+	// Empty id is a no-op and must return the input context unchanged (no
+	// user.id member added).
+	base := context.Background()
+	if out := telemetry.SetUserBaggage(base, ""); out != base {
+		t.Errorf("SetUserBaggage(\"\") should return ctx unchanged")
+	}
+	if got := baggage.FromContext(telemetry.SetUserBaggage(base, "")).Member("user.id").Value(); got != "" {
+		t.Errorf("empty id should add no member, got %q", got)
 	}
 }
 

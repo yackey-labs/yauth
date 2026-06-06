@@ -100,6 +100,18 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// scim is organization-scoped: its bearer credential is an org-scoped API key
+	// minted via the organizations plugin, so scim without organizations cannot
+	// authenticate any request.
+	if p.SCIM.Enabled && !p.Organizations.Enabled {
+		return fmt.Errorf("plugins.scim requires plugins.organizations (SCIM is organization-scoped)")
+	}
+	// organizations + scim mint and validate org-scoped API keys through the
+	// api-key resolver, so the api_key plugin must be enabled to recognise them.
+	if (p.Organizations.Enabled || p.SCIM.Enabled) && !p.APIKey.Enabled {
+		return fmt.Errorf("plugins.organizations/scim require plugins.api_key (org-scoped keys validate through the api-key resolver)")
+	}
+
 	if c.Cache.Enabled {
 		switch c.Cache.Provider {
 		case "redis":
@@ -184,6 +196,12 @@ func (c *Config) EnabledPlugins() []string {
 	if p.OAuth2Server.Enabled {
 		out = append(out, "oauth2_server")
 	}
+	if p.Organizations.Enabled {
+		out = append(out, "organizations")
+	}
+	if p.SCIM.Enabled {
+		out = append(out, "scim")
+	}
 	return out
 }
 
@@ -239,6 +257,19 @@ func (c *Config) ExpectedTables() []string {
 			"yauth_authorization_codes",
 			"yauth_consents",
 			"yauth_device_codes",
+		)
+	}
+	// organizations brings the multi-tenant + group tables; scim operates over
+	// those same tables (org-scoped users/groups) and adds none of its own.
+	if p.Organizations.Enabled {
+		base = append(base,
+			"yauth_organizations",
+			"yauth_memberships",
+			"yauth_invitations",
+			"yauth_groups",
+			"yauth_group_members",
+			"yauth_organization_domains",
+			"yauth_organization_policies",
 		)
 	}
 	return base

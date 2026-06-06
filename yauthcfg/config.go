@@ -225,6 +225,8 @@ type PluginsConfig struct {
 	AsymJWT       AsymJWTPluginConfig       `yaml:"asym_jwt" toml:"asym_jwt"`
 	OIDC          OIDCPluginConfig          `yaml:"oidc" toml:"oidc"`
 	OAuth2Server  OAuth2ServerPluginConfig  `yaml:"oauth2_server" toml:"oauth2_server"`
+	Organizations OrganizationsPluginConfig `yaml:"organizations" toml:"organizations"`
+	SCIM          SCIMPluginConfig          `yaml:"scim" toml:"scim"`
 }
 
 // EmailPasswordPluginConfig configures plugins/emailpassword.
@@ -508,6 +510,39 @@ type OAuth2ServerPluginConfig struct {
 	DCRStaleClientTTL time.Duration `yaml:"dcr_stale_client_ttl" toml:"dcr_stale_client_ttl"`
 	// DCRStaleSweepInterval is how often the stale-client sweep runs. Default 24h.
 	DCRStaleSweepInterval time.Duration `yaml:"dcr_stale_sweep_interval" toml:"dcr_stale_sweep_interval"`
+}
+
+// OrganizationsPluginConfig configures the multi-tenant organizations plugin
+// (organizations, memberships, invitations, org-scoped groups, and org-scoped
+// API keys). Enable it alongside the api_key plugin: org-scoped keys share the
+// api-key prefix so one resolver path validates both user- and org-scoped
+// credentials.
+type OrganizationsPluginConfig struct {
+	Enabled bool `yaml:"enabled" toml:"enabled"`
+	// APIKeyPrefix is the prefix-tag for org-scoped API keys. Empty falls back to
+	// the api_key plugin's prefix (default "yak"), so the key the apikey plugin
+	// mints and the key an org mints validate through one resolver.
+	APIKeyPrefix string `yaml:"api_key_prefix" toml:"api_key_prefix"`
+	// InvitationTTL is the lifetime of newly-minted invitations. 0 → plugin default (7d).
+	InvitationTTL time.Duration `yaml:"invitation_ttl" toml:"invitation_ttl"`
+	// DefaultInviteRole is assigned to invitees when the request omits a role.
+	// Empty → plugin default ("member").
+	DefaultInviteRole string `yaml:"default_invite_role" toml:"default_invite_role"`
+}
+
+// SCIMPluginConfig configures the SCIM 2.0 provisioning plugin (org-scoped
+// /scim/v2/...). SCIM is organization-scoped and its bearer credential is an
+// org-scoped API key, so it requires the organizations + api_key plugins and
+// its APIKeyPrefix MUST match theirs.
+type SCIMPluginConfig struct {
+	Enabled bool `yaml:"enabled" toml:"enabled"`
+	// APIKeyPrefix is the leading prefix-tag of SCIM bearer keys. Empty falls back
+	// to the api_key plugin's prefix (default "yak"). MUST match it.
+	APIKeyPrefix string `yaml:"api_key_prefix" toml:"api_key_prefix"`
+	// BasePath is the external URL prefix the router is mounted under (e.g.
+	// "/api/auth"), used only to build absolute SCIM self/Location URLs. Empty
+	// falls back to the shared oidc/oauth2_server base path (server.prefix).
+	BasePath string `yaml:"base_path" toml:"base_path"`
 }
 
 // Default returns a Config populated with sensible development defaults

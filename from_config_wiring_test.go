@@ -99,6 +99,8 @@ func fullConfig(t *testing.T) *yauthcfg.Config {
 	p.OIDC.Enabled = true
 	p.OAuth2Server.Enabled = true
 	p.OAuth2Server.DCREnabled = true
+	p.Organizations.Enabled = true // workforce tenancy (org-scoped groups + keys)
+	p.SCIM.Enabled = true          // SCIM 2.0 provisioning over the org-scoped surface
 	return c
 }
 
@@ -229,6 +231,45 @@ func TestNewFromConfigIdPValuesFlow(t *testing.T) {
 	if keys, ok := jwks["keys"].([]any); !ok || len(keys) == 0 {
 		t.Errorf("jwks.json should contain keys (asymjwt wired), got %v", jwks["keys"])
 	}
+}
+
+// TestOrganizationsSCIMConfigInvariants pins the cross-plugin rules that make
+// the org-scoped SCIM surface coherent: scim is organization-scoped, and both
+// organizations and scim authenticate org-scoped API keys through the api-key
+// resolver — so each dependency is a loud config error rather than a runtime
+// surprise (e.g. a SCIM key that never resolves).
+func TestOrganizationsSCIMConfigInvariants(t *testing.T) {
+	t.Run("scim requires organizations", func(t *testing.T) {
+		c := minimalConfig()
+		c.Plugins.APIKey.Enabled = true
+		c.Plugins.SCIM.Enabled = true // organizations left off
+		if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "organizations") {
+			t.Fatalf("want scim-requires-organizations error, got %v", err)
+		}
+	})
+	t.Run("organizations requires api_key", func(t *testing.T) {
+		c := minimalConfig()
+		c.Plugins.Organizations.Enabled = true // api_key left off
+		if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "api_key") {
+			t.Fatalf("want organizations-requires-api_key error, got %v", err)
+		}
+	})
+	t.Run("orgs+scim+apikey wire and share the prefix", func(t *testing.T) {
+		c := minimalConfig()
+		c.Plugins.APIKey.Enabled = true
+		c.Plugins.APIKey.Prefix = "tiny"
+		c.Plugins.Organizations.Enabled = true
+		c.Plugins.SCIM.Enabled = true
+		ya, err := yauth.NewFromConfig(context.Background(), c)
+		if err != nil {
+			t.Fatalf("NewFromConfig: %v", err)
+		}
+		for _, want := range []string{"organizations", "scim"} {
+			if !slices.Contains(ya.PluginNames(), want) {
+				t.Errorf("%q plugin not wired; have %v", want, ya.PluginNames())
+			}
+		}
+	})
 }
 
 func minimalConfig() *yauthcfg.Config {

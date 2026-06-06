@@ -29,7 +29,9 @@ import (
 	"github.com/yackey-labs/yauth/plugins/oauth/providers"
 	"github.com/yackey-labs/yauth/plugins/oauth2server"
 	"github.com/yackey-labs/yauth/plugins/oidc"
+	"github.com/yackey-labs/yauth/plugins/organizations"
 	"github.com/yackey-labs/yauth/plugins/passkey"
+	"github.com/yackey-labs/yauth/plugins/scim"
 	"github.com/yackey-labs/yauth/plugins/status"
 	"github.com/yackey-labs/yauth/plugins/webhooks"
 	yauthrepo "github.com/yackey-labs/yauth/repo"
@@ -568,6 +570,26 @@ func addAuthPlugins(builder *YAuthBuilder, cfg *yauthcfg.Config, mailer *smtpmai
 			BackchannelLogoutTimeout:    p.OAuth2Server.BackchannelLogoutTimeout,
 			DCRStaleClientTTL:           p.OAuth2Server.DCRStaleClientTTL,
 			DCRStaleSweepInterval:       p.OAuth2Server.DCRStaleSweepInterval,
+		}))
+	}
+
+	// organizations + scim are the workforce-tenancy + provisioning surface.
+	// Both authenticate org-scoped API keys, so their prefix defaults to the
+	// api-key plugin's prefix (itself "yak" when unset) — one resolver path
+	// validates user- and org-scoped credentials alike. scim's self/Location
+	// URLs are built under the same base path as oidc/oauth2server.
+	apiKeyPrefix := firstNonEmpty(p.APIKey.Prefix, "yak")
+	if p.Organizations.Enabled {
+		builder = builder.WithPlugin(organizations.New(organizations.Config{
+			APIKeyPrefix:      firstNonEmpty(p.Organizations.APIKeyPrefix, apiKeyPrefix),
+			InvitationTTL:     p.Organizations.InvitationTTL,
+			DefaultInviteRole: p.Organizations.DefaultInviteRole,
+		}))
+	}
+	if p.SCIM.Enabled {
+		builder = builder.WithPlugin(scim.New(scim.Config{
+			APIKeyPrefix: firstNonEmpty(p.SCIM.APIKeyPrefix, apiKeyPrefix),
+			BasePath:     firstNonEmpty(p.SCIM.BasePath, idpBasePath),
 		}))
 	}
 

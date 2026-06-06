@@ -74,14 +74,26 @@ func respFromCtx(ctx context.Context) (http.ResponseWriter, error) {
 	return w, nil
 }
 
-// stashGuards is the per-operation middleware chain for the three
-// authenticated routes (logout, change-password, PATCH me): stash the raw
-// request/writer, then require a valid identity. AuthUserFromContext recovers
-// the resolved user inside the handler.
+// stashGuards is the per-operation middleware chain for PATCH /me: stash the
+// raw request/writer, then require a valid identity. A must_change_password
+// user is 403-gated here (they may not edit their profile until they rotate
+// the provisioned credential). AuthUserFromContext recovers the resolved user
+// inside the handler.
 func stashGuards(api huma.API, mw *middleware.Middleware) huma.Middlewares {
 	return huma.Middlewares{
 		middleware.StashHTTPHuma(api),
 		middleware.RequireAuthHuma(api, mw),
+	}
+}
+
+// stashGuardsAllowMustChange is stashGuards for the two routes a must-change
+// user MUST still reach: logout and change-password. The latter is what clears
+// must_change_password; without this exemption the user could never escape the
+// locked state.
+func stashGuardsAllowMustChange(api huma.API, mw *middleware.Middleware) huma.Middlewares {
+	return huma.Middlewares{
+		middleware.StashHTTPHuma(api),
+		middleware.RequireAuthHumaAllowMustChange(api, mw),
 	}
 }
 
@@ -640,7 +652,7 @@ func (p *emailPasswordPlugin) registerLogout(host plugin.PluginHost, api huma.AP
 		Tags:          []string{"email-password"},
 		Security:      []map[string][]string{{"sessionCookie": {}}},
 		DefaultStatus: http.StatusNoContent,
-		Middlewares:   stashGuards(api, mw),
+		Middlewares:   stashGuardsAllowMustChange(api, mw),
 	}, func(ctx context.Context, _ *struct{}) (*logoutOutput, error) {
 		r, err := reqFromCtx(ctx)
 		if err != nil {
@@ -748,7 +760,7 @@ func (p *emailPasswordPlugin) registerSession(host plugin.PluginHost, api huma.A
 		Summary:     "Return the current authenticated user",
 		Tags:        []string{"email-password"},
 		Security:    []map[string][]string{{"sessionCookie": {}}},
-		Middlewares: huma.Middlewares{middleware.RequireAuthHuma(api, mw)},
+		Middlewares: huma.Middlewares{middleware.RequireAuthHumaAllowMustChange(api, mw)},
 	}, func(ctx context.Context, _ *struct{}) (*sessionOutput, error) {
 		au, ok := middleware.AuthUserFromContext(ctx)
 		if !ok || au == nil {
@@ -799,7 +811,7 @@ func (p *emailPasswordPlugin) registerChangePassword(host plugin.PluginHost, api
 		Summary:     "Rotate the current user's password",
 		Tags:        []string{"email-password"},
 		Security:    []map[string][]string{{"sessionCookie": {}}},
-		Middlewares: stashGuards(api, mw),
+		Middlewares: stashGuardsAllowMustChange(api, mw),
 	}, func(ctx context.Context, in *changePasswordInput) (*changePasswordOutput, error) {
 		r, err := reqFromCtx(ctx)
 		if err != nil {

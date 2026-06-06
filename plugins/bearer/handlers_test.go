@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 
 	"github.com/yackey-labs/yauth/auth"
 	"github.com/yackey-labs/yauth/domain"
+	"github.com/yackey-labs/yauth/middleware"
 	"github.com/yackey-labs/yauth/yautherr"
 )
 
@@ -69,6 +71,26 @@ func TestToken_BadPassword(t *testing.T) {
 	resp := h.do(t, "POST", "/token", `{"email":"alice@example.com","password":"wrong"}`, nil)
 	if resp.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", resp.Code)
+	}
+}
+
+// TestToken_MustChangePasswordBlocked verifies a must_change_password user
+// cannot mint a bearer token — that would be a permanent escape from the
+// forced-password-change gate. They get 403 with the must-change detail even
+// though the password is correct.
+func TestToken_MustChangePasswordBlocked(t *testing.T) {
+	h, fr, user := newHarness(t)
+	mustPassword(t, fr, user.ID, "correct horse battery staple")
+	if err := fr.SetUserMustChangePassword(context.Background(), user.ID, true); err != nil {
+		t.Fatalf("SetUserMustChangePassword: %v", err)
+	}
+
+	resp := h.do(t, "POST", "/token", `{"email":"alice@example.com","password":"correct horse battery staple"}`, nil)
+	if resp.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d body=%s", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), middleware.MustChangePasswordDetail) {
+		t.Fatalf("expected must-change detail, got %s", resp.Body.String())
 	}
 }
 

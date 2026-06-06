@@ -35,6 +35,9 @@ func (c *Config) Validate() error {
 	if p.EmailPassword.Enabled && p.EmailPassword.MinPasswordLength < 0 {
 		return fmt.Errorf("plugins.email_password.min_password_length must be non-negative")
 	}
+	if p.EmailPassword.BootstrapAdmin.Enabled && strings.TrimSpace(p.EmailPassword.BootstrapAdmin.Email) == "" {
+		return fmt.Errorf("plugins.email_password.bootstrap_admin.email is required when bootstrap_admin is enabled")
+	}
 	if p.Bearer.Enabled {
 		if p.Bearer.JWTSecretEnv == "" {
 			return fmt.Errorf("plugins.bearer.jwt_secret_env is required when bearer is enabled")

@@ -1,6 +1,7 @@
 package yauth_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
@@ -8,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -122,6 +124,57 @@ func TestNewFromConfigWiresEveryPlugin(t *testing.T) {
 	if len(wired) != len(enabled) {
 		t.Fatalf("wired %d plugins (%v) but %d are enabled (%v) — a plugin was silently dropped",
 			len(wired), wired, len(enabled), enabled)
+	}
+}
+
+// TestNewFromConfig_BootstrapAdmin drives bootstrap end-to-end through the real
+// NewFromConfig entry point on the memory driver: the admin is provisioned, the
+// generated password is logged once, a disabled config is a no-op, and a second
+// NewFromConfig over the SAME repo (restart simulation) does not re-provision.
+func TestNewFromConfig_BootstrapAdmin(t *testing.T) {
+	mkCfg := func(enabled bool) *yauthcfg.Config {
+		c := &yauthcfg.Config{}
+		c.Database.Driver = "memory"
+		c.Plugins.EmailPassword.Enabled = true
+		c.Plugins.EmailPassword.BootstrapAdmin = yauthcfg.BootstrapAdminConfig{
+			Enabled: enabled, Email: "admin@example.com",
+		}
+		return c
+	}
+
+	// Disabled = no-op.
+	var disabledBuf bytes.Buffer
+	repoOff := memrepo.New()
+	if _, err := yauth.NewFromConfig(context.Background(), mkCfg(false),
+		yauth.WithRepo(repoOff), yauth.WithConfigLogger(slog.New(slog.NewJSONHandler(&disabledBuf, nil)))); err != nil {
+		t.Fatalf("NewFromConfig disabled: %v", err)
+	}
+	if _, err := repoOff.GetUserByEmail(context.Background(), "admin@example.com"); err == nil {
+		t.Fatalf("disabled bootstrap created an admin")
+	}
+
+	// Enabled = provisions + logs once. Reuse one repo across two NewFromConfig
+	// calls to simulate a restart.
+	shared := memrepo.New()
+	var buf1 bytes.Buffer
+	if _, err := yauth.NewFromConfig(context.Background(), mkCfg(true),
+		yauth.WithRepo(shared), yauth.WithConfigLogger(slog.New(slog.NewJSONHandler(&buf1, nil)))); err != nil {
+		t.Fatalf("NewFromConfig enabled: %v", err)
+	}
+	if u, err := shared.GetUserByEmail(context.Background(), "admin@example.com"); err != nil || u.Role != "admin" || !u.MustChangePassword {
+		t.Fatalf("admin not provisioned correctly: u=%v err=%v", u, err)
+	}
+	if !strings.Contains(buf1.String(), "bootstrap admin provisioned") {
+		t.Fatalf("expected provisioning log:\n%s", buf1.String())
+	}
+
+	var buf2 bytes.Buffer
+	if _, err := yauth.NewFromConfig(context.Background(), mkCfg(true),
+		yauth.WithRepo(shared), yauth.WithConfigLogger(slog.New(slog.NewJSONHandler(&buf2, nil)))); err != nil {
+		t.Fatalf("NewFromConfig restart: %v", err)
+	}
+	if strings.Contains(buf2.String(), "bootstrap admin provisioned") {
+		t.Fatalf("restart re-provisioned the admin:\n%s", buf2.String())
 	}
 }
 

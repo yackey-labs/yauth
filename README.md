@@ -687,7 +687,7 @@ Notable fields beyond cookie/session settings:
 | Field | Default | Purpose |
 | --- | --- | --- |
 | `AllowSignups` | `true` | Set `false` to disable new user registration (`SIGNUPS_DISABLED` 403) |
-| `AutoAdminFirstUser` | `false` | Promote the first registered user to role `admin` |
+| `AutoAdminFirstUser` | `false` | Promote the first registered user to role `admin`. **Legacy** — prefer `plugins.email_password.bootstrap_admin` (`yauth docs admin-bootstrap`), which deterministically provisions the admin at startup with a forced password change instead of letting whoever registers first become admin. |
 | `CORS.AllowedOrigins` | `[]` (off) | CORS middleware; empty slice disables it entirely |
 | `AllowAdminMachineCallers` | `false` | Allow bearer/API-key callers to pass `RequireAdmin` (default: cookie-only) |
 | `RateLimit.*` | various | Per-operation max+window pairs; `Max=0` disables that operation's limit |

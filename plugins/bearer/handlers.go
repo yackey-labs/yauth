@@ -112,6 +112,16 @@ func (p *bearerPlugin) registerToken(host plugin.PluginHost, api huma.API, prefi
 			return nil, huma.Error401Unauthorized("invalid email or password")
 		}
 
+		// A user provisioned out-of-band (e.g. the secure admin bootstrap) with
+		// must_change_password set may NOT mint a bearer token: that would be a
+		// permanent escape from the forced-password-change gate (bearer/api-key
+		// callers are never re-checked for the flag). They must first rotate the
+		// password via the cookie /change-password flow. Same 403 detail the
+		// auth middleware uses so clients handle it uniformly.
+		if user.MustChangePassword {
+			return nil, huma.Error403Forbidden(middleware.MustChangePasswordDetail)
+		}
+
 		// yauth #44: when the caller requests a specific org, verify active
 		// membership and use that org's id + role as JWT claims. Otherwise
 		// fall back to the default auto-select behaviour.

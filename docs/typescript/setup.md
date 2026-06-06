@@ -80,6 +80,40 @@ Returns reactive session state plus helpers:
 `user` is `null` when unauthenticated and an `AuthUser` after login. Call
 `await logout()` to end the session.
 
+## Forced password change (`must_change_password`)
+
+When an account is provisioned out-of-band — the secure **admin bootstrap**
+(`yauth docs admin-bootstrap`), or an admin who set `must_change_password` — the
+user can authenticate but is **locked out of every API route except
+change-password, logout, and `/session` until they rotate the password.**
+
+The login response shape is **unchanged**. `POST /login` still returns 200 with
+`{ "user": { …, "must_change_password": true } }`, and `GET /session` surfaces
+the same flag. The server-side enforcement is the new piece: any other
+authenticated request from that cookie session returns:
+
+```
+HTTP/1.1 403 Forbidden
+Content-Type: application/problem+json
+
+{ "title": "Forbidden", "status": 403, "detail": "password change required" }
+```
+
+Frontend handling:
+
+1. After login (or on `useSession()` resolving), check
+   `user.must_change_password`. If true, route the user to a change-password
+   screen instead of the app.
+2. Submit `POST /change-password` with `current_password` + a new password. On
+   success the flag clears, a fresh session cookie is issued, and the rest of
+   the API unlocks. Re-fetch the session (`refetch()`).
+3. As a backstop, treat a `403` with `detail === "password change required"`
+   anywhere in the app as "redirect to change-password" — this catches a
+   must-change session that skipped the post-login check.
+
+Machine credentials (bearer JWT / api-key) are never gated by this flag — it is
+a password-login concept.
+
 ## SolidJS
 
 `@yackey-labs/yauth-ui-solidjs` mirrors the Vue package with a provider +

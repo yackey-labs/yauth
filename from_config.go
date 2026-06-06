@@ -58,7 +58,48 @@ func NewFromConfig(ctx context.Context, cfg *yauthcfg.Config, opts ...ConfigOpti
 	if err != nil {
 		return nil, err
 	}
-	return b.Build()
+	y, err := b.Build()
+	if err != nil {
+		return nil, err
+	}
+
+	// Secure admin bootstrap runs after the instance is built (so the repo is
+	// fully decorated) and assumes the schema already exists — consumers run
+	// `yauth migrate` before `serve`. It is idempotent and multi-replica safe;
+	// see bootstrapAdmin. A failure here is logged, not fatal: a transient DB
+	// error on one replica must not take the process down when the admin may
+	// already exist (another replica won the race) or be created on the next
+	// restart.
+	if cfg.Plugins.EmailPassword.Enabled && cfg.Plugins.EmailPassword.BootstrapAdmin.Enabled {
+		logger := resolveConfigOptions(opts).logger
+		bootstrapAdmin(ctx, y.Repo(), logger, cfg.Plugins.EmailPassword.BootstrapAdmin, effectiveBootstrapPolicy(cfg.Plugins.EmailPassword))
+	}
+
+	return y, nil
+}
+
+// effectiveBootstrapPolicy returns the password policy a bootstrap-generated
+// password must satisfy — the same policy /register enforces, with the
+// MinPasswordLength=12 baseline applied when no explicit policy min is set
+// (mirroring emailpassword.New + validatePasswordComplexity).
+func effectiveBootstrapPolicy(ep yauthcfg.EmailPasswordPluginConfig) passwordpolicy.Policy {
+	pol := passwordpolicy.Policy{
+		MinLength:      ep.PasswordPolicy.MinLength,
+		MaxLength:      ep.PasswordPolicy.MaxLength,
+		RequireUpper:   ep.PasswordPolicy.RequireUpper,
+		RequireLower:   ep.PasswordPolicy.RequireLower,
+		RequireDigit:   ep.PasswordPolicy.RequireDigit,
+		RequireSpecial: ep.PasswordPolicy.RequireSpecial,
+		DisallowCommon: ep.PasswordPolicy.DisallowCommon,
+	}
+	if pol.MinLength == 0 {
+		min := ep.MinPasswordLength
+		if min <= 0 {
+			min = 12
+		}
+		pol.MinLength = min
+	}
+	return pol
 }
 
 // ConfigOption tweaks how NewFromConfig / NewBuilderFromConfig assemble the

@@ -243,6 +243,12 @@ type EmailPasswordPluginConfig struct {
 	// PasswordPolicy mirrors auth/passwordpolicy.Policy.
 	PasswordPolicy PasswordPolicyConfig `yaml:"password_policy" toml:"password_policy"`
 
+	// BootstrapAdmin deterministically provisions an admin user at startup
+	// when no admin exists yet — the secure default for seeding the first
+	// administrator (replaces auto_admin_first_user, which promotes whoever
+	// registers first publicly). See BootstrapAdminConfig.
+	BootstrapAdmin BootstrapAdminConfig `yaml:"bootstrap_admin" toml:"bootstrap_admin"`
+
 	// VerificationLinkBaseURL is the base URL for email-verification
 	// links delivered by the configured Mailer. Empty = raw token.
 	VerificationLinkBaseURL string `yaml:"verification_link_base_url" toml:"verification_link_base_url"`
@@ -255,6 +261,30 @@ type EmailPasswordPluginConfig struct {
 	// PasswordResetTokenTTL is the lifetime of password-reset tokens.
 	// Defaults to 1h when zero.
 	PasswordResetTokenTTL time.Duration `yaml:"password_reset_token_ttl" toml:"password_reset_token_ttl"`
+}
+
+// BootstrapAdminConfig provisions the first administrator deterministically
+// at startup. When Enabled and no admin user exists yet, NewFromConfig creates
+// a user with role "admin" and must_change_password=true. If Password is set,
+// it is used (and never logged); otherwise a strong random password satisfying
+// the configured policy is generated and logged exactly once at creation
+// (WARN). The operation is idempotent and multi-replica safe: it relies on the
+// email unique constraint so a restart, or two replicas racing, never creates
+// a duplicate or re-logs the password.
+//
+// Prefer this over auto_admin_first_user. The two are mutually exclusive in
+// practice: a bootstrapped admin makes a user exist, so auto_admin_first_user
+// (which only promotes when NO user exists) never fires afterward.
+type BootstrapAdminConfig struct {
+	// Enabled turns on startup admin provisioning.
+	Enabled bool `yaml:"enabled" toml:"enabled"`
+	// Email is the admin account's email address (required when Enabled).
+	Email string `yaml:"email" toml:"email"`
+	// Password, when set, is the admin's initial password. It is used as-is
+	// and NEVER logged. Leave empty to have yauth generate and log a strong
+	// random password once at creation. The user must change it on first
+	// login either way (must_change_password is set).
+	Password string `yaml:"password,omitempty" toml:"password,omitempty"`
 }
 
 // PasswordPolicyConfig mirrors auth/passwordpolicy.Policy.

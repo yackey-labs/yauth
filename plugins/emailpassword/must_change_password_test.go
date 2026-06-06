@@ -154,6 +154,83 @@ func TestChangePassword_ClearsMustChangeFlag(t *testing.T) {
 	}
 }
 
+// TestLogin_MustChange_GatesUntilChanged verifies the server-side enforcement:
+// a must_change_password user logs in and gets a session cookie, but every
+// non-exempt route is 403-gated (PATCH /me here) until they rotate the
+// password via the exempt /change-password route — after which the gate lifts.
+func TestLogin_MustChange_GatesUntilChanged(t *testing.T) {
+	srv, r := newMCPServer(t)
+	defer srv.Close()
+
+	const email = "carol@example.com"
+	const password = "correct horse battery staple"
+	const newPassword = "another correct horse staple"
+
+	res := postJSON(t, srv.URL+"/api/auth/register", map[string]any{"email": email, "password": password})
+	res.Body.Close()
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("register: %d", res.StatusCode)
+	}
+	u, err := r.GetUserByEmail(context.Background(), email)
+	if err != nil || u == nil {
+		t.Fatalf("GetUserByEmail: %v", err)
+	}
+	if err := r.SetUserMustChangePassword(context.Background(), u.ID, true); err != nil {
+		t.Fatalf("SetUserMustChangePassword: %v", err)
+	}
+
+	// Login still succeeds and yields a cookie (response shape unchanged).
+	res = postJSON(t, srv.URL+"/api/auth/login", map[string]any{"email": email, "password": password})
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("login: %d", res.StatusCode)
+	}
+	cookie := findCookie(res, "yauth_session")
+	if cookie == nil {
+		t.Fatalf("no session cookie")
+	}
+
+	// A gated route (PATCH /me) is forbidden while must_change is set.
+	gated := func() int {
+		body, _ := json.Marshal(map[string]any{"display_name": "Carol"})
+		req, _ := http.NewRequest(http.MethodPatch, srv.URL+"/api/auth/me", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.AddCookie(cookie)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("patch me: %v", err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if got := gated(); got != http.StatusForbidden {
+		t.Fatalf("PATCH /me before change = %d, want 403", got)
+	}
+
+	// The exempt /change-password route works and clears the flag.
+	creq := mustNewPostJSON(t, srv.URL+"/api/auth/change-password", map[string]any{
+		"current_password": password, "new_password": newPassword,
+	})
+	creq.AddCookie(cookie)
+	cres, err := http.DefaultClient.Do(creq)
+	if err != nil {
+		t.Fatalf("change-password: %v", err)
+	}
+	// change-password re-issues the session; use the fresh cookie.
+	newCookie := findCookie(cres, "yauth_session")
+	cres.Body.Close()
+	if cres.StatusCode != http.StatusOK {
+		t.Fatalf("change-password: %d", cres.StatusCode)
+	}
+	if newCookie != nil {
+		cookie = newCookie
+	}
+
+	if got := gated(); got != http.StatusOK {
+		t.Fatalf("PATCH /me after change = %d, want 200", got)
+	}
+}
+
 // TestResetPassword_ClearsMustChangeFlag verifies that a successful
 // reset-password clears must_change_password (the admin-forced-reset flow).
 func TestResetPassword_ClearsMustChangeFlag(t *testing.T) {

@@ -29,8 +29,21 @@ func newStatusCmd() *cobra.Command {
 			} else {
 				fmt.Fprintf(out, "plugins:   %s\n", strings.Join(plugins, ", "))
 			}
+
+			ep := cfg.Plugins.EmailPassword
+			if ep.BootstrapAdmin.Enabled {
+				pw := "generated (logged once at first boot)"
+				if ep.BootstrapAdmin.Password != "" {
+					pw = "operator-provided (not logged)"
+				}
+				fmt.Fprintf(out, "bootstrap: admin <%s>, password %s\n", ep.BootstrapAdmin.Email, pw)
+			}
+
 			for _, warn := range cfg.DeprecationWarnings() {
 				fmt.Fprintln(cmd.ErrOrStderr(), "warning: "+warn)
+			}
+			if ep.BootstrapAdmin.Enabled && cfg.Server.AutoAdminFirstUser {
+				fmt.Fprintln(cmd.ErrOrStderr(), "warning: both bootstrap_admin and auto_admin_first_user are set; bootstrap_admin provisions the admin at startup, so auto_admin_first_user (promote-first-registrant) will not fire — disable it.")
 			}
 			return nil
 		},

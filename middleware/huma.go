@@ -17,8 +17,35 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
 
+	"github.com/yackey-labs/yauth/domain"
 	"github.com/yackey-labs/yauth/yautherr"
 )
+
+// MustChangePasswordDetail is the RFC 9457 `detail` returned by the auth gate
+// when a human (cookie-session) caller whose account has
+// must_change_password=true tries to use any route other than the
+// password-change exempt set (change-password, logout, /session). Clients can
+// match on this exact string (alongside HTTP 403) to drive a "change your
+// password" challenge. The login response itself is unchanged — it still
+// returns must_change_password=true in the user body — so the happy path is
+// driven from /login or /session; this 403 is the server-side backstop that
+// guarantees the rest of the API stays locked until the password is rotated.
+const MustChangePasswordDetail = "password change required"
+
+// enforceMustChange reports whether the resolved principal must rotate an
+// out-of-band-provisioned credential before doing anything else. It returns
+// true only for HUMAN callers (cookie session, or empty method which the
+// resolver treats as cookie) — must_change_password is a password concept, so
+// machine credentials (bearer JWT / api-key) are never gated; such a caller
+// could not have logged in with a must-change password anyway. The exempt
+// routes (change-password, logout, /session) call the *AllowMustChange gate
+// variants below instead of this enforcement.
+func enforceMustChange(au *domain.AuthUser) bool {
+	if au == nil || !au.User.MustChangePassword {
+		return false
+	}
+	return !isMachineMethod(au.Method)
+}
 
 // RequireAuthHuma returns a huma per-operation middleware that requires a
 // valid identity. On success it injects the resolved AuthUser onto the huma
@@ -27,11 +54,30 @@ import (
 // without calling next. api is captured so the error can be rendered through
 // huma's default huma.NewError (native RFC 9457 problem+json).
 func RequireAuthHuma(api huma.API, mw *Middleware) func(huma.Context, func(huma.Context)) {
+	return requireAuthHuma(api, mw, false)
+}
+
+// RequireAuthHumaAllowMustChange is RequireAuthHuma without the
+// must_change_password gate. It is used by the narrow set of routes a
+// must-change user MUST still reach to escape the locked state:
+// change-password (rotate the credential, clearing the flag), logout, and
+// /session (so a SPA can read must_change_password and render the change
+// screen). Every other authenticated route uses RequireAuthHuma /
+// RequireAdminHuma and is therefore 403-gated until the password is rotated.
+func RequireAuthHumaAllowMustChange(api huma.API, mw *Middleware) func(huma.Context, func(huma.Context)) {
+	return requireAuthHuma(api, mw, true)
+}
+
+func requireAuthHuma(api huma.API, mw *Middleware, allowMustChange bool) func(huma.Context, func(huma.Context)) {
 	return func(ctx huma.Context, next func(huma.Context)) {
 		r, _ := humago.Unwrap(ctx)
 		au, err := mw.ResolveAuth(r)
 		if err != nil || au == nil {
 			_ = huma.WriteErr(api, ctx, http.StatusUnauthorized, "Unauthorized")
+			return
+		}
+		if !allowMustChange && enforceMustChange(au) {
+			_ = huma.WriteErr(api, ctx, http.StatusForbidden, MustChangePasswordDetail)
 			return
 		}
 		// Stamp user.id + yauth.* context onto the active span. The huma
@@ -139,6 +185,15 @@ func RequireAdminHuma(api huma.API, mw *Middleware) func(huma.Context, func(huma
 				return
 			}
 			_ = huma.WriteErr(api, ctx, http.StatusUnauthorized, "Unauthorized")
+			return
+		}
+		// Admin routes are never in the must-change exempt set (you cannot
+		// change-password / logout / read /session via an admin route), so
+		// enforce unconditionally: a bootstrapped admin (role=admin AND
+		// must_change=true) is locked out of every admin operation until they
+		// rotate the provisioned password.
+		if enforceMustChange(au) {
+			_ = huma.WriteErr(api, ctx, http.StatusForbidden, MustChangePasswordDetail)
 			return
 		}
 		tagAuthSpan(r.Context(), au)

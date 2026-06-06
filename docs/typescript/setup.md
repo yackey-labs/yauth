@@ -76,9 +76,16 @@ npm install @yackey-labs/yauth-client @yackey-labs/yauth-ui-solidjs
 ### `useSession()`
 
 Returns reactive session state plus helpers:
-`{ user, loading, isAuthenticated, isLoading, isEmailVerified, userRole, userEmail, displayName, refetch, logout }`.
+`{ user, loading, isAuthenticated, isLoading, isEmailVerified, mustChangePassword, userRole, userEmail, displayName, refetch, logout }`.
 `user` is `null` when unauthenticated and an `AuthUser` after login. Call
 `await logout()` to end the session.
+
+`isAuthenticated` is `true` only when the user is signed in **and** not in a
+forced password-change state — so it stays `false` for a bootstrapped/reset
+account until the password is rotated (see the next section). `mustChangePassword`
+is the underlying flag; the prebuilt `LoginForm` handles the gate for you, so
+most apps only need `isAuthenticated` and never read `mustChangePassword`
+directly.
 
 ## Forced password change (`must_change_password`)
 
@@ -99,17 +106,32 @@ Content-Type: application/problem+json
 { "title": "Forbidden", "status": 403, "detail": "password change required" }
 ```
 
-Frontend handling:
+**The prebuilt Vue UI handles this for you — no extra wiring.** Keep using
+`LoginForm` and `useSession` exactly as in the happy-path setup above:
 
-1. After login (or on `useSession()` resolving), check
-   `user.must_change_password`. If true, route the user to a change-password
-   screen instead of the app.
-2. Submit `POST /change-password` with `current_password` + a new password. On
-   success the flag clears, a fresh session cookie is issued, and the rest of
-   the API unlocks. Re-fetch the session (`refetch()`).
-3. As a backstop, treat a `403` with `detail === "password change required"`
-   anywhere in the app as "redirect to change-password" — this catches a
-   must-change session that skipped the post-login check.
+- When a login (or a page reload that resolves a must-change session) lands a
+  user with `must_change_password: true`, **`LoginForm` self-gates**: it swaps
+  its own body for the forced `ChangePasswordForm` and does **not** call
+  `onSuccess` until the password is actually rotated. Because the host's usual
+  `v-if="!isAuthenticated"` branch still renders `LoginForm` while the flag
+  holds (see `isAuthenticated` above), this works across reloads with no host
+  changes.
+- On a successful change, `LoginForm` re-fetches the session (the server
+  re-issues the cookie with the flag cleared), `isAuthenticated` flips `true`,
+  and `onSuccess` fires with the now-unblocked user — your normal post-login
+  navigation runs.
+- **403 backstop.** When `YAuthPlugin` builds the client from `baseUrl`, it
+  installs an `onError` that flips the gate on whenever any stray authenticated
+  call returns the `403 "password change required"` problem — so an app that
+  fired a data request before checking the session can't dead-end. If you pass
+  your **own pre-built `client`** instead of `baseUrl`, forward its `onError`
+  to the same effect; `useSession()` does not expose the flag-setter, so the
+  simplest path is to let the plugin build the client, or to surface
+  `must_change_password` from your own login/session handling.
+
+The standalone `ChangePasswordForm` (for an in-app "change my password" screen)
+and the `mustChangePassword` flag on `useSession()` remain available if you want
+to build a custom gate; the login response shape and `AuthUser` are unchanged.
 
 Machine credentials (bearer JWT / api-key) are never gated by this flag — it is
 a password-login concept.

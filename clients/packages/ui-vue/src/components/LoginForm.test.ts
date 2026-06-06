@@ -1,5 +1,6 @@
 import { mount } from "@vue/test-utils";
 import { describe, expect, it, vi } from "vitest";
+import { ref } from "vue";
 import { type YAuthContext, YAuthKey } from "../provider";
 import LoginForm from "./LoginForm.vue";
 
@@ -16,7 +17,11 @@ function createMockContext(
 		} as never,
 		user: { value: null } as never,
 		loading: { value: false } as never,
+		// A real ref so the LoginForm template auto-unwraps it (a plain object
+		// would read as truthy and wrongly trip the must-change gate).
+		mustChangePassword: ref(false) as never,
 		refetch: vi.fn().mockResolvedValue({ id: "u1", email: "test@test.com" }),
+		flagMustChangePassword: vi.fn(),
 		...overrides,
 	};
 }
@@ -137,6 +142,99 @@ describe("LoginForm", () => {
 		});
 
 		expect(wrapper.text()).not.toContain("Sign in with passkey");
+	});
+
+	it("renders the forced change-password gate when mustChangePassword is already true (reload mid-flow)", () => {
+		const ctx = createMockContext({
+			user: ref({ id: "u1", email: "admin@test.com" }) as never,
+			mustChangePassword: ref(true) as never,
+		});
+
+		const wrapper = mount(LoginForm, {
+			global: { provide: { [YAuthKey as symbol]: ctx } },
+		});
+
+		// The login form is gone; the forced ChangePasswordForm is shown instead.
+		expect(wrapper.find("input[type='email']").exists()).toBe(false);
+		expect(wrapper.text()).toContain("Change your password");
+		expect(wrapper.find("#yauth-new-password").exists()).toBe(true);
+	});
+
+	it("advances to the forced change-password gate after a login whose user must change password", async () => {
+		const mustChange = ref(false);
+		// refetch resolves the session AND flips the gate on, mirroring the
+		// provider reading must_change_password off the re-fetched session.
+		const refetchMock = vi.fn().mockImplementation(async () => {
+			mustChange.value = true;
+			return { id: "u1", email: "admin@test.com" };
+		});
+		const onSuccess = vi.fn();
+
+		const ctx = createMockContext({
+			client: {
+				emailPassword: { login: vi.fn().mockResolvedValue({}) },
+			} as never,
+			refetch: refetchMock,
+			mustChangePassword: mustChange as never,
+		});
+
+		const wrapper = mount(LoginForm, {
+			props: { onSuccess },
+			global: { provide: { [YAuthKey as symbol]: ctx } },
+		});
+
+		await wrapper.find("input[type='email']").setValue("admin@test.com");
+		await wrapper.find("input[type='password']").setValue("bootstrap-pw");
+		await wrapper.find("form").trigger("submit");
+
+		await vi.waitFor(() => {
+			expect(wrapper.text()).toContain("Change your password");
+		});
+		// onSuccess must NOT fire while the user is still gated.
+		expect(onSuccess).not.toHaveBeenCalled();
+	});
+
+	it("clears the gate and calls onSuccess after the forced change succeeds", async () => {
+		const mustChange = ref(true);
+		const changeMock = vi.fn().mockResolvedValue({});
+		// After the change, the server re-issues the session with the flag
+		// cleared; refetch reflects that.
+		const refetchMock = vi.fn().mockImplementation(async () => {
+			mustChange.value = false;
+			return { id: "u1", email: "admin@test.com" };
+		});
+		const onSuccess = vi.fn();
+
+		const ctx = createMockContext({
+			client: {
+				emailPassword: { changePassword: changeMock },
+			} as never,
+			refetch: refetchMock,
+			mustChangePassword: mustChange as never,
+			user: ref({ id: "u1", email: "admin@test.com" }) as never,
+		});
+
+		const wrapper = mount(LoginForm, {
+			props: { onSuccess },
+			global: { provide: { [YAuthKey as symbol]: ctx } },
+		});
+
+		// Forced gate is shown; complete the change.
+		await wrapper.find("#yauth-current-password").setValue("bootstrap-pw");
+		await wrapper.find("#yauth-new-password").setValue("new-strong-pw");
+		await wrapper.find("#yauth-confirm-password").setValue("new-strong-pw");
+		await wrapper.find("form").trigger("submit");
+
+		await vi.waitFor(() => {
+			expect(changeMock).toHaveBeenCalledWith({
+				current_password: "bootstrap-pw",
+				new_password: "new-strong-pw",
+			});
+			expect(onSuccess).toHaveBeenCalledWith({
+				id: "u1",
+				email: "admin@test.com",
+			});
+		});
 	});
 
 	it("has proper accessibility attributes", () => {

@@ -14,6 +14,8 @@ function createMockContext(
 		} as never,
 		user: { value: null } as never,
 		loading: { value: false } as never,
+		mustChangePassword: { value: false } as never,
+		flagMustChangePassword: vi.fn(),
 		refetch: vi.fn(),
 		...overrides,
 	};

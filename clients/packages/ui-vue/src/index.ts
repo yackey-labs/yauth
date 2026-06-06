@@ -57,6 +57,7 @@ export {
 } from "./composables/useOrganizations";
 export { useSession } from "./composables/useSession";
 export {
+  MUST_CHANGE_PASSWORD_DETAIL,
   useYAuth,
   type YAuthContext,
   YAuthKey,

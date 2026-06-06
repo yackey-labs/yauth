@@ -18,7 +18,7 @@ import (
 func tracer() trace.Tracer { return otel.Tracer(TracerName) }
 
 // RecordError adds an error event to the current span and sets its status
-// to Error. Mirrors the Rust `record_error` helper.
+// to Error.
 func RecordError(ctx context.Context, name string, err error) {
 	if err == nil {
 		return
@@ -127,8 +127,9 @@ func RecordErrorOnCx(cx context.Context, name string, err error) {
 	span.SetStatus(codes.Error, err.Error())
 }
 
-// EndSpan ends the span carried by cx. Provided for parity with the Rust
-// helper of the same name.
+// EndSpan ends the span carried by cx. Useful for the
+// StartSpan-without-defer pattern when the span is started and ended in
+// different scopes.
 func EndSpan(cx context.Context) {
 	trace.SpanFromContext(cx).End()
 }

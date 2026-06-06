@@ -1,6 +1,5 @@
 // Package telemetry provides OpenTelemetry tracing initialization and helpers
-// for yauth-go. It is the Go counterpart to the Rust telemetry feature in
-// crates/yauth/src/telemetry.
+// for yauth.
 //
 // The helpers in otel.go always record against the global TracerProvider
 // (go.opentelemetry.io/otel), per OpenTelemetry's guidance that a library
@@ -23,8 +22,8 @@
 //     invoke the helpers in this package without configuring an exporter.
 //
 // All helpers in otel.go degrade to no-ops automatically when the global
-// tracer provider is the no-op provider, mirroring the Rust side's
-// `#[cfg(not(feature = "telemetry"))]` branch.
+// tracer provider is the no-op provider, so call sites need no telemetry
+// guards.
 package telemetry
 
 import (
@@ -43,14 +42,14 @@ import (
 )
 
 // TracerName is the global tracer name used by the otel.go helpers and the
-// HTTP trace middleware. Matches the Rust side ("yauth").
+// HTTP trace middleware.
 const TracerName = "yauth"
 
 // Config controls how Init wires the OpenTelemetry SDK. The zero value is
 // usable: Enabled=false disables telemetry by installing a no-op provider.
 type Config struct {
-	// Enabled toggles real OTLP export vs the no-op provider. Provided to
-	// give Go callers the equivalent of the Rust feature flag.
+	// Enabled toggles real OTLP export vs the no-op provider. Set false to
+	// disable telemetry without changing call sites.
 	Enabled bool
 
 	// Endpoint overrides OTEL_EXPORTER_OTLP_TRACES_ENDPOINT /

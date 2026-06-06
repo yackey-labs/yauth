@@ -15,6 +15,8 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/yackey-labs/yauth/auth"
 	"github.com/yackey-labs/yauth/auth/passwordpolicy"
@@ -22,6 +24,7 @@ import (
 	"github.com/yackey-labs/yauth/events"
 	"github.com/yackey-labs/yauth/middleware"
 	"github.com/yackey-labs/yauth/plugin"
+	"github.com/yackey-labs/yauth/telemetry"
 	"github.com/yackey-labs/yauth/yautherr"
 )
 
@@ -225,8 +228,13 @@ func (p *emailPasswordPlugin) registerRegister(host plugin.PluginHost, api huma.
 		if !validEmail(req.Email) {
 			return nil, huma.Error400BadRequest("email must contain '@'")
 		}
-		if err := p.validatePasswordComplexity(req.Password); err != nil {
-			return nil, huma.Error400BadRequest(err.Error())
+		var policyErr error
+		_ = telemetry.WithSpan(ctx, "yauth.password.policy", trace.SpanKindInternal, func(context.Context) error {
+			policyErr = p.validatePasswordComplexity(req.Password)
+			return policyErr
+		})
+		if policyErr != nil {
+			return nil, huma.Error400BadRequest(policyErr.Error())
 		}
 		if pwned, msg := p.checkHIBP(ctx, req.Password); pwned {
 			return nil, huma.Error422UnprocessableEntity(msg)
@@ -238,7 +246,13 @@ func (p *emailPasswordPlugin) registerRegister(host plugin.PluginHost, api huma.
 		// account, return the same shape as a successful "registration
 		// pending verification" response and email the user out-of-band.
 		// This matches the Rust reference implementation.
-		if existing, err := repo.GetUserByEmail(ctx, req.Email); err == nil && existing != nil {
+		var existing *domain.User
+		lookupErr := telemetry.WithSpan(ctx, "yauth.user.lookup", trace.SpanKindInternal, func(ctx context.Context) error {
+			u, e := repo.GetUserByEmail(ctx, req.Email)
+			existing = u
+			return e
+		})
+		if err := lookupErr; err == nil && existing != nil {
 			go func(email string) {
 				if err := p.cfg.Mailer.SendAccountExists(context.Background(), email); err != nil {
 					p.logger.ErrorContext(context.Background(), "email-password: send account-exists notice failed", "email", redactEmail(email), "err", err)
@@ -291,6 +305,8 @@ func (p *emailPasswordPlugin) registerRegister(host plugin.PluginHost, api huma.
 			}
 			return nil, huma.Error500InternalServerError("unable to create user")
 		}
+		// Attribute the registration to the freshly-created principal.
+		telemetry.SetUserID(ctx, user.ID)
 
 		hash, err := auth.HashPassword(req.Password)
 		if err != nil {
@@ -338,7 +354,12 @@ func (p *emailPasswordPlugin) registerRegister(host plugin.PluginHost, api huma.
 			}
 		}
 
-		raw, _, err := auth.IssueSession(ctx, repo, user.ID, middleware.RequestIP(r), requestUA(r), host.SessionTTL())
+		var raw string
+		err = telemetry.WithSpan(ctx, "yauth.session.create", trace.SpanKindInternal, func(ctx context.Context) error {
+			r2, _, serr := auth.IssueSession(ctx, repo, user.ID, middleware.RequestIP(r), requestUA(r), host.SessionTTL())
+			raw = r2
+			return serr
+		})
 		if err != nil {
 			return nil, huma.Error500InternalServerError("unable to issue session")
 		}
@@ -455,7 +476,12 @@ func (p *emailPasswordPlugin) registerLogin(host plugin.PluginHost, api huma.API
 			return nil, huma.NewError(decBlockStatus(dec), decBlockMessage(dec))
 		}
 
-		user, err := repo.GetUserByEmail(ctx, req.Email)
+		var user *domain.User
+		err = telemetry.WithSpan(ctx, "yauth.user.lookup", trace.SpanKindInternal, func(ctx context.Context) error {
+			u, lookupErr := repo.GetUserByEmail(ctx, req.Email)
+			user = u
+			return lookupErr
+		})
 		if err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
 				// Constant-time dummy hash compare to mitigate user
@@ -466,6 +492,11 @@ func (p *emailPasswordPlugin) registerLogin(host plugin.PluginHost, api huma.API
 			}
 			return nil, huma.Error500InternalServerError("unable to look up user")
 		}
+		// Stamp the resolved principal onto the active span the MOMENT the
+		// user is loaded — BEFORE password verification — so even a
+		// failed-password attempt is attributable to a user.id. Works under
+		// the consumer's otelhttp root span without yauth's HTTP middleware.
+		telemetry.SetUserID(ctx, user.ID)
 		if user.Banned {
 			p.emitLoginFailed(ctx, host, &user.ID, &user.Email, ip, "banned")
 			return nil, huma.Error403Forbidden("account suspended")
@@ -488,7 +519,13 @@ func (p *emailPasswordPlugin) registerLogin(host plugin.PluginHost, api huma.API
 			}
 			return nil, huma.Error500InternalServerError("unable to look up password")
 		}
-		ok, err := auth.VerifyPassword(req.Password, pw.PasswordHash)
+		// The Argon2id compare is the CPU cost we want visible in traces.
+		var ok bool
+		err = telemetry.WithSpan(ctx, "yauth.password.verify", trace.SpanKindInternal, func(context.Context) error {
+			v, verr := auth.VerifyPassword(req.Password, pw.PasswordHash)
+			ok = v
+			return verr
+		})
 		if err != nil || !ok {
 			// Honor Block decisions on bad-password (e.g., lockout).
 			if dec, _ := host.Emit(ctx, events.AuthEvent{
@@ -533,7 +570,12 @@ func (p *emailPasswordPlugin) registerLogin(host plugin.PluginHost, api huma.API
 			ttl = p.cfg.RememberMeTTL
 		}
 
-		raw, _, err := auth.IssueSession(ctx, repo, user.ID, ip, requestUA(r), ttl)
+		var raw string
+		err = telemetry.WithSpan(ctx, "yauth.session.create", trace.SpanKindInternal, func(ctx context.Context) error {
+			r2, _, serr := auth.IssueSession(ctx, repo, user.ID, ip, requestUA(r), ttl)
+			raw = r2
+			return serr
+		})
 		if err != nil {
 			return nil, huma.Error500InternalServerError("unable to issue session")
 		}
@@ -773,9 +815,19 @@ func (p *emailPasswordPlugin) registerChangePassword(host plugin.PluginHost, api
 			return nil, huma.Error401Unauthorized("not authenticated")
 		}
 
+		// The change-password route is RequireAuth-gated, so ResolveAuth has
+		// already stamped user.id on the active span. Re-stamp defensively in
+		// case a future caller reaches here via a different path.
+		telemetry.SetUserID(ctx, au.User.ID)
+
 		req := in.Body
-		if err := p.validatePasswordComplexity(req.NewPassword); err != nil {
-			return nil, huma.Error400BadRequest(err.Error())
+		var policyErr error
+		_ = telemetry.WithSpan(ctx, "yauth.password.policy", trace.SpanKindInternal, func(context.Context) error {
+			policyErr = p.validatePasswordComplexity(req.NewPassword)
+			return policyErr
+		})
+		if policyErr != nil {
+			return nil, huma.Error400BadRequest(policyErr.Error())
 		}
 
 		repoRef := host.Repo()
@@ -784,7 +836,12 @@ func (p *emailPasswordPlugin) registerChangePassword(host plugin.PluginHost, api
 		if err != nil {
 			return nil, huma.Error500InternalServerError("unable to load current password")
 		}
-		ok2, err := auth.VerifyPassword(req.CurrentPassword, pw.PasswordHash)
+		var ok2 bool
+		err = telemetry.WithSpan(ctx, "yauth.password.verify", trace.SpanKindInternal, func(context.Context) error {
+			v, verr := auth.VerifyPassword(req.CurrentPassword, pw.PasswordHash)
+			ok2 = v
+			return verr
+		})
 		if err != nil || !ok2 {
 			return nil, huma.Error401Unauthorized("current password is incorrect")
 		}
@@ -985,6 +1042,8 @@ func (p *emailPasswordPlugin) registerVerifyEmail(host plugin.PluginHost, api hu
 		if err != nil || ev == nil {
 			return nil, huma.Error401Unauthorized("token is invalid, expired, or already used")
 		}
+		// Attribute the verification to the principal once the token resolves.
+		telemetry.SetUserID(ctx, ev.UserID)
 
 		now := time.Now().UTC()
 		verified := true
@@ -1235,8 +1294,13 @@ func (p *emailPasswordPlugin) registerResetPassword(host plugin.PluginHost, api 
 		if raw == "" {
 			return nil, huma.Error400BadRequest("token is required")
 		}
-		if err := p.validatePasswordComplexity(req.Password); err != nil {
-			return nil, huma.Error400BadRequest(err.Error())
+		var policyErr error
+		_ = telemetry.WithSpan(ctx, "yauth.password.policy", trace.SpanKindInternal, func(context.Context) error {
+			policyErr = p.validatePasswordComplexity(req.Password)
+			return policyErr
+		})
+		if policyErr != nil {
+			return nil, huma.Error400BadRequest(policyErr.Error())
 		}
 
 		repoRef := host.Repo()
@@ -1246,6 +1310,8 @@ func (p *emailPasswordPlugin) registerResetPassword(host plugin.PluginHost, api 
 		if err != nil || pr == nil {
 			return nil, huma.Error401Unauthorized("token is invalid, expired, or already used")
 		}
+		// Attribute the reset to the principal once the token resolves a user.
+		telemetry.SetUserID(ctx, pr.UserID)
 
 		// Load current hash (if any) so we can compare and append to
 		// history. Missing password is OK — the user may have signed
@@ -1399,7 +1465,22 @@ func (p *emailPasswordPlugin) checkHIBP(ctx context.Context, password string) (b
 	if !p.cfg.HIBPCheck {
 		return false, ""
 	}
-	count, err := p.checker.CheckPwned(ctx, password)
+	// Wrap the breach check in an INTERNAL span so the outbound HIBP call is
+	// visible as compute/IO; the otelhttp CLIENT span nests under it. Record
+	// only the boolean/count outcome — never the password or its hash.
+	var count int
+	var err error
+	_ = telemetry.WithSpan(ctx, "yauth.password.breach_check", trace.SpanKindInternal, func(ctx context.Context) error {
+		count, err = p.checker.CheckPwned(ctx, password)
+		if err != nil {
+			return err
+		}
+		telemetry.AddEvent(ctx, "hibp.result",
+			attribute.Bool("yauth.password.breached", count > 0),
+			attribute.Int("yauth.password.breach_count", count),
+		)
+		return nil
+	})
 	if err != nil {
 		p.logger.WarnContext(ctx, "email-password: HIBP check failed (fail-open)", "err", err)
 		return false, ""

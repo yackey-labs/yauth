@@ -24,6 +24,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 // DefaultEndpoint is the production HIBP range API.
@@ -66,7 +68,16 @@ func (c *Checker) CheckPwned(ctx context.Context, password string) (int, error) 
 	}
 	client := c.Client
 	if client == nil {
-		client = &http.Client{Timeout: DefaultTimeout}
+		// Wrap the default transport with otelhttp so the outbound breach
+		// check emits a CLIENT span and injects W3C traceparent/baggage
+		// headers (via the global TextMapPropagator) — nesting it under the
+		// caller's request span when one is present. Callers that supply
+		// their own Client (e.g. tests) are responsible for their own
+		// transport; we never mutate a caller-provided Client.
+		client = &http.Client{
+			Timeout:   DefaultTimeout,
+			Transport: otelhttp.NewTransport(http.DefaultTransport),
+		}
 	}
 	ua := c.UserAgent
 	if ua == "" {

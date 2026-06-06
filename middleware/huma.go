@@ -34,6 +34,13 @@ func RequireAuthHuma(api huma.API, mw *Middleware) func(huma.Context, func(huma.
 			_ = huma.WriteErr(api, ctx, http.StatusUnauthorized, "Unauthorized")
 			return
 		}
+		// Stamp user.id + yauth.* context onto the active span. The huma
+		// injection path below bypasses withAuthUser (which the net/http
+		// RequireAuth uses), so without this, session-resolved identity is
+		// never recorded on huma-native routes. Derives from the request ctx
+		// so it nests under the consumer's otelhttp root span without yauth's
+		// own HTTP middleware. No-op under the noop provider.
+		tagAuthSpan(r.Context(), au)
 		next(huma.WithValue(ctx, authUserKey, au))
 	}
 }
@@ -134,6 +141,7 @@ func RequireAdminHuma(api huma.API, mw *Middleware) func(huma.Context, func(huma
 			_ = huma.WriteErr(api, ctx, http.StatusUnauthorized, "Unauthorized")
 			return
 		}
+		tagAuthSpan(r.Context(), au)
 		next(huma.WithValue(ctx, authUserKey, au))
 	}
 }

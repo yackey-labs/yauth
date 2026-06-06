@@ -1,11 +1,16 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
+
+	"github.com/yackey-labs/yauth/domain"
 	"github.com/yackey-labs/yauth/repo"
+	"github.com/yackey-labs/yauth/telemetry"
 )
 
 // RateLimit returns an http middleware that enforces a fixed-window rate
@@ -30,7 +35,16 @@ func RateLimit(r repo.RateLimitRepository, name string, max int, window time.Dur
 		}
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 			key := name + ":" + clientIP(req)
-			res, err := r.CheckRateLimit(req.Context(), key, max, window)
+			// Wrap the rate-limit check in an INTERNAL span derived from the
+			// request context so the UpsertRateLimit SQL nests under a named
+			// yauth.ratelimit span instead of appearing bare. No-op under the
+			// noop provider.
+			var res domain.RateLimitResult
+			err := telemetry.WithSpan(req.Context(), "yauth.ratelimit", trace.SpanKindInternal, func(ctx context.Context) error {
+				r, e := r.CheckRateLimit(ctx, key, max, window)
+				res = r
+				return e
+			})
 			if err != nil {
 				// Fail-open: log nothing; rate-limit repo is required to
 				// be best-effort by contract.

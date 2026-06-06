@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
 	"github.com/yackey-labs/yauth/auth/passwordpolicy"
@@ -67,6 +68,11 @@ type ConfigOption func(*configOptions)
 
 type configOptions struct {
 	logger *slog.Logger
+
+	repo    yauthrepo.Repository
+	repoSet bool
+	pool    *pgxpool.Pool
+	poolSet bool
 }
 
 func resolveConfigOptions(opts []ConfigOption) configOptions {
@@ -87,6 +93,42 @@ func resolveConfigOptions(opts []ConfigOption) configOptions {
 // WithLogger, all runtime logging. Defaults to slog.Default().
 func WithConfigLogger(l *slog.Logger) ConfigOption {
 	return func(o *configOptions) { o.logger = l }
+}
+
+// WithRepo injects a pre-built [repo.Repository], bypassing the cfg.Database
+// driver switch entirely. Use it to share a repo your app already owns — e.g.
+// a cache-decorated repo, a test fake, or pgxrepo.New(yourPool) over a pool
+// you opened once for the whole process.
+//
+// When a repo is injected, yauth treats it as the complete storage layer and
+// does NOT touch cfg.Database (no pool is opened, no driver is dialed), does
+// NOT apply the cfg.Cache decorator (compose your own around the injected
+// repo), and does NOT run cfg.Database.AutoMigrate (you own migrations — run
+// `yauth migrate` or migrate.Run against your pool). If any of those config
+// fields are set alongside an injected repo they are ignored with a startup
+// WARN, in keeping with yauth's fail-loud-over-silent stance.
+//
+// WithRepo and [WithPool] are mutually exclusive; setting both is an error.
+func WithRepo(r yauthrepo.Repository) ConfigOption {
+	return func(o *configOptions) { o.repo = r; o.repoSet = true }
+}
+
+// WithPool injects an existing *pgxpool.Pool so yauth reuses it instead of
+// opening a second pool to the same Postgres. Unlike [WithRepo], this stays on
+// the pgx path: cfg.Cache still wraps the resulting repo and
+// cfg.Database.AutoMigrate still runs against the shared pool — so the
+// declarative cache/migrate wiring keeps working while one pool serves both
+// your app and yauth.
+//
+// Because OpenTelemetry pool tracing is a pool-construction option
+// (pgxrepo.WithOTelTracing), it cannot be applied to an already-built pool. If
+// you want yauth's queries traced, build your pool with tracing yourself
+// (pgxrepo.Open(ctx, dsn, pgxrepo.WithOTelTracing()) or the equivalent
+// otelpgx tracer); cfg.Telemetry does not retrofit it onto an injected pool.
+//
+// WithPool and [WithRepo] are mutually exclusive; setting both is an error.
+func WithPool(p *pgxpool.Pool) ConfigOption {
+	return func(o *configOptions) { o.pool = p; o.poolSet = true }
 }
 
 // NewBuilderFromConfig wires a *YAuthBuilder from a yauthcfg.Config — the same
@@ -113,15 +155,54 @@ func NewBuilderFromConfig(ctx context.Context, cfg *yauthcfg.Config, opts ...Con
 		logger.Warn("yauth: deprecated config field set (ignored)", "detail", warn)
 	}
 
-	var repo yauthrepo.Repository
+	if o.repoSet && o.poolSet {
+		return nil, errors.New("yauth: WithRepo and WithPool are mutually exclusive — pass at most one")
+	}
+	if o.repoSet && o.repo == nil {
+		return nil, errors.New("yauth: WithRepo was given a nil repository")
+	}
+	if o.poolSet && o.pool == nil {
+		return nil, errors.New("yauth: WithPool was given a nil *pgxpool.Pool")
+	}
 
-	switch cfg.Database.Driver {
-	case "memory", "mem":
+	var repo yauthrepo.Repository
+	// skipCacheWrap is set when the caller owns the full repo layer (WithRepo):
+	// the cfg.Cache decorator is theirs to compose, not ours to bolt on.
+	skipCacheWrap := false
+
+	switch {
+	case o.repoSet:
+		// Injected repo: it IS the storage layer. cfg.Database is not consulted
+		// (no pool opened, no driver dialed), the cache decorator is the
+		// caller's to compose, and migrations are the caller's to run. Warn —
+		// don't silently ignore — when conflicting config is set alongside it.
+		if cfg.Cache.Enabled {
+			logger.Warn("yauth: cfg.Cache ignored — a repo was injected via WithRepo (compose the cache decorator around it yourself)")
+		}
+		if cfg.Database.AutoMigrate {
+			logger.Warn("yauth: cfg.Database.auto_migrate ignored — a repo was injected via WithRepo (you own migrations: run `yauth migrate`)")
+		}
+		repo = o.repo
+		skipCacheWrap = true
+	case o.poolSet:
+		// Injected pool: stay on the pgx path so cfg.Cache wrapping and
+		// cfg.Database.AutoMigrate keep working, but reuse the caller's pool
+		// instead of opening a second one. (OTel pool tracing is a
+		// construction-time option and cannot be retrofitted here — see
+		// WithPool's doc.)
+		if cfg.Database.AutoMigrate {
+			logger.Warn("yauth: database.auto_migrate=true is for DEV/TEST only — use `yauth migrate` in production")
+			if err := yauthMigrate.Run(ctx, pgxrepo.StdDB(o.pool), "pgx"); err != nil {
+				return nil, fmt.Errorf("yauth: auto_migrate failed: %w", err)
+			}
+		}
+		repo = pgxrepo.New(o.pool)
+	case cfg.Database.Driver == "memory" || cfg.Database.Driver == "mem":
 		// In-process, non-persistent backend (no DSN, no migrations). For dev,
 		// tests, and ephemeral throwaway instances — data is lost on restart and
 		// it is single-process only.
 		repo = memrepo.New()
-	case "pgx":
+	case cfg.Database.Driver == "pgx":
 		poolOpts := []pgxrepo.PoolOption{}
 		if cfg.Telemetry.Enabled {
 			poolOpts = append(poolOpts, pgxrepo.WithOTelTracing())
@@ -143,7 +224,7 @@ func NewBuilderFromConfig(ctx context.Context, cfg *yauthcfg.Config, opts ...Con
 	default:
 		return nil, fmt.Errorf("yauth: unsupported database driver %q (supported: pgx, memory)", cfg.Database.Driver)
 	}
-	if cfg.Cache.Enabled {
+	if cfg.Cache.Enabled && !skipCacheWrap {
 		decorated, err := buildCacheDecorator(repo, cfg.Cache)
 		if err != nil {
 			return nil, err

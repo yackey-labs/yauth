@@ -15,9 +15,16 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/testcontainers/testcontainers-go"
+	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
+	"github.com/testcontainers/testcontainers-go/wait"
 
 	yauth "github.com/yackey-labs/yauth"
 	"github.com/yackey-labs/yauth/plugins/status"
+	"github.com/yackey-labs/yauth/repo/memrepo"
+	"github.com/yackey-labs/yauth/repo/pgxrepo"
 	"github.com/yackey-labs/yauth/yauthcfg"
 )
 
@@ -191,6 +198,126 @@ func TestNewBuilderFromConfigMix(t *testing.T) {
 	}
 	if !slices.Contains(ya.PluginNames(), "status") {
 		t.Errorf("mixed-in status plugin missing from %v", ya.PluginNames())
+	}
+}
+
+// TestNewBuilderFromConfigWithRepo proves the injected repo bypasses the
+// cfg.Database switch entirely: the config names driver=pgx with a
+// syntactically-valid-but-unreachable DSN, yet Build succeeds because the
+// injected memrepo is used and no pool is ever dialed. If the switch were NOT
+// skipped, NewBuilderFromConfig would try to Open/Ping that DSN and fail —
+// so success here is positive proof the injected repo is the one in use.
+func TestNewBuilderFromConfigWithRepo(t *testing.T) {
+	c := minimalConfig()
+	c.Database.Driver = "pgx"
+	c.Database.DSN = "postgres://u:p@127.0.0.1:1/db" // valid syntax, unreachable
+
+	b, err := yauth.NewBuilderFromConfig(context.Background(), c, yauth.WithRepo(memrepo.New()))
+	if err != nil {
+		t.Fatalf("NewBuilderFromConfig with injected repo: %v", err)
+	}
+	if _, err := b.Build(); err != nil {
+		t.Fatalf("Build with injected repo: %v", err)
+	}
+}
+
+// TestNewFromConfigWithRepoIgnoresCacheAndMigrate confirms that injecting a
+// repo makes cfg.Cache and cfg.Database.AutoMigrate no-ops (the caller owns
+// both): the config enables a redis cache pointed at an unreachable address
+// and sets auto_migrate, yet construction succeeds because neither is applied
+// to the injected repo.
+func TestNewFromConfigWithRepoIgnoresCacheAndMigrate(t *testing.T) {
+	c := minimalConfig()
+	c.Database.Driver = "pgx"
+	c.Database.DSN = "postgres://u:p@127.0.0.1:1/db"
+	c.Database.AutoMigrate = true // would dial+migrate if honored — it must be ignored
+	c.Cache.Enabled = true
+	c.Cache.Provider = "redis"
+	c.Cache.RedisAddr = "127.0.0.1:1" // wrapping would still construct, but must be skipped
+
+	ya, err := yauth.NewFromConfig(context.Background(), c, yauth.WithRepo(memrepo.New()))
+	if err != nil {
+		t.Fatalf("NewFromConfig with injected repo + cache/migrate set: %v", err)
+	}
+	if ya == nil {
+		t.Fatal("expected a built *YAuth, got nil")
+	}
+}
+
+// TestWithRepoAndWithPoolMutuallyExclusive verifies setting both injection
+// options is a loud error rather than a silent last-wins.
+func TestWithRepoAndWithPoolMutuallyExclusive(t *testing.T) {
+	c := minimalConfig()
+	_, err := yauth.NewBuilderFromConfig(context.Background(), c,
+		yauth.WithRepo(memrepo.New()),
+		yauth.WithPool(nil),
+	)
+	if err == nil {
+		t.Fatal("expected mutual-exclusion error, got nil")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("error should mention mutual exclusion, got: %v", err)
+	}
+}
+
+// TestNewBuilderFromConfigWithPool exercises the WithPool path end-to-end
+// against a real Postgres (testcontainers): the caller's pool is reused,
+// auto_migrate runs against it, and the resulting instance works. Skips when
+// Docker is unavailable, matching the pgxrepo suite's convention.
+func TestNewBuilderFromConfigWithPool(t *testing.T) {
+	ctx := context.Background()
+	ctr, err := tcpostgres.Run(ctx, "docker.io/library/postgres:16-alpine",
+		tcpostgres.WithDatabase("yauth_test"),
+		tcpostgres.WithUsername("yauth"),
+		tcpostgres.WithPassword("yauth"),
+		testcontainers.WithWaitStrategy(
+			wait.ForLog("database system is ready to accept connections").
+				WithOccurrence(2).
+				WithStartupTimeout(60*time.Second),
+		),
+	)
+	if err != nil {
+		t.Skipf("Docker not available; WithPool test skipped: %v", err)
+	}
+	defer func() { _ = ctr.Terminate(ctx) }()
+
+	dsn, err := ctr.ConnectionString(ctx, "sslmode=disable")
+	if err != nil {
+		t.Skipf("connection string: %v", err)
+	}
+	pool, err := pgxrepo.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open pool: %v", err)
+	}
+	defer pool.Close()
+
+	c := minimalConfig()
+	c.Database.Driver = "pgx"
+	c.Database.DSN = dsn
+	c.Database.AutoMigrate = true // must run against the injected pool
+
+	b, err := yauth.NewBuilderFromConfig(ctx, c, yauth.WithPool(pool))
+	if err != nil {
+		t.Fatalf("NewBuilderFromConfig with injected pool: %v", err)
+	}
+	ya, err := b.Build()
+	if err != nil {
+		t.Fatalf("Build with injected pool: %v", err)
+	}
+	if ya == nil {
+		t.Fatal("expected a built *YAuth, got nil")
+	}
+
+	// auto_migrate ran against the shared pool: yauth's tables now exist in
+	// the caller's database.
+	var n int
+	if err := pool.QueryRow(ctx,
+		"SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename LIKE 'yauth_%'",
+	).Scan(&n); err != nil {
+		t.Fatalf("count yauth tables: %v", err)
+	}
+	if n == 0 {
+		t.Error("expected auto_migrate to create yauth_* tables via the injected pool, found none")
 	}
 }
 

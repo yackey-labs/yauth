@@ -13,6 +13,41 @@ is the source of truth for which wins when they overlap.
 Both produce the same `*YAuth`. `NewFromConfig` is exactly
 `NewBuilderFromConfig` followed by `.Build()`.
 
+## Sharing a pool / injecting your own repo
+
+By default `NewFromConfig` opens and owns its own `*pgxpool.Pool` from
+`database.dsn`. If your app already holds a pool to the same Postgres and wants
+**one pool serving both**, inject it — you keep the declarative plugin /
+telemetry / mailer wiring and just swap the storage layer:
+
+```go
+// Reuse an existing *pgxpool.Pool. Stays on the pgx path: cfg.Cache still
+// wraps and cfg.Database.auto_migrate still runs against your pool.
+ya, err := yauth.NewFromConfig(ctx, cfg, yauth.WithPool(myPool))
+```
+
+For full control over the storage layer — a cache-decorated repo, a test fake,
+or any `repo.Repository` — inject the repo itself:
+
+```go
+// The injected repo IS the storage layer: cfg.Database is not consulted,
+// the cfg.Cache decorator is yours to compose, and you own migrations.
+ya, err := yauth.NewFromConfig(ctx, cfg, yauth.WithRepo(myRepo))
+```
+
+| Option | cfg.Database driver switch | cfg.Cache decorator | cfg.Database.auto_migrate | OTel pool tracing |
+| --- | --- | --- | --- | --- |
+| `WithPool(pool)` | skipped (pool reused) | still applied | still runs against your pool | build the pool with tracing yourself |
+| `WithRepo(repo)` | skipped entirely | **not** applied (compose your own) | **not** run (you own migrations) | n/a |
+
+`WithRepo` and `WithPool` are mutually exclusive (passing both errors), and a
+nil argument errors. When a repo is injected, any `cfg.Cache` or
+`cfg.Database.auto_migrate` set alongside it is ignored with a startup `WARN`
+rather than silently dropped. Because `pgxrepo.WithOTelTracing()` is a
+pool-*construction* option, it can't be retrofitted onto an already-built pool:
+to trace yauth's queries with `WithPool`, open your pool with tracing yourself
+(`pgxrepo.Open(ctx, dsn, pgxrepo.WithOTelTracing())`).
+
 ## Mixing the two
 
 Start from YAML and extend with the builder via `NewBuilderFromConfig` — it

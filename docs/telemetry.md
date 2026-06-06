@@ -94,6 +94,43 @@ telemetry:
   `telemetry.enabled` is true and yauth opens the pool; if you inject your own
   pool (`yauth.WithPool`), attach the tracer when you build that pool.
 
+## Spans yauth emits
+
+All of yauth's own spans are **INTERNAL** (kind `Internal`, tracer/scope
+`yauth`) — never SERVER. They are created from the inbound request context, so
+they **nest under the caller's root span**: your `otelhttp` server span when
+`http_middleware: false`, or yauth's own `TraceMiddleware` span otherwise. yauth
+never emits a second server span, so there is no double-counting either way.
+
+| Span | Where | Notes |
+| --- | --- | --- |
+| `yauth.resolve` | every authenticated request (`middleware.ResolveAuth`) | Wraps the whole identity resolution. Tags `user.id` (semconv) and `yauth.auth.method` (`cookie` / `bearer` / `api-key` / `service-account`) once the principal is known. The session/user lookup SQL (and the bearer `yauth.token.verify`) nest **under this span**, so a request is one tidy subtree instead of bare `GetSessionByTokenHash` + `GetUserByID` with an empty `user.id`. |
+| `yauth.token.verify` | bearer resolver | Bearer JWT signature + claims validation. Records only `yauth.token.signing` (`hs256` / `asym`) — never the token or any claim value. |
+| `yauth.ratelimit` | rate-limit middleware | Fixed-window rate-limit check. |
+| `yauth.user.lookup` | login / register | Email → user lookup. |
+| `yauth.password.policy` | register / change / reset | Complexity policy evaluation. |
+| `yauth.password.verify` | login / change-password | Argon2id compare (the CPU cost worth seeing). |
+| `yauth.password.breach_check` | register / change / reset (HIBP enabled) | Records only the breached bool + breach count — never the password or its hash. |
+| `yauth.session.create` | login / register | Session issuance. |
+
+Attributes follow the keep-PII-out rule: ids, booleans, and counts only — never
+passwords, hashes, tokens, or email addresses.
+
+### Outbound calls (CLIENT spans + traceparent)
+
+yauth's outbound HTTP calls wrap their transport with `otelhttp.NewTransport`,
+so each emits a **CLIENT** span and injects the **W3C traceparent + baggage** on
+the wire (letting the remote side join the trace). This covers:
+
+- the **HIBP** breach check (`yauth.password.breach_check` parent),
+- **SSO/OIDC** discovery, JWKS fetch, and token exchange (the `ssooidc` plugin's
+  default HTTP client), and
+- **webhook delivery** (the `webhooks` plugin's default delivery client).
+
+A caller-supplied `HTTPClient` (on those plugin configs) is used verbatim — if
+you inject your own, wrap its transport with `otelhttp` yourself to keep the
+CLIENT spans and propagation.
+
 ## See also
 
 - `yauth schema config` — the reflected `telemetry` block (field descriptions)

@@ -218,6 +218,34 @@ func WithAuthUser(ctx context.Context, au *domain.AuthUser) context.Context {
 // bearer resolvers can pre-populate AuthUser.ActiveOrgID from a JWT
 // claim and hydration will reconcile + role-resolve.
 func (m *Middleware) ResolveAuth(r *http.Request) (*domain.AuthUser, error) {
+	// Open a yauth.resolve INTERNAL span around the whole resolution so the
+	// session/user lookup SQL re-parents under it (instead of surfacing as
+	// bare GetSessionByTokenHash + GetUserByID with no user.id). It is
+	// INTERNAL — never SERVER — so it nests under the caller's root span
+	// (their otelhttp server span when http_middleware:false, or yauth's own
+	// TraceMiddleware span otherwise) without emitting a second server span.
+	// Reassigning r threads the child ctx into resolveCookie, every
+	// AuthResolver, and maybeHydrateOrg for free — they all read r.Context().
+	ctx, span := telemetry.StartSpan(r.Context(), "yauth.resolve", trace.SpanKindInternal)
+	defer span.End()
+	r = r.WithContext(ctx)
+
+	au, err := m.resolveAuthInner(r)
+	if au != nil {
+		// Tag the resolve span once the principal is known: user.id (semconv)
+		// plus yauth.auth.method (cookie/bearer/api-key) and any org context.
+		// user.id isn't known until resolution completes, so this is the END
+		// of resolution by design. tagAuthSpan reads the span off ctx (the
+		// resolve span), so the lookups + identity land on the same span.
+		tagAuthSpan(ctx, au)
+	}
+	return au, err
+}
+
+// resolveAuthInner is the resolution body: cookie first, then each registered
+// AuthResolver in registration order. ResolveAuth wraps it in the
+// yauth.resolve span and tags the resolved identity onto that span.
+func (m *Middleware) resolveAuthInner(r *http.Request) (*domain.AuthUser, error) {
 	if au, err := m.resolveCookie(r); err == nil {
 		m.maybeHydrateOrg(r.Context(), au)
 		return au, nil

@@ -36,6 +36,8 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+
 	"github.com/yackey-labs/yauth/plugin"
 )
 
@@ -184,11 +186,20 @@ func (p *ssoOIDCPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api hu
 
 // httpClient returns the configured HTTP client or a 10s-timeout
 // default. The helper exists so tests can swap in an httptest server.
+//
+// The default client's transport is wrapped with otelhttp so the outbound
+// OIDC discovery / JWKS / token-exchange calls emit CLIENT spans and inject
+// the W3C traceparent + baggage (so the IdP-side trace, if any, joins ours).
+// A caller-supplied HTTPClient is used verbatim — instrumenting it is the
+// caller's choice.
 func (p *ssoOIDCPlugin) httpClient() *http.Client {
 	if p.cfg.HTTPClient != nil {
 		return p.cfg.HTTPClient
 	}
-	return &http.Client{Timeout: defaultHTTPTimeout}
+	return &http.Client{
+		Timeout:   defaultHTTPTimeout,
+		Transport: otelhttp.NewTransport(http.DefaultTransport),
+	}
 }
 
 // jwksCache returns the lazily-initialized process-wide JWKS cache.

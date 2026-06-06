@@ -28,6 +28,8 @@ import (
 	"net/http"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+
 	"github.com/yackey-labs/yauth/plugin"
 )
 
@@ -142,7 +144,14 @@ func (p *webhooksPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api h
 
 	httpClient := p.cfg.HTTPClient
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: p.cfg.DeliveryTimeout}
+		// Wrap the default transport with otelhttp so each webhook delivery
+		// emits a CLIENT span and injects the W3C traceparent + signature
+		// headers, letting receivers correlate the delivery on their side.
+		// A caller-supplied HTTPClient is used verbatim.
+		httpClient = &http.Client{
+			Timeout:   p.cfg.DeliveryTimeout,
+			Transport: otelhttp.NewTransport(http.DefaultTransport),
+		}
 	}
 
 	p.dispatcher = NewDispatcher(host.Repo(), httpClient, p.cfg.WorkerCount, RetryConfig{

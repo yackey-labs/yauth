@@ -1,13 +1,17 @@
 package bearer
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/yackey-labs/yauth/domain"
 	"github.com/yackey-labs/yauth/plugin"
+	"github.com/yackey-labs/yauth/telemetry"
 	"github.com/yackey-labs/yauth/yautherr"
 )
 
@@ -43,23 +47,46 @@ func (b *bearerResolver) Resolve(r *http.Request) (*domain.AuthUser, bool, error
 		return nil, false, nil
 	}
 
-	parsed, err := verifyAccessToken(b.cfg.JWTSecret, raw, b.cfg)
-	if err != nil {
-		// The bearer plugin issues HS256 tokens, but an IdP that also runs the
-		// oauth2-server plugin mints RS256/ES256 access tokens signed with the
-		// shared asymmetric key. Those are equally first-party Bearer
-		// credentials, so when an asymmetric host signer is registered, fall
-		// back to verifying against it (gated on token_use=access) before
-		// rejecting. Without this, OIDC clients can't call /userinfo (and other
-		// RequireAuth routes) with the access token from the token endpoint.
-		signer := b.host.JWTSigner()
-		if signer == nil {
-			return nil, true, yautherr.ErrInvalidToken
-		}
-		parsed, err = verifyAsymAccessToken(signer, raw)
+	// Wrap the signature/claims validation in an INTERNAL span (scope "yauth")
+	// so the JWT verify is visible as its own compute step nested under the
+	// resolve span. Records only the signing family (hs256/asym) — never the
+	// token or any claim value. A rejected token is captured as the outcome
+	// attribute yauth.token.valid=false rather than a span error: routine
+	// expired/refresh churn is expected traffic, not an error to light up
+	// error-rate views (matches the yauth.password.verify convention, which
+	// does not mark a wrong password as a span error).
+	var parsed parsedToken
+	var ok bool
+	_ = telemetry.WithSpan(r.Context(), "yauth.token.verify", trace.SpanKindInternal, func(ctx context.Context) error {
+		p, err := verifyAccessToken(b.cfg.JWTSecret, raw, b.cfg)
 		if err != nil {
-			return nil, true, yautherr.ErrInvalidToken
+			// The bearer plugin issues HS256 tokens, but an IdP that also runs the
+			// oauth2-server plugin mints RS256/ES256 access tokens signed with the
+			// shared asymmetric key. Those are equally first-party Bearer
+			// credentials, so when an asymmetric host signer is registered, fall
+			// back to verifying against it (gated on token_use=access) before
+			// rejecting. Without this, OIDC clients can't call /userinfo (and other
+			// RequireAuth routes) with the access token from the token endpoint.
+			signer := b.host.JWTSigner()
+			if signer == nil {
+				telemetry.SetAttribute(ctx, "yauth.token.valid", false)
+				return nil
+			}
+			p, err = verifyAsymAccessToken(signer, raw)
+			if err != nil {
+				telemetry.SetAttribute(ctx, "yauth.token.valid", false)
+				return nil
+			}
+			telemetry.SetAttribute(ctx, "yauth.token.signing", "asym")
+		} else {
+			telemetry.SetAttribute(ctx, "yauth.token.signing", "hs256")
 		}
+		parsed = p
+		ok = true
+		return nil
+	})
+	if !ok {
+		return nil, true, yautherr.ErrInvalidToken
 	}
 
 	user, err := b.host.Repo().GetUserByID(r.Context(), parsed.UserID)

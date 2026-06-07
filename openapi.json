@@ -2137,6 +2137,40 @@
         ],
         "type": "object"
       },
+      "LoginOption": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object"
+      },
+      "LoginOptionsOutBody": {
+        "additionalProperties": false,
+        "properties": {
+          "options": {
+            "items": {
+              "$ref": "#/components/schemas/LoginOption"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "options"
+        ],
+        "type": "object"
+      },
       "LoginRequest": {
         "additionalProperties": false,
         "properties": {
@@ -12383,6 +12417,38 @@
         "summary": "Begin SSO login (org= / connection_id= / domain= HRD)",
         "tags": [
           "oauth"
+        ]
+      }
+    },
+    "/sso/login-options": {
+      "get": {
+        "operationId": "ssooidc-login-options",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginOptionsOutBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [],
+        "summary": "List active global SSO connections for login buttons (public)",
+        "tags": [
+          "sso"
         ]
       }
     },

@@ -39,6 +39,40 @@ func globalAdminGuards(api huma.API, mw *middleware.Middleware) huma.Middlewares
 func (p *ssoOIDCPlugin) registerGlobalConnectionRoutes(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
 	guards := globalAdminGuards(api, mw)
 
+	// GET {prefix}/sso/login-options — PUBLIC: the active global connections a
+	// login page can render as "Sign in with X" buttons (id + name only, no
+	// config, no secrets). Each maps to /sso/login?connection_id=<id>.
+	type loginOption struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	type loginOptionsOut struct {
+		Body struct {
+			Options []loginOption `json:"options"`
+		}
+	}
+	huma.Register(api, huma.Operation{
+		OperationID: "ssooidc-login-options",
+		Method:      http.MethodGet,
+		Path:        prefix + "/sso/login-options",
+		Summary:     "List active global SSO connections for login buttons (public)",
+		Tags:        []string{"sso"},
+		Security:    []map[string][]string{}, // public
+	}, func(ctx context.Context, _ *struct{}) (*loginOptionsOut, error) {
+		rows, err := host.Repo().ListSsoConnectionsByOrg(ctx, globalOrg)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("list sso connections failed")
+		}
+		out := &loginOptionsOut{}
+		out.Body.Options = make([]loginOption, 0, len(rows))
+		for _, c := range rows {
+			if c != nil && c.Status == domain.ConnectionStatusActive {
+				out.Body.Options = append(out.Body.Options, loginOption{ID: c.ID, Name: c.Name})
+			}
+		}
+		return out, nil
+	})
+
 	// POST {prefix}/sso/connections — create a global connection.
 	type createIn struct {
 		Body createConnectionRequest

@@ -5732,6 +5732,89 @@
         ]
       }
     },
+    "/federate/approve": {
+      "post": {
+        "operationId": "oauth2-federate-approve",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Approve a guided federation request",
+        "tags": [
+          "oauth2"
+        ]
+      }
+    },
+    "/federate/redeem": {
+      "post": {
+        "operationId": "oauth2-federate-redeem",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [],
+        "summary": "Redeem a one-time federation grant",
+        "tags": [
+          "oauth2"
+        ]
+      }
+    },
+    "/federate/review": {
+      "post": {
+        "operationId": "oauth2-federate-review",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Review a guided federation request",
+        "tags": [
+          "oauth2"
+        ]
+      }
+    },
     "/forgot-password": {
       "post": {
         "operationId": "emailPasswordForgotPassword",
@@ -11899,6 +11982,114 @@
         "summary": "SSO callback (IdP returns here)",
         "tags": [
           "oauth"
+        ]
+      }
+    },
+    "/sso/federate/return": {
+      "get": {
+        "operationId": "ssooidc-federate-return",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "contentEncoding": "base64",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Content-Type": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Location": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Complete guided federation (redeem grant + seed connection)",
+        "tags": [
+          "organizations"
+        ]
+      }
+    },
+    "/sso/federate/start": {
+      "get": {
+        "operationId": "ssooidc-federate-start",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "contentEncoding": "base64",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Content-Type": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Location": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Begin guided federation (redirects to the IdP for approval)",
+        "tags": [
+          "organizations"
         ]
       }
     },

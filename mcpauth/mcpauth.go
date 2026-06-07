@@ -141,14 +141,17 @@ func Mount(root *http.ServeMux, ya *yauth.YAuth, cfg Config) {
 
 	root.HandleFunc("GET /.well-known/oauth-protected-resource", protectedResource(cfg))
 
-	asMeta := authServerMetadata(yaRouter, cfg)
+	asMeta := wellKnownMetadata(yaRouter, cfg, "/.well-known/oauth-authorization-server")
 	root.Handle("GET /.well-known/oauth-authorization-server", asMeta)
 	// RFC 8414 §3.1 inserts the well-known segment between host and the issuer
 	// path (".../oauth-authorization-server/api/auth"); some MCP clients probe
 	// that form. Serve the same patched document for any suffix.
 	root.Handle("GET /.well-known/oauth-authorization-server/", asMeta)
 
-	oidc := proxyTo(yaRouter, "/.well-known/openid-configuration")
+	// OIDC discovery is patched the same way: OIDC relying parties (e.g. yauth's
+	// ssooidc) read authorization_endpoint from here, and it must point at the
+	// consent UI, not yauth's JSON /oauth/authorize.
+	oidc := wellKnownMetadata(yaRouter, cfg, "/.well-known/openid-configuration")
 	root.Handle("GET /.well-known/openid-configuration", oidc)
 	root.Handle("GET /.well-known/openid-configuration/", oidc)
 }
@@ -175,12 +178,14 @@ func protectedResource(cfg Config) http.HandlerFunc {
 	}
 }
 
-// authServerMetadata proxies yauth's RFC 8414 document and rewrites
-// authorization_endpoint to the in-app consent route so browser-driven PKCE
-// flows render the consent UI instead of receiving JSON.
-func authServerMetadata(yaRouter http.Handler, cfg Config) http.HandlerFunc {
+// wellKnownMetadata proxies one of yauth's discovery documents (RFC 8414
+// oauth-authorization-server, or OIDC openid-configuration) and rewrites
+// authorization_endpoint to the in-app consent route so browser-driven flows
+// (MCP clients AND OIDC relying parties) render the consent UI instead of
+// receiving yauth's raw JSON consent payload.
+func wellKnownMetadata(yaRouter http.Handler, cfg Config, internalPath string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		status, _, body := proxyFetch(yaRouter, r, "/.well-known/oauth-authorization-server")
+		status, _, body := proxyFetch(yaRouter, r, internalPath)
 		if status != http.StatusOK {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(status)
@@ -205,21 +210,6 @@ func authServerMetadata(yaRouter http.Handler, cfg Config) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
 		_ = json.NewEncoder(w).Encode(doc)
-	}
-}
-
-// proxyTo returns a handler that serves the yauth response for internalPath
-// verbatim. Used for OIDC discovery, which needs no rewriting.
-func proxyTo(yaRouter http.Handler, internalPath string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		status, header, body := proxyFetch(yaRouter, r, internalPath)
-		for k, vs := range header {
-			for _, v := range vs {
-				w.Header().Add(k, v)
-			}
-		}
-		w.WriteHeader(status)
-		_, _ = w.Write(body)
 	}
 }
 

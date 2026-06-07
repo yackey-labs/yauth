@@ -228,4 +228,10 @@ func TestOpenIDConfigurationProxied(t *testing.T) {
 	if got, _ := doc["issuer"].(string); got == "" {
 		t.Errorf("issuer missing; discovery doc was not proxied from yauth")
 	}
+	// authorization_endpoint must be patched to the SPA consent route (same as the
+	// AS metadata) so OIDC relying parties (e.g. ssooidc) drive the consent UI
+	// instead of hitting yauth's JSON /oauth/authorize.
+	if got := doc["authorization_endpoint"]; got != srv.URL+"/authorize" {
+		t.Errorf("openid-configuration authorization_endpoint = %v, want %s/authorize", got, srv.URL)
+	}
 }

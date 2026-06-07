@@ -76,6 +76,31 @@ tiny-idp ships `FederateApproveView`); the RP needs `Config.SelfIssuer` + an
 asymjwt signer. The grant store is in-process (single-replica IdP; a restart
 mid-handshake just means re-approve).
 
+### Org-less (global) connections — for apps without organizations
+
+Single-tenant apps that don't model orgs (and "Sign in with Google/Okta" on any
+app) use **global** connections — `organization_id` is the empty sentinel `""`
+(no migration, no FK). Manage them with the **global-admin-gated** CRUD
+(distinct from the org-scoped routes):
+
+```
+POST   {prefix}/sso/connections          create a global connection (admin)
+GET    {prefix}/sso/connections          list global connections (admin)
+PATCH  {prefix}/sso/connections/{cid}    update (admin)
+DELETE {prefix}/sso/connections/{cid}    delete (admin)
+POST   {prefix}/sso/connections/{cid}/test
+GET    {prefix}/sso/login-options         PUBLIC: [{id,name}] of ACTIVE globals
+```
+
+Drive one with `GET {prefix}/sso/login?connection_id=<id>&redirect_url=/path`.
+On callback a global connection **just links/creates the user** — no org
+membership, no active-org stamp. A login page renders "Sign in with X" buttons
+from `/sso/login-options` (public, ids + names only). Adding Google is then: a
+global connection with `discovery_url = https://accounts.google.com/.well-known/openid-configuration`
++ a client_id/secret from Google Cloud Console (Google isn't keyless — that path
+is yauth↔yauth only). Orgs remain available for multi-tenant/B2B; they're now
+optional, not required.
+
 ### Lower-level
 
 - `ssooidc.SeedConnection(ctx, repo, key, in)` — connection-as-code when you

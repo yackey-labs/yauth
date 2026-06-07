@@ -1508,6 +1508,45 @@
         },
         "type": "object"
       },
+      "FederateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "admin_api_key": {
+            "type": "string"
+          },
+          "default_role_on_jit": {
+            "type": "string"
+          },
+          "discovery_url": {
+            "type": "string"
+          },
+          "group_to_role": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "jit_provisioning_enabled": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "discovery_url"
+        ],
+        "type": "object"
+      },
       "ForgotPasswordRequest": {
         "additionalProperties": false,
         "properties": {
@@ -9409,6 +9448,64 @@
           }
         ],
         "summary": "Test an SSO connection (discovery round-trip)",
+        "tags": [
+          "organizations"
+        ]
+      }
+    },
+    "/organizations/{id}/sso/federate": {
+      "post": {
+        "operationId": "ssooidc-federate",
+        "parameters": [
+          {
+            "description": "Organization ID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "description": "Organization ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FederateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionJSON"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Federate this app to an upstream IdP in one call",
         "tags": [
           "organizations"
         ]

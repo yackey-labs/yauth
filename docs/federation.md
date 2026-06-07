@@ -52,6 +52,30 @@ Back it with a button that POSTs to it. When the OP doesn't trust the issuer,
 pass `admin_api_key` instead (needs OP `DCRAllowConfidentialClients` +
 `AllowAdminMachineCallers`).
 
+### Guided approval handshake (any IdP, human-approved, no pre-trust)
+
+When the OP shouldn't pre-trust the RP's issuer, use the browser-bounce handshake
+— the OP admin approves each federation live (WorkOS-Admin-Portal style), no
+allow-list edit:
+
+1. RP admin → `GET {prefix}/sso/federate/start?idp=<OP base>&org=<id>&app_name=…`
+   (org-admin gated): the RP signs a `federation_request` (its metadata +
+   `return_uri` + connection params, signed with its key) and **302s to the OP's
+   `/federate/approve?req=<jwt>`** approval page.
+2. OP approval page → `POST {prefix}/federate/review` (admin) shows the request →
+   admin approves → `POST {prefix}/federate/approve` (admin) verifies the request
+   against the RP's JWKS, registers a confidential client, mints a **one-time,
+   short-TTL grant**, and returns `redirect_url` back to the RP's `return_uri`.
+3. RP `GET {prefix}/sso/federate/return` verifies the echoed request (its own
+   signature), **redeems the grant server-to-server** (`POST {prefix}/federate/redeem`)
+   for the client creds, and seeds the connection. The secret never enters a
+   browser; the grant is single-use.
+
+The OP needs `DCREnabled` + an `/federate/approve` UI page (yauth-ui has none —
+tiny-idp ships `FederateApproveView`); the RP needs `Config.SelfIssuer` + an
+asymjwt signer. The grant store is in-process (single-replica IdP; a restart
+mid-handshake just means re-approve).
+
 ### Lower-level
 
 - `ssooidc.SeedConnection(ctx, repo, key, in)` — connection-as-code when you

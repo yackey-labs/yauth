@@ -144,13 +144,17 @@ func seedAdminKey(ctx context.Context, r *memrepo.Repo) string {
 		log.Fatalf("idp: gen api key: %v", err)
 	}
 	role := "admin"
+	// Short-lived grant: the RP only needs it once, at registration. Bounding the
+	// window is the cheap version of WorkOS-style one-time handoff links.
+	exp := now.Add(5 * time.Minute)
 	if err := r.CreateAPIKey(ctx, domain.NewAPIKey{
 		ID:              uuid.NewString(),
 		UserID:          &adminID,
 		KeyPrefix:       gen.Prefix,
 		KeyHash:         gen.Hash,
-		Name:            "federation",
+		Name:            "federation (5m)",
 		Role:            &role,
+		ExpiresAt:       &exp,
 		CreatedByUserID: adminID,
 		CreatedAt:       now,
 	}); err != nil {

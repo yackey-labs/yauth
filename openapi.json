@@ -1920,6 +1920,24 @@
         ],
         "type": "object"
       },
+      "ListOutBody": {
+        "additionalProperties": false,
+        "properties": {
+          "sso_connections": {
+            "items": {
+              "$ref": "#/components/schemas/ConnectionJSON"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "sso_connections"
+        ],
+        "type": "object"
+      },
       "ListPermissionsResponse": {
         "additionalProperties": false,
         "properties": {
@@ -11982,6 +12000,231 @@
         "summary": "SSO callback (IdP returns here)",
         "tags": [
           "oauth"
+        ]
+      }
+    },
+    "/sso/connections": {
+      "get": {
+        "operationId": "ssooidc-list-global-connections",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListOutBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "List global (org-less) SSO connections",
+        "tags": [
+          "sso"
+        ]
+      },
+      "post": {
+        "operationId": "ssooidc-create-global-connection",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateConnectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionJSON"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Create a global (org-less) SSO connection",
+        "tags": [
+          "sso"
+        ]
+      }
+    },
+    "/sso/connections/{cid}": {
+      "delete": {
+        "operationId": "ssooidc-delete-global-connection",
+        "parameters": [
+          {
+            "description": "SSO connection ID",
+            "in": "path",
+            "name": "cid",
+            "required": true,
+            "schema": {
+              "description": "SSO connection ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Delete a global SSO connection",
+        "tags": [
+          "sso"
+        ]
+      },
+      "patch": {
+        "operationId": "ssooidc-update-global-connection",
+        "parameters": [
+          {
+            "description": "SSO connection ID",
+            "in": "path",
+            "name": "cid",
+            "required": true,
+            "schema": {
+              "description": "SSO connection ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateConnectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionJSON"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Update a global SSO connection (partial)",
+        "tags": [
+          "sso"
+        ]
+      }
+    },
+    "/sso/connections/{cid}/test": {
+      "post": {
+        "operationId": "ssooidc-test-global-connection",
+        "parameters": [
+          {
+            "description": "SSO connection ID",
+            "in": "path",
+            "name": "cid",
+            "required": true,
+            "schema": {
+              "description": "SSO connection ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestConnectionResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Test a global SSO connection (discovery round-trip)",
+        "tags": [
+          "sso"
         ]
       }
     },

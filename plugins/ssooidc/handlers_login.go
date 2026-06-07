@@ -441,8 +441,12 @@ func (p *ssoOIDCPlugin) registerSsoCallback(host plugin.PluginHost, api huma.API
 		if mapped := mapGroupToRole(groups, mapping.GroupToRole); mapped != "" {
 			role = mapped
 		}
-		if err := p.upsertMembership(ctx, host, conn.OrganizationID, userID, role); err != nil {
-			return nil, huma.Error500InternalServerError("membership upsert failed")
+		// Org-scoped connections JIT a membership; global (org-less) connections
+		// just link/create the user — no org, no membership.
+		if conn.OrganizationID != "" {
+			if err := p.upsertMembership(ctx, host, conn.OrganizationID, userID, role); err != nil {
+				return nil, huma.Error500InternalServerError("membership upsert failed")
+			}
 		}
 
 		// Issue session and set the cookie.
@@ -450,9 +454,12 @@ func (p *ssoOIDCPlugin) registerSsoCallback(host plugin.PluginHost, api huma.API
 		if err != nil {
 			return nil, huma.Error500InternalServerError("issue session failed")
 		}
-		// Stamp active_org_id so subsequent /me etc. land in this org.
-		oid := conn.OrganizationID
-		_ = host.Repo().SetSessionActiveOrg(ctx, sess.ID, &oid)
+		// Stamp active_org_id so subsequent /me etc. land in this org (org-scoped
+		// connections only; global connections leave the session org-less).
+		if conn.OrganizationID != "" {
+			oid := conn.OrganizationID
+			_ = host.Repo().SetSessionActiveOrg(ctx, sess.ID, &oid)
+		}
 		http.SetCookie(w, auth.SessionCookie(
 			cookieOptionsFromHost(host, r, int(host.SessionTTL().Seconds())),
 			raw,

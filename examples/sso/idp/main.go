@@ -69,8 +69,12 @@ func main() {
 			Issuer:                      shared.IDPIssuer,
 			BasePath:                    "",
 			DCREnabled:                  true,
-			DCRAllowConfidentialClients: true, // let relying parties self-register
-			AllowPrivateNetworkJWKSURI:  true, // localhost demo
+			DCRAllowConfidentialClients: true,
+			// Zero-key federation: trust the RP's issuer. A DCR request carrying a
+			// software_statement signed by this issuer (verified against its JWKS)
+			// self-registers a confidential client with NO admin credential.
+			DCRTrustedIssuers:          []string{shared.RPIssuer},
+			AllowPrivateNetworkJWKSURI: true, // localhost demo
 		})).
 		WithPlugin(oidc.New(oidc.Config{Issuer: shared.IDPIssuer, BasePath: ""})).
 		Build()

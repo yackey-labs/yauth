@@ -42,6 +42,7 @@ package oauth2server
 
 import (
 	"github.com/danielgtaylor/huma/v2"
+	"net/http"
 
 	"sync"
 	"time"
@@ -142,6 +143,20 @@ type Config struct {
 	// DCRStaleSweepInterval is how often the sweep runs when DCRStaleClientTTL
 	// is set. Default: 24h.
 	DCRStaleSweepInterval time.Duration
+	// DCRTrustedIssuers enables zero-credential federation: a DCR request that
+	// carries a `software_statement` (a JWT signed by the registrant's own key,
+	// with `iss` = the registrant's issuer) is authorized WITHOUT an admin
+	// credential when its `iss` is in this allow-list AND its signature verifies
+	// against that issuer's published JWKS (fetched from its OIDC discovery).
+	// The registrant proves control of a trusted issuer instead of presenting a
+	// shared secret or admin token — the easiest secure yauth→yauth federation.
+	// A confidential client is minted and its secret returned over TLS. Empty
+	// (default) disables trusted-issuer DCR. Each entry is an exact issuer URL.
+	DCRTrustedIssuers []string
+	// DCRTrustedIssuerHTTPClient fetches trusted issuers' discovery + JWKS during
+	// software_statement verification. Default: a 15s client. Override in tests
+	// or to reach loopback issuers.
+	DCRTrustedIssuerHTTPClient *http.Client
 }
 
 // oauth2Plugin is the unexported plugin.Plugin implementation.

@@ -14,6 +14,11 @@ const (
 	// IDPDiscovery is the root (mcpauth-aliased) OIDC discovery doc the RP reads.
 	IDPDiscovery = "http://127.0.0.1:8081/.well-known/openid-configuration"
 
+	// RPIssuer is the relying party's OWN issuer. Both apps are yauth, so the RP
+	// is also an issuer: it publishes a JWKS, letting the IdP verify the RP's
+	// software_statement and authorize self-registration with NO admin key.
+	RPIssuer = "http://127.0.0.1:8080/api/auth"
+
 	// JWTSecret signs bearer tokens on both sides (dev-only).
 	JWTSecret = "dev-only-jwt-secret-change-me-please-32bytes!!"
 

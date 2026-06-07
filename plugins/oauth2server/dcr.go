@@ -32,6 +32,11 @@ type dcrRegisterRequest struct {
 	ClientURI               *string  `json:"client_uri,omitempty"`
 	LogoURI                 *string  `json:"logo_uri,omitempty"`
 	InitiateLoginURI        *string  `json:"initiate_login_uri,omitempty"`
+	// SoftwareStatement (RFC 7591) is a JWT signed by the registrant's own key
+	// (iss = its issuer). When iss is in Config.DCRTrustedIssuers and the
+	// signature verifies against that issuer's JWKS, the registration is
+	// authorized without an admin credential. See Config.DCRTrustedIssuers.
+	SoftwareStatement *string `json:"software_statement,omitempty"`
 }
 
 // dcrRegisterResponse is the RFC 7591 §3.2.1 success body.
@@ -95,6 +100,35 @@ func (p *oauth2Plugin) handleDCRRegister(host plugin.PluginHost, prefix string) 
 			return
 		}
 
+		// Trusted-issuer federation (RFC 7591 software_statement): if the request
+		// carries a statement signed by an allow-listed issuer, it authorizes a
+		// confidential registration with no admin credential. Verify it first and
+		// let its signed metadata fill in the request.
+		var trusted *trustedStatement
+		if req.SoftwareStatement != nil && strings.TrimSpace(*req.SoftwareStatement) != "" {
+			ts, err := p.verifySoftwareStatement(r.Context(), *req.SoftwareStatement)
+			if err != nil {
+				writeDCRError(w, http.StatusForbidden, "access_denied", "software_statement: "+sanitizeErr(err))
+				return
+			}
+			trusted = ts
+			if len(req.RedirectURIs) == 0 {
+				req.RedirectURIs = ts.RedirectURIs
+			}
+			if req.ClientName == nil && ts.ClientName != "" {
+				name := ts.ClientName
+				req.ClientName = &name
+			}
+			if req.Scope == nil && ts.Scope != "" {
+				scope := ts.Scope
+				req.Scope = &scope
+			}
+			if req.TokenEndpointAuthMethod == nil {
+				m := "client_secret_basic" // trusted peers are confidential by default
+				req.TokenEndpointAuthMethod = &m
+			}
+		}
+
 		if len(req.RedirectURIs) == 0 {
 			writeDCRError(w, http.StatusBadRequest, "invalid_redirect_uri", "redirect_uris is required")
 			return
@@ -145,7 +179,7 @@ func (p *oauth2Plugin) handleDCRRegister(host plugin.PluginHost, prefix string) 
 		// Public-only by default: a self-registered confidential client could use
 		// client_credentials to mint a no-user token. Confidential/M2M clients
 		// must be provisioned via the admin endpoint unless explicitly allowed.
-		if !p.cfg.DCRAllowConfidentialClients && authMethod != "none" {
+		if !p.cfg.DCRAllowConfidentialClients && trusted == nil && authMethod != "none" {
 			writeDCRError(w, http.StatusBadRequest, "invalid_client_metadata", `dynamic registration is restricted to public clients; token_endpoint_auth_method must be "none"`)
 			return
 		}
@@ -174,7 +208,7 @@ func (p *oauth2Plugin) handleDCRRegister(host plugin.PluginHost, prefix string) 
 		// an authenticated administrator, as is the loopback case itself when
 		// the operator sets DCRRequireAdminForLoopback.
 		anonymousAllowed := isPublic && allLoopback && !p.cfg.DCRRequireAdminForLoopback
-		if !anonymousAllowed {
+		if !anonymousAllowed && trusted == nil {
 			if _, err := host.Middleware().ResolveAdmin(r); err != nil {
 				if errors.Is(err, yautherr.ErrForbidden) {
 					writeDCRError(w, http.StatusForbidden, "access_denied", "administrator privileges are required to register this client; a public client restricted to loopback redirect_uris may register without authentication")

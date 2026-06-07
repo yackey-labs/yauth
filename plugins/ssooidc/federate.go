@@ -12,15 +12,45 @@ import (
 	"github.com/yackey-labs/yauth/domain"
 )
 
+// Signer signs a JWT from claims (asymjwt.Signer satisfies it). Used to mint a
+// software_statement so the RP can federate with NO admin credential.
+type Signer interface {
+	Sign(claims map[string]any) (string, error)
+}
+
+// SignSoftwareStatement builds an RFC 7591 software_statement: a short-lived JWT
+// signed by the RP's own key, asserting its issuer + the client metadata it
+// wants registered. A trusted-issuer IdP verifies it against the RP's JWKS and
+// registers the client with no admin credential or shared secret.
+func SignSoftwareStatement(signer Signer, issuer string, redirectURIs []string, clientName, scope string, ttl time.Duration) (string, error) {
+	if ttl <= 0 {
+		ttl = 5 * time.Minute
+	}
+	now := time.Now()
+	return signer.Sign(map[string]any{
+		"iss":           issuer,
+		"sub":           issuer,
+		"iat":           now.Unix(),
+		"exp":           now.Add(ttl).Unix(),
+		"redirect_uris": redirectURIs,
+		"client_name":   clientName,
+		"scope":         scope,
+	})
+}
+
 // FederateInput describes a one-call federation to an upstream yauth/OIDC IdP.
 type FederateInput struct {
 	// DiscoveryURL is the IdP's OIDC discovery document.
 	DiscoveryURL string
 	// AdminAPIKey authorizes the dynamic client registration at the IdP
-	// (sent as X-Api-Key). It must resolve to an admin and the IdP must allow
-	// machine admin callers + confidential DCR. In production this is ideally a
-	// short-lived, single-use grant rather than a long-lived key.
+	// (sent as X-Api-Key). Optional when SoftwareStatement is set. In production
+	// prefer a short-lived, single-use grant over a long-lived key.
 	AdminAPIKey string
+	// SoftwareStatement is a JWT signed by THIS app's key (see
+	// SignSoftwareStatement). When the IdP trusts this app's issuer, it
+	// authorizes confidential registration with no admin credential — the
+	// easiest, zero-secret federation. Takes precedence over AdminAPIKey.
+	SoftwareStatement string
 
 	OrganizationID         string
 	ConnectionName         string
@@ -61,6 +91,7 @@ func Federate(ctx context.Context, repo connectionCreator, key [32]byte, in Fede
 		GrantTypes:              []string{"authorization_code", "refresh_token"},
 		TokenEndpointAuthMethod: "client_secret_basic",
 		Scope:                   strings.Join(scopes, " "),
+		SoftwareStatement:       in.SoftwareStatement,
 	})
 	if err != nil {
 		return domain.SsoConnection{}, err
@@ -118,6 +149,7 @@ type dcrRequest struct {
 	GrantTypes              []string `json:"grant_types"`
 	TokenEndpointAuthMethod string   `json:"token_endpoint_auth_method"`
 	Scope                   string   `json:"scope"`
+	SoftwareStatement       string   `json:"software_statement,omitempty"`
 }
 
 func dynamicRegister(ctx context.Context, hc *http.Client, endpoint, apiKey string, body dcrRequest) (clientID, clientSecret string, err error) {

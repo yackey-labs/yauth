@@ -17,28 +17,38 @@ go run ./examples/sso/idp
 go run ./examples/sso/rp
 ```
 
-The RP **federates in one call** via `ssooidc.Federate`: given the IdP's
-discovery URL + a one-time admin key, it **dynamically registers its own
-confidential client** at the IdP (RFC 7591 DCR) and seeds the local connection
-with the server-minted secret — **no client_id/secret is ever copy-pasted**.
-(`ssooidc.SeedConnection` is the lower-level "I already have the credentials"
-path.) A user with the same email exists in both apps, so the first SSO login
-demonstrates **JIT link-by-email** (not a duplicate); a brand-new IdP user is
-JIT-provisioned with `default_role_on_jit`.
+The RP **federates keylessly** — easier than WorkOS (manual client_id/secret
+paste) or Ory (registration token). Because both apps are yauth, the RP is also
+an issuer: it signs a short-lived **`software_statement`** (RFC 7591) with its
+own key and presents it to the IdP's DCR endpoint. The IdP — configured to trust
+the RP's issuer — verifies it against the RP's published **JWKS**, then
+self-registers a confidential client and returns the secret over TLS. **No admin
+key, no shared secret, nothing copy-pasted.** A same-email user in both apps
+makes the first login demonstrate **JIT link-by-email**; new IdP users are
+JIT-provisioned at `default_role_on_jit`, with admins kept elevated via
+`group_to_role`.
 
 The easiest path, end to end:
 
 ```go
-// RP startup — one call, no secret handling:
+// IdP: trust the peer's issuer (one allow-list entry).
+oauth2server.Config{ DCRTrustedIssuers: []string{"https://app/api/auth"}, DCRAllowConfidentialClients: true }
+
+// RP startup — sign a statement with our own key, then one call, zero secrets:
+stmt, _ := ssooidc.SignSoftwareStatement(signer, "https://app/api/auth",
+    []string{"https://app/api/auth/sso/callback"}, "My App", "openid email profile groups", 5*time.Minute)
 ssooidc.Federate(ctx, repo, encKey, ssooidc.FederateInput{
-    DiscoveryURL: "https://idp/.well-known/openid-configuration",
-    AdminAPIKey:  oneTimeAdminKey,          // ideally short-lived/single-use
-    OrganizationID: orgID,
-    ConnectionName: "tiny-idp",
-    RedirectURI:    "https://app/api/auth/sso/callback",
+    DiscoveryURL:      "https://idp/.well-known/openid-configuration",
+    SoftwareStatement: stmt,            // ← issuer trust; no admin key
+    OrganizationID: orgID, ConnectionName: "tiny-idp",
+    RedirectURI: "https://app/api/auth/sso/callback",
     JitProvisioningEnabled: true, DefaultRoleOnJit: "viewer",
+    GroupToRole: map[string]string{"platform-admins": "owner"},
 })
 ```
+
+(`AdminAPIKey` is still supported for IdPs that don't trust the issuer;
+`ssooidc.SeedConnection` is the lowest-level "I already have client_id/secret" path.)
 
 ## Architecture
 

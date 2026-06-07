@@ -25,17 +25,13 @@ go build -o "$TMP/rp"  ./examples/sso/rp  || fail "build rp"
 echo "→ starting IdP…"
 "$TMP/idp" >"$TMP/idp.log" 2>&1 & pids+=($!)
 waitup "$IDP/" || { cat "$TMP/idp.log"; fail "IdP did not start"; }
+echo "  IdP up (trusts the RP's issuer for keyless DCR)."
 
-# The RP federates using a one-time admin key the IdP printed — no pre-shared secret.
-key=$(grep -oE 'FEDERATION_ADMIN_KEY=[^ ]+' "$TMP/idp.log" | head -1 | cut -d= -f2-)
-[ -n "$key" ] || { cat "$TMP/idp.log"; fail "no FEDERATION_ADMIN_KEY from IdP"; }
-echo "  IdP up; got federation key ${key:0:12}…"
-
-echo "→ starting RP (federates via DCR — registers its own client, no secret pasted)…"
-SSO_IDP_ADMIN_KEY="$key" "$TMP/rp" >"$TMP/rp.log" 2>&1 & pids+=($!)
+echo "→ starting RP (federates keylessly — signs a software_statement, no admin key)…"
+"$TMP/rp" >"$TMP/rp.log" 2>&1 & pids+=($!)
 waitup "$RP/" || { cat "$TMP/rp.log"; fail "RP did not start"; }
-grep -q "federated with the IdP" "$TMP/rp.log" || { cat "$TMP/rp.log"; fail "RP did not federate"; }
-echo "  RP up + federated."
+grep -q "federated with the IdP keylessly" "$TMP/rp.log" || { cat "$TMP/rp.log"; fail "RP did not federate"; }
+echo "  RP up + federated (zero admin key, zero secret pasted)."
 
 reg(){ curl -fsS -o /dev/null -X POST "$1/api/auth/register" \
   -H 'content-type: application/json' \

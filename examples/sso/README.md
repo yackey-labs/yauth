@@ -17,10 +17,28 @@ go run ./examples/sso/idp
 go run ./examples/sso/rp
 ```
 
-The RP seeds its SSO connection **as code** via `ssooidc.SeedConnection` — no
-client_id/secret is ever pasted into a UI. A user with the same email exists in
-both apps, so the first SSO login demonstrates **JIT link-by-email** (not a
-duplicate); a brand-new IdP user would be JIT-provisioned with `default_role_on_jit`.
+The RP **federates in one call** via `ssooidc.Federate`: given the IdP's
+discovery URL + a one-time admin key, it **dynamically registers its own
+confidential client** at the IdP (RFC 7591 DCR) and seeds the local connection
+with the server-minted secret — **no client_id/secret is ever copy-pasted**.
+(`ssooidc.SeedConnection` is the lower-level "I already have the credentials"
+path.) A user with the same email exists in both apps, so the first SSO login
+demonstrates **JIT link-by-email** (not a duplicate); a brand-new IdP user is
+JIT-provisioned with `default_role_on_jit`.
+
+The easiest path, end to end:
+
+```go
+// RP startup — one call, no secret handling:
+ssooidc.Federate(ctx, repo, encKey, ssooidc.FederateInput{
+    DiscoveryURL: "https://idp/.well-known/openid-configuration",
+    AdminAPIKey:  oneTimeAdminKey,          // ideally short-lived/single-use
+    OrganizationID: orgID,
+    ConnectionName: "tiny-idp",
+    RedirectURI:    "https://app/api/auth/sso/callback",
+    JitProvisioningEnabled: true, DefaultRoleOnJit: "viewer",
+})
+```
 
 ## Architecture
 

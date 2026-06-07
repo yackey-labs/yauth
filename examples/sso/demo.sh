@@ -16,17 +16,26 @@ cleanup(){ for p in "${pids[@]:-}"; do kill "$p" 2>/dev/null; done; rm -rf "$TMP
 trap cleanup EXIT
 fail(){ echo "FAIL: $*" >&2; exit 1; }
 
-echo "→ building + starting IdP + RP…"
+waitup(){ for i in $(seq 1 60); do curl -fsS -o /dev/null "$1" 2>/dev/null && return 0; sleep 0.5; done; return 1; }
+
+echo "→ building…"
 go build -o "$TMP/idp" ./examples/sso/idp || fail "build idp"
 go build -o "$TMP/rp"  ./examples/sso/rp  || fail "build rp"
-"$TMP/idp" >"$TMP/idp.log" 2>&1 & pids+=($!)
-"$TMP/rp"  >"$TMP/rp.log"  2>&1 & pids+=($!)
 
-for url in $IDP/ $RP/; do
-  for i in $(seq 1 60); do curl -fsS -o /dev/null "$url" 2>/dev/null && break; sleep 0.5
-    [ "$i" = 60 ] && { cat "$TMP"/*.log; fail "server $url did not start"; }; done
-done
-echo "  up."
+echo "→ starting IdP…"
+"$TMP/idp" >"$TMP/idp.log" 2>&1 & pids+=($!)
+waitup "$IDP/" || { cat "$TMP/idp.log"; fail "IdP did not start"; }
+
+# The RP federates using a one-time admin key the IdP printed — no pre-shared secret.
+key=$(grep -oE 'FEDERATION_ADMIN_KEY=[^ ]+' "$TMP/idp.log" | head -1 | cut -d= -f2-)
+[ -n "$key" ] || { cat "$TMP/idp.log"; fail "no FEDERATION_ADMIN_KEY from IdP"; }
+echo "  IdP up; got federation key ${key:0:12}…"
+
+echo "→ starting RP (federates via DCR — registers its own client, no secret pasted)…"
+SSO_IDP_ADMIN_KEY="$key" "$TMP/rp" >"$TMP/rp.log" 2>&1 & pids+=($!)
+waitup "$RP/" || { cat "$TMP/rp.log"; fail "RP did not start"; }
+grep -q "federated with the IdP" "$TMP/rp.log" || { cat "$TMP/rp.log"; fail "RP did not federate"; }
+echo "  RP up + federated."
 
 reg(){ curl -fsS -o /dev/null -X POST "$1/api/auth/register" \
   -H 'content-type: application/json' \

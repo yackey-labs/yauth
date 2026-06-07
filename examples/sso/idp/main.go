@@ -22,10 +22,10 @@ import (
 	"github.com/google/uuid"
 
 	yauth "github.com/yackey-labs/yauth"
-	"github.com/yackey-labs/yauth/auth"
 	"github.com/yackey-labs/yauth/domain"
 	"github.com/yackey-labs/yauth/examples/sso/shared"
 	"github.com/yackey-labs/yauth/mcpauth"
+	"github.com/yackey-labs/yauth/plugins/apikey"
 	"github.com/yackey-labs/yauth/plugins/asymjwt"
 	"github.com/yackey-labs/yauth/plugins/bearer"
 	"github.com/yackey-labs/yauth/plugins/emailpassword"
@@ -52,18 +52,25 @@ func main() {
 		log.Fatalf("idp: asymjwt.New: %v", err)
 	}
 
-	ya, err := yauth.New(r, yauth.NewDefaultConfig()).
+	// Allow machine (api-key) admin callers so a relying party can self-register
+	// its confidential client over the network via DCR (ssooidc.Federate).
+	cfg := yauth.NewDefaultConfig()
+	cfg.AllowAdminMachineCallers = true
+
+	ya, err := yauth.New(r, cfg).
 		WithJWTSecret([]byte(shared.JWTSecret)).
 		WithPlugin(emailpassword.New(emailpassword.Config{})).
+		WithPlugin(apikey.New(apikey.Config{})).
 		WithPlugin(bearer.New(bearer.Config{Issuer: shared.IDPIssuer})).
 		WithPlugin(asym).
 		// Issuer already includes the /api/auth mount, so BasePath must be ""
 		// (otherwise discovery doubles it: /api/auth/api/auth/oauth/token).
 		WithPlugin(oauth2server.New(oauth2server.Config{
-			Issuer:                     shared.IDPIssuer,
-			BasePath:                   "",
-			DCREnabled:                 true,
-			AllowPrivateNetworkJWKSURI: true, // localhost demo
+			Issuer:                      shared.IDPIssuer,
+			BasePath:                    "",
+			DCREnabled:                  true,
+			DCRAllowConfidentialClients: true, // let relying parties self-register
+			AllowPrivateNetworkJWKSURI:  true, // localhost demo
 		})).
 		WithPlugin(oidc.New(oidc.Config{Issuer: shared.IDPIssuer, BasePath: ""})).
 		Build()
@@ -71,7 +78,9 @@ func main() {
 		log.Fatalf("idp: build yauth: %v", err)
 	}
 
-	seedRPClient(ctx, r)
+	// Seed an admin + a federation api-key. The RP uses this key once to
+	// dynamically register itself — no client_secret is ever pre-shared.
+	adminKey := seedAdminKey(ctx, r)
 
 	mux := http.NewServeMux()
 	// Root discovery (RFC 8414 + OIDC) with authorization_endpoint rewritten to
@@ -88,6 +97,8 @@ func main() {
 
 	log.Printf("IdP listening on %s  (issuer %s)", shared.IDPBase, shared.IDPIssuer)
 	log.Printf("  seed user: %s / %q (register via the RP demo or POST /api/auth/register)", shared.SharedEmail, shared.SharedPass)
+	// Printed in a parseable form so demo.sh (and a human) can hand it to the RP.
+	log.Printf("FEDERATION_ADMIN_KEY=%s", adminKey)
 	if err := http.ListenAndServe(shared.IDPAddr, mux); err != nil {
 		log.Fatalf("idp: listen: %v", err)
 	}
@@ -112,27 +123,38 @@ func genRSAKeyPEM() (priv, pub []byte) {
 	return priv, pub
 }
 
-// seedRPClient registers the relying party as a confidential client.
-func seedRPClient(ctx context.Context, r *memrepo.Repo) {
-	hash, err := auth.HashPassword(shared.DemoClientSecret)
-	if err != nil {
-		log.Fatalf("idp: hash client secret: %v", err)
-	}
-	method := "client_secret_basic"
-	name := "Demo Relying Party"
+// seedAdminKey creates an admin user and a federation api-key, returning the
+// plaintext key (shown once). The RP presents it to the DCR endpoint to register
+// its own confidential client — so no client_secret is ever pre-shared.
+func seedAdminKey(ctx context.Context, r *memrepo.Repo) string {
 	now := time.Now().UTC()
-	if err := r.CreateOAuth2Client(ctx, domain.NewOAuth2Client{
-		ID:                      uuid.NewString(),
-		ClientID:                shared.DemoClientID,
-		ClientSecretHash:        &hash,
-		ClientName:              &name,
-		RedirectURIs:            mustJSON([]string{shared.RPBase + "/api/auth/sso/callback"}),
-		GrantTypes:              mustJSON([]string{"authorization_code", "refresh_token"}),
-		Scopes:                  mustJSON([]string{"openid", "email", "profile", "groups"}),
-		IsPublic:                false,
-		TokenEndpointAuthMethod: &method,
-		CreatedAt:               now,
+	adminID := uuid.NewString()
+	if _, err := r.CreateUser(ctx, domain.NewUser{
+		ID:            adminID,
+		Email:         "admin@idp.test",
+		Role:          "admin",
+		EmailVerified: true,
+		CreatedAt:     now,
+		UpdatedAt:     now,
 	}); err != nil {
-		log.Fatalf("idp: create RP client: %v", err)
+		log.Fatalf("idp: seed admin: %v", err)
 	}
+	gen, err := apikey.GenerateKey("yak")
+	if err != nil {
+		log.Fatalf("idp: gen api key: %v", err)
+	}
+	role := "admin"
+	if err := r.CreateAPIKey(ctx, domain.NewAPIKey{
+		ID:              uuid.NewString(),
+		UserID:          &adminID,
+		KeyPrefix:       gen.Prefix,
+		KeyHash:         gen.Hash,
+		Name:            "federation",
+		Role:            &role,
+		CreatedByUserID: adminID,
+		CreatedAt:       now,
+	}); err != nil {
+		log.Fatalf("idp: create api key: %v", err)
+	}
+	return gen.Plaintext
 }

@@ -20,12 +20,6 @@ const (
 	// OrgSlug is the RP's single anchor org that hosts the SSO connection.
 	OrgSlug = "demo"
 
-	// DemoClientID / DemoClientSecret is the confidential client the RP uses at
-	// the IdP. In round 1 it is a fixed shared dev credential; later rounds
-	// replace this with dynamic registration so nothing is shared or pasted.
-	DemoClientID     = "demo-rp-client"
-	DemoClientSecret = "dev-only-rp-client-secret-change-me-0"
-
 	// SharedEmail exists in BOTH apps so the first SSO login demonstrates
 	// JIT linking-by-email (not duplicate creation).
 	SharedEmail = "user@demo.test"

@@ -13,6 +13,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/google/uuid"
@@ -55,20 +56,30 @@ func main() {
 		log.Fatalf("rp: build yauth: %v", err)
 	}
 
-	// Connection-as-code: no client_id/secret pasted into a UI.
-	if _, err := ssooidc.SeedConnection(ctx, r, shared.EncryptionKey(), ssooidc.SeedConnectionInput{
-		OrganizationID:         orgID,
-		Name:                   "Demo IdP",
-		JitProvisioningEnabled: true,
-		DefaultRoleOnJit:       "viewer",
-		OIDC: ssooidc.OidcConnectionConfig{
-			DiscoveryURL: shared.IDPDiscovery,
-			ClientID:     shared.DemoClientID,
-			ClientSecret: shared.DemoClientSecret,
-			Scopes:       []string{"openid", "email", "profile", "groups"},
-		},
-	}); err != nil {
-		log.Fatalf("rp: seed connection: %v", err)
+	// Zero copy-paste federation: given the IdP's URL + a one-time admin key, the
+	// RP dynamically registers its own confidential client at the IdP and seeds
+	// the connection with the server-minted secret — nothing is pre-shared.
+	adminKey := os.Getenv("SSO_IDP_ADMIN_KEY")
+	switch {
+	case adminKey == "":
+		log.Printf("rp: SSO_IDP_ADMIN_KEY not set — copy the IdP's FEDERATION_ADMIN_KEY=… line, then run:")
+		log.Printf("rp:   SSO_IDP_ADMIN_KEY=<key> go run ./examples/sso/rp")
+		log.Printf("rp: starting without an SSO connection (local login only).")
+	default:
+		conn, err := ssooidc.Federate(ctx, r, shared.EncryptionKey(), ssooidc.FederateInput{
+			DiscoveryURL:           shared.IDPDiscovery,
+			AdminAPIKey:            adminKey,
+			OrganizationID:         orgID,
+			ConnectionName:         "Demo IdP",
+			RedirectURI:            shared.RPBase + "/api/auth/sso/callback",
+			Scopes:                 []string{"openid", "email", "profile", "groups"},
+			JitProvisioningEnabled: true,
+			DefaultRoleOnJit:       "viewer",
+		})
+		if err != nil {
+			log.Fatalf("rp: federate: %v", err)
+		}
+		log.Printf("rp: federated with the IdP — registered client %s dynamically (no secret pre-shared)", conn.ID)
 	}
 
 	mux := http.NewServeMux()

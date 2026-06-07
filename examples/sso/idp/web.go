@@ -1,18 +1,8 @@
 package main
 
 import (
-	"encoding/json"
-	"log"
 	"net/http"
 )
-
-func mustJSON(v any) []byte {
-	b, err := json.Marshal(v)
-	if err != nil {
-		log.Fatalf("idp: marshal: %v", err)
-	}
-	return b
-}
 
 // page serves a static HTML string.
 func page(html string) http.HandlerFunc {

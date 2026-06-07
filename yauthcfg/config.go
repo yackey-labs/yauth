@@ -502,6 +502,11 @@ type OAuth2ServerPluginConfig struct {
 	// DCRAllowConfidentialClients lets DCR create confidential clients (default
 	// is public/PKCE only).
 	DCRAllowConfidentialClients bool `yaml:"dcr_allow_confidential_clients" toml:"dcr_allow_confidential_clients"`
+	// DCRTrustedIssuers is the allow-list of peer issuer URLs whose signed
+	// software_statement authorizes keyless confidential DCR (no admin
+	// credential). The registrant proves control of a trusted issuer; its
+	// statement is verified against that issuer's published JWKS.
+	DCRTrustedIssuers []string `yaml:"dcr_trusted_issuers" toml:"dcr_trusted_issuers"`
 	// AllowPrivateNetworkJWKSURI permits private_key_jwt clients to use loopback
 	// / RFC 1918 jwks_uri (SSRF protection off). Dev/test only.
 	AllowPrivateNetworkJWKSURI bool `yaml:"allow_private_network_jwks_uri" toml:"allow_private_network_jwks_uri"`

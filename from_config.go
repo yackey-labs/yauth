@@ -566,6 +566,7 @@ func addAuthPlugins(builder *YAuthBuilder, cfg *yauthcfg.Config, mailer *smtpmai
 			DCREnabled:                  p.OAuth2Server.DCREnabled,
 			DCRRequireAdminForLoopback:  p.OAuth2Server.DCRRequireAdminForLoopback,
 			DCRAllowConfidentialClients: p.OAuth2Server.DCRAllowConfidentialClients,
+			DCRTrustedIssuers:           p.OAuth2Server.DCRTrustedIssuers,
 			AllowPrivateNetworkJWKSURI:  p.OAuth2Server.AllowPrivateNetworkJWKSURI,
 			BackchannelLogoutTimeout:    p.OAuth2Server.BackchannelLogoutTimeout,
 			DCRStaleClientTTL:           p.OAuth2Server.DCRStaleClientTTL,

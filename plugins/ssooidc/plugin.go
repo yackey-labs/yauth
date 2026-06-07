@@ -177,6 +177,8 @@ func (p *ssoOIDCPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api hu
 	p.registerDeleteConnection(host, api, mw, prefix)
 	p.registerTestConnection(host, api, mw, prefix)
 	p.registerFederate(host, api, mw, prefix)
+	p.registerFederateStart(host, api, prefix)
+	p.registerFederateReturn(host, api, prefix)
 
 	// User-facing login flow. The route bodies live in handlers_login.go.
 	p.registerSsoLogin(host, api, prefix)

@@ -175,6 +175,11 @@ type oauth2Plugin struct {
 
 	// sweepOnce guards one-time start of the stale-DCR-client sweep goroutine.
 	sweepOnce sync.Once
+
+	// fedGrants* hold the in-process one-time grant store for the guided
+	// federation handshake (see federate_handshake.go).
+	fedGrantsOnce sync.Once
+	fedGrantsRef  *federationGrantStore
 }
 
 // New constructs the oauth2-server plugin.

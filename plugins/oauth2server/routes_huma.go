@@ -344,5 +344,9 @@ func (p *oauth2Plugin) registerRoutes(host plugin.PluginHost, api huma.API, mw *
 	// like the legacy un-wrapped mux registration.
 	if p.cfg.DCREnabled {
 		reg("oauth2-dcr-register", http.MethodPost, "/oauth/register", "Dynamic client registration (RFC 7591)", publicSec, public, p.handleDCRRegister(host, prefix))
+		// Guided federation handshake (human-approved browser bounce).
+		reg("oauth2-federate-review", http.MethodPost, "/federate/review", "Review a guided federation request", sessionSec, admin, p.handleFederateReview(host))
+		reg("oauth2-federate-approve", http.MethodPost, "/federate/approve", "Approve a guided federation request", sessionSec, admin, p.handleFederateApprove(host))
+		reg("oauth2-federate-redeem", http.MethodPost, "/federate/redeem", "Redeem a one-time federation grant", publicSec, public, p.handleFederateRedeem(host))
 	}
 }

@@ -16,10 +16,12 @@ import (
 
 // trustedStatement is the verified result of a DCR software_statement.
 type trustedStatement struct {
-	Issuer       string
-	RedirectURIs []string
-	ClientName   string
-	Scope        string
+	Issuer           string
+	RedirectURIs     []string
+	ClientName       string
+	Scope            string
+	InitiateLoginURI string // optional: the RP's SP-initiated launch URL
+	ReturnURI        string // guided handshake: where the IdP redirects after approval
 }
 
 func (p *oauth2Plugin) trustedIssuerClient() *http.Client {
@@ -98,6 +100,16 @@ func (p *oauth2Plugin) verifyStatementSignature(ctx context.Context, jws string)
 	if v, ok := tok.Get("scope"); ok {
 		if s, ok := v.(string); ok {
 			out.Scope = s
+		}
+	}
+	if v, ok := tok.Get("initiate_login_uri"); ok {
+		if s, ok := v.(string); ok {
+			out.InitiateLoginURI = s
+		}
+	}
+	if v, ok := tok.Get("return_uri"); ok {
+		if s, ok := v.(string); ok {
+			out.ReturnURI = s
 		}
 	}
 	return out, nil

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"io"
 	"net/http"
 	"strings"
@@ -52,8 +53,15 @@ type FederateInput struct {
 	// easiest, zero-secret federation. Takes precedence over AdminAPIKey.
 	SoftwareStatement string
 
-	OrganizationID         string
-	ConnectionName         string
+	OrganizationID string
+	ConnectionName string // local connection name (the IdP's name, shown in this app's admin)
+	// ClientName is the name registered AT the IdP — i.e. THIS app's name, shown
+	// in the IdP's app launcher. Defaults to ConnectionName when empty.
+	ClientName string
+	// InitiateLoginURI is this app's SP-initiated login URL (OIDC third-party
+	// login). Set on the registered client so the IdP launcher's tile launches
+	// straight into the SSO flow. e.g. https://app/api/auth/sso/login?org=...
+	InitiateLoginURI       string
 	RedirectURI            string // the RP's callback, e.g. https://app/api/auth/sso/callback
 	Scopes                 []string
 	JitProvisioningEnabled bool
@@ -73,11 +81,17 @@ type FederateInput struct {
 func Federate(ctx context.Context, repo connectionRepo, key [32]byte, in FederateInput) (domain.SsoConnection, error) {
 	hc := in.HTTPClient
 	if hc == nil {
-		hc = &http.Client{Timeout: 15 * time.Second}
+		// otelhttp transport so the W3C traceparent propagates to the IdP — the
+		// DCR + discovery calls join the caller's trace.
+		hc = &http.Client{Timeout: 15 * time.Second, Transport: otelhttp.NewTransport(http.DefaultTransport)}
 	}
 	scopes := in.Scopes
 	if len(scopes) == 0 {
 		scopes = []string{"openid", "email", "profile", "groups"}
+	}
+	clientName := in.ClientName
+	if clientName == "" {
+		clientName = in.ConnectionName
 	}
 
 	// Idempotent: if this org already has a connection to this IdP, return it
@@ -96,11 +110,12 @@ func Federate(ctx context.Context, repo connectionRepo, key [32]byte, in Federat
 	}
 
 	clientID, clientSecret, err := dynamicRegister(ctx, hc, regEndpoint, in.AdminAPIKey, dcrRequest{
-		ClientName:              in.ConnectionName,
+		ClientName:              clientName,
 		RedirectURIs:            []string{in.RedirectURI},
 		GrantTypes:              []string{"authorization_code", "refresh_token"},
 		TokenEndpointAuthMethod: "client_secret_basic",
 		Scope:                   strings.Join(scopes, " "),
+		InitiateLoginURI:        in.InitiateLoginURI,
 		SoftwareStatement:       in.SoftwareStatement,
 	})
 	if err != nil {
@@ -159,6 +174,7 @@ type dcrRequest struct {
 	GrantTypes              []string `json:"grant_types"`
 	TokenEndpointAuthMethod string   `json:"token_endpoint_auth_method"`
 	Scope                   string   `json:"scope"`
+	InitiateLoginURI        string   `json:"initiate_login_uri,omitempty"`
 	SoftwareStatement       string   `json:"software_statement,omitempty"`
 }
 

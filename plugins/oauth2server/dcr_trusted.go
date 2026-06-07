@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"net/http"
 	"strings"
 	"time"
@@ -25,7 +26,9 @@ func (p *oauth2Plugin) trustedIssuerClient() *http.Client {
 	if p.cfg.DCRTrustedIssuerHTTPClient != nil {
 		return p.cfg.DCRTrustedIssuerHTTPClient
 	}
-	return &http.Client{Timeout: 15 * time.Second}
+	// otelhttp so the W3C traceparent propagates to the peer issuer when we fetch
+	// its discovery + JWKS to verify a software_statement.
+	return &http.Client{Timeout: 15 * time.Second, Transport: otelhttp.NewTransport(http.DefaultTransport)}
 }
 
 // verifySoftwareStatement validates a DCR software_statement (RFC 7591): it reads

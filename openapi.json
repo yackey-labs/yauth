@@ -1514,6 +1514,9 @@
           "admin_api_key": {
             "type": "string"
           },
+          "app_name": {
+            "type": "string"
+          },
           "default_role_on_jit": {
             "type": "string"
           },
@@ -1528,6 +1531,9 @@
           },
           "jit_provisioning_enabled": {
             "type": "boolean"
+          },
+          "launch_redirect": {
+            "type": "string"
           },
           "name": {
             "type": "string"

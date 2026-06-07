@@ -1,0 +1,138 @@
+package ssooidc
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/yackey-labs/yauth/auth"
+	"github.com/yackey-labs/yauth/domain"
+	"github.com/yackey-labs/yauth/repo/memrepo"
+)
+
+func ssoTestKey() [32]byte {
+	var k [32]byte
+	copy(k[:], []byte("test-key-test-key-test-key-test!"))
+	return k
+}
+
+func TestMapGroupToRole(t *testing.T) {
+	if got := mapGroupToRole([]string{"x", "admins"}, map[string]string{"admins": "owner"}); got != "owner" {
+		t.Fatalf("matched group: got %q want owner", got)
+	}
+	if got := mapGroupToRole([]string{"x"}, map[string]string{"admins": "owner"}); got != "" {
+		t.Fatalf("no match: got %q want empty", got)
+	}
+	if got := mapGroupToRole(nil, map[string]string{"admins": "owner"}); got != "" {
+		t.Fatalf("no groups: got %q want empty", got)
+	}
+}
+
+// SeedConnection must encrypt the client_secret at rest and round-trip the
+// config (incl. group→role) through the connection codec.
+func TestSeedConnectionRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	r := memrepo.New()
+	now := time.Now().UTC()
+	org, err := r.CreateOrganization(ctx, domain.NewOrganization{ID: uuid.NewString(), Name: "o", Slug: "o", CreatedAt: now, UpdatedAt: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := ssoTestKey()
+	conn, err := SeedConnection(ctx, r, key, SeedConnectionInput{
+		OrganizationID:         org.ID,
+		Name:                   "idp",
+		JitProvisioningEnabled: true,
+		DefaultRoleOnJit:       "viewer",
+		OIDC: OidcConnectionConfig{
+			DiscoveryURL:  "https://idp/.well-known/openid-configuration",
+			ClientID:      "cid",
+			ClientSecret:  "supersecret",
+			Scopes:        []string{"openid", "groups"},
+			ClaimMappings: ClaimMappings{Email: "email", Groups: "groups", GroupToRole: map[string]string{"admins": "owner"}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if conn.Status != domain.ConnectionStatusActive {
+		t.Fatalf("status = %q, want active", conn.Status)
+	}
+	// The stored config must not contain the plaintext secret.
+	if string(conn.Config) == "" || containsPlaintext(conn.Config, "supersecret") {
+		t.Fatalf("client_secret not encrypted at rest")
+	}
+	got, err := unmarshalOidcConfig(key, conn.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ClientSecret != "supersecret" {
+		t.Fatalf("secret round-trip: got %q", got.ClientSecret)
+	}
+	if got.ClientID != "cid" {
+		t.Fatalf("client_id: got %q", got.ClientID)
+	}
+	if got.ClaimMappings.GroupToRole["admins"] != "owner" {
+		t.Fatalf("group→role lost: %+v", got.ClaimMappings)
+	}
+}
+
+func containsPlaintext(b []byte, s string) bool {
+	return len(b) > 0 && len(s) > 0 && bytesContains(b, []byte(s))
+}
+
+func bytesContains(haystack, needle []byte) bool {
+	for i := 0; i+len(needle) <= len(haystack); i++ {
+		if string(haystack[i:i+len(needle)]) == string(needle) {
+			return true
+		}
+	}
+	return false
+}
+
+// JIT must never fail (or actually demote) when it would strip the last owner.
+func TestUpsertMembershipNeverDemotesOwner(t *testing.T) {
+	ctx := context.Background()
+	r := memrepo.New()
+	host := newFakeHost(r, "http://idp")
+	p := &ssoOIDCPlugin{}
+	now := time.Now().UTC()
+	org, _ := r.CreateOrganization(ctx, domain.NewOrganization{ID: uuid.NewString(), Name: "o", Slug: "o", CreatedAt: now, UpdatedAt: now})
+	u, _ := r.CreateUser(ctx, domain.NewUser{ID: uuid.NewString(), Email: "a@b.test", Role: "admin", EmailVerified: true, CreatedAt: now, UpdatedAt: now})
+	if _, err := r.CreateMembership(ctx, domain.NewMembership{ID: uuid.NewString(), OrganizationID: org.ID, UserID: u.ID, Role: auth.RoleOwner, Status: domain.MembershipActive, JoinedAt: &now, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.upsertMembership(ctx, host, org.ID, u.ID, "viewer"); err != nil {
+		t.Fatalf("upsert (owner→viewer) must be a no-op, got error: %v", err)
+	}
+	m, err := r.GetMembershipByOrgUser(ctx, org.ID, u.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Role != auth.RoleOwner {
+		t.Fatalf("owner was demoted to %q", m.Role)
+	}
+}
+
+// A brand-new SSO user gets a membership at the JIT role.
+func TestUpsertMembershipCreatesForNewUser(t *testing.T) {
+	ctx := context.Background()
+	r := memrepo.New()
+	host := newFakeHost(r, "http://idp")
+	p := &ssoOIDCPlugin{}
+	now := time.Now().UTC()
+	org, _ := r.CreateOrganization(ctx, domain.NewOrganization{ID: uuid.NewString(), Name: "o", Slug: "o", CreatedAt: now, UpdatedAt: now})
+	u, _ := r.CreateUser(ctx, domain.NewUser{ID: uuid.NewString(), Email: "new@b.test", Role: "member", EmailVerified: true, CreatedAt: now, UpdatedAt: now})
+	if err := p.upsertMembership(ctx, host, org.ID, u.ID, "viewer"); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	m, err := r.GetMembershipByOrgUser(ctx, org.ID, u.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m == nil || m.Role != "viewer" {
+		t.Fatalf("membership = %+v, want role viewer", m)
+	}
+}

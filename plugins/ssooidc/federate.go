@@ -70,7 +70,7 @@ type FederateInput struct {
 //
 // It is the easiest yauth→yauth path: the admin supplies the IdP URL + an admin
 // credential; the secret is generated at the IdP and stored server-side.
-func Federate(ctx context.Context, repo connectionCreator, key [32]byte, in FederateInput) (domain.SsoConnection, error) {
+func Federate(ctx context.Context, repo connectionRepo, key [32]byte, in FederateInput) (domain.SsoConnection, error) {
 	hc := in.HTTPClient
 	if hc == nil {
 		hc = &http.Client{Timeout: 15 * time.Second}
@@ -78,6 +78,16 @@ func Federate(ctx context.Context, repo connectionCreator, key [32]byte, in Fede
 	scopes := in.Scopes
 	if len(scopes) == 0 {
 		scopes = []string{"openid", "email", "profile", "groups"}
+	}
+
+	// Idempotent: if this org already has a connection to this IdP, return it
+	// instead of registering a second client. Safe to call on every boot.
+	if existing, err := repo.ListSsoConnectionsByOrg(ctx, in.OrganizationID); err == nil {
+		for _, c := range existing {
+			if cfg, derr := unmarshalOidcConfig(key, c.Config); derr == nil && cfg.DiscoveryURL == in.DiscoveryURL {
+				return *c, nil
+			}
+		}
 	}
 
 	regEndpoint, err := discoverRegistrationEndpoint(ctx, hc, in.DiscoveryURL)

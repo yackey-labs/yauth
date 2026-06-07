@@ -15,6 +15,12 @@ type connectionCreator interface {
 	CreateSsoConnection(ctx context.Context, in domain.NewSsoConnection) (domain.SsoConnection, error)
 }
 
+// connectionRepo adds the listing Federate needs for idempotency.
+type connectionRepo interface {
+	connectionCreator
+	ListSsoConnectionsByOrg(ctx context.Context, organizationID string) ([]*domain.SsoConnection, error)
+}
+
 // SeedConnectionInput describes an OIDC SSO connection to provision
 // programmatically (connection-as-code).
 type SeedConnectionInput struct {

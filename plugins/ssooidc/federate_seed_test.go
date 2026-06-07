@@ -136,3 +136,31 @@ func TestUpsertMembershipCreatesForNewUser(t *testing.T) {
 		t.Fatalf("membership = %+v, want role viewer", m)
 	}
 }
+
+// Federate is idempotent: a second call with the same IdP returns the existing
+// connection rather than registering a duplicate. (Uses SeedConnection to plant
+// the first one, then asserts Federate short-circuits before any HTTP.)
+func TestFederateIdempotentReturnsExisting(t *testing.T) {
+	ctx := context.Background()
+	r := memrepo.New()
+	now := time.Now().UTC()
+	org, _ := r.CreateOrganization(ctx, domain.NewOrganization{ID: uuid.NewString(), Name: "o", Slug: "o", CreatedAt: now, UpdatedAt: now})
+	key := ssoTestKey()
+	disco := "https://idp.test/.well-known/openid-configuration"
+	first, err := SeedConnection(ctx, r, key, SeedConnectionInput{
+		OrganizationID: org.ID, Name: "idp",
+		OIDC: OidcConnectionConfig{DiscoveryURL: disco, ClientID: "cid", ClientSecret: "s"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// No HTTPClient/endpoint reachable — if Federate tried to register it would
+	// fail; idempotency must short-circuit and return the existing connection.
+	got, err := Federate(ctx, r, key, FederateInput{DiscoveryURL: disco, OrganizationID: org.ID, ConnectionName: "idp", RedirectURI: "https://app/cb"})
+	if err != nil {
+		t.Fatalf("idempotent Federate should not error: %v", err)
+	}
+	if got.ID != first.ID {
+		t.Fatalf("Federate returned a new connection %s, want existing %s", got.ID, first.ID)
+	}
+}

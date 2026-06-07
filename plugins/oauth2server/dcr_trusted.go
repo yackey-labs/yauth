@@ -40,17 +40,32 @@ func (p *oauth2Plugin) verifySoftwareStatement(ctx context.Context, jws string) 
 	if len(p.cfg.DCRTrustedIssuers) == 0 {
 		return nil, errors.New("trusted-issuer DCR is disabled")
 	}
-	// 1. Unverified read of iss so we know which issuer's keys to trust.
+	unverified, err := jwt.Parse([]byte(jws), jwt.WithVerify(false), jwt.WithValidate(false))
+	if err != nil {
+		return nil, fmt.Errorf("software_statement parse: %w", err)
+	}
+	if iss := strings.TrimSpace(unverified.Issuer()); iss == "" || !issuerAllowed(iss, p.cfg.DCRTrustedIssuers) {
+		return nil, fmt.Errorf("software_statement issuer %q is not trusted", iss)
+	}
+	return p.verifyStatementSignature(ctx, jws)
+}
+
+// verifyStatementSignature verifies a software_statement's signature against its
+// OWN issuer's published JWKS (read from the unverified iss → discovery → jwks),
+// WITHOUT requiring the issuer to be pre-allow-listed. Use it where a human
+// approval (not a static allow-list) is the trust gate — e.g. the guided
+// federation handshake. Returns the attested client metadata.
+func (p *oauth2Plugin) verifyStatementSignature(ctx context.Context, jws string) (*trustedStatement, error) {
 	unverified, err := jwt.Parse([]byte(jws), jwt.WithVerify(false), jwt.WithValidate(false))
 	if err != nil {
 		return nil, fmt.Errorf("software_statement parse: %w", err)
 	}
 	iss := strings.TrimSpace(unverified.Issuer())
-	if iss == "" || !issuerAllowed(iss, p.cfg.DCRTrustedIssuers) {
-		return nil, fmt.Errorf("software_statement issuer %q is not trusted", iss)
+	if iss == "" {
+		return nil, errors.New("software_statement has no issuer")
 	}
 
-	// 2. Resolve the issuer's JWKS via its discovery document.
+	// Resolve the issuer's JWKS via its discovery document.
 	jwksURI, err := fetchIssuerJWKSURI(ctx, p.trustedIssuerClient(), iss)
 	if err != nil {
 		return nil, err

@@ -76,6 +76,19 @@
         },
         "type": "object"
       },
+      "AddMemberRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "role": {
+            "description": "Membership role; defaults to member. owner is rejected (use transfer-ownership).",
+            "type": "string"
+          },
+          "user_id": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "AdminBanRequest": {
         "additionalProperties": false,
         "properties": {
@@ -1508,6 +1521,51 @@
         },
         "type": "object"
       },
+      "FederateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "admin_api_key": {
+            "type": "string"
+          },
+          "app_name": {
+            "type": "string"
+          },
+          "default_role_on_jit": {
+            "type": "string"
+          },
+          "discovery_url": {
+            "type": "string"
+          },
+          "group_to_role": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "jit_provisioning_enabled": {
+            "type": "boolean"
+          },
+          "launch_redirect": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "discovery_url"
+        ],
+        "type": "object"
+      },
       "ForgotPasswordRequest": {
         "additionalProperties": false,
         "properties": {
@@ -1875,6 +1933,24 @@
         ],
         "type": "object"
       },
+      "ListOutBody": {
+        "additionalProperties": false,
+        "properties": {
+          "sso_connections": {
+            "items": {
+              "$ref": "#/components/schemas/ConnectionJSON"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "sso_connections"
+        ],
+        "type": "object"
+      },
       "ListPermissionsResponse": {
         "additionalProperties": false,
         "properties": {
@@ -2071,6 +2147,40 @@
         },
         "required": [
           "token"
+        ],
+        "type": "object"
+      },
+      "LoginOption": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object"
+      },
+      "LoginOptionsOutBody": {
+        "additionalProperties": false,
+        "properties": {
+          "options": {
+            "items": {
+              "$ref": "#/components/schemas/LoginOption"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "options"
         ],
         "type": "object"
       },
@@ -5620,6 +5730,89 @@
         ]
       }
     },
+    "/federate/approve": {
+      "post": {
+        "operationId": "oauth2-federate-approve",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Approve a guided federation request",
+        "tags": [
+          "oauth2"
+        ]
+      }
+    },
+    "/federate/redeem": {
+      "post": {
+        "operationId": "oauth2-federate-redeem",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [],
+        "summary": "Redeem a one-time federation grant",
+        "tags": [
+          "oauth2"
+        ]
+      }
+    },
+    "/federate/review": {
+      "post": {
+        "operationId": "oauth2-federate-review",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Review a guided federation request",
+        "tags": [
+          "oauth2"
+        ]
+      }
+    },
     "/forgot-password": {
       "post": {
         "operationId": "emailPasswordForgotPassword",
@@ -8739,6 +8932,63 @@
         "tags": [
           "organizations"
         ]
+      },
+      "post": {
+        "description": "Directly enrolls an existing user as a member — no invitation round-trip. Caller must be an org admin/owner or an install-wide admin. Idempotent: enrolling an existing member returns 200 with the current membership untouched (role is NOT changed; use the role endpoint).",
+        "operationId": "organizations-add-member",
+        "parameters": [
+          {
+            "description": "Organization ID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "description": "Organization ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddMemberRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MembershipJSON"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Add a user to an organization (admin, idempotent)",
+        "tags": [
+          "organizations"
+        ]
       }
     },
     "/organizations/{id}/members/{user_id}": {
@@ -9342,6 +9592,64 @@
           }
         ],
         "summary": "Test an SSO connection (discovery round-trip)",
+        "tags": [
+          "organizations"
+        ]
+      }
+    },
+    "/organizations/{id}/sso/federate": {
+      "post": {
+        "operationId": "ssooidc-federate",
+        "parameters": [
+          {
+            "description": "Organization ID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "description": "Organization ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FederateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionJSON"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Federate this app to an upstream IdP in one call",
         "tags": [
           "organizations"
         ]
@@ -10742,6 +11050,339 @@
         ]
       }
     },
+    "/sso/connections": {
+      "get": {
+        "operationId": "ssooidc-list-global-connections",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListOutBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "List global (org-less) SSO connections",
+        "tags": [
+          "sso"
+        ]
+      },
+      "post": {
+        "operationId": "ssooidc-create-global-connection",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateConnectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionJSON"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Create a global (org-less) SSO connection",
+        "tags": [
+          "sso"
+        ]
+      }
+    },
+    "/sso/connections/{cid}": {
+      "delete": {
+        "operationId": "ssooidc-delete-global-connection",
+        "parameters": [
+          {
+            "description": "SSO connection ID",
+            "in": "path",
+            "name": "cid",
+            "required": true,
+            "schema": {
+              "description": "SSO connection ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Delete a global SSO connection",
+        "tags": [
+          "sso"
+        ]
+      },
+      "patch": {
+        "operationId": "ssooidc-update-global-connection",
+        "parameters": [
+          {
+            "description": "SSO connection ID",
+            "in": "path",
+            "name": "cid",
+            "required": true,
+            "schema": {
+              "description": "SSO connection ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateConnectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionJSON"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Update a global SSO connection (partial)",
+        "tags": [
+          "sso"
+        ]
+      }
+    },
+    "/sso/connections/{cid}/test": {
+      "post": {
+        "operationId": "ssooidc-test-global-connection",
+        "parameters": [
+          {
+            "description": "SSO connection ID",
+            "in": "path",
+            "name": "cid",
+            "required": true,
+            "schema": {
+              "description": "SSO connection ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestConnectionResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Test a global SSO connection (discovery round-trip)",
+        "tags": [
+          "sso"
+        ]
+      }
+    },
+    "/sso/federate/return": {
+      "get": {
+        "operationId": "ssooidc-federate-return",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "contentEncoding": "base64",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Content-Type": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Location": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Complete guided federation (redeem grant + seed connection)",
+        "tags": [
+          "organizations"
+        ]
+      }
+    },
+    "/sso/federate/start": {
+      "get": {
+        "operationId": "ssooidc-federate-start",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "contentEncoding": "base64",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Content-Type": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Location": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Begin guided federation (redirects to the IdP for approval)",
+        "tags": [
+          "organizations"
+        ]
+      }
+    },
     "/sso/login": {
       "get": {
         "operationId": "ssooidc-login",
@@ -10789,6 +11430,38 @@
         "summary": "Begin SSO login (org= / connection_id= / domain= HRD)",
         "tags": [
           "oauth"
+        ]
+      }
+    },
+    "/sso/login-options": {
+      "get": {
+        "operationId": "ssooidc-login-options",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginOptionsOutBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [],
+        "summary": "List active global SSO connections for login buttons (public)",
+        "tags": [
+          "sso"
         ]
       }
     },

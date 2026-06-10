@@ -5,8 +5,10 @@ Connect one yauth app (the **relying party**, RP) to another OIDC issuer (the
 Both halves are yauth plugins:
 
 - **RP side:** `plugins/ssooidc` — inbound "Sign in with <IdP>". Mounts
-  `/sso/login`, `/sso/callback`, and org-scoped admin
-  `/organizations/{id}/sso/connections` (+ `/sso/federate`) under `/api/auth`.
+  `/sso/login`, `/sso/callback`, global admin `/sso/connections`, and org-scoped
+  admin `/organizations/{id}/sso/connections` (+ `/sso/federate`) under
+  `/api/auth`. Wire it declaratively with `plugins.sso_oidc` (below) or via the
+  builder.
 - **OP side:** `plugins/oauth2server` (+ `oidc`, `asymjwt`) — the issuer the RP
   federates to. Dynamic client registration (DCR) lets RPs self-register.
 
@@ -92,6 +94,19 @@ POST   {prefix}/sso/connections/{cid}/test
 GET    {prefix}/sso/login-options         PUBLIC: [{id,name}] of ACTIVE globals
 ```
 
+The plugin itself is config-wireable — no Go code on the app side
+(`NewFromConfig` / yauth.yaml):
+
+```yaml
+plugins:
+  sso_oidc:
+    enabled: true
+    encryption_key_env: SSO_ENCRYPTION_KEY # base64 32-byte AES key (`yauth gen-secrets`)
+    # state_ttl: 10m                       # /sso/login → /sso/callback window
+    # allowed_redirect_urls: ["/dashboard"] # empty = redirect_url ignored
+    # self_issuer: https://app/api/auth    # enables the keyless runtime federate endpoint
+```
+
 Drive one with `GET {prefix}/sso/login?connection_id=<id>&redirect_url=/path`.
 On callback a global connection **just links/creates the user** — no org
 membership, no active-org stamp. A login page renders "Sign in with X" buttons
@@ -100,6 +115,11 @@ global connection with `discovery_url = https://accounts.google.com/.well-known/
 + a client_id/secret from Google Cloud Console (Google isn't keyless — that path
 is yauth↔yauth only). Orgs remain available for multi-tenant/B2B; they're now
 optional, not required.
+
+Apps that DO keep one hidden org (for org-scoped groups/SCIM under a
+single-tenant UI) can enroll users into it directly —
+`POST {prefix}/organizations/{id}/members` `{user_id, role?}` (org-admin or
+install-admin gated, idempotent) — no invitation round-trip.
 
 ### Lower-level
 

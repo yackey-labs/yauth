@@ -134,7 +134,8 @@ Two complementary mechanisms:
      for platform conventions like `DATABASE_URL`. (`YAUTH_DATABASE_DSN` takes
      precedence if both are set.)
    - `*_env` fields (`bearer.jwt_secret_env`, `mfa.encryption_key_env`,
-     `asym_jwt.private_key_pem_env`, `oauth.*.client_id_env`, …) name the env var
+     `asym_jwt.private_key_pem_env`, `oauth.*.client_id_env`,
+     `sso_oidc.encryption_key_env`, …) name the env var
      holding a secret/key; the value is read at build time so the file stays safe
      to commit.
 

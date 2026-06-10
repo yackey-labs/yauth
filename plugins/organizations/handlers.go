@@ -530,6 +530,110 @@ func (p *orgsPlugin) registerListMembers(host plugin.PluginHost, api huma.API, m
 	})
 }
 
+// --- POST /organizations/{id}/members ---
+
+// addMemberRequest is the admin "directly enroll a user" payload — the
+// non-interactive complement to invitations. Single-tenant ("realm-flat")
+// consoles use it to make every workforce user a member of the one
+// auto-managed org so the org-scoped group endpoints work for them.
+type addMemberRequest struct {
+	UserID string   `json:"user_id,omitempty"`
+	Role   string   `json:"role,omitempty" doc:"Membership role; defaults to member. owner is rejected (use transfer-ownership)."`
+	_      struct{} `json:"-" additionalProperties:"false"`
+}
+
+type addMemberInput struct {
+	ID   string `path:"id" doc:"Organization ID"`
+	Body addMemberRequest
+}
+
+func (p *orgsPlugin) registerAddMember(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	type output struct {
+		Status int
+		Body   membershipJSON
+	}
+	huma.Register(api, huma.Operation{
+		OperationID:   "organizations-add-member",
+		Method:        http.MethodPost,
+		Path:          prefix + "/organizations/{id}/members",
+		Summary:       "Add a user to an organization (admin, idempotent)",
+		Description:   "Directly enrolls an existing user as a member — no invitation round-trip. Caller must be an org admin/owner or an install-wide admin. Idempotent: enrolling an existing member returns 200 with the current membership untouched (role is NOT changed; use the role endpoint).",
+		Tags:          []string{"organizations"},
+		Security:      []map[string][]string{{"sessionCookie": {}}},
+		DefaultStatus: http.StatusCreated,
+		Middlewares:   authGuards(api, mw),
+	}, func(ctx context.Context, in *addMemberInput) (*output, error) {
+		au, err := authUser(ctx)
+		if err != nil {
+			return nil, err
+		}
+		orgID := in.ID
+		req := in.Body
+		if req.UserID == "" {
+			return nil, huma.Error400BadRequest("user_id is required")
+		}
+		role := req.Role
+		if role == "" {
+			role = auth.RoleMember
+		}
+		if role == auth.RoleOwner {
+			return nil, huma.Error400BadRequest("use POST /organizations/{id}/transfer-ownership to set an owner")
+		}
+
+		// Caller must be admin-or-higher IN the org, or an install-wide admin
+		// (user.role=="admin") — the latter covers realm-flat consoles where the
+		// install admin manages a single auto-managed org.
+		caller, err := host.Repo().GetMembershipByOrgUser(ctx, orgID, au.User.ID)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("membership lookup failed")
+		}
+		isOrgAdmin := caller != nil && auth.RoleAtLeast(caller.Role, auth.RoleAdmin)
+		if !isOrgAdmin && au.User.Role != auth.RoleAdmin {
+			return nil, huma.Error403Forbidden("organization admin role required")
+		}
+
+		// The org must exist (an install-wide admin bypasses the membership
+		// check, so this is their existence gate too).
+		org, err := host.Repo().GetOrganizationByID(ctx, orgID)
+		if err != nil || org == nil {
+			return nil, huma.Error404NotFound("organization not found")
+		}
+		target, err := host.Repo().GetUserByID(ctx, req.UserID)
+		if err != nil || target == nil {
+			return nil, huma.Error404NotFound("user not found")
+		}
+
+		// Idempotent: an existing membership (any role/status) is returned as-is.
+		if existing, err := host.Repo().GetMembershipByOrgUser(ctx, orgID, req.UserID); err != nil {
+			return nil, huma.Error500InternalServerError("membership lookup failed")
+		} else if existing != nil {
+			return &output{Status: http.StatusOK, Body: toMembershipJSON(*existing)}, nil
+		}
+
+		now := time.Now().UTC()
+		mem, err := host.Repo().CreateMembership(ctx, domain.NewMembership{
+			ID:             uuid.NewString(),
+			OrganizationID: orgID,
+			UserID:         req.UserID,
+			Role:           role,
+			Status:         domain.MembershipActive,
+			JoinedAt:       &now,
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		})
+		if err != nil {
+			// Concurrent enroll losing the race is still success.
+			if errors.Is(err, yautherr.ErrConflict) {
+				if existing, e2 := host.Repo().GetMembershipByOrgUser(ctx, orgID, req.UserID); e2 == nil && existing != nil {
+					return &output{Status: http.StatusOK, Body: toMembershipJSON(*existing)}, nil
+				}
+			}
+			return nil, huma.Error500InternalServerError("create membership failed")
+		}
+		return &output{Status: http.StatusCreated, Body: toMembershipJSON(mem)}, nil
+	})
+}
+
 // --- POST /organizations/{id}/invitations ---
 
 // createInvitationInput wraps the native JSON body plus the path param. huma

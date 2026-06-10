@@ -36,6 +36,12 @@ export interface AddGroupMemberRequest {
   user_id?: string;
 }
 
+export interface AddMemberRequest {
+  /** Membership role; defaults to member. owner is rejected (use transfer-ownership). */
+  role?: string;
+  user_id?: string;
+}
+
 export interface AdminBanRequest {
   reason?: string;
   until?: string;
@@ -570,6 +576,21 @@ export interface ErrorModel {
   type?: string;
 }
 
+export type FederateRequestGroupToRole = {[key: string]: string};
+
+export interface FederateRequest {
+  admin_api_key?: string;
+  app_name?: string;
+  default_role_on_jit?: string;
+  discovery_url: string;
+  group_to_role?: FederateRequestGroupToRole;
+  jit_provisioning_enabled?: boolean;
+  launch_redirect?: string;
+  name?: string;
+  /** @nullable */
+  scopes?: string[] | null;
+}
+
 export interface ForgotPasswordRequest {
   email?: string;
 }
@@ -739,6 +760,11 @@ export interface ListOrganizationsResponse {
   organizations: OrganizationJSON[] | null;
 }
 
+export interface ListOutBody {
+  /** @nullable */
+  sso_connections: ConnectionJSON[] | null;
+}
+
 export interface ListPermissionsResponse {
   organization_id: string;
   /** @nullable */
@@ -799,6 +825,16 @@ export interface LockoutUnlockReqRequest {
 
 export interface LockoutUnlockRequest {
   token: string;
+}
+
+export interface LoginOption {
+  id: string;
+  name: string;
+}
+
+export interface LoginOptionsOutBody {
+  /** @nullable */
+  options: LoginOption[] | null;
 }
 
 export interface LoginRequest {
@@ -2055,6 +2091,78 @@ export const getConfig = async ( options?: RequestInit): Promise<ConfigResponse>
   {
     ...options,
     method: 'GET'
+
+
+  }
+);}
+
+
+
+export const getOauth2FederateApproveUrl = () => {
+
+
+
+
+  return `/federate/approve`
+}
+
+/**
+ * @summary Approve a guided federation request
+ */
+export const oauth2FederateApprove = async ( options?: RequestInit): Promise<void> => {
+
+  return customFetch<void>(getOauth2FederateApproveUrl(),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+export const getOauth2FederateRedeemUrl = () => {
+
+
+
+
+  return `/federate/redeem`
+}
+
+/**
+ * @summary Redeem a one-time federation grant
+ */
+export const oauth2FederateRedeem = async ( options?: RequestInit): Promise<void> => {
+
+  return customFetch<void>(getOauth2FederateRedeemUrl(),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+export const getOauth2FederateReviewUrl = () => {
+
+
+
+
+  return `/federate/review`
+}
+
+/**
+ * @summary Review a guided federation request
+ */
+export const oauth2FederateReview = async ( options?: RequestInit): Promise<void> => {
+
+  return customFetch<void>(getOauth2FederateReviewUrl(),
+  {
+    ...options,
+    method: 'POST'
 
 
   }
@@ -3813,6 +3921,32 @@ export const organizationsListMembers = async (id: string, options?: RequestInit
 
 
 
+export const getOrganizationsAddMemberUrl = (id: string,) => {
+
+
+
+
+  return `/organizations/${id}/members`
+}
+
+/**
+ * Directly enrolls an existing user as a member — no invitation round-trip. Caller must be an org admin/owner or an install-wide admin. Idempotent: enrolling an existing member returns 200 with the current membership untouched (role is NOT changed; use the role endpoint).
+ * @summary Add a user to an organization (admin, idempotent)
+ */
+export const organizationsAddMember = async (id: string,
+    addMemberRequest: AddMemberRequest, options?: RequestInit): Promise<MembershipJSON> => {
+
+  return customFetch<MembershipJSON>(getOrganizationsAddMemberUrl(id),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(addMemberRequest)
+  }
+);}
+
+
+
 export const getOrganizationsRemoveMemberUrl = (id: string,
     userId: string,) => {
 
@@ -4088,6 +4222,31 @@ export const ssooidcTestConnection = async (id: string,
     method: 'POST'
 
 
+  }
+);}
+
+
+
+export const getSsooidcFederateUrl = (id: string,) => {
+
+
+
+
+  return `/organizations/${id}/sso/federate`
+}
+
+/**
+ * @summary Federate this app to an upstream IdP in one call
+ */
+export const ssooidcFederate = async (id: string,
+    federateRequest: FederateRequest, options?: RequestInit): Promise<ConnectionJSON> => {
+
+  return customFetch<ConnectionJSON>(getSsooidcFederateUrl(id),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(federateRequest)
   }
 );}
 
@@ -4785,6 +4944,175 @@ export const ssooidcCallbackPost = async ( options?: RequestInit): Promise<strin
 
 
 
+export const getSsooidcListGlobalConnectionsUrl = () => {
+
+
+
+
+  return `/sso/connections`
+}
+
+/**
+ * @summary List global (org-less) SSO connections
+ */
+export const ssooidcListGlobalConnections = async ( options?: RequestInit): Promise<ListOutBody> => {
+
+  return customFetch<ListOutBody>(getSsooidcListGlobalConnectionsUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+export const getSsooidcCreateGlobalConnectionUrl = () => {
+
+
+
+
+  return `/sso/connections`
+}
+
+/**
+ * @summary Create a global (org-less) SSO connection
+ */
+export const ssooidcCreateGlobalConnection = async (createConnectionRequest: CreateConnectionRequest, options?: RequestInit): Promise<ConnectionJSON> => {
+
+  return customFetch<ConnectionJSON>(getSsooidcCreateGlobalConnectionUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(createConnectionRequest)
+  }
+);}
+
+
+
+export const getSsooidcDeleteGlobalConnectionUrl = (cid: string,) => {
+
+
+
+
+  return `/sso/connections/${cid}`
+}
+
+/**
+ * @summary Delete a global SSO connection
+ */
+export const ssooidcDeleteGlobalConnection = async (cid: string, options?: RequestInit): Promise<void> => {
+
+  return customFetch<void>(getSsooidcDeleteGlobalConnectionUrl(cid),
+  {
+    ...options,
+    method: 'DELETE'
+
+
+  }
+);}
+
+
+
+export const getSsooidcUpdateGlobalConnectionUrl = (cid: string,) => {
+
+
+
+
+  return `/sso/connections/${cid}`
+}
+
+/**
+ * @summary Update a global SSO connection (partial)
+ */
+export const ssooidcUpdateGlobalConnection = async (cid: string,
+    updateConnectionRequest: UpdateConnectionRequest, options?: RequestInit): Promise<ConnectionJSON> => {
+
+  return customFetch<ConnectionJSON>(getSsooidcUpdateGlobalConnectionUrl(cid),
+  {
+    ...options,
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(updateConnectionRequest)
+  }
+);}
+
+
+
+export const getSsooidcTestGlobalConnectionUrl = (cid: string,) => {
+
+
+
+
+  return `/sso/connections/${cid}/test`
+}
+
+/**
+ * @summary Test a global SSO connection (discovery round-trip)
+ */
+export const ssooidcTestGlobalConnection = async (cid: string, options?: RequestInit): Promise<TestConnectionResponse> => {
+
+  return customFetch<TestConnectionResponse>(getSsooidcTestGlobalConnectionUrl(cid),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+export const getSsooidcFederateReturnUrl = () => {
+
+
+
+
+  return `/sso/federate/return`
+}
+
+/**
+ * @summary Complete guided federation (redeem grant + seed connection)
+ */
+export const ssooidcFederateReturn = async ( options?: RequestInit): Promise<string> => {
+
+  return customFetch<string>(getSsooidcFederateReturnUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+export const getSsooidcFederateStartUrl = () => {
+
+
+
+
+  return `/sso/federate/start`
+}
+
+/**
+ * @summary Begin guided federation (redirects to the IdP for approval)
+ */
+export const ssooidcFederateStart = async ( options?: RequestInit): Promise<string> => {
+
+  return customFetch<string>(getSsooidcFederateStartUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
 export const getSsooidcLoginUrl = () => {
 
 
@@ -4799,6 +5127,30 @@ export const getSsooidcLoginUrl = () => {
 export const ssooidcLogin = async ( options?: RequestInit): Promise<string> => {
 
   return customFetch<string>(getSsooidcLoginUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+export const getSsooidcLoginOptionsUrl = () => {
+
+
+
+
+  return `/sso/login-options`
+}
+
+/**
+ * @summary List active global SSO connections for login buttons (public)
+ */
+export const ssooidcLoginOptions = async ( options?: RequestInit): Promise<LoginOptionsOutBody> => {
+
+  return customFetch<LoginOptionsOutBody>(getSsooidcLoginOptionsUrl(),
   {
     ...options,
     method: 'GET'

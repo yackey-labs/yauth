@@ -32,6 +32,7 @@ import (
 	"github.com/yackey-labs/yauth/plugins/organizations"
 	"github.com/yackey-labs/yauth/plugins/passkey"
 	"github.com/yackey-labs/yauth/plugins/scim"
+	"github.com/yackey-labs/yauth/plugins/ssooidc"
 	"github.com/yackey-labs/yauth/plugins/status"
 	"github.com/yackey-labs/yauth/plugins/webhooks"
 	yauthrepo "github.com/yackey-labs/yauth/repo"
@@ -513,6 +514,23 @@ func addAuthPlugins(builder *YAuthBuilder, cfg *yauthcfg.Config, mailer *smtpmai
 		plug, err := oauth.New(oauth.Config{EncryptionKey: key, Providers: provs})
 		if err != nil {
 			return nil, fmt.Errorf("yauth: oauth: %w", err)
+		}
+		builder = builder.WithPlugin(plug)
+	}
+
+	if p.SSOOIDC.Enabled {
+		key, err := resolveAESKey(p.SSOOIDC.EncryptionKeyEnv)
+		if err != nil {
+			return nil, fmt.Errorf("yauth: sso_oidc encryption key: %w", err)
+		}
+		plug, err := ssooidc.New(ssooidc.Config{
+			EncryptionKey:       key,
+			StateTTL:            p.SSOOIDC.StateTTL,
+			AllowedRedirectURLs: p.SSOOIDC.AllowedRedirectURLs,
+			SelfIssuer:          p.SSOOIDC.SelfIssuer,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("yauth: sso_oidc: %w", err)
 		}
 		builder = builder.WithPlugin(plug)
 	}

@@ -227,6 +227,7 @@ type PluginsConfig struct {
 	OAuth2Server  OAuth2ServerPluginConfig  `yaml:"oauth2_server" toml:"oauth2_server"`
 	Organizations OrganizationsPluginConfig `yaml:"organizations" toml:"organizations"`
 	SCIM          SCIMPluginConfig          `yaml:"scim" toml:"scim"`
+	SSOOIDC       SSOOIDCPluginConfig       `yaml:"sso_oidc" toml:"sso_oidc"`
 }
 
 // EmailPasswordPluginConfig configures plugins/emailpassword.
@@ -398,6 +399,30 @@ type OAuthPluginConfig struct {
 	// enabled. Generate one with `yauth gen-secrets`.
 	EncryptionKeyEnv string                   `yaml:"encryption_key_env" toml:"encryption_key_env"`
 	Providers        map[string]OAuthProvider `yaml:"providers" toml:"providers"`
+}
+
+// SSOOIDCPluginConfig configures the sso_oidc plugin — this app acting as an
+// OIDC Relying Party toward an upstream IdP ("Sign in with <IdP>"). The
+// connections themselves are data, not config: global (org-less) or
+// org-scoped rows managed at runtime via /sso/connections and
+// /organizations/{id}/sso/connections. This block only mounts the plugin.
+type SSOOIDCPluginConfig struct {
+	Enabled bool `yaml:"enabled" toml:"enabled"`
+	// EncryptionKeyEnv names the env var holding the base64-encoded 32-byte
+	// AES-256 key that encrypts each connection's IdP client_secret at rest.
+	// Required when enabled. Generate one with `yauth gen-secrets`.
+	EncryptionKeyEnv string `yaml:"encryption_key_env" toml:"encryption_key_env"`
+	// StateTTL bounds the /sso/login -> /sso/callback round trip. Zero means
+	// the plugin default (10m).
+	StateTTL time.Duration `yaml:"state_ttl" toml:"state_ttl"`
+	// AllowedRedirectURLs is the allow-list of post-login redirect_url
+	// targets. Empty means redirect_url is ignored entirely (the safest
+	// default).
+	AllowedRedirectURLs []string `yaml:"allowed_redirect_urls" toml:"allowed_redirect_urls"`
+	// SelfIssuer is this app's OWN OIDC issuer URL. When set (and asym_jwt is
+	// enabled) the runtime federate endpoint signs a software_statement so the
+	// app can self-register at a trusted upstream IdP with no admin key.
+	SelfIssuer string `yaml:"self_issuer" toml:"self_issuer"`
 }
 
 // WebhooksPluginConfig configures outbound webhook delivery. Per-webhook HMAC

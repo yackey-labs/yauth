@@ -76,6 +76,19 @@
         },
         "type": "object"
       },
+      "AddMemberRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "role": {
+            "description": "Membership role; defaults to member. owner is rejected (use transfer-ownership).",
+            "type": "string"
+          },
+          "user_id": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "AdminBanRequest": {
         "additionalProperties": false,
         "properties": {
@@ -8983,6 +8996,63 @@
           }
         ],
         "summary": "List organization members",
+        "tags": [
+          "organizations"
+        ]
+      },
+      "post": {
+        "description": "Directly enrolls an existing user as a member — no invitation round-trip. Caller must be an org admin/owner or an install-wide admin. Idempotent: enrolling an existing member returns 200 with the current membership untouched (role is NOT changed; use the role endpoint).",
+        "operationId": "organizations-add-member",
+        "parameters": [
+          {
+            "description": "Organization ID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "description": "Organization ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddMemberRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MembershipJSON"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Add a user to an organization (admin, idempotent)",
         "tags": [
           "organizations"
         ]

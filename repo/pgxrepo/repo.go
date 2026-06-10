@@ -1118,6 +1118,7 @@ func (r *Repo) CreateOAuth2Client(ctx context.Context, input domain.NewOAuth2Cli
 		InitiateLoginUri:                 input.InitiateLoginURI,
 		ClientUri:                        input.ClientURI,
 		LogoUri:                          input.LogoURI,
+		EnforceGroupAssignment:           input.EnforceGroupAssignment,
 	})
 }
 

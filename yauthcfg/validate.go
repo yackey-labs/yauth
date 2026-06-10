@@ -81,6 +81,9 @@ func (c *Config) Validate() error {
 	if p.OAuth.Enabled && p.OAuth.EncryptionKeyEnv == "" {
 		return fmt.Errorf("plugins.oauth.encryption_key_env is required when oauth is enabled")
 	}
+	if p.SSOOIDC.Enabled && p.SSOOIDC.EncryptionKeyEnv == "" {
+		return fmt.Errorf("plugins.sso_oidc.encryption_key_env is required when sso_oidc is enabled")
+	}
 	if p.OAuth2Server.Enabled {
 		if p.OAuth2Server.AccessTTL < 0 || p.OAuth2Server.BackchannelLogoutTimeout < 0 ||
 			p.OAuth2Server.AuthorizationCodeTTL < 0 || p.OAuth2Server.DeviceCodeTTL < 0 {
@@ -201,6 +204,9 @@ func (c *Config) EnabledPlugins() []string {
 	}
 	if p.SCIM.Enabled {
 		out = append(out, "scim")
+	}
+	if p.SSOOIDC.Enabled {
+		out = append(out, "sso_oidc")
 	}
 	return out
 }

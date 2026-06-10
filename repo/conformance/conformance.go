@@ -1119,6 +1119,24 @@ var oauth2ClientCases = []testCase{
 			t.Fatalf("logo_uri round-trip: got %v", got.LogoURI)
 		}
 	}},
+	{"create_persists_enforce_group_assignment", func(t *testing.T, r repo.Repository) {
+		// Regression: the pgx INSERT used to omit the column, silently storing
+		// false for clients created with enforcement on (PATCH path was fine).
+		now := nowUTC()
+		_ = r.CreateOAuth2Client(ctx(), domain.NewOAuth2Client{
+			ID: "c1", ClientID: "client_enforced",
+			RedirectURIs: json.RawMessage(`[]`), GrantTypes: json.RawMessage(`[]`), Scopes: json.RawMessage(`[]`),
+			CreatedAt:              now,
+			EnforceGroupAssignment: true,
+		})
+		got, err := r.GetOAuth2ClientByClientID(ctx(), "client_enforced")
+		if err != nil || got == nil {
+			t.Fatalf("unexpected: %+v err=%v", got, err)
+		}
+		if !got.EnforceGroupAssignment {
+			t.Fatalf("enforce_group_assignment not persisted on create")
+		}
+	}},
 	{"launch_metadata_nil_by_default", func(t *testing.T, r repo.Repository) {
 		now := nowUTC()
 		_ = r.CreateOAuth2Client(ctx(), domain.NewOAuth2Client{

@@ -16,6 +16,7 @@
 //	PATCH  {prefix}/organizations/{id}                  update org (admin-gated, RequireAuth)
 //	DELETE {prefix}/organizations/{id}                  delete org + cascade (admin-gated, RequireAuth)
 //	GET    {prefix}/organizations/{id}/members          list members (membership-gated, RequireAuth)
+//	POST   {prefix}/organizations/{id}/members          add a member directly (org-admin or install-admin, idempotent)
 //	POST   {prefix}/organizations/{id}/invitations      create invitation (admin-gated, RequireAuth)
 //	POST   {prefix}/invitations/accept                  accept invitation by token (RequireAuth)
 //
@@ -145,6 +146,7 @@ func (p *orgsPlugin) Routes(host plugin.PluginHost, _ plugin.Router, api huma.AP
 	p.registerUpdate(host, api, mw, prefix)
 	p.registerDelete(host, api, mw, prefix)
 	p.registerListMembers(host, api, mw, prefix)
+	p.registerAddMember(host, api, mw, prefix)
 	p.registerCreateInvitation(host, api, mw, prefix)
 	p.registerAcceptInvitation(host, api, mw, prefix)
 

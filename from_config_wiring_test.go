@@ -62,6 +62,7 @@ func fullConfig(t *testing.T) *yauthcfg.Config {
 	t.Setenv("YA_JWT_SECRET", "test-hs256-secret-that-is-long-enough-32+")
 	t.Setenv("YA_MFA_KEY", aesKey)
 	t.Setenv("YA_OAUTH_KEY", aesKey)
+	t.Setenv("YA_SSOOIDC_KEY", aesKey)
 	t.Setenv("YA_GOOGLE_ID", "google-client-id")
 	t.Setenv("YA_GOOGLE_SECRET", "google-client-secret")
 
@@ -101,6 +102,8 @@ func fullConfig(t *testing.T) *yauthcfg.Config {
 	p.OAuth2Server.DCREnabled = true
 	p.Organizations.Enabled = true // workforce tenancy (org-scoped groups + keys)
 	p.SCIM.Enabled = true          // SCIM 2.0 provisioning over the org-scoped surface
+	p.SSOOIDC.Enabled = true
+	p.SSOOIDC.EncryptionKeyEnv = "YA_SSOOIDC_KEY" // RP toward an upstream IdP (org-less or org-scoped)
 	return c
 }
 

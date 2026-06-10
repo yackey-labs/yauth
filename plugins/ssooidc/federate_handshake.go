@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/google/uuid"
 
+	"github.com/yackey-labs/yauth/auth"
 	"github.com/yackey-labs/yauth/plugin"
 )
 
@@ -41,10 +43,12 @@ func (p *ssoOIDCPlugin) registerFederateStart(host plugin.PluginHost, api huma.A
 		q := r.URL.Query()
 		orgID := strings.TrimSpace(q.Get("org"))
 		idpBase := strings.TrimRight(strings.TrimSpace(q.Get("idp")), "/")
-		if orgID == "" || idpBase == "" {
-			return nil, huma.Error400BadRequest("org and idp are required")
+		if idpBase == "" {
+			return nil, huma.Error400BadRequest("idp is required")
 		}
-		if err := p.requireFlowOrgAdmin(ctx, host, r, orgID); err != nil {
+		// org is optional: empty seeds a GLOBAL (org-less) connection, gated on
+		// the install-wide admin role instead of org membership.
+		if err := p.requireFlowAdmin(ctx, host, r, orgID); err != nil {
 			return nil, err
 		}
 		signer := host.JWTSigner()
@@ -72,10 +76,20 @@ func (p *ssoOIDCPlugin) registerFederateStart(host plugin.PluginHost, api huma.A
 		if defaultRole == "" {
 			defaultRole = "viewer"
 		}
-		// initiate_login_uri needs the org slug for the SP-initiated URL.
-		slug := orgID
-		if org, oerr := host.Repo().GetOrganizationByID(ctx, orgID); oerr == nil && org != nil && org.Slug != "" {
-			slug = org.Slug
+		// The SP-initiated login URL the OP will register: org slug for
+		// org-scoped connections; a pre-minted connection_id for global ones
+		// (the id must exist in the URL before the row does — see
+		// SeedConnectionInput.ID).
+		var loginSelector, connectionID string
+		if orgID != "" {
+			slug := orgID
+			if org, oerr := host.Repo().GetOrganizationByID(ctx, orgID); oerr == nil && org != nil && org.Slug != "" {
+				slug = org.Slug
+			}
+			loginSelector = "org=" + url.QueryEscape(slug)
+		} else {
+			connectionID = uuid.NewString()
+			loginSelector = "connection_id=" + url.QueryEscape(connectionID)
 		}
 		now := time.Now()
 		req, err := signer.Sign(map[string]any{
@@ -85,11 +99,12 @@ func (p *ssoOIDCPlugin) registerFederateStart(host plugin.PluginHost, api huma.A
 			"client_name":        appName,
 			"redirect_uris":      []string{base + "/api/auth/sso/callback"},
 			"scope":              scopes,
-			"initiate_login_uri": base + "/api/auth/sso/login?org=" + url.QueryEscape(slug) + "&redirect_url=" + url.QueryEscape(launch),
+			"initiate_login_uri": base + "/api/auth/sso/login?" + loginSelector + "&redirect_url=" + url.QueryEscape(launch),
 			"return_uri":         base + "/api/auth/sso/federate/return",
 			// RP-side params, echoed back (signed) for the return handler:
 			"idp_base":        idpBase,
 			"org_id":          orgID,
+			"connection_id":   connectionID,
 			"connection_name": q.Get("name"),
 			"jit":             jit,
 			"default_role":    defaultRole,
@@ -133,13 +148,13 @@ func (p *ssoOIDCPlugin) registerFederateReturn(host plugin.PluginHost, api huma.
 		if err != nil {
 			return nil, huma.Error400BadRequest("invalid federation request: " + err.Error())
 		}
-		orgID := claimString(claims, "org_id")
-		if err := p.requireFlowOrgAdmin(ctx, host, r, orgID); err != nil {
+		orgID := claimString(claims, "org_id") // empty → global connection
+		if err := p.requireFlowAdmin(ctx, host, r, orgID); err != nil {
 			return nil, err
 		}
 		idpBase := strings.TrimRight(claimString(claims, "idp_base"), "/")
-		if idpBase == "" || orgID == "" {
-			return nil, huma.Error400BadRequest("federation request missing idp_base/org_id")
+		if idpBase == "" {
+			return nil, huma.Error400BadRequest("federation request missing idp_base")
 		}
 
 		// Redeem the one-time grant server-to-server for the client creds.
@@ -160,6 +175,7 @@ func (p *ssoOIDCPlugin) registerFederateReturn(host plugin.PluginHost, api huma.
 
 		scopes := strings.Fields(claimStringOr(claims, "scope", "openid email profile groups"))
 		if _, err := SeedConnection(ctx, host.Repo(), p.cfg.EncryptionKey, SeedConnectionInput{
+			ID:                     claimString(claims, "connection_id"),
 			OrganizationID:         orgID,
 			Name:                   claimStringOr(claims, "connection_name", "SSO"),
 			JitProvisioningEnabled: claimBool(claims, "jit"),
@@ -188,11 +204,18 @@ func (p *ssoOIDCPlugin) launchTarget(claims map[string]any) string {
 	return "/admin/sso"
 }
 
-// requireFlowOrgAdmin authenticates the request and requires org-admin on orgID.
-func (p *ssoOIDCPlugin) requireFlowOrgAdmin(ctx context.Context, host plugin.PluginHost, r *http.Request, orgID string) error {
+// requireFlowAdmin authenticates the request and requires org-admin on orgID —
+// or, when orgID is empty (global connection), the install-wide admin role.
+func (p *ssoOIDCPlugin) requireFlowAdmin(ctx context.Context, host plugin.PluginHost, r *http.Request, orgID string) error {
 	au, err := host.Middleware().ResolveAuth(r)
 	if err != nil || au == nil {
 		return huma.Error401Unauthorized("authentication required")
+	}
+	if orgID == "" {
+		if au.User.Role != auth.RoleAdmin {
+			return huma.Error403Forbidden("admin role required")
+		}
+		return nil
 	}
 	if _, err := requireOrgAdmin(ctx, host, orgID, au.User.ID); err != nil {
 		return err

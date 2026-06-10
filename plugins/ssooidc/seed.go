@@ -24,6 +24,10 @@ type connectionRepo interface {
 // SeedConnectionInput describes an OIDC SSO connection to provision
 // programmatically (connection-as-code).
 type SeedConnectionInput struct {
+	// ID is optional — empty generates one. Callers that must know the id
+	// before the row exists (e.g. the guided handshake registering an
+	// initiate_login_uri with ?connection_id=) pre-mint it.
+	ID                     string
 	OrganizationID         string
 	Name                   string
 	Status                 domain.ConnectionStatus // default: active
@@ -53,9 +57,13 @@ func SeedConnection(ctx context.Context, repo connectionCreator, key [32]byte, i
 	if status == "" {
 		status = domain.ConnectionStatusActive
 	}
+	id := in.ID
+	if id == "" {
+		id = uuid.NewString()
+	}
 	now := time.Now().UTC()
 	return repo.CreateSsoConnection(ctx, domain.NewSsoConnection{
-		ID:                     uuid.NewString(),
+		ID:                     id,
 		OrganizationID:         in.OrganizationID,
 		Kind:                   domain.ConnectionKindOIDCClient,
 		Name:                   in.Name,

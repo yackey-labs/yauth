@@ -23,7 +23,7 @@ the **onboarding path** (how the RP gets registered at the OP).
 
 | Scope | Use when | Login routing |
 | ----- | -------- | ------------- |
-| **Global** (`/sso/connections`) | The IdP belongs to *you* and serves everyone — workforce SSO against your central IdP, or "Sign in with Google" on any app. Single-tenant apps; orgs not required. | Render buttons from public `/sso/login-options`; drive with `?connection_id=` |
+| **Global** (`/sso/connections`) | The IdP belongs to *you* and serves everyone — workforce SSO against your central IdP, or "Sign in with Google" on any app. Single-tenant apps; orgs not required. | Render buttons from public `/sso/login-options`; drive with `?connection_id=` — or with no selector at all when exactly one global is active |
 | **Org-scoped** (`/organizations/{id}/sso/connections`) | The IdP belongs to *your customer* — multi-tenant B2B where each org brings its own IdP (the WorkOS model). | Home-realm discovery: `?org=<slug>` or `?domain=<email-domain>` |
 
 Mixing is fine: a B2B app can offer global "Sign in with Google" alongside
@@ -94,7 +94,11 @@ When the OP shouldn't pre-trust the RP's issuer, use the browser-bounce handshak
 allow-list edit:
 
 1. RP admin → `GET {prefix}/sso/federate/start?idp=<OP base>&org=<id>&app_name=…`
-   (org-admin gated): the RP signs a `federation_request` (its metadata +
+   (org-admin gated). **`org` is optional**: omit it (install-admin gated
+   instead) to seed a GLOBAL connection — the org-less default for
+   single-tenant apps; the registered `initiate_login_uri` then selects by a
+   pre-minted `connection_id` instead of an org slug. The RP signs a
+   `federation_request` (its metadata +
    `return_uri` + connection params, signed with its key) and **302s to the OP's
    `/federate/approve?req=<jwt>`** approval page.
 2. OP approval page → `POST {prefix}/federate/review` (admin) shows the request →
@@ -140,7 +144,10 @@ plugins:
     # self_issuer: https://app/api/auth    # enables the keyless runtime federate endpoint
 ```
 
-Drive one with `GET {prefix}/sso/login?connection_id=<id>&redirect_url=/path`.
+Drive one with `GET {prefix}/sso/login?connection_id=<id>&redirect_url=/path` —
+or, when exactly ONE global connection is active (the common single-IdP shape),
+plain `GET {prefix}/sso/login?redirect_url=/path` resolves it with no selector
+(two+ active globals make that ambiguous → 400, pass connection_id).
 On callback a global connection **just links/creates the user** — no org
 membership, no active-org stamp. A login page renders "Sign in with X" buttons
 from `/sso/login-options` (public, ids + names only). Adding Google is then: a

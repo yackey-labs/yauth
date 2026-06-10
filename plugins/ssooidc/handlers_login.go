@@ -181,6 +181,26 @@ func (p *ssoOIDCPlugin) resolveConnection(ctx context.Context, host plugin.Plugi
 		}
 		return p.firstActiveOIDCForOrg(ctx, host, d.OrganizationID)
 	}
+	// No selector: fall back to THE global connection when it is unambiguous —
+	// the common single-IdP, org-less shape ("Sign in with <IdP>" is the only
+	// button). Two+ active globals is ambiguous and keeps the explicit 400.
+	rows, err := host.Repo().ListSsoConnectionsByOrg(ctx, "")
+	if err != nil {
+		return nil, huma.Error500InternalServerError("lookup failed")
+	}
+	var only *domain.SsoConnection
+	for _, c := range rows {
+		if c == nil || c.Status != domain.ConnectionStatusActive || c.Kind != domain.ConnectionKindOIDCClient {
+			continue
+		}
+		if only != nil {
+			return nil, huma.Error400BadRequest("multiple global sso connections are active — pass connection_id")
+		}
+		only = c
+	}
+	if only != nil {
+		return only, nil
+	}
 	return nil, huma.Error400BadRequest("one of connection_id, org, or domain is required")
 }
 

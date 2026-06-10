@@ -14,6 +14,39 @@ Both halves are yauth plugins:
 
 Runnable end-to-end reference: **`examples/sso/`** (`./examples/sso/demo.sh`).
 
+## Which shape? (decide this first)
+
+Two independent choices: the **scope** of the connection (who it routes), and
+the **onboarding path** (how the RP gets registered at the OP).
+
+**Connection scope — ask "whose IdP is it?"**
+
+| Scope | Use when | Login routing |
+| ----- | -------- | ------------- |
+| **Global** (`/sso/connections`) | The IdP belongs to *you* and serves everyone — workforce SSO against your central IdP, or "Sign in with Google" on any app. Single-tenant apps; orgs not required. | Render buttons from public `/sso/login-options`; drive with `?connection_id=` |
+| **Org-scoped** (`/organizations/{id}/sso/connections`) | The IdP belongs to *your customer* — multi-tenant B2B where each org brings its own IdP (the WorkOS model). | Home-realm discovery: `?org=<slug>` or `?domain=<email-domain>` |
+
+Mixing is fine: a B2B app can offer global "Sign in with Google" alongside
+per-org enterprise connections. Differences on callback: an org-scoped login
+JIT-stamps org membership + active org; a global login just links/creates the
+user.
+
+**Onboarding path — ask "who operates the OP, and do they pre-trust you?"**
+
+| Path | Use when |
+| ---- | -------- |
+| Keyless trusted-issuer (`dcr_trusted_issuers`) | Both sides yauth and you operate both — internal platform apps against your own IdP. Zero secrets. |
+| One-click runtime federate (`POST .../sso/federate`) | Same trust shape, but you want an admin button instead of code/seed. |
+| Guided approval handshake (`/sso/federate/start` → `/federate/approve`) | Both sides yauth but the OP admin should approve each RP by hand — partner apps, no standing allow-list. |
+| Manual / `SeedConnection` | The OP is a third party (Google, Okta, Entra): no DCR — paste the client_id/secret they issued. |
+
+**Putting users in orgs** (org-scoped setups only) — three ways in, by who
+drives: **invitation** (`POST .../invitations` + accept) when the *user*
+consents — inviting outsiders in B2B; **direct add**
+(`POST .../members`, idempotent) when an *admin* drives — workforce installs
+and realm-flat consoles enrolling already-registered users; **SCIM** when the
+*upstream directory* drives — provisioning from Okta/Entra.
+
 ## Easiest: keyless trusted-issuer federation (no secret, no copy-paste)
 
 Because both apps are yauth, the RP is also an issuer (it publishes a JWKS). The
@@ -148,10 +181,11 @@ install-admin gated, idempotent) — no invitation round-trip.
 5. **JIT applies `default_role_on_jit` on every login** (it overwrites a static
    seeded role) — keep admins elevated via `group_to_role`. JIT never *demotes*
    an existing owner (it would otherwise 500 on the last-owner guard).
-6. **SSO connections are org-scoped**; single-tenant apps seed one anchor org and
-   enroll their admins as owner-members. The anchor org is plumbing — don't let
-   it become the data tenant (scope app data by the fixed tenant in single mode,
-   not the active org).
+6. **Org-scoped connections need the user in the org.** If you use the
+   org-scoped shape in a single-tenant app (e.g. for org-scoped groups/SCIM),
+   the anchor org is plumbing — don't let it become the data tenant, and enroll
+   users via `POST /organizations/{id}/members` (or SCIM), not by hand. If you
+   don't need orgs at all, use a global connection instead.
 7. **Connection `redirect_url`** (the post-login landing) must be the param the
    RP reads (`redirect_url`) and either a relative `/path` or an entry in
    `ssooidc.Config.AllowedRedirectURLs`.

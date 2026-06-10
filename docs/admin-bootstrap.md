@@ -30,6 +30,28 @@ WARN yauth: bootstrap admin provisioned — log in and change the password immed
 An **operator-provided password is NEVER logged.** On subsequent restarts (admin
 already exists) nothing is logged and nothing is created.
 
+## After bootstrap: provisioning the rest of the workforce
+
+Bootstrap seeds the *first* admin only. Further accounts are created by an
+admin through **`POST {prefix}/admin/users`** — the admin-driven complement to
+self-registration (which `allow_signups: false` disables) and SCIM:
+
+```jsonc
+POST /api/auth/admin/users
+{ "email": "new.hire@example.com", "display_name": "New Hire", "role": "user" }
+// → 201 { "user": {...}, "password": "<temp — returned ONCE>" }
+```
+
+Semantics mirror bootstrap: `email_verified=true` (the admin vouches for the
+address), `must_change_password=true` by default so the temp credential is
+rotated on first sign-in. Omit `password` to have a strong one generated and
+returned once in the response; an operator-provided password is never echoed.
+Duplicate email → 409.
+
+**Which way to create users?** Self-registration (`allow_signups`) for open/dev
+installs; `POST /admin/users` when an admin onboards a workforce by hand;
+SCIM when an upstream directory (Okta/Entra) drives provisioning.
+
 ## Config
 
 ```yaml

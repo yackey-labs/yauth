@@ -102,6 +102,49 @@
         },
         "type": "object"
       },
+      "AdminCreateUserRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "email": {
+            "description": "Required. Must be unique.",
+            "format": "email",
+            "type": "string"
+          },
+          "must_change_password": {
+            "type": "boolean"
+          },
+          "password": {
+            "minLength": 8,
+            "type": "string"
+          },
+          "role": {
+            "description": "Defaults to user.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "email"
+        ],
+        "type": "object"
+      },
+      "AdminCreateUserResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "password": {
+            "type": "string"
+          },
+          "user": {
+            "$ref": "#/components/schemas/UserJSON"
+          }
+        },
+        "required": [
+          "user"
+        ],
+        "type": "object"
+      },
       "AdminDeleteUserRequest": {
         "additionalProperties": false,
         "properties": {
@@ -4568,6 +4611,51 @@
           }
         ],
         "summary": "List/search users",
+        "tags": [
+          "admin"
+        ]
+      },
+      "post": {
+        "description": "Provisions a workforce account directly — the admin-driven complement to self-registration and SCIM. Omit password to have a strong temp password generated and returned once; must_change_password defaults to true so the initial credential is rotated on first sign-in.",
+        "operationId": "admin-create-user",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminCreateUserRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCreateUserResponse"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Create a user (admin provisioning)",
         "tags": [
           "admin"
         ]

@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -179,6 +180,147 @@ func (p *adminPlugin) registerListUsers(host plugin.PluginHost, api huma.API, mw
 			Page:    page,
 			PerPage: limit,
 		}}, nil
+	})
+}
+
+// --- POST /admin/users -----------------------------------------------------
+
+// adminCreateUserRequest provisions a workforce account out-of-band — the
+// admin-driven complement to self-registration (which allow_signups can turn
+// off) and SCIM. The credential is marked must_change_password by default so
+// the temp password is rotated on first sign-in.
+type adminCreateUserRequest struct {
+	Email       string  `json:"email" format:"email" doc:"Required. Must be unique."`
+	DisplayName *string `json:"display_name,omitempty"`
+	Role        *string `json:"role,omitempty" doc:"Defaults to user."`
+	// Password is the initial credential. Empty → a strong random temp
+	// password is generated and returned ONCE in the response.
+	Password *string `json:"password,omitempty" minLength:"8"`
+	// MustChangePassword defaults to TRUE (out-of-band provisioning).
+	MustChangePassword *bool    `json:"must_change_password,omitempty"`
+	_                  struct{} `json:"-" additionalProperties:"false"`
+}
+
+type adminCreateUserInput struct {
+	Body adminCreateUserRequest
+}
+
+// adminCreateUserResponse echoes the user plus — only when generated — the
+// one-time temp password for the admin to hand to the user.
+type adminCreateUserResponse struct {
+	User userJSON `json:"user"`
+	// Password is present ONLY when the server generated it. Operator-provided
+	// passwords are never echoed.
+	Password string `json:"password,omitempty"`
+}
+
+// generateTempPassword returns a 24-char crypto-random password guaranteed to
+// contain upper, lower, and digit classes (passes the default policy).
+func generateTempPassword() (string, error) {
+	const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789"
+	for {
+		b := make([]byte, 24)
+		if _, err := rand.Read(b); err != nil {
+			return "", err
+		}
+		var hasU, hasL, hasD bool
+		for i := range b {
+			c := alphabet[int(b[i])%len(alphabet)]
+			b[i] = c
+			switch {
+			case c >= 'A' && c <= 'Z':
+				hasU = true
+			case c >= 'a' && c <= 'z':
+				hasL = true
+			default:
+				hasD = true
+			}
+		}
+		if hasU && hasL && hasD {
+			return string(b), nil
+		}
+	}
+}
+
+func (p *adminPlugin) registerCreateUser(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	type output struct {
+		Body adminCreateUserResponse
+	}
+	huma.Register(api, huma.Operation{
+		OperationID:   "admin-create-user",
+		Method:        http.MethodPost,
+		Path:          prefix + "/admin/users",
+		Summary:       "Create a user (admin provisioning)",
+		Description:   "Provisions a workforce account directly — the admin-driven complement to self-registration and SCIM. Omit password to have a strong temp password generated and returned once; must_change_password defaults to true so the initial credential is rotated on first sign-in.",
+		Tags:          []string{"admin"},
+		Security:      []map[string][]string{{"sessionCookie": {}}},
+		DefaultStatus: http.StatusCreated,
+		Middlewares:   adminGuardsNoStash(api, mw),
+	}, func(ctx context.Context, in *adminCreateUserInput) (*output, error) {
+		req := in.Body
+		email := strings.ToLower(strings.TrimSpace(req.Email))
+		if email == "" {
+			return nil, huma.Error400BadRequest("email is required")
+		}
+		role := "user"
+		if req.Role != nil && strings.TrimSpace(*req.Role) != "" {
+			role = strings.TrimSpace(*req.Role)
+		}
+
+		password := ""
+		generated := false
+		if req.Password != nil && *req.Password != "" {
+			password = *req.Password
+		} else {
+			pw, err := generateTempPassword()
+			if err != nil {
+				return nil, huma.Error500InternalServerError("password generation failed")
+			}
+			password, generated = pw, true
+		}
+		hash, err := auth.HashPassword(password)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("password hashing failed")
+		}
+
+		mustChange := true
+		if req.MustChangePassword != nil {
+			mustChange = *req.MustChangePassword
+		}
+
+		now := time.Now().UTC()
+		u, err := host.Repo().CreateUser(ctx, domain.NewUser{
+			ID:          newID(),
+			Email:       email,
+			DisplayName: req.DisplayName,
+			// Admin-provisioned: the admin vouches for the address (mirrors
+			// bootstrap_admin); no verification round-trip.
+			EmailVerified:      true,
+			Role:               role,
+			MustChangePassword: mustChange,
+			CreatedAt:          now,
+			UpdatedAt:          now,
+		})
+		if err != nil {
+			if errors.Is(err, yautherr.ErrUserExists) || errors.Is(err, yautherr.ErrConflict) {
+				return nil, huma.Error409Conflict("a user with this email already exists")
+			}
+			return nil, huma.Error500InternalServerError("unable to create user")
+		}
+		if err := host.Repo().UpsertPassword(ctx, domain.NewPassword{
+			UserID:       u.ID,
+			PasswordHash: hash,
+		}); err != nil {
+			// Don't leave a credential-less row behind.
+			_ = host.Repo().DeleteUser(ctx, u.ID)
+			return nil, huma.Error500InternalServerError("unable to store credential")
+		}
+
+		out := adminCreateUserResponse{User: toUserJSON(u)}
+		if generated {
+			out.Password = password
+		}
+		return &output{Body: out}, nil
 	})
 }
 

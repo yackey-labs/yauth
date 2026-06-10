@@ -47,6 +47,40 @@ export interface AdminBanRequest {
   until?: string;
 }
 
+export interface AdminCreateUserRequest {
+  display_name?: string;
+  /** Required. Must be unique. */
+  email: string;
+  must_change_password?: boolean;
+  /** @minLength 8 */
+  password?: string;
+  /** Defaults to user. */
+  role?: string;
+}
+
+export interface UserJSON {
+  activates_at?: string;
+  banned: boolean;
+  banned_reason?: string;
+  banned_until?: string;
+  created_at: string;
+  display_name?: string;
+  email: string;
+  email_verified: boolean;
+  id: string;
+  must_change_password: boolean;
+  role: string;
+  suspended: boolean;
+  suspended_at?: string;
+  suspended_reason?: string;
+  updated_at: string;
+}
+
+export interface AdminCreateUserResponse {
+  password?: string;
+  user: UserJSON;
+}
+
 export interface AdminDeleteUserRequest {
   reason: string;
 }
@@ -637,24 +671,6 @@ export interface GroupMemberJSON {
   display_name?: string;
   email: string;
   user_id: string;
-}
-
-export interface UserJSON {
-  activates_at?: string;
-  banned: boolean;
-  banned_reason?: string;
-  banned_until?: string;
-  created_at: string;
-  display_name?: string;
-  email: string;
-  email_verified: boolean;
-  id: string;
-  must_change_password: boolean;
-  role: string;
-  suspended: boolean;
-  suspended_at?: string;
-  suspended_reason?: string;
-  updated_at: string;
 }
 
 export interface ImpersonateResponse {
@@ -1484,6 +1500,31 @@ export const adminListUsers = async ( options?: RequestInit): Promise<ListUsersR
     method: 'GET'
 
 
+  }
+);}
+
+
+
+export const getAdminCreateUserUrl = () => {
+
+
+
+
+  return `/admin/users`
+}
+
+/**
+ * Provisions a workforce account directly — the admin-driven complement to self-registration and SCIM. Omit password to have a strong temp password generated and returned once; must_change_password defaults to true so the initial credential is rotated on first sign-in.
+ * @summary Create a user (admin provisioning)
+ */
+export const adminCreateUser = async (adminCreateUserRequest: AdminCreateUserRequest, options?: RequestInit): Promise<AdminCreateUserResponse> => {
+
+  return customFetch<AdminCreateUserResponse>(getAdminCreateUserUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(adminCreateUserRequest)
   }
 );}
 

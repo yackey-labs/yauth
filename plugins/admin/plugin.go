@@ -6,6 +6,7 @@
 //
 //	GET    {prefix}/admin/users                  — list/search users
 //	GET    {prefix}/admin/users/{id}             — fetch a single user
+//	POST   {prefix}/admin/users                  — create a user (admin provisioning; temp password returned once)
 //	PATCH  {prefix}/admin/users/{id}             — partial update (display_name?, role?)
 //	PUT    {prefix}/admin/users/{id}             — alias for PATCH (Rust parity)
 //	DELETE {prefix}/admin/users/{id}             — hard-delete a user (refuses self-delete)
@@ -60,6 +61,7 @@ func (p *adminPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma
 	mw := host.Middleware()
 
 	p.registerListUsers(host, api, mw, prefix)
+	p.registerCreateUser(host, api, mw, prefix)
 	p.registerGetUser(host, api, mw, prefix)
 	// PATCH and its PUT alias (Rust parity) share one handler but need
 	// distinct OperationIDs — huma requires operation-id uniqueness.

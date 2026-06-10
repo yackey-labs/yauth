@@ -48,6 +48,18 @@ npm install @yackey-labs/yauth-client @yackey-labs/yauth-ui-solidjs
    To supply a pre-built client (custom fetch options / interceptors), pass the
    `client` option instead of `baseUrl`.
 
+   > **Vite dev-mode trap — double-configure the client.** If your app ALSO
+   > imports functions directly from `@yackey-labs/yauth-client` (e.g.
+   > `ssooidcLoginOptions`, the admin functions), call
+   > `configureClient({ baseUrl })` from your own import in `main.ts` too.
+   > `configureClient` stores `{baseUrl}` in module-level state, and in dev
+   > vite's dep optimizer inlines a SEPARATE copy of that state into the
+   > ui-vue chunk vs your app's chunk — `YAuthPlugin` configures ui-vue's copy
+   > while your direct calls run with `baseUrl: ""` and fetch your SPA's
+   > index.html ("Unexpected token '<' … is not valid JSON"). Production
+   > builds dedupe to one module instance, so the bug ONLY bites in dev.
+   > Apps that build an instance via `createYAuthClient(...)` are unaffected.
+
 3. **Use the components.** They take **callback props** (React style), not Vue
    emits — `:on-success`, not `@success` (the emit form silently does nothing):
 

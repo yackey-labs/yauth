@@ -42,14 +42,16 @@ const handleLogin = async () => {
 
 const handleRegister = async () => {
 	const ccr = (await pk!.registerBegin()) as unknown as {
-		publicKey: unknown;
+		options: { publicKey: unknown };
+		challenge_id: string;
 	};
 	const credential = await startRegistration({
-		optionsJSON: ccr.publicKey as Parameters<
+		optionsJSON: ccr.options.publicKey as Parameters<
 			typeof startRegistration
 		>[0]["optionsJSON"],
 	});
 	await pk!.registerFinish({
+		challenge_id: ccr.challenge_id,
 		credential: credential as unknown as Record<string, unknown>,
 		name: "Passkey",
 	});

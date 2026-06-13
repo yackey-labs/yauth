@@ -109,6 +109,9 @@ jobs:
       # the registry, so a re-run (or workflow_dispatch) after a partial failure
       # publishes only what is missing instead of aborting on the first
       # already-published package.
+      # Backport dist-tag: if the version being published is older than the
+      # current "latest" on the registry, use "vMAJOR.MINOR.x" instead of
+      # "latest" — npm refuses to downgrade the latest pointer implicitly.
       - name: Publish to npm (OIDC trusted publishing + provenance)
         run: |
           set -euo pipefail
@@ -120,6 +123,17 @@ jobs:
           for p in shared client ui-vue; do
             sed -i "s/\"workspace:\*\"/\"$VER\"/g" "packages/$p/package.json"
           done
+          # Determine the dist-tag. Fall back to 0.0.0 if the package is new.
+          CURRENT_LATEST=$(npm view "@yackey-labs/yauth-shared" version 2>/dev/null || echo "0.0.0")
+          HIGHEST=$(printf '%s\n' "$VER" "$CURRENT_LATEST" | sort -V | tail -1)
+          if [ "$HIGHEST" = "$VER" ]; then
+            DIST_TAG="latest"
+          else
+            MAJOR=$(echo "$VER" | cut -d. -f1)
+            MINOR=$(echo "$VER" | cut -d. -f2)
+            DIST_TAG="v${MAJOR}.${MINOR}.x"
+          fi
+          echo "dist-tag: $DIST_TAG (registry latest: $CURRENT_LATEST, publishing: $VER)"
           published=0 skipped=0
           for p in shared client ui-vue; do
             pkg="@yackey-labs/yauth-$p"
@@ -129,7 +143,7 @@ jobs:
               continue
             fi
             echo "::group::npm publish $p ($VER)"
-            ( cd "packages/$p" && npm publish --provenance --access public )
+            ( cd "packages/$p" && npm publish --provenance --access public --tag "$DIST_TAG" )
             echo "::endgroup::"
             published=$((published+1))
           done

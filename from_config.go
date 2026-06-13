@@ -110,6 +110,17 @@ func effectiveBootstrapPolicy(ep yauthcfg.EmailPasswordPluginConfig) passwordpol
 // the few things the config file cannot carry (e.g. a live *slog.Logger).
 type ConfigOption func(*configOptions)
 
+// Mailer is the combined mailer interface accepted by [WithMailer]. It merges
+// the three individual plugin mailer interfaces so a single concrete type can
+// handle all email-sending plugins. The bundled [smtpmailer.Mailer] satisfies
+// it; implement it yourself to route through any delivery service (Resend, SES,
+// Postmark, a transactional relay, …).
+type Mailer interface {
+	emailpassword.Mailer
+	magiclink.Mailer
+	lockout.Mailer
+}
+
 type configOptions struct {
 	logger *slog.Logger
 
@@ -117,6 +128,8 @@ type configOptions struct {
 	repoSet bool
 	pool    *pgxpool.Pool
 	poolSet bool
+
+	mailer Mailer // optional custom mailer; overrides mailer.provider when non-nil
 }
 
 func resolveConfigOptions(opts []ConfigOption) configOptions {
@@ -173,6 +186,15 @@ func WithRepo(r yauthrepo.Repository) ConfigOption {
 // WithPool and [WithRepo] are mutually exclusive; setting both is an error.
 func WithPool(p *pgxpool.Pool) ConfigOption {
 	return func(o *configOptions) { o.pool = p; o.poolSet = true }
+}
+
+// WithMailer injects a custom mailer, replacing the built-in smtp/logging
+// backend for all email-sending plugins (email-password, magic-link, lockout).
+// When set, mailer.provider in yaml is ignored. Use this to route email through
+// any delivery service — implement the five Send* methods of [Mailer] and pass
+// the value here; [NewFromConfig] wires it into every plugin that sends email.
+func WithMailer(m Mailer) ConfigOption {
+	return func(o *configOptions) { o.mailer = m }
 }
 
 // NewBuilderFromConfig wires a *YAuthBuilder from a yauthcfg.Config — the same
@@ -277,10 +299,9 @@ func NewBuilderFromConfig(ctx context.Context, cfg *yauthcfg.Config, opts ...Con
 	}
 	builder := New(repo, configToYAuthConfig(cfg)).WithLogger(logger)
 
-	// Build the host's mailer once and share it across plugins. Each
-	// plugin satisfies its own Mailer interface structurally — *smtp.Mailer
-	// has every method any of the three plugin interfaces require.
-	mailer, err := buildMailer(cfg.Mailer)
+	// Resolve the effective mailer: custom (WithMailer) wins; smtp when
+	// mailer.provider=smtp; nil falls back to each plugin's LoggingMailer.
+	mailer, err := resolveMailer(cfg.Mailer, o.mailer)
 	if err != nil {
 		return nil, err
 	}
@@ -419,7 +440,7 @@ func buildOAuthProviders(c yauthcfg.OAuthPluginConfig) ([]oauth.Provider, error)
 // environment. Returns the first construction error. Plugins are added in the
 // same order as yauthcfg.EnabledPlugins so asymjwt's signer is registered
 // before oidc/oauth2server (which read it).
-func addAuthPlugins(builder *YAuthBuilder, cfg *yauthcfg.Config, mailer *smtpmailer.Mailer) (*YAuthBuilder, error) {
+func addAuthPlugins(builder *YAuthBuilder, cfg *yauthcfg.Config, mailer Mailer) (*YAuthBuilder, error) {
 	p := &cfg.Plugins
 
 	// One IdP issuer/base-path, applied to both oidc and oauth2server so their
@@ -770,10 +791,23 @@ func configToYAuthConfig(c *yauthcfg.Config) YAuthConfig {
 	return out
 }
 
+// resolveMailer returns the effective mailer. custom (from WithMailer) wins when
+// non-nil; otherwise buildMailer is called. Returns nil when the effective
+// provider is logging — callers fall back to each plugin's LoggingMailer.
+func resolveMailer(cfg yauthcfg.MailerConfig, custom Mailer) (Mailer, error) {
+	if custom != nil {
+		return custom, nil
+	}
+	m, err := buildMailer(cfg)
+	if err != nil || m == nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 // buildMailer translates the cfg into a concrete mailer. Returns nil when
 // no provider is configured (callers fall back to the plugin's default
-// LoggingMailer). The returned *smtp.Mailer satisfies the Mailer interface
-// of every plugin that needs a mailer.
+// LoggingMailer). The returned *smtp.Mailer satisfies the [Mailer] interface.
 func buildMailer(cfg yauthcfg.MailerConfig) (*smtpmailer.Mailer, error) {
 	provider := strings.ToLower(strings.TrimSpace(cfg.Provider))
 	if provider == "" || provider == "logging" {

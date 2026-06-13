@@ -44,6 +44,32 @@ config file stays safe to commit. `NewFromConfig` wires this mailer into all
 three plugins automatically. Inspect every field with `yauth schema config`
 (the `mailer` block carries inline descriptions and the `provider` enum).
 
+## Custom mailer (`WithMailer` / `NewFromConfig`)
+
+Pass a custom mailer to `NewFromConfig` via `yauth.WithMailer(m)`. When set,
+`mailer.provider` in yaml is ignored — your implementation handles all delivery.
+The value must implement `yauth.Mailer`, which merges the three plugin interfaces:
+
+```go
+type Mailer interface {
+    emailpassword.Mailer  // SendVerification, SendPasswordReset, SendAccountExists
+    magiclink.Mailer      // SendMagicLink
+    lockout.Mailer        // SendUnlockToken
+}
+```
+
+Example — routing through a transactional email service:
+
+```go
+ya, err := yauth.NewFromConfig(ctx, cfg,
+    yauth.WithPool(pool),
+    yauth.WithMailer(myCustomMailer), // implements all five Send* methods
+)
+```
+
+`NewFromConfig` wires the mailer into every enabled email-sending plugin
+automatically — no per-plugin wiring needed.
+
 ## Configure a mailer (builder API)
 
 The builder has no host-level mailer; set `Config.Mailer` on each plugin that

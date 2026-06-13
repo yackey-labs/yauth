@@ -131,7 +131,7 @@ jobs:
           else
             MAJOR=$(echo "$VER" | cut -d. -f1)
             MINOR=$(echo "$VER" | cut -d. -f2)
-            DIST_TAG="v${MAJOR}.${MINOR}.x"
+            DIST_TAG="v${MAJOR}.${MINOR}"
           fi
           echo "dist-tag: $DIST_TAG (registry latest: $CURRENT_LATEST, publishing: $VER)"
           published=0 skipped=0

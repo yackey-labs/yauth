@@ -139,9 +139,20 @@ func (c Config) scopeNames() []string {
 func Mount(root *http.ServeMux, ya *yauth.YAuth, cfg Config) {
 	yaRouter := ya.Router()
 
-	root.HandleFunc("GET /.well-known/oauth-protected-resource", protectedResource(cfg))
+	// These discovery documents are fetched cross-origin by browser-based
+	// relying parties: an OIDC SPA reads openid-configuration via fetch before
+	// it can begin a login. yauth's Router() applies the configured CORS policy
+	// to its own routes, but these root aliases are served by mcpauth's own
+	// handlers — and wellKnownMetadata proxies yauth's doc through a recorder
+	// that drops the inner router's response headers — so without wrapping them
+	// here the browser blocks the response for lack of an
+	// Access-Control-Allow-Origin header. cors mirrors yauth's policy and is a
+	// no-op when no origins are configured.
+	cors := corsFromYAuth(ya)
 
-	asMeta := wellKnownMetadata(yaRouter, cfg, "/.well-known/oauth-authorization-server")
+	root.Handle("GET /.well-known/oauth-protected-resource", cors(protectedResource(cfg)))
+
+	asMeta := cors(wellKnownMetadata(yaRouter, cfg, "/.well-known/oauth-authorization-server"))
 	root.Handle("GET /.well-known/oauth-authorization-server", asMeta)
 	// RFC 8414 §3.1 inserts the well-known segment between host and the issuer
 	// path (".../oauth-authorization-server/api/auth"); some MCP clients probe
@@ -151,9 +162,24 @@ func Mount(root *http.ServeMux, ya *yauth.YAuth, cfg Config) {
 	// OIDC discovery is patched the same way: OIDC relying parties (e.g. yauth's
 	// ssooidc) read authorization_endpoint from here, and it must point at the
 	// consent UI, not yauth's JSON /oauth/authorize.
-	oidc := wellKnownMetadata(yaRouter, cfg, "/.well-known/openid-configuration")
+	oidc := cors(wellKnownMetadata(yaRouter, cfg, "/.well-known/openid-configuration"))
 	root.Handle("GET /.well-known/openid-configuration", oidc)
 	root.Handle("GET /.well-known/openid-configuration/", oidc)
+}
+
+// corsFromYAuth builds a CORS wrapper mirroring ya's configured cross-origin
+// policy, so the root discovery aliases honor the same allowed origins as
+// yauth's own routes. middleware.CORS returns the handler unchanged when no
+// origins are configured, so this is a no-op in that case.
+func corsFromYAuth(ya *yauth.YAuth) func(http.Handler) http.Handler {
+	c := ya.Config().CORS
+	return middleware.CORS(middleware.CORSConfig{
+		AllowedOrigins:   c.AllowedOrigins,
+		AllowedMethods:   c.AllowedMethods,
+		AllowedHeaders:   c.AllowedHeaders,
+		AllowCredentials: c.AllowCredentials,
+		MaxAge:           c.MaxAge,
+	})
 }
 
 // protectedResource serves RFC 9728 OAuth 2.0 Protected Resource Metadata. It

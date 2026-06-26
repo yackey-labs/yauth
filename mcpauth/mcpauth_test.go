@@ -235,3 +235,67 @@ func TestOpenIDConfigurationProxied(t *testing.T) {
 		t.Errorf("openid-configuration authorization_endpoint = %v, want %s/authorize", got, srv.URL)
 	}
 }
+
+// TestRootDiscoveryCORS verifies the root .well-known discovery aliases
+// mcpauth.Mount registers honor yauth's configured CORS policy. Browser-based
+// OIDC relying parties (SPAs) fetch openid-configuration cross-origin, so the
+// response must carry Access-Control-Allow-Origin for an allowed origin — and
+// must NOT for a disallowed one. Regression guard for the gap where these
+// root handlers bypassed yauth's CORS middleware (the inner router's headers
+// are dropped by the proxying recorder), blocking SPA logins.
+func TestRootDiscoveryCORS(t *testing.T) {
+	r := memrepo.New()
+	cfg := yauth.NewDefaultConfig()
+	cfg.CORS = yauth.CORSConfig{
+		AllowedOrigins:   []string{"https://rp.test"},
+		AllowCredentials: true,
+	}
+	ya, err := yauth.New(r, cfg).
+		WithJWTSecret([]byte("test-only-jwt-secret-please-change-32b")).
+		WithPlugin(bearer.New(bearer.Config{})).
+		WithPlugin(oauth2server.New(oauth2server.Config{
+			Issuer:      "http://idp.test",
+			BasePath:    "/api/auth",
+			AccessTTL:   5 * time.Minute,
+			AuthCodeTTL: time.Minute,
+		})).
+		WithPlugin(oidc.New(oidc.Config{Issuer: "http://idp.test", BasePath: "/api/auth"})).
+		Build()
+	if err != nil {
+		t.Fatalf("build yauth: %v", err)
+	}
+	mux := http.NewServeMux()
+	mux.Handle("/api/auth/", http.StripPrefix("/api/auth", ya.Router()))
+	mcpauth.Mount(mux, ya, mcpauth.Config{AuthBasePath: "/api/auth", ConsentPath: "/authorize"})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	get := func(t *testing.T, path, origin string) *http.Response {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodGet, srv.URL+path, nil) //nolint:noctx
+		req.Header.Set("Origin", origin)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		resp.Body.Close() //nolint:errcheck
+		return resp
+	}
+
+	for _, path := range []string{
+		"/.well-known/openid-configuration",
+		"/.well-known/oauth-authorization-server",
+		"/.well-known/oauth-protected-resource",
+	} {
+		resp := get(t, path, "https://rp.test")
+		if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "https://rp.test" {
+			t.Errorf("%s: Access-Control-Allow-Origin = %q, want %q", path, got, "https://rp.test")
+		}
+	}
+
+	// A disallowed origin must not receive ACAO.
+	resp := get(t, "/.well-known/openid-configuration", "https://evil.test")
+	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "" {
+		t.Errorf("disallowed origin: Access-Control-Allow-Origin = %q, want empty", got)
+	}
+}

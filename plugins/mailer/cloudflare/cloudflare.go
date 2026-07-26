@@ -14,6 +14,11 @@
 //     with success=true even when the recipient lands in permanent_bounces,
 //     so a bare status-code check would silently swallow a bounced
 //     verification or password-reset link. See send.
+//   - Every send is traced. The default HTTP client wraps
+//     otelhttp.NewTransport, so the call emits a CLIENT span and propagates
+//     W3C traceparent; send additionally opens its own span carrying the
+//     message kind and the resulting delivery disposition. Recipient
+//     addresses are never recorded as span attributes.
 //
 // The Workers binding form of Email Service is not usable from a Go server;
 // the REST API is the only applicable transport. Cloudflare also exposes an
@@ -33,6 +38,11 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel/trace"
+
+	"github.com/yackey-labs/yauth/telemetry"
 )
 
 // defaultBaseURL is Cloudflare's API root. Overridable via Mailer.BaseURL
@@ -60,7 +70,9 @@ type Mailer struct {
 	// https://api.cloudflare.com/client/v4.
 	BaseURL string
 	// HTTPClient performs the request. Nil uses an internal client with a
-	// 30s timeout.
+	// 30s timeout whose transport is wrapped with otelhttp — see
+	// httpClient. A caller-supplied client is used verbatim and is never
+	// mutated; wrapping its transport is that caller's responsibility.
 	HTTPClient *http.Client
 }
 
@@ -73,14 +85,14 @@ func New(cfg Mailer) *Mailer {
 func (m *Mailer) SendVerification(ctx context.Context, email, link string) error {
 	subject := "Verify your email"
 	body := fmt.Sprintf("Click the link to verify your email address:\n\n%s\n", link)
-	return m.send(ctx, email, subject, body)
+	return m.send(ctx, "verification", email, subject, body)
 }
 
 // SendPasswordReset implements emailpassword.Mailer.
 func (m *Mailer) SendPasswordReset(ctx context.Context, email, link string) error {
 	subject := "Reset your password"
 	body := fmt.Sprintf("Click the link to reset your password:\n\n%s\n", link)
-	return m.send(ctx, email, subject, body)
+	return m.send(ctx, "password_reset", email, subject, body)
 }
 
 // SendAccountExists implements emailpassword.Mailer.
@@ -88,21 +100,21 @@ func (m *Mailer) SendAccountExists(ctx context.Context, email string) error {
 	subject := "Account already exists"
 	body := "Someone (possibly you) attempted to register an account with this email address. " +
 		"An account already exists. If you forgot your password, use the password-reset flow.\n"
-	return m.send(ctx, email, subject, body)
+	return m.send(ctx, "account_exists", email, subject, body)
 }
 
 // SendMagicLink implements magiclink.Mailer.
 func (m *Mailer) SendMagicLink(ctx context.Context, email, link string) error {
 	subject := "Your sign-in link"
 	body := fmt.Sprintf("Click the link to sign in:\n\n%s\n", link)
-	return m.send(ctx, email, subject, body)
+	return m.send(ctx, "magic_link", email, subject, body)
 }
 
 // SendUnlockToken implements lockout.Mailer.
 func (m *Mailer) SendUnlockToken(ctx context.Context, email, link string) error {
 	subject := "Unlock your account"
 	body := fmt.Sprintf("Click the link to unlock your account:\n\n%s\n", link)
-	return m.send(ctx, email, subject, body)
+	return m.send(ctx, "unlock_token", email, subject, body)
 }
 
 // sendRequest is the JSON body of POST /accounts/{id}/email/sending/send.
@@ -135,14 +147,57 @@ type sendResult struct {
 	Queued           []string `json:"queued"`
 }
 
-// send posts one message and interprets the result.
+// httpClient returns the client to send with. A caller-supplied client is
+// returned verbatim and never mutated — wrapping its transport is that
+// caller's responsibility. The default wraps otelhttp so the outbound send
+// emits a CLIENT span and injects W3C traceparent/baggage headers (via the
+// global TextMapPropagator), nesting under the caller's request span when
+// one is present.
+//
+// This default matters: NewFromConfig's yaml path leaves HTTPClient nil, so
+// without it every auth email sent from a config-driven deployment would be
+// invisible in traces.
+func (m *Mailer) httpClient() *http.Client {
+	if m.HTTPClient != nil {
+		return m.HTTPClient
+	}
+	return &http.Client{
+		Timeout:   defaultTimeout,
+		Transport: otelhttp.NewTransport(http.DefaultTransport),
+	}
+}
+
+// send opens a span for the delivery and delegates to doSend.
+//
+// The span is what makes the bounce path observable. otelhttp alone is not
+// enough: a permanent bounce comes back as HTTP 200, so the transport span
+// is marked OK while the send actually failed. Recording the error here is
+// the only way a bounced verification link shows up as a failure in traces.
+//
+// kind is a fixed label (verification, password_reset, …), never free text,
+// so it stays low-cardinality. The recipient address is deliberately NOT
+// recorded — it is PII and spans are exported off-host.
+func (m *Mailer) send(ctx context.Context, kind, to, subject, body string) error {
+	ctx, span := telemetry.StartSpan(ctx, "mailer.cloudflare.send", trace.SpanKindClient)
+	defer span.End()
+	telemetry.SetAttributeOnCx(ctx, "mailer.provider", "cloudflare")
+	telemetry.SetAttributeOnCx(ctx, "mailer.message.kind", kind)
+
+	err := m.doSend(ctx, to, subject, body)
+	if err != nil {
+		telemetry.RecordErrorOnCx(ctx, "mailer.cloudflare.send_failed", err)
+	}
+	return err
+}
+
+// doSend posts one message and interprets the result.
 //
 // Cloudflare returns HTTP 200 with success=true when a recipient is
 // rejected outright — the address simply appears under permanent_bounces
 // instead of delivered/queued. Because every mail yauth sends carries a
 // single-use token the user is waiting on, a bounce is a hard failure and
 // must surface as an error rather than a silent success.
-func (m *Mailer) send(ctx context.Context, to, subject, body string) error {
+func (m *Mailer) doSend(ctx context.Context, to, subject, body string) error {
 	if m.AccountID == "" {
 		return errors.New("cloudflare: AccountID is required")
 	}
@@ -176,11 +231,7 @@ func (m *Mailer) send(ctx context.Context, to, subject, body string) error {
 	req.Header.Set("Authorization", "Bearer "+m.APIToken)
 	req.Header.Set("Content-Type", "application/json")
 
-	client := m.HTTPClient
-	if client == nil {
-		client = &http.Client{Timeout: defaultTimeout}
-	}
-	resp, err := client.Do(req)
+	resp, err := m.httpClient().Do(req)
 	if err != nil {
 		// err from net/http can embed the request URL but never the
 		// Authorization header, so this is safe to wrap.
@@ -190,6 +241,7 @@ func (m *Mailer) send(ctx context.Context, to, subject, body string) error {
 		_, _ = io.Copy(io.Discard, resp.Body)
 		_ = resp.Body.Close()
 	}()
+	telemetry.SetAttributeOnCx(ctx, "http.response.status_code", resp.StatusCode)
 
 	// Cap the read so a misbehaving endpoint can't balloon memory.
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
@@ -220,13 +272,22 @@ func (m *Mailer) send(ctx context.Context, to, subject, body string) error {
 	if parsed.Result == nil {
 		return errors.New("cloudflare: send reported success but returned no delivery result")
 	}
-	if contains(parsed.Result.PermanentBounces, to) {
+
+	// Record the disposition, not the address: "bounced" on a span is the
+	// signal an operator needs, while the recipient is PII.
+	switch {
+	case contains(parsed.Result.PermanentBounces, to):
+		telemetry.SetAttributeOnCx(ctx, "mailer.disposition", "bounced")
 		return fmt.Errorf("cloudflare: %s permanently bounced", to)
-	}
-	if !contains(parsed.Result.Delivered, to) && !contains(parsed.Result.Queued, to) {
+	case contains(parsed.Result.Delivered, to):
+		telemetry.SetAttributeOnCx(ctx, "mailer.disposition", "delivered")
+	case contains(parsed.Result.Queued, to):
+		telemetry.SetAttributeOnCx(ctx, "mailer.disposition", "queued")
+	default:
 		// Neither delivered, queued, nor bounced — the recipient was
 		// dropped without explanation. Treat as failure so the caller
 		// does not assume a token is in flight.
+		telemetry.SetAttributeOnCx(ctx, "mailer.disposition", "unlisted")
 		return fmt.Errorf("cloudflare: %s was neither delivered nor queued", to)
 	}
 	return nil

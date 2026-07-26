@@ -85,6 +85,35 @@ is waiting on, so this mailer treats a bounce (and a recipient that appears
 in none of the three lists) as a **hard error** the calling plugin can see.
 `queued` counts as success.
 
+### Tracing
+
+Cloudflare sends are traced out of the box — nothing to configure. Each send
+opens a `mailer.cloudflare.send` CLIENT span, and the default HTTP client
+wraps `otelhttp.NewTransport`, so the outbound call also emits its own CLIENT
+span and propagates W3C `traceparent`. Both nest under the caller's request
+span when one is present.
+
+The span carries:
+
+| Attribute | Values |
+|---|---|
+| `mailer.provider` | `cloudflare` |
+| `mailer.message.kind` | `verification`, `password_reset`, `account_exists`, `magic_link`, `unlock_token` |
+| `mailer.disposition` | `delivered`, `queued`, `bounced`, `unlisted` |
+| `http.response.status_code` | Cloudflare's HTTP status |
+
+A bounce sets the span status to **Error**. This is the whole reason the span
+exists: the bounce comes back as HTTP 200, so transport-level instrumentation
+alone would record a perfectly healthy call for a verification link that went
+nowhere. Alert on `mailer.disposition = bounced`.
+
+**Recipient addresses are never recorded as span attributes** — they are PII
+and spans get exported off-host. Use `mailer.disposition` plus the message
+kind to diagnose; the address stays in your own logs.
+
+If you inject your own `HTTPClient`, it is used verbatim and never mutated —
+wrapping its transport is then your responsibility.
+
 ### Cloudflare over plain SMTP instead
 
 Cloudflare also exposes an SMTP endpoint, which works with `provider: smtp`

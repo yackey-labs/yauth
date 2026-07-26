@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lestrrat-go/jwx/v2/jwk"
-	"github.com/lestrrat-go/jwx/v2/jwt"
+	"github.com/lestrrat-go/jwx/v3/jwk"
+	"github.com/lestrrat-go/jwx/v3/jwt"
 )
 
 // trustedStatement is the verified result of a DCR software_statement.
@@ -46,7 +46,8 @@ func (p *oauth2Plugin) verifySoftwareStatement(ctx context.Context, jws string) 
 	if err != nil {
 		return nil, fmt.Errorf("software_statement parse: %w", err)
 	}
-	if iss := strings.TrimSpace(unverified.Issuer()); iss == "" || !issuerAllowed(iss, p.cfg.DCRTrustedIssuers) {
+	unverifiedIss, _ := unverified.Issuer()
+	if iss := strings.TrimSpace(unverifiedIss); iss == "" || !issuerAllowed(iss, p.cfg.DCRTrustedIssuers) {
 		return nil, fmt.Errorf("software_statement issuer %q is not trusted", iss)
 	}
 	return p.verifyStatementSignature(ctx, jws)
@@ -62,7 +63,8 @@ func (p *oauth2Plugin) verifyStatementSignature(ctx context.Context, jws string)
 	if err != nil {
 		return nil, fmt.Errorf("software_statement parse: %w", err)
 	}
-	iss := strings.TrimSpace(unverified.Issuer())
+	rawIss, _ := unverified.Issuer()
+	iss := strings.TrimSpace(rawIss)
 	if iss == "" {
 		return nil, errors.New("software_statement has no issuer")
 	}
@@ -88,31 +90,44 @@ func (p *oauth2Plugin) verifyStatementSignature(ctx context.Context, jws string)
 		return nil, fmt.Errorf("software_statement verification failed: %w", err)
 	}
 
-	out := &trustedStatement{Issuer: tok.Issuer()}
-	if v, ok := tok.Get("redirect_uris"); ok {
+	tokIss, _ := tok.Issuer()
+	out := &trustedStatement{Issuer: tokIss}
+	if v, ok := claim(tok, "redirect_uris"); ok {
 		out.RedirectURIs = toStringSlice(v)
 	}
-	if v, ok := tok.Get("client_name"); ok {
-		if s, ok := v.(string); ok {
-			out.ClientName = s
-		}
-	}
-	if v, ok := tok.Get("scope"); ok {
-		if s, ok := v.(string); ok {
-			out.Scope = s
-		}
-	}
-	if v, ok := tok.Get("initiate_login_uri"); ok {
-		if s, ok := v.(string); ok {
-			out.InitiateLoginURI = s
-		}
-	}
-	if v, ok := tok.Get("return_uri"); ok {
-		if s, ok := v.(string); ok {
-			out.ReturnURI = s
-		}
-	}
+	out.ClientName = stringClaim(tok, "client_name")
+	out.Scope = stringClaim(tok, "scope")
+	out.InitiateLoginURI = stringClaim(tok, "initiate_login_uri")
+	out.ReturnURI = stringClaim(tok, "return_uri")
 	return out, nil
+}
+
+// claim reads an arbitrary claim from tok, reporting whether it was present.
+//
+// jwx v3 replaced v2's `(value, ok)` accessor with `Get(key, dst) error`,
+// which INVERTS the signal: absence is now an error rather than a false
+// second return. Getting this backwards would compile cleanly and silently
+// attest claims a software_statement never made — so the polarity is
+// centralised here rather than repeated at each call site.
+func claim(tok jwt.Token, key string) (any, bool) {
+	var v any
+	if err := tok.Get(key, &v); err != nil {
+		return nil, false
+	}
+	return v, true
+}
+
+// stringClaim returns a string claim, or "" when the claim is absent or is
+// not a string. This matches the v2 form exactly: the outer presence check
+// and the inner type assertion both had to pass before the field was set,
+// so a present-but-non-string claim leaves the field at its zero value.
+func stringClaim(tok jwt.Token, key string) string {
+	v, ok := claim(tok, key)
+	if !ok {
+		return ""
+	}
+	s, _ := v.(string)
+	return s
 }
 
 func issuerAllowed(iss string, allow []string) bool {

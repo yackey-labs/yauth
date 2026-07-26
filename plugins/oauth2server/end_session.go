@@ -6,7 +6,7 @@ import (
 	"net/url"
 
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/lestrrat-go/jwx/v2/jwk"
+	"github.com/lestrrat-go/jwx/v3/jwk"
 
 	"github.com/yackey-labs/yauth/auth"
 	"github.com/yackey-labs/yauth/plugin"
@@ -191,7 +191,7 @@ func signerPublicKey(signer plugin.JWTSigner) (any, error) {
 		return nil, errors.New("signer JWKS is empty")
 	}
 	var pub any
-	if err := k.Raw(&pub); err != nil {
+	if err := jwk.Export(k, &pub); err != nil {
 		return nil, err
 	}
 	return pub, nil

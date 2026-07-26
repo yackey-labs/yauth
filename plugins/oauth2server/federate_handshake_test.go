@@ -11,8 +11,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/lestrrat-go/jwx/v2/jwa"
-	"github.com/lestrrat-go/jwx/v2/jwt"
+	"github.com/lestrrat-go/jwx/v3/jwa"
+	"github.com/lestrrat-go/jwx/v3/jwt"
 
 	yauth "github.com/yackey-labs/yauth"
 	"github.com/yackey-labs/yauth/domain"
@@ -37,7 +37,7 @@ func (p *peerIssuer) signFederationRequest(t *testing.T, iss, returnURI string, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	signed, err := jwt.Sign(tok, jwt.WithKey(jwa.RS256, p.key))
+	signed, err := jwt.Sign(tok, jwt.WithKey(jwa.RS256(), p.key))
 	if err != nil {
 		t.Fatal(err)
 	}

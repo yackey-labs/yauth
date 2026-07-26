@@ -197,6 +197,9 @@ mailer:
     password_env: SMTP_PASS
 ```
 
+`provider` also accepts `cloudflare` (Cloudflare Email Service over its REST
+API) — see `yauth docs mailer` for its `cloudflare:` block and prerequisites.
+
 (Builder path: set `Config.Mailer` on `emailpassword`/`magiclink`/`lockout`.)
 Full guide, including a builder example and custom providers: `yauth docs mailer`.
 

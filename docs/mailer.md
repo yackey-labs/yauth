@@ -25,6 +25,14 @@ or mailer.provider=smtp for production
 If you see that line in a deployed service, you have a misconfiguration. Fix it
 by configuring a real mailer.
 
+## Pick a provider
+
+| `mailer.provider` | Use for |
+|---|---|
+| `logging` (default) | **Dev only** — writes tokens to the log, sends nothing |
+| `smtp` | Any SMTP relay (including Cloudflare's, see below) |
+| `cloudflare` | Cloudflare Email Service over its REST API |
+
 ## Configure SMTP (YAML / `NewFromConfig`)
 
 ```yaml
@@ -43,6 +51,62 @@ Secrets are referenced by env-var **name** (`*_env`), never inlined, so the
 config file stays safe to commit. `NewFromConfig` wires this mailer into all
 three plugins automatically. Inspect every field with `yauth schema config`
 (the `mailer` block carries inline descriptions and the `provider` enum).
+
+## Configure Cloudflare Email Service (YAML / `NewFromConfig`)
+
+```yaml
+mailer:
+  provider: cloudflare
+  from: "no-reply@example.com"   # domain must be onboarded for Email Sending
+  cloudflare:
+    account_id: "your-cloudflare-account-id"
+    api_token_env: CLOUDFLARE_API_TOKEN   # env VAR NAME, not the token
+```
+
+Prerequisites, all on the Cloudflare side:
+
+1. The domain must use **Cloudflare DNS** and be onboarded under
+   **Compute → Email Service → Email Sending**. Onboarding adds the SPF,
+   DKIM, DMARC and bounce-routing records for you.
+2. The API token needs the **Email Sending: Edit** permission, and must
+   belong to the account that owns the onboarded domain.
+3. `from` must be an address at that onboarded domain.
+
+Startup fails fast if `account_id`, `api_token_env`, or `from` is missing —
+**and also if the named env var is unset or empty**, so a missing secret is
+a boot error rather than a run of silently vanishing verification emails.
+
+### Bounces are errors, not successes
+
+Cloudflare answers `HTTP 200` with `"success": true` even when it refuses a
+recipient outright — the address just lands in `permanent_bounces` instead of
+`delivered` or `queued`. Every yauth email carries a single-use token someone
+is waiting on, so this mailer treats a bounce (and a recipient that appears
+in none of the three lists) as a **hard error** the calling plugin can see.
+`queued` counts as success.
+
+### Cloudflare over plain SMTP instead
+
+Cloudflare also exposes an SMTP endpoint, which works with `provider: smtp`
+and no Cloudflare-specific config at all — the username is the literal string
+`api_token` and the password is the API token:
+
+```yaml
+mailer:
+  provider: smtp
+  from: "no-reply@example.com"
+  smtp:
+    host: smtp.mx.cloudflare.net
+    port: 465
+    username_env: CLOUDFLARE_SMTP_USER   # env var containing: api_token
+    password_env: CLOUDFLARE_API_TOKEN
+    tls: true
+```
+
+Prefer `provider: cloudflare` when you want per-recipient delivery status
+(the bounce detection above — SMTP gives you none of it) or when egress on
+port 465 is unavailable. Prefer `provider: smtp` if you would rather keep one
+code path across several mail vendors.
 
 ## Custom mailer (`WithMailer` / `NewFromConfig`)
 
@@ -89,6 +153,17 @@ yauth.New(repo, cfg).
     WithPlugin(magiclink.New(magiclink.Config{Mailer: m})).
     WithPlugin(lockout.New(lockout.Config{Mailer: m})).
     Build()
+```
+
+The Cloudflare mailer drops in the same way — it satisfies all three
+interfaces too:
+
+```go
+m := cfmailer.New(cfmailer.Mailer{
+    AccountID: "your-cloudflare-account-id",
+    APIToken:  os.Getenv("CLOUDFLARE_API_TOKEN"),
+    From:      "no-reply@example.com",
+})
 ```
 
 Implement the interface yourself to route through Resend/SES/Postmark/etc.

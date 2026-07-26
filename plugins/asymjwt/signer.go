@@ -10,8 +10,8 @@ import (
 	"os"
 
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/lestrrat-go/jwx/v2/jwa"
-	"github.com/lestrrat-go/jwx/v2/jwk"
+	"github.com/lestrrat-go/jwx/v3/jwa"
+	"github.com/lestrrat-go/jwx/v3/jwk"
 )
 
 // Signer implements plugin.JWTSigner backed by an asymmetric keypair.
@@ -216,10 +216,10 @@ func validatePublicKeyType(k any, keyType string) (any, error) {
 }
 
 // buildJWKS marshals pub into a single-key JWKS document using
-// lestrrat-go/jwx/v2/jwk. The kid and alg headers are set so verifiers
+// lestrrat-go/jwx/v3/jwk. The kid and alg headers are set so verifiers
 // can pin the key.
 func buildJWKS(pub any, keyType, kid string) ([]byte, error) {
-	key, err := jwk.FromRaw(pub)
+	key, err := jwk.Import(pub)
 	if err != nil {
 		return nil, fmt.Errorf("asymjwt: build jwk: %w", err)
 	}
@@ -228,11 +228,11 @@ func buildJWKS(pub any, keyType, kid string) ([]byte, error) {
 	}
 	switch keyType {
 	case "RS256":
-		if err := key.Set(jwk.AlgorithmKey, jwa.RS256); err != nil {
+		if err := key.Set(jwk.AlgorithmKey, jwa.RS256()); err != nil {
 			return nil, err
 		}
 	case "ES256":
-		if err := key.Set(jwk.AlgorithmKey, jwa.ES256); err != nil {
+		if err := key.Set(jwk.AlgorithmKey, jwa.ES256()); err != nil {
 			return nil, err
 		}
 	}

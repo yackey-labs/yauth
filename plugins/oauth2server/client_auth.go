@@ -14,7 +14,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
-	"github.com/lestrrat-go/jwx/v2/jwk"
+	"github.com/lestrrat-go/jwx/v3/jwk"
 
 	"github.com/yackey-labs/yauth/auth"
 	"github.com/yackey-labs/yauth/domain"
@@ -317,11 +317,15 @@ func fetchJWKS(ctx context.Context, uri string, allowPrivate bool) ([]any, error
 		return nil, fmt.Errorf("parse jwks: %w", err)
 	}
 	out := make([]any, 0, set.Len())
-	for it := set.Keys(ctx); it.Next(ctx); {
-		pair := it.Pair()
-		k := pair.Value.(jwk.Key)
+	// jwx v3 removed iterators; index the set directly. Keys that fail to
+	// export are skipped, matching the previous behaviour.
+	for i := range set.Len() {
+		k, ok := set.Key(i)
+		if !ok {
+			continue
+		}
 		var raw any
-		if err := k.Raw(&raw); err != nil {
+		if err := jwk.Export(k, &raw); err != nil {
 			continue
 		}
 		out = append(out, raw)

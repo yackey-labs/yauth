@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lestrrat-go/jwx/v2/jwa"
-	"github.com/lestrrat-go/jwx/v2/jwk"
-	"github.com/lestrrat-go/jwx/v2/jwt"
+	"github.com/lestrrat-go/jwx/v3/jwa"
+	"github.com/lestrrat-go/jwx/v3/jwk"
+	"github.com/lestrrat-go/jwx/v3/jwt"
 
 	yauth "github.com/yackey-labs/yauth"
 	"github.com/yackey-labs/yauth/plugins/bearer"
@@ -33,12 +33,12 @@ func newPeerIssuer(t *testing.T) *peerIssuer {
 	if err != nil {
 		t.Fatal(err)
 	}
-	key, err := jwk.FromRaw(raw)
+	key, err := jwk.Import(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
 	_ = key.Set(jwk.KeyIDKey, "peer-kid")
-	_ = key.Set(jwk.AlgorithmKey, jwa.RS256)
+	_ = key.Set(jwk.AlgorithmKey, jwa.RS256())
 	pub, err := key.PublicKey()
 	if err != nil {
 		t.Fatal(err)
@@ -74,7 +74,7 @@ func (p *peerIssuer) sign(t *testing.T, iss string, redirectURIs []string) strin
 	if err != nil {
 		t.Fatal(err)
 	}
-	signed, err := jwt.Sign(tok, jwt.WithKey(jwa.RS256, p.key))
+	signed, err := jwt.Sign(tok, jwt.WithKey(jwa.RS256(), p.key))
 	if err != nil {
 		t.Fatal(err)
 	}

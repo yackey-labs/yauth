@@ -32,8 +32,8 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
-	"github.com/lestrrat-go/jwx/v2/jwa"
-	"github.com/lestrrat-go/jwx/v2/jwk"
+	"github.com/lestrrat-go/jwx/v3/jwa"
+	"github.com/lestrrat-go/jwx/v3/jwk"
 
 	"github.com/yackey-labs/yauth/auth"
 	"github.com/yackey-labs/yauth/domain"
@@ -106,12 +106,12 @@ func (i *fakeIDP) handleJWKS(w http.ResponseWriter, r *http.Request) {
 	i.jwksCalls++
 	set := jwk.NewSet()
 	add := func(key *rsa.PrivateKey, kid string) {
-		k, err := jwk.FromRaw(&key.PublicKey)
+		k, err := jwk.Import(&key.PublicKey)
 		if err != nil {
 			return
 		}
 		_ = k.Set(jwk.KeyIDKey, kid)
-		_ = k.Set(jwk.AlgorithmKey, jwa.RS256)
+		_ = k.Set(jwk.AlgorithmKey, jwa.RS256())
 		_ = set.AddKey(k)
 	}
 	add(i.key, i.kid)

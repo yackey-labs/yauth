@@ -32,7 +32,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/lestrrat-go/jwx/v2/jwk"
+	"github.com/lestrrat-go/jwx/v3/jwk"
 )
 
 // jwksEntry is one cached document.
@@ -245,7 +245,7 @@ func (c *jwksCache) verifyIDToken(ctx context.Context, jwksURL, rawToken, expect
 			}
 		}
 		var raw any
-		if err := k.Raw(&raw); err != nil {
+		if err := jwk.Export(k, &raw); err != nil {
 			return nil, fmt.Errorf("ssooidc: extract raw key: %w", err)
 		}
 		switch raw.(type) {
@@ -327,7 +327,7 @@ func (c *jwksCache) verifyLogoutToken(ctx context.Context, jwksURL, rawToken, ex
 			}
 		}
 		var raw any
-		if err := k.Raw(&raw); err != nil {
+		if err := jwk.Export(k, &raw); err != nil {
 			return nil, fmt.Errorf("ssooidc: extract raw key: %w", err)
 		}
 		switch raw.(type) {

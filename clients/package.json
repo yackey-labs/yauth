@@ -16,13 +16,13 @@
     "clean": "rm -rf node_modules packages/*/node_modules packages/*/dist"
   },
   "devDependencies": {
-    "@faker-js/faker": "^10.4.0",
-    "@vitejs/plugin-vue": "^5.2.0",
-    "msw": "^2.13.2",
-    "orval": "^8.7.0",
+    "@faker-js/faker": "^10.5.0",
+    "@vitejs/plugin-vue": "^6.0.8",
+    "msw": "^2.15.0",
+    "orval": "^8.23.0",
     "typescript": "^5.9.3",
-    "vite-plus": "^0.1.20",
-    "vitest": "^4.0.0"
+    "vite-plus": "^0.2.6",
+    "vitest": "^4.1.10"
   },
   "engines": {
     "node": ">=20"

@@ -404,3 +404,96 @@ func TestEncodeRoundTrip(t *testing.T) {
 		t.Errorf("driver round-trip: got %q, want %q", got.Database.Driver, c.Database.Driver)
 	}
 }
+
+// The cloudflare mailer block must survive the real file-loading path, not
+// just struct-literal construction. The YAML decoder runs with
+// KnownFields(true), so a typo in a `yaml:` tag fails here and nowhere else;
+// Validate() does not inspect the mailer block at all.
+func TestLoadYAML_MailerCloudflare(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "yauth.yaml")
+	body := []byte(`database:
+  driver: memory
+mailer:
+  provider: cloudflare
+  from: "no-reply@example.com"
+  cloudflare:
+    account_id: "acct123"
+    api_token_env: CLOUDFLARE_API_TOKEN
+    base_url: "https://proxy.example.com/client/v4"
+`)
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Mailer.Provider != "cloudflare" {
+		t.Errorf("provider = %q", cfg.Mailer.Provider)
+	}
+	if cfg.Mailer.From != "no-reply@example.com" {
+		t.Errorf("from = %q", cfg.Mailer.From)
+	}
+	if cfg.Mailer.Cloudflare.AccountID != "acct123" {
+		t.Errorf("account_id = %q", cfg.Mailer.Cloudflare.AccountID)
+	}
+	if cfg.Mailer.Cloudflare.APITokenEnv != "CLOUDFLARE_API_TOKEN" {
+		t.Errorf("api_token_env = %q", cfg.Mailer.Cloudflare.APITokenEnv)
+	}
+	if cfg.Mailer.Cloudflare.BaseURL != "https://proxy.example.com/client/v4" {
+		t.Errorf("base_url = %q", cfg.Mailer.Cloudflare.BaseURL)
+	}
+}
+
+// Same block via TOML, which uses separate struct tags.
+func TestLoadTOML_MailerCloudflare(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "yauth.toml")
+	body := []byte(`[database]
+driver = "memory"
+
+[mailer]
+provider = "cloudflare"
+from = "no-reply@example.com"
+
+[mailer.cloudflare]
+account_id = "acct123"
+api_token_env = "CLOUDFLARE_API_TOKEN"
+`)
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Mailer.Cloudflare.AccountID != "acct123" {
+		t.Errorf("account_id = %q", cfg.Mailer.Cloudflare.AccountID)
+	}
+	if cfg.Mailer.Cloudflare.APITokenEnv != "CLOUDFLARE_API_TOKEN" {
+		t.Errorf("api_token_env = %q", cfg.Mailer.Cloudflare.APITokenEnv)
+	}
+}
+
+// Encode (used by `yauth init`) must round-trip the block back through the
+// strict decoder.
+func TestEncodeDecode_MailerCloudflareRoundTrips(t *testing.T) {
+	in := &Config{}
+	in.Mailer = MailerConfig{
+		Provider:   "cloudflare",
+		From:       "no-reply@example.com",
+		Cloudflare: CloudflareConfig{AccountID: "acct123", APITokenEnv: "CLOUDFLARE_API_TOKEN"},
+	}
+	raw, err := Encode(in)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	out, err := Decode(raw, FormatYAML)
+	if err != nil {
+		t.Fatalf("Decode of encoded config: %v", err)
+	}
+	if out.Mailer.Cloudflare != in.Mailer.Cloudflare {
+		t.Errorf("cloudflare block did not round-trip: %+v vs %+v", out.Mailer.Cloudflare, in.Mailer.Cloudflare)
+	}
+}

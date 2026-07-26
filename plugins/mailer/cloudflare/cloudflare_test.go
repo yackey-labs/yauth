@@ -234,7 +234,7 @@ func TestSend_RejectsMissingConfig(t *testing.T) {
 		"no token":   {AccountID: "a", From: "f@x"},
 		"no from":    {AccountID: "a", APIToken: "t"},
 	} {
-		if err := m.send(testCtx(), "u@x", "s", "b"); err == nil {
+		if err := m.send(testCtx(), "verification", "u@x", "s", "b"); err == nil {
 			t.Errorf("%s: expected an error", name)
 		}
 	}
@@ -259,7 +259,7 @@ func TestSend_DefaultsToCloudflareAPIRoot(t *testing.T) {
 	m := New(Mailer{AccountID: "a", APIToken: "t", From: "f@x"})
 	ctx, cancel := context.WithCancel(testCtx())
 	cancel()
-	err := m.send(ctx, "u@x", "s", "b")
+	err := m.send(ctx, "verification", "u@x", "s", "b")
 	if err == nil {
 		t.Fatal("expected the cancelled context to abort the request")
 	}

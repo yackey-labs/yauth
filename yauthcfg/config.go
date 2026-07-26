@@ -123,11 +123,22 @@ type CORSConfig struct {
 // MailerConfig selects an outbound mailer for the host. Provider "logging"
 // (the default) is a DEV stand-in that writes the would-be email — including
 // verification/reset/magic-link tokens — to the log and sends nothing; use
-// "smtp" in production. See `yauth docs mailer`.
+// "smtp" or "cloudflare" in production. See `yauth docs mailer`.
 type MailerConfig struct {
-	Provider string     `yaml:"provider" toml:"provider" enum:"logging,smtp" doc:"Outbound mailer. 'logging' (default) is DEV ONLY: it logs the would-be email body — including single-use verification/reset/magic-link bearer tokens — and sends NO real email. Set 'smtp' for production. See 'yauth docs mailer'."`
-	From     string     `yaml:"from" toml:"from" doc:"Envelope/From address for outbound mail. Required when provider=smtp."`
-	SMTP     SMTPConfig `yaml:"smtp" toml:"smtp" doc:"SMTP connection settings (used when provider=smtp)."`
+	Provider   string           `yaml:"provider" toml:"provider" enum:"logging,smtp,cloudflare" doc:"Outbound mailer. 'logging' (default) is DEV ONLY: it logs the would-be email body — including single-use verification/reset/magic-link bearer tokens — and sends NO real email. Set 'smtp' or 'cloudflare' for production. See 'yauth docs mailer'."`
+	From       string           `yaml:"from" toml:"from" doc:"Envelope/From address for outbound mail. Required when provider is smtp or cloudflare."`
+	SMTP       SMTPConfig       `yaml:"smtp" toml:"smtp" doc:"SMTP connection settings (used when provider=smtp)."`
+	Cloudflare CloudflareConfig `yaml:"cloudflare" toml:"cloudflare" doc:"Cloudflare Email Service settings (used when provider=cloudflare)."`
+}
+
+// CloudflareConfig holds Cloudflare Email Service (REST API) details. The
+// API token is resolved from an environment variable to keep the config
+// file safe to commit. The domain of MailerConfig.From must be onboarded
+// for Email Sending on the account identified by AccountID.
+type CloudflareConfig struct {
+	AccountID   string `yaml:"account_id" toml:"account_id" doc:"Cloudflare account ID that owns the onboarded sending domain (required when provider=cloudflare)."`
+	APITokenEnv string `yaml:"api_token_env" toml:"api_token_env" doc:"Name of the env var holding a Cloudflare API token with the 'Email Sending: Edit' permission (the value is read at runtime; the var name, not the secret, lives in config). Required when provider=cloudflare."`
+	BaseURL     string `yaml:"base_url" toml:"base_url" doc:"Override the Cloudflare API root. Empty uses https://api.cloudflare.com/client/v4 — set this only for a proxy or a test double."`
 }
 
 // SMTPConfig holds SMTP connection details. Username/password are

@@ -435,3 +435,55 @@ func TestDuplicatePluginRejected(t *testing.T) {
 		t.Errorf("error should mention duplicate plugin, got: %v", err)
 	}
 }
+
+// A configured mailer must actually reach the mail-sending plugins. The
+// observable signal is the console-mailer WARN each plugin emits at startup:
+// present means the plugin fell back to LoggingMailer (dev-only, logs
+// tokens), absent means a real mailer was wired in.
+//
+// This pins the same property TestBuildMailer_LoggingYieldsUntypedNil covers
+// at the unit level, but end-to-end through NewFromConfig — a typed-nil leak
+// out of buildMailer would flip both directions of this test.
+func TestNewFromConfigWiresConfiguredMailer(t *testing.T) {
+	t.Setenv("TEST_CF_TOKEN", "cf-token-value")
+
+	mkCfg := func(mailer yauthcfg.MailerConfig) *yauthcfg.Config {
+		c := &yauthcfg.Config{}
+		c.Database.Driver = "memory"
+		c.Plugins.EmailPassword.Enabled = true
+		c.Plugins.MagicLink.Enabled = true
+		c.Plugins.AccountLock.Enabled = true
+		c.Mailer = mailer
+		return c
+	}
+
+	build := func(t *testing.T, mailer yauthcfg.MailerConfig) string {
+		t.Helper()
+		var buf bytes.Buffer
+		_, err := yauth.NewFromConfig(context.Background(), mkCfg(mailer),
+			yauth.WithRepo(memrepo.New()),
+			yauth.WithConfigLogger(slog.New(slog.NewJSONHandler(&buf, nil))))
+		if err != nil {
+			t.Fatalf("NewFromConfig: %v", err)
+		}
+		return buf.String()
+	}
+
+	// provider=logging (the default) must still reach LoggingMailer and warn.
+	if logs := build(t, yauthcfg.MailerConfig{Provider: "logging"}); !strings.Contains(logs, "LoggingMailer") {
+		t.Errorf("provider=logging should warn about the console mailer, got:\n%s", logs)
+	}
+
+	// provider=cloudflare must suppress the warning on every sending plugin.
+	logs := build(t, yauthcfg.MailerConfig{
+		Provider: "cloudflare",
+		From:     "no-reply@example.com",
+		Cloudflare: yauthcfg.CloudflareConfig{
+			AccountID:   "acct123",
+			APITokenEnv: "TEST_CF_TOKEN",
+		},
+	})
+	if strings.Contains(logs, "LoggingMailer") {
+		t.Errorf("provider=cloudflare should wire a real mailer into every sending plugin, but a console-mailer WARN was emitted:\n%s", logs)
+	}
+}

@@ -23,6 +23,7 @@ import (
 	"github.com/yackey-labs/yauth/plugins/emailpassword"
 	"github.com/yackey-labs/yauth/plugins/lockout"
 	"github.com/yackey-labs/yauth/plugins/magiclink"
+	cfmailer "github.com/yackey-labs/yauth/plugins/mailer/cloudflare"
 	smtpmailer "github.com/yackey-labs/yauth/plugins/mailer/smtp"
 	"github.com/yackey-labs/yauth/plugins/mfa"
 	"github.com/yackey-labs/yauth/plugins/oauth"
@@ -299,8 +300,9 @@ func NewBuilderFromConfig(ctx context.Context, cfg *yauthcfg.Config, opts ...Con
 	}
 	builder := New(repo, configToYAuthConfig(cfg)).WithLogger(logger)
 
-	// Resolve the effective mailer: custom (WithMailer) wins; smtp when
-	// mailer.provider=smtp; nil falls back to each plugin's LoggingMailer.
+	// Resolve the effective mailer: custom (WithMailer) wins; otherwise the
+	// provider named by mailer.provider (smtp | cloudflare); nil falls back
+	// to each plugin's LoggingMailer.
 	mailer, err := resolveMailer(cfg.Mailer, o.mailer)
 	if err != nil {
 		return nil, err
@@ -798,24 +800,32 @@ func resolveMailer(cfg yauthcfg.MailerConfig, custom Mailer) (Mailer, error) {
 	if custom != nil {
 		return custom, nil
 	}
-	m, err := buildMailer(cfg)
-	if err != nil || m == nil {
-		return nil, err
-	}
-	return m, nil
+	return buildMailer(cfg)
 }
 
-// buildMailer translates the cfg into a concrete mailer. Returns nil when
-// no provider is configured (callers fall back to the plugin's default
-// LoggingMailer). The returned *smtp.Mailer satisfies the [Mailer] interface.
-func buildMailer(cfg yauthcfg.MailerConfig) (*smtpmailer.Mailer, error) {
+// buildMailer translates the cfg into a concrete mailer. Returns a nil
+// [Mailer] when no provider is configured (callers fall back to the plugin's
+// default LoggingMailer and its startup WARN).
+//
+// Every branch must return a literal nil rather than a typed nil pointer:
+// a (*T)(nil) stored in the Mailer interface is NOT == nil, which would send
+// the logging fallback down the real-mailer path.
+func buildMailer(cfg yauthcfg.MailerConfig) (Mailer, error) {
 	provider := strings.ToLower(strings.TrimSpace(cfg.Provider))
-	if provider == "" || provider == "logging" {
+	switch provider {
+	case "", "logging":
 		return nil, nil
+	case "smtp":
+		return buildSMTPMailer(cfg)
+	case "cloudflare":
+		return buildCloudflareMailer(cfg)
+	default:
+		return nil, fmt.Errorf("yauth: unsupported mailer.provider %q (logging | smtp | cloudflare)", cfg.Provider)
 	}
-	if provider != "smtp" {
-		return nil, fmt.Errorf("yauth: unsupported mailer.provider %q (logging | smtp)", cfg.Provider)
-	}
+}
+
+// buildSMTPMailer constructs the bundled SMTP mailer from cfg.
+func buildSMTPMailer(cfg yauthcfg.MailerConfig) (Mailer, error) {
 	if cfg.SMTP.Host == "" || cfg.SMTP.Port == 0 {
 		return nil, errors.New("yauth: mailer.smtp requires host and port")
 	}
@@ -837,6 +847,33 @@ func buildMailer(cfg yauthcfg.MailerConfig) (*smtpmailer.Mailer, error) {
 		Password: pass,
 		From:     cfg.From,
 		TLS:      cfg.SMTP.TLS,
+	}), nil
+}
+
+// buildCloudflareMailer constructs the Cloudflare Email Service mailer from
+// cfg. The API token is read from the env var named by api_token_env; an
+// empty value is rejected here rather than at first send, so a missing
+// secret fails at startup instead of silently swallowing the first
+// verification email.
+func buildCloudflareMailer(cfg yauthcfg.MailerConfig) (Mailer, error) {
+	if cfg.Cloudflare.AccountID == "" {
+		return nil, errors.New("yauth: mailer.cloudflare requires account_id")
+	}
+	if cfg.Cloudflare.APITokenEnv == "" {
+		return nil, errors.New("yauth: mailer.cloudflare requires api_token_env")
+	}
+	if cfg.From == "" {
+		return nil, errors.New("yauth: mailer.from is required when provider=cloudflare")
+	}
+	token := os.Getenv(cfg.Cloudflare.APITokenEnv)
+	if token == "" {
+		return nil, fmt.Errorf("yauth: mailer.cloudflare api_token_env %q is unset or empty", cfg.Cloudflare.APITokenEnv)
+	}
+	return cfmailer.New(cfmailer.Mailer{
+		AccountID: cfg.Cloudflare.AccountID,
+		APIToken:  token,
+		From:      cfg.From,
+		BaseURL:   cfg.Cloudflare.BaseURL,
 	}), nil
 }
 

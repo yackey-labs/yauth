@@ -1084,7 +1084,7 @@ const { user } = useSession()
 | email-password         | ✅           | Argon2id, dummy-verify on miss to defeat enumeration timing                              |
 | bearer JWT             | ✅           | HS256 access + opaque refresh; family rotation with reuse-revocation                     |
 | api-key                | ✅           | `yak_<prefix>_<secret>` header credential, scoped + per-user cap                         |
-| magic-link             | ✅           | LoggingMailer for dev; SMTP / Resend mailers via the `Mailer` interface                  |
+| magic-link             | ✅           | LoggingMailer for dev; bundled SMTP + Cloudflare mailers, or any `Mailer` impl           |
 | account-lockout        | ✅           | Exponential ladder; events-based interception of `login.attempt/failed/succeeded`        |
 | status                 | ✅           | Admin-gated diagnostic                                                                   |
 | admin                  | ✅           | Users CRUD-ish + ban/unban/impersonate + audit log                                       |

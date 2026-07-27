@@ -37,6 +37,24 @@ func okResponse(w http.ResponseWriter, to string) {
 	})
 }
 
+// acceptedResponse writes the envelope Cloudflare actually returns for an
+// accepted message from a domain that reports no per-recipient disposition:
+// a message_id and three empty lists. Kept separate from okResponse because
+// TestSend_UnlistedRecipientIsAnError depends on that one carrying no ID.
+func acceptedResponse(w http.ResponseWriter, messageID string) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"success": true,
+		"errors":  []any{},
+		"result": map[string]any{
+			"message_id":        messageID,
+			"delivered":         []string{},
+			"permanent_bounces": []string{},
+			"queued":            []string{},
+		},
+	})
+}
+
 func TestSend_PostsExpectedRequest(t *testing.T) {
 	var (
 		gotPath   string
@@ -107,6 +125,59 @@ func TestSend_PermanentBounceIsAnError(t *testing.T) {
 	}
 }
 
+// A bounce must not be rescued by the message_id introduced for the
+// accepted-but-undisposed case. Cloudflare returns both together, and this
+// ordering is the whole safety property of the disposition switch.
+func TestSend_PermanentBounceBeatsMessageID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"success": true,
+			"errors":  []any{},
+			"result": map[string]any{
+				"message_id":        "<abc@example.com>",
+				"delivered":         []string{},
+				"permanent_bounces": []string{"user@example.com"},
+				"queued":            []string{},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	err := newTestMailer(srv).SendVerification(testCtx(), "user@example.com", "https://x/verify")
+	if err == nil {
+		t.Fatal("a message_id must not rescue a permanently bounced recipient")
+	}
+	if !strings.Contains(err.Error(), "bounce") {
+		t.Errorf("error should name the bounce, got %q", err)
+	}
+}
+
+// The production shape: Cloudflare accepts the message, returns a message_id
+// and leaves all three per-recipient lists empty. The mail does arrive, so
+// this must not be reported as a failure.
+func TestSend_MessageIDWithNoDispositionIsSuccess(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		acceptedResponse(w, "<KgUT174Nmi0kh5WsTvJG5PASUBHbtTAJRtEm@freshstrings.app>")
+	}))
+	defer srv.Close()
+
+	if err := newTestMailer(srv).SendVerification(testCtx(), "user@example.com", "https://x/verify"); err != nil {
+		t.Errorf("an accepted message with a message_id should succeed, got %v", err)
+	}
+}
+
+func TestSend_DeliveredCountsAsSuccess(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		okResponse(w, "user@example.com")
+	}))
+	defer srv.Close()
+
+	if err := newTestMailer(srv).SendVerification(testCtx(), "user@example.com", "https://x/verify"); err != nil {
+		t.Errorf("a delivered recipient should succeed, got %v", err)
+	}
+}
+
 func TestSend_QueuedCountsAsSuccess(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -127,8 +198,9 @@ func TestSend_QueuedCountsAsSuccess(t *testing.T) {
 	}
 }
 
-// Neither delivered, queued, nor bounced: the recipient vanished. The caller
-// must not assume a token is in flight.
+// Neither delivered, queued, nor bounced, and no message_id: the recipient
+// vanished with nothing to show for it. The caller must not assume a token is
+// in flight.
 func TestSend_UnlistedRecipientIsAnError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		okResponse(w, "someone-else@example.com")

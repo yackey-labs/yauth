@@ -133,6 +133,33 @@ func TestSend_EmitsSpanWithKindAndDisposition(t *testing.T) {
 	}
 }
 
+// An accepted message with no per-recipient disposition is a success, and the
+// span must say so — it previously landed on "unlisted" with an error status,
+// which made every send from such a domain look like a failure.
+func TestSend_AcceptedWithoutDispositionIsNotAnErrorSpan(t *testing.T) {
+	rec := installRecorder(t)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		acceptedResponse(w, "<abc@example.com>")
+	}))
+	defer srv.Close()
+
+	if err := newTestMailer(srv).SendVerification(context.Background(), "user@example.com", "https://x/verify"); err != nil {
+		t.Fatalf("SendVerification: %v", err)
+	}
+
+	span := spanByName(rec.Ended(), "mailer.cloudflare.send")
+	if span == nil {
+		t.Fatal("no mailer.cloudflare.send span was recorded")
+	}
+	if v, _ := attrString(span, "mailer.disposition"); v != "accepted" {
+		t.Errorf("mailer.disposition = %q, want accepted", v)
+	}
+	if span.Status().Code == codes.Error {
+		t.Errorf("an accepted send should not be an error span: %v", span.Status())
+	}
+}
+
 // The bounce path is the reason this span exists: Cloudflare says HTTP 200,
 // so otelhttp records a healthy call while the mail went nowhere.
 func TestSend_BounceMarksSpanAsError(t *testing.T) {

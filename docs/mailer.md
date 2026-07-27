@@ -81,9 +81,15 @@ a boot error rather than a run of silently vanishing verification emails.
 Cloudflare answers `HTTP 200` with `"success": true` even when it refuses a
 recipient outright — the address just lands in `permanent_bounces` instead of
 `delivered` or `queued`. Every yauth email carries a single-use token someone
-is waiting on, so this mailer treats a bounce (and a recipient that appears
-in none of the three lists) as a **hard error** the calling plugin can see.
-`queued` counts as success.
+is waiting on, so this mailer treats a bounce as a **hard error** the calling
+plugin can see. `queued` counts as success.
+
+Cloudflare does not always populate those per-recipient lists. An accepted
+send frequently comes back with a `message_id` and all three lists empty, and
+the mail arrives — so a `message_id` counts as success when the lists are
+silent. The bounce check runs first, so a rejected address is never rescued by
+one. Only a response with **no disposition and no `message_id`** is an error:
+nothing in it says the message went anywhere.
 
 ### Tracing
 
@@ -99,7 +105,7 @@ The span carries:
 |---|---|
 | `mailer.provider` | `cloudflare` |
 | `mailer.message.kind` | `verification`, `password_reset`, `account_exists`, `magic_link`, `unlock_token` |
-| `mailer.disposition` | `delivered`, `queued`, `bounced`, `unlisted` |
+| `mailer.disposition` | `delivered`, `queued`, `accepted` (message_id only), `bounced`, `unlisted` (no signal at all) |
 | `http.response.status_code` | Cloudflare's HTTP status |
 
 A bounce sets the span status to **Error**. This is the whole reason the span

@@ -13,7 +13,9 @@
 //   - Delivery status is checked per recipient: Cloudflare answers HTTP 200
 //     with success=true even when the recipient lands in permanent_bounces,
 //     so a bare status-code check would silently swallow a bounced
-//     verification or password-reset link. See send.
+//     verification or password-reset link. When the per-recipient lists are
+//     all empty, a returned message_id means Cloudflare accepted the
+//     message and the send counts as a success. See send.
 //   - Every send is traced. The default HTTP client wraps
 //     otelhttp.NewTransport, so the call emits a CLIENT span and propagates
 //     W3C traceparent; send additionally opens its own span carrying the
@@ -142,6 +144,10 @@ type apiError struct {
 }
 
 type sendResult struct {
+	// MessageID is set whenever Cloudflare takes ownership of the message.
+	// It is the only positive signal for a sending domain that reports no
+	// per-recipient disposition — see doSend.
+	MessageID        string   `json:"message_id"`
 	Delivered        []string `json:"delivered"`
 	PermanentBounces []string `json:"permanent_bounces"`
 	Queued           []string `json:"queued"`
@@ -197,6 +203,12 @@ func (m *Mailer) send(ctx context.Context, kind, to, subject, body string) error
 // instead of delivered/queued. Because every mail yauth sends carries a
 // single-use token the user is waiting on, a bounce is a hard failure and
 // must surface as an error rather than a silent success.
+//
+// The per-recipient lists are not always populated, though: observed in
+// production on 2026-07-27 UTC, accepted sends came back success=true with a
+// message_id and all three lists empty — and the mail arrived. A message_id
+// therefore counts as acceptance when the lists are silent. The bounce check
+// runs first, so a rejected address is never rescued by one.
 func (m *Mailer) doSend(ctx context.Context, to, subject, body string) error {
 	if m.AccountID == "" {
 		return errors.New("cloudflare: AccountID is required")
@@ -283,12 +295,17 @@ func (m *Mailer) doSend(ctx context.Context, to, subject, body string) error {
 		telemetry.SetAttributeOnCx(ctx, "mailer.disposition", "delivered")
 	case contains(parsed.Result.Queued, to):
 		telemetry.SetAttributeOnCx(ctx, "mailer.disposition", "queued")
+	case parsed.Result.MessageID != "":
+		// No per-recipient disposition, but Cloudflare issued a message
+		// ID — it owns the message now. This is the ordinary shape of an
+		// accepted send from a domain that reports no disposition.
+		telemetry.SetAttributeOnCx(ctx, "mailer.disposition", "accepted")
 	default:
-		// Neither delivered, queued, nor bounced — the recipient was
-		// dropped without explanation. Treat as failure so the caller
-		// does not assume a token is in flight.
+		// No disposition and no message ID — the recipient was dropped
+		// without explanation. Treat as failure so the caller does not
+		// assume a token is in flight.
 		telemetry.SetAttributeOnCx(ctx, "mailer.disposition", "unlisted")
-		return fmt.Errorf("cloudflare: %s was neither delivered nor queued", to)
+		return fmt.Errorf("cloudflare: %s was neither delivered nor queued, and no message_id was returned", to)
 	}
 	return nil
 }

@@ -39,14 +39,24 @@ const handleSubmit = async (e: Event) => {
 		return;
 	}
 	try {
-		const result = (await client.emailPassword.login({
+		// MFA step-up is a **200**, not an error: the server answers
+		// `{require_mfa: true, pending_session_id: "…"}` and issues no cookie
+		// (see loginResponse in plugins/emailpassword/handlers.go). The field is
+		// `require_mfa` — reading `mfa_required` here (the org-policy field
+		// name) meant this branch never ran, and the flow fell through to the
+		// success path below, calling `onSuccess(null)` on a login that had not
+		// happened.
+		const result = await client.emailPassword.login({
 			email: email.value,
 			password: password.value,
-		})) as unknown as
-			| { mfa_required?: boolean; pending_session_id?: string }
-			| undefined;
+		});
 
-		if (result?.mfa_required && result.pending_session_id) {
+		if (result?.require_mfa) {
+			if (!result.pending_session_id) {
+				throw new Error(
+					"Server requested MFA but returned no pending_session_id.",
+				);
+			}
 			props.onMfaRequired?.(result.pending_session_id);
 			return;
 		}
@@ -57,7 +67,8 @@ const handleSubmit = async (e: Event) => {
 		// hold off on `onSuccess` until the password is actually rotated.
 		const user = await refetch();
 		if (mustChangePassword.value) return;
-		props.onSuccess?.(user!);
+		if (!user) throw new Error("Signed in, but the session did not resolve.");
+		props.onSuccess?.(user);
 	} catch (err: unknown) {
 		const e = err instanceof Error ? err : new Error(String(err));
 		error.value = e.message;

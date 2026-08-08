@@ -79,11 +79,29 @@ npm install @yackey-labs/yauth-client @yackey-labs/yauth-ui-solidjs
 
 ### Component prop API
 
-| Component      | Prop        | Callback signature            | Notes                                    |
-| -------------- | ----------- | ----------------------------- | ---------------------------------------- |
-| `LoginForm`    | `onSuccess` | `(user: AuthUser) => void`    | After successful login                   |
-| `LoginForm`    | `onMfa`     | `(pendingId: string) => void` | When the server returns `require_mfa`    |
-| `RegisterForm` | `onSuccess` | `(message: string) => void`   | With the server's success message        |
+| Component      | Prop             | Callback signature            | Notes                                                    |
+| -------------- | ---------------- | ----------------------------- | -------------------------------------------------------- |
+| `LoginForm`    | `onSuccess`      | `(user: AuthUser) => void`    | After a successful login (never fires with a null user)   |
+| `LoginForm`    | `onMfaRequired`  | `(pendingId: string) => void` | When the server returns `require_mfa` — see MFA below     |
+| `LoginForm`    | `onError`        | `(error: Error) => void`      | Login failed (also rendered inside the form)              |
+| `RegisterForm` | `onSuccess`      | `(message: string) => void`   | With the server's success message                         |
+
+### MFA step-up
+
+MFA is **not** an error path. When the authenticating user has a verified TOTP
+secret, `POST /login` returns **HTTP 200** with no session cookie and this body:
+
+```json
+{ "require_mfa": true, "pending_session_id": "…" }
+```
+
+The field is `require_mfa` (`mfa_required` is an unrelated org-policy field).
+`LoginForm` handles this for you: it calls `onMfaRequired(pendingSessionId)`
+instead of `onSuccess`, and you render `<MfaChallenge :pending-session-id="…">`,
+which posts the code to `/mfa/verify` and only then issues the real session.
+The headless equivalent is `useAuth().login()`, which resolves to
+`{ mfaRequired: true, pendingSessionId }` on that branch and `{ user }` on a
+plain login.
 
 ### `useSession()`
 

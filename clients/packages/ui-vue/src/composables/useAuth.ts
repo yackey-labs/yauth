@@ -25,26 +25,27 @@ export function useAuth() {
 			return null;
 		}
 		try {
-			await client.emailPassword.login({ email, password });
+			// MFA step-up arrives on the SUCCESS path: the server answers 200
+			// with `{require_mfa: true, pending_session_id: "…"}` and issues no
+			// cookie (loginResponse in plugins/emailpassword/handlers.go). This
+			// used to look for `mfa_required` — the org-policy field name — on the
+			// *error* body in the catch below, so it could never match: an
+			// MFA-enabled user got `null` back with `error` unset, i.e. a silent
+			// failure the host could not distinguish from anything else.
+			const result = await client.emailPassword.login({ email, password });
+			if (result?.require_mfa) {
+				if (!result.pending_session_id) {
+					error.value = "Server requested MFA but returned no pending session.";
+					return null;
+				}
+				return {
+					mfaRequired: true,
+					pendingSessionId: result.pending_session_id,
+				};
+			}
 			const u = await refetch();
 			return u ? { user: u } : null;
 		} catch (err: unknown) {
-			// Check if MFA is required (server returns an error with mfa_required in body)
-			if (
-				err &&
-				typeof err === "object" &&
-				"body" in err &&
-				err.body &&
-				typeof err.body === "object" &&
-				"mfa_required" in err.body &&
-				(err.body as Record<string, unknown>).mfa_required
-			) {
-				const body = err.body as Record<string, unknown>;
-				return {
-					mfaRequired: true,
-					pendingSessionId: body.pending_session_id as string,
-				};
-			}
 			error.value = err instanceof Error ? err.message : String(err);
 			return null;
 		} finally {

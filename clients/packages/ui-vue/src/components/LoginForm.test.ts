@@ -105,8 +105,13 @@ describe("LoginForm", () => {
 	});
 
 	it("calls onMfaRequired when MFA is needed", async () => {
+		// `require_mfa` is the field the server actually sends (loginResponse in
+		// plugins/emailpassword/handlers.go). This mock used to say
+		// `mfa_required`, matching the component's bug rather than the wire
+		// contract — which is why the test stayed green while the real flow was
+		// dead. See mfa-step-up.test.ts for the full regression suite.
 		const loginMock = vi.fn().mockResolvedValue({
-			mfa_required: true,
+			require_mfa: true,
 			pending_session_id: "sess-123",
 		});
 		const onMfaRequired = vi.fn();

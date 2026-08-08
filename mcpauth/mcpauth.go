@@ -267,8 +267,9 @@ func proxyFetch(yaRouter http.Handler, r *http.Request, internalPath string) (in
 //
 // It also applies the same must-change-password gate RequireAuth applies: a
 // cookie-session caller whose account still owes a password rotation gets 403
-// with middleware.MustChangePasswordDetail. Machine callers (bearer / api-key)
-// are never gated — must_change_password is a password concept, and
+// with middleware.MustChangePasswordDetail. Machine callers (bearer, api-key,
+// and org-scoped service-account keys) are never gated — must_change_password
+// is a password concept, and
 // middleware.MustRotatePassword encodes exactly that rule, so both stacks share
 // one predicate and cannot drift. This matters because /mcp is normally mounted
 // same-origin with the app's SPA, so a browser cookie resolves here too: without

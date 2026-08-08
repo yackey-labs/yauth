@@ -208,8 +208,8 @@ available if you want to build a custom gate — see the router-guard example
 under `useSession()` above, and remember that `isAuthenticated` is **false** for
 these users by design. The login response shape and `AuthUser` are unchanged.
 
-Machine credentials (bearer JWT / api-key) are never gated by this flag — it is
-a password-login concept.
+Machine credentials (bearer JWT, api-key, and org-scoped service-account keys)
+are never gated by this flag — it is a password-login concept.
 
 ## SolidJS
 

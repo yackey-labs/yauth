@@ -369,10 +369,11 @@ type StatusPluginConfig struct {
 type AdminPluginConfig struct {
 	Enabled bool `yaml:"enabled" toml:"enabled"`
 
-	// AllowMachineCallers controls whether bearer-JWT or X-Api-Key
-	// callers may pass the RequireAdmin gate. The default (false) is
-	// strict: only cookie-resolved sessions count, even if the bearer
-	// token or api-key belongs to an admin user. Set true to allow
+	// AllowMachineCallers controls whether bearer-JWT, X-Api-Key or
+	// org-scoped API key (service account) callers may pass the
+	// RequireAdmin gate. The default (false) is strict: only
+	// cookie-resolved sessions count, even if the bearer token or api-key
+	// belongs to — or was created by — an admin user. Set true to allow
 	// machine-to-machine admin automation. Tracked via AuthUser.Method.
 	AllowMachineCallers bool `yaml:"allow_machine_callers" toml:"allow_machine_callers"`
 }

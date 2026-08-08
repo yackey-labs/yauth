@@ -126,7 +126,8 @@ they could keep using the seeded password. yauth enforces the rotation
    `detail: "password change required"`. This is enforced centrally in the auth
    middleware, so it covers **admin routes too** — a bootstrapped admin cannot
    touch the admin API until they rotate the password. It applies to **cookie
-   sessions only**; bearer/api-key callers are never gated (must-change is a
+   sessions only**; machine callers — bearer, user-scoped api-key, and
+   org-scoped api-key (service account) — are never gated (must-change is a
    password concept).
 
    The gate runs on **both** middleware stacks, with the **same** response:

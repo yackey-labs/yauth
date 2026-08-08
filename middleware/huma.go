@@ -42,8 +42,11 @@ const MustChangePasswordDetail = "password change required"
 // out-of-band-provisioned credential before doing anything else. It returns
 // true only for HUMAN callers (cookie session, or empty method which the
 // resolver treats as cookie) — must_change_password is a password concept, so
-// machine credentials (bearer JWT / api-key) are never gated; such a caller
-// could not have logged in with a must-change password anyway. The exempt
+// machine credentials (bearer JWT, user-scoped api-key, and org-scoped
+// service-account keys) are never gated; such a caller could not have logged
+// in with a must-change password anyway. In the service-account case the flag
+// on AuthUser.User is the KEY CREATOR's, not the caller's, so gating on it
+// would break a machine integration over a human's password state. The exempt
 // routes (change-password, logout, /session) call the *AllowMustChange gate
 // variants instead of enforcing this.
 //

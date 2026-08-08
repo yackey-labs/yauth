@@ -48,11 +48,11 @@ type Config struct {
 	// UAMismatchAction is "warn" or "invalidate". Empty defaults to "warn".
 	UAMismatchAction string
 
-	// AllowAdminMachineCallers controls whether bearer-JWT or X-Api-Key
-	// callers can pass RequireAdmin. The strict default (false) requires
-	// a cookie-resolved session for admin access even when the underlying
-	// user has role=admin. Set true to allow admin automation via
-	// machine credentials.
+	// AllowAdminMachineCallers controls whether bearer-JWT, X-Api-Key or
+	// org-scoped API key (service account) callers can pass RequireAdmin.
+	// The strict default (false) requires a cookie-resolved session for
+	// admin access even when the underlying user has role=admin. Set true
+	// to allow admin automation via machine credentials.
 	AllowAdminMachineCallers bool
 
 	// EnableOrgHydration toggles active-org context decoration on
@@ -548,8 +548,9 @@ func (m *Middleware) OptionalAuth(next http.Handler) http.Handler {
 //     cookie-resolved session).
 //   - (nil, yautherr.ErrUnauthorized): no valid identity resolved.
 //   - (nil, yautherr.ErrForbidden): identity resolved but the caller is
-//     not an admin, or is an admin presenting machine credentials while
-//     AllowAdminMachineCallers is false.
+//     not an admin, or is an admin presenting machine credentials —
+//     bearer, user-scoped api-key, or an org-scoped service-account key —
+//     while AllowAdminMachineCallers is false.
 //
 // Handlers that must control their own error body — e.g. the RFC 7591
 // dynamic client registration endpoint, which returns a JSON error per
@@ -574,10 +575,10 @@ func (m *Middleware) ResolveAdmin(r *http.Request) (*domain.AuthUser, error) {
 // non-admin.
 //
 // When Config.AllowAdminMachineCallers is false (the default), bearer
-// JWT or X-Api-Key callers are rejected with 403 even if the underlying
-// user is an admin: only cookie sessions count. AuthUser.Method is the
-// signal — empty Method is treated as cookie for backwards compat with
-// hand-built principals.
+// JWT, X-Api-Key and org-scoped API key (service account) callers are
+// rejected with 403 even if the underlying user is an admin: only cookie
+// sessions count. AuthUser.Method is the signal — empty Method is treated
+// as cookie for backwards compat with hand-built principals.
 //
 // Like RequireAuth (and RequireAdminHuma) it also enforces the
 // must_change_password gate — unconditionally, since no admin route can be in
@@ -604,11 +605,20 @@ func (m *Middleware) RequireAdmin(next http.Handler) http.Handler {
 }
 
 // isMachineMethod reports whether m identifies a machine-credential auth
-// path (bearer JWT or X-Api-Key). Empty/cookie methods are treated as
-// human callers.
+// path: bearer JWT, a user-scoped X-Api-Key, or an org-scoped X-Api-Key
+// (service account). Empty/cookie methods are treated as human callers.
+//
+// AuthMethodServiceAccount MUST be listed here. The org-scoped API key path
+// (plugins/apikey) synthesises an AuthUser whose User is the full record of
+// the human who created the key — role and must_change_password included — so
+// a service account that is classified as human inherits its creator's
+// humanity in both gates at once: it passes the admin machine-caller check
+// with the creator's admin role, and it is 403'd by the must-change gate on
+// the creator's password state. Both were live bugs; keep every machine
+// method in this one switch rather than re-deriving the set at call sites.
 func isMachineMethod(m string) bool {
 	switch m {
-	case domain.AuthMethodBearer, domain.AuthMethodAPIKey:
+	case domain.AuthMethodBearer, domain.AuthMethodAPIKey, domain.AuthMethodServiceAccount:
 		return true
 	}
 	return false

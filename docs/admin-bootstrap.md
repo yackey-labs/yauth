@@ -129,12 +129,24 @@ they could keep using the seeded password. yauth enforces the rotation
    sessions only**; bearer/api-key callers are never gated (must-change is a
    password concept).
 
-   The gate runs on **both** middleware stacks:
+   The gate runs on **both** middleware stacks, with the **same** response:
 
-   | Wrapper | Applies to | 403 body |
-   | ------- | ---------- | -------- |
-   | `RequireAuthHuma` / `RequireAdminHuma` | yauth's own huma-native routes, plus host huma routes wired with them | RFC 9457 problem+json: `{"title":"Forbidden","status":403,"detail":"password change required"}` |
-   | `middleware.RequireAuth` / `RequireAdmin` | host routes wrapped the `net/http` way (see the README's "Protecting your own routes") | plain text `password change required\n` — `http.Error`, matching those wrappers' existing `Unauthorized` / `Forbidden` bodies |
+   | Wrapper | Applies to |
+   | ------- | ---------- |
+   | `RequireAuthHuma` / `RequireAdminHuma` | yauth's own huma-native routes, plus host huma routes wired with them |
+   | `middleware.RequireAuth` / `RequireAdmin` | host routes wrapped the `net/http` way (see the README's "Protecting your own routes") |
+
+   ```http
+   HTTP/1.1 403 Forbidden
+   Content-Type: application/problem+json
+
+   {"title":"Forbidden","status":403,"detail":"password change required"}
+   ```
+
+   Byte-identical from either stack — a test in `middleware/` asserts it — so a
+   client never has to know which one served a route. Note this is the one 403
+   the `net/http` wrappers render as problem+json rather than a plain-text
+   `http.Error`; their `401` and their non-admin `403` are unchanged.
 
    > **Behaviour change (unreleased).** The `net/http` row is new. `RequireAuth`
    > / `RequireAdmin` previously resolved the identity and let a must-change

@@ -31,11 +31,11 @@ import (
 // 403 is the server-side backstop that guarantees the rest of the API stays
 // locked until the password is rotated.
 //
-// Both gates use this string, in the body shape native to their stack: the
-// huma middlewares below render it as the RFC 9457 problem+json `detail`; the
-// net/http RequireAuth / RequireAdmin wrappers write it as the plain-text
-// http.Error body, matching their existing "Unauthorized" / "Forbidden"
-// responses. Key on status + string, not on the media type.
+// Both gates render it identically — RFC 9457 problem+json carrying this
+// string as `detail`. The huma middlewares below go through huma.WriteErr; the
+// net/http RequireAuth / RequireAdmin wrappers go through
+// writeMustChangeProblem, which reproduces huma.NewError's body byte for byte.
+// One condition, one wire shape, whichever stack served the route.
 const MustChangePasswordDetail = "password change required"
 
 // enforceMustChange reports whether the resolved principal must rotate an

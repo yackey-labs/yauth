@@ -190,17 +190,27 @@ returns `403` for non-admin users. Import `middleware` from
 > centrally in the auth middleware". It was previously missing on the net/http
 > path, so a bootstrapped or admin-provisioned account could reach every
 > host-owned route the docs tell you to protect this way. A **cookie-session**
-> caller whose account has `must_change_password=true` now gets `403` with the
-> body `password change required`; bearer-JWT / `X-Api-Key` callers are never
-> gated. If your app has its own change-password or logout route, switch it to
-> `RequireAuthAllowMustChange` so the user can escape the gate.
+> caller whose account has `must_change_password=true` now gets a `403`;
+> bearer-JWT / `X-Api-Key` callers are never gated. If your app has its own
+> change-password or logout route, switch it to `RequireAuthAllowMustChange` so
+> the user can escape the gate.
 >
-> Body shapes differ by stack, on purpose: the net/http wrappers write
-> `http.Error` **plain text** (`"password change required\n"` — note the
-> trailing newline `http.Error` adds), matching their existing
-> `Unauthorized` / `Forbidden` bodies, while yauth's own huma-native routes
-> render RFC 9457 problem+json (`{"detail": "password change required", …}`).
-> Match on the `403` status plus the string; trim before comparing.
+> That 403 is **RFC 9457 problem+json**, byte-identical to what the huma gate
+> emits — one condition, one wire shape, whichever stack served the route:
+>
+> ```http
+> HTTP/1.1 403 Forbidden
+> Content-Type: application/problem+json
+>
+> {"title":"Forbidden","status":403,"detail":"password change required"}
+> ```
+>
+> This is the one place these wrappers depart from their plain-text
+> `http.Error` bodies; the `401` and the non-admin `403` are unchanged. It is
+> deliberate — this response is meant to be parsed (yauth's own Vue client
+> matches on `detail`), and a client should not have to know which middleware
+> stack served a route to know how to read the answer. A test asserts the two
+> stacks stay byte-identical.
 >
 > `OptionalAuth` is deliberately **not** gated — it authorizes nothing on its
 > own.

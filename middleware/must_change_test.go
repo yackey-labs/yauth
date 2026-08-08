@@ -4,15 +4,37 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/google/uuid"
 
 	"github.com/yackey-labs/yauth/auth"
 	"github.com/yackey-labs/yauth/domain"
+	"github.com/yackey-labs/yauth/humaapi"
 )
+
+// wantMustChangeBody is the exact RFC 9457 body huma.NewError produces for
+// huma.WriteErr(api, ctx, 403, MustChangePasswordDetail) — field set and order
+// from huma.ErrorModel, Type omitted because it is empty. The net/http gate
+// must reproduce it byte for byte so a client sees ONE wire shape for this
+// condition regardless of which middleware stack served the route.
+const wantMustChangeBody = `{"title":"Forbidden","status":403,"detail":"password change required"}` + "\n"
+
+// assertMustChangeProblem asserts a 403 problem+json must-change response.
+func assertMustChangeProblem(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d (body=%q)", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/problem+json" {
+		t.Errorf("Content-Type: want application/problem+json, got %q", ct)
+	}
+	if got := rec.Body.String(); got != wantMustChangeBody {
+		t.Errorf("body:\n got %q\nwant %q", got, wantMustChangeBody)
+	}
+}
 
 // mustChangeFixture provisions a user with the given role, flips
 // must_change_password on, and returns a raw session cookie token for them.
@@ -62,13 +84,7 @@ func TestRequireAuth_MustChangePassword403(t *testing.T) {
 	tok := mustChangeFixture(t, r, "user", true)
 	mw := New(r, Config{CookieName: "yauth_session"})
 
-	rec := doCookie(mw.RequireAuth(okHandler()), tok)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("must-change cookie user: expected 403, got %d (body=%q)", rec.Code, rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), MustChangePasswordDetail) {
-		t.Fatalf("expected body to carry %q, got %q", MustChangePasswordDetail, rec.Body.String())
-	}
+	assertMustChangeProblem(t, doCookie(mw.RequireAuth(okHandler()), tok))
 }
 
 // A normal user is untouched by the gate.
@@ -148,13 +164,7 @@ func TestRequireAdmin_MustChangePassword403(t *testing.T) {
 	tok := mustChangeFixture(t, r, "admin", true)
 	mw := New(r, Config{CookieName: "yauth_session"})
 
-	rec := doCookie(mw.RequireAdmin(okHandler()), tok)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("must-change admin: expected 403, got %d (body=%q)", rec.Code, rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), MustChangePasswordDetail) {
-		t.Fatalf("expected body to carry %q, got %q", MustChangePasswordDetail, rec.Body.String())
-	}
+	assertMustChangeProblem(t, doCookie(mw.RequireAdmin(okHandler()), tok))
 }
 
 // A rotated admin still gets through, and the machine-caller carve-out holds
@@ -204,5 +214,50 @@ func TestOptionalAuth_MustChangeNotGated(t *testing.T) {
 	rec := doCookie(h, tok)
 	if rec.Code != http.StatusOK || !got {
 		t.Fatalf("OptionalAuth: expected 200 with injected user, got %d inject=%v", rec.Code, got)
+	}
+}
+
+// The two stacks must produce the SAME wire response for the same condition.
+// This drives a real huma operation through RequireAuthHuma and the net/http
+// RequireAuth over the identical must-change session, then compares status,
+// Content-Type and body bytes. If huma's ErrorModel ever changes shape, this
+// fails instead of the two silently drifting apart.
+func TestMustChangeGate_HumaAndNetHTTPAgreeByteForByte(t *testing.T) {
+	r := newFakeRepo()
+	tok := mustChangeFixture(t, r, "user", true)
+	mw := New(r, Config{CookieName: "yauth_session"})
+
+	// net/http side.
+	netRec := doCookie(mw.RequireAuth(okHandler()), tok)
+
+	// huma side: a trivial operation guarded by RequireAuthHuma.
+	mux := http.NewServeMux()
+	api := humaapi.New(mux)
+	huma.Register(api, huma.Operation{
+		OperationID: "mustChangeProbe",
+		Method:      http.MethodGet,
+		Path:        "/probe",
+		Middlewares: huma.Middlewares{RequireAuthHuma(api, mw)},
+	}, func(context.Context, *struct{}) (*struct{}, error) {
+		return &struct{}{}, nil
+	})
+	humaReq := httptest.NewRequest(http.MethodGet, "/probe", nil)
+	humaReq.AddCookie(&http.Cookie{Name: "yauth_session", Value: tok})
+	humaRec := httptest.NewRecorder()
+	mux.ServeHTTP(humaRec, humaReq)
+
+	if humaRec.Code != netRec.Code {
+		t.Fatalf("status mismatch: huma=%d net/http=%d", humaRec.Code, netRec.Code)
+	}
+	if got, want := netRec.Header().Get("Content-Type"), humaRec.Header().Get("Content-Type"); got != want {
+		t.Errorf("Content-Type mismatch:\n net/http %q\n huma     %q", got, want)
+	}
+	if got, want := netRec.Body.String(), humaRec.Body.String(); got != want {
+		t.Errorf("body mismatch:\n net/http %q\n huma     %q", got, want)
+	}
+	// And both match the constant the docs publish.
+	if humaRec.Body.String() != wantMustChangeBody {
+		t.Errorf("huma body drifted from the documented shape:\n got %q\nwant %q",
+			humaRec.Body.String(), wantMustChangeBody)
 	}
 }

@@ -456,12 +456,9 @@ func (m *Middleware) auditMismatch(ctx context.Context, sess *domain.Session, ev
 // gated. Use RequireAuthAllowMustChange for the narrow set of routes such a
 // user must still reach (your own change-password / logout screens).
 //
-// Body shape: this wrapper writes plain-text http.Error bodies, matching the
-// existing "Unauthorized" / "Forbidden" responses on the net/http path — the
-// 403 body is MustChangePasswordDetail ("password change required\n").
-// huma-native yauth routes render the same condition as RFC 9457
-// problem+json. Clients should key on the 403 status plus the detail string,
-// not on the body's media type.
+// Body shape: the must-change 403 is RFC 9457 problem+json, byte-identical to
+// what the huma gate renders (see writeMustChangeProblem). The 401 and the
+// non-must-change 403 keep their historical plain-text http.Error bodies.
 func (m *Middleware) RequireAuth(next http.Handler) http.Handler {
 	return m.requireAuth(next, false)
 }
@@ -483,10 +480,43 @@ func (m *Middleware) requireAuth(next http.Handler, allowMustChange bool) http.H
 			return
 		}
 		if !allowMustChange && enforceMustChange(au) {
-			http.Error(w, MustChangePasswordDetail, http.StatusForbidden)
+			writeMustChangeProblem(w)
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(withAuthUser(r.Context(), au)))
+	})
+}
+
+// mustChangeProblem is the RFC 9457 body for the must_change_password 403.
+// Field set and ORDER mirror huma.ErrorModel as populated by huma.NewError
+// (Type is empty there, so omitted here too), which is what makes the two
+// stacks byte-identical.
+type mustChangeProblem struct {
+	Title  string `json:"title"`
+	Status int    `json:"status"`
+	Detail string `json:"detail"`
+}
+
+// writeMustChangeProblem renders the must_change_password 403 as problem+json,
+// matching the huma gate byte for byte:
+//
+//	Content-Type: application/problem+json
+//	{"title":"Forbidden","status":403,"detail":"password change required"}
+//
+// This is the ONE place the net/http wrappers deliberately depart from their
+// plain-text http.Error bodies. The 401 and the plain non-admin 403 keep theirs
+// (changing those would break far more than it fixes), but this particular 403
+// is a response clients are expected to PARSE and act on — yauth's own ui-vue
+// backstop matches on the `detail` field — and shipping two different body
+// shapes for one condition, depending on which middleware stack happened to
+// serve the route, is a worse trap than one inconsistent body in this file.
+func writeMustChangeProblem(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(http.StatusForbidden)
+	_ = json.NewEncoder(w).Encode(mustChangeProblem{
+		Title:  http.StatusText(http.StatusForbidden),
+		Status: http.StatusForbidden,
+		Detail: MustChangePasswordDetail,
 	})
 }
 
@@ -552,8 +582,8 @@ func (m *Middleware) ResolveAdmin(r *http.Request) (*domain.AuthUser, error) {
 // Like RequireAuth (and RequireAdminHuma) it also enforces the
 // must_change_password gate — unconditionally, since no admin route can be in
 // the exempt set. A bootstrapped admin cannot touch a RequireAdmin-protected
-// route until the provisioned password is rotated; the 403 body is the
-// plain-text MustChangePasswordDetail.
+// route until the provisioned password is rotated; that 403 is problem+json
+// (writeMustChangeProblem), while the non-admin 403 above stays plain text.
 func (m *Middleware) RequireAdmin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		au, err := m.ResolveAdmin(r)
@@ -566,7 +596,7 @@ func (m *Middleware) RequireAdmin(next http.Handler) http.Handler {
 			return
 		}
 		if enforceMustChange(au) {
-			http.Error(w, MustChangePasswordDetail, http.StatusForbidden)
+			writeMustChangeProblem(w)
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(withAuthUser(r.Context(), au)))

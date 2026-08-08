@@ -21,26 +21,50 @@ import (
 	"github.com/yackey-labs/yauth/yautherr"
 )
 
-// MustChangePasswordDetail is the RFC 9457 `detail` returned by the auth gate
-// when a human (cookie-session) caller whose account has
-// must_change_password=true tries to use any route other than the
-// password-change exempt set (change-password, logout, /session). Clients can
-// match on this exact string (alongside HTTP 403) to drive a "change your
-// password" challenge. The login response itself is unchanged — it still
-// returns must_change_password=true in the user body — so the happy path is
-// driven from /login or /session; this 403 is the server-side backstop that
-// guarantees the rest of the API stays locked until the password is rotated.
+// MustChangePasswordDetail is the `detail` returned by the auth gate when a
+// human (cookie-session) caller whose account has must_change_password=true
+// tries to use any route other than the password-change exempt set
+// (change-password, logout, /session). Clients can match on this exact string
+// (alongside HTTP 403) to drive a "change your password" challenge. The login
+// response itself is unchanged — it still returns must_change_password=true in
+// the user body — so the happy path is driven from /login or /session; this
+// 403 is the server-side backstop that guarantees the rest of the API stays
+// locked until the password is rotated.
+//
+// Both gates render it identically — RFC 9457 problem+json carrying this
+// string as `detail`. The huma middlewares below go through huma.WriteErr; the
+// net/http RequireAuth / RequireAdmin wrappers go through
+// writeMustChangeProblem, which reproduces huma.NewError's body byte for byte.
+// One condition, one wire shape, whichever stack served the route.
 const MustChangePasswordDetail = "password change required"
 
-// enforceMustChange reports whether the resolved principal must rotate an
+// MustRotatePassword reports whether the resolved principal must rotate an
 // out-of-band-provisioned credential before doing anything else. It returns
 // true only for HUMAN callers (cookie session, or empty method which the
 // resolver treats as cookie) — must_change_password is a password concept, so
 // machine credentials (bearer JWT / api-key) are never gated; such a caller
 // could not have logged in with a must-change password anyway. The exempt
 // routes (change-password, logout, /session) call the *AllowMustChange gate
-// variants below instead of this enforcement.
-func enforceMustChange(au *domain.AuthUser) bool {
+// variants instead of enforcing this.
+//
+// This is the single predicate behind BOTH stacks — the huma middlewares in
+// this file and the net/http RequireAuth / RequireAdmin wrappers in
+// middleware.go — so the gate cannot drift between them.
+//
+// It is EXPORTED for consumers that resolve identity with ResolveAuth /
+// ResolveAdmin and enforce with their own guard rather than wrapping with
+// RequireAuth. That is a common pattern (an edge middleware that stashes the
+// user, plus a framework-native guard downstream), and such a guard silently
+// misses the must-change gate entirely — the account can use the whole API on
+// its provisioned password. If that describes your app, add:
+//
+//	if middleware.MustRotatePassword(au) {
+//	    // 403 with middleware.MustChangePasswordDetail
+//	}
+//
+// to your guard, exempting only your change-password / logout / session
+// routes.
+func MustRotatePassword(au *domain.AuthUser) bool {
 	if au == nil || !au.User.MustChangePassword {
 		return false
 	}
@@ -76,7 +100,7 @@ func requireAuthHuma(api huma.API, mw *Middleware, allowMustChange bool) func(hu
 			_ = huma.WriteErr(api, ctx, http.StatusUnauthorized, "Unauthorized")
 			return
 		}
-		if !allowMustChange && enforceMustChange(au) {
+		if !allowMustChange && MustRotatePassword(au) {
 			_ = huma.WriteErr(api, ctx, http.StatusForbidden, MustChangePasswordDetail)
 			return
 		}
@@ -192,7 +216,7 @@ func RequireAdminHuma(api huma.API, mw *Middleware) func(huma.Context, func(huma
 		// enforce unconditionally: a bootstrapped admin (role=admin AND
 		// must_change=true) is locked out of every admin operation until they
 		// rotate the provisioned password.
-		if enforceMustChange(au) {
+		if MustRotatePassword(au) {
 			_ = huma.WriteErr(api, ctx, http.StatusForbidden, MustChangePasswordDetail)
 			return
 		}

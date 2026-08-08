@@ -88,16 +88,59 @@ npm install @yackey-labs/yauth-client @yackey-labs/yauth-ui-solidjs
 ### `useSession()`
 
 Returns reactive session state plus helpers:
-`{ user, loading, isAuthenticated, isLoading, isEmailVerified, mustChangePassword, userRole, userEmail, displayName, refetch, logout }`.
+`{ user, loading, isAuthenticated, isSignedIn, isLoading, isEmailVerified, mustChangePassword, userRole, userEmail, displayName, refetch, logout }`.
 `user` is `null` when unauthenticated and an `AuthUser` after login. Call
 `await logout()` to end the session.
 
-`isAuthenticated` is `true` only when the user is signed in **and** not in a
-forced password-change state — so it stays `false` for a bootstrapped/reset
-account until the password is rotated (see the next section). `mustChangePassword`
-is the underlying flag; the prebuilt `LoginForm` handles the gate for you, so
-most apps only need `isAuthenticated` and never read `mustChangePassword`
-directly.
+Two different questions, two different flags:
+
+| Flag | Answers | Signed out | Normal user | Must-change user |
+| ---- | ------- | ---------- | ----------- | ---------------- |
+| `isAuthenticated` | "may this user use the app?" | `false` | `true` | **`false`** |
+| `isSignedIn` | "is there a session at all?" | `false` | `true` | `true` |
+
+> ### ⚠️ `isAuthenticated` goes **FALSE** for a must-change user
+>
+> This is deliberate — it is exactly what lets the prebuilt `LoginForm`
+> self-gate with zero host wiring (see the next section) — but it is a trap if
+> you write your own router guard. A user with `must_change_password: true`
+> logs in successfully (`200`, cookie set), your guard reads
+> `isAuthenticated === false`, redirects to `/login`, and the loop repeats.
+> **From the outside this looks like a silent login failure: 200s in the
+> network tab, and nothing in the console.**
+>
+> Custom guards must key on `isSignedIn` (identity only) and branch on
+> `mustChangePassword`:
+>
+> ```ts
+> router.beforeEach((to) => {
+>   const { isSignedIn, mustChangePassword, isLoading } = useSession()
+>   if (isLoading.value) return true                 // session still resolving
+>   if (to.meta.public) return true
+>
+>   // Signed out → login. Note: isSignedIn, NOT isAuthenticated.
+>   if (!isSignedIn.value) return { name: 'login', query: { next: to.fullPath } }
+>
+>   // Signed in but held in forced rotation → the change screen. Every other
+>   // route 403s with "password change required" until they rotate.
+>   if (mustChangePassword.value && to.name !== 'change-password') {
+>     return { name: 'change-password' }
+>   }
+>   return true
+> })
+> ```
+>
+> …with that `change-password` route rendering `<ChangePasswordForm>`.
+>
+> **Development warning.** If `mustChangePassword` stays `true` for 5 seconds
+> and no `<ChangePasswordForm>` has mounted, the plugin emits a `console.warn`
+> describing this exact situation and how to fix it. It is stripped from
+> production builds and never fires on the prebuilt path (`LoginForm` mounts a
+> `ChangePasswordForm` itself).
+
+Apps using the prebuilt components can ignore all of the above: `LoginForm`
+handles the gate, so `isAuthenticated` is the right check and most apps never
+read `mustChangePassword` or `isSignedIn` directly.
 
 ## Forced password change (`must_change_password`)
 
@@ -142,8 +185,10 @@ Content-Type: application/problem+json
   `must_change_password` from your own login/session handling.
 
 The standalone `ChangePasswordForm` (for an in-app "change my password" screen)
-and the `mustChangePassword` flag on `useSession()` remain available if you want
-to build a custom gate; the login response shape and `AuthUser` are unchanged.
+and the `mustChangePassword` + `isSignedIn` flags on `useSession()` remain
+available if you want to build a custom gate — see the router-guard example
+under `useSession()` above, and remember that `isAuthenticated` is **false** for
+these users by design. The login response shape and `AuthUser` are unchanged.
 
 Machine credentials (bearer JWT / api-key) are never gated by this flag — it is
 a password-login concept.

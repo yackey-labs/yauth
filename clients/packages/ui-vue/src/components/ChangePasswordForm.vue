@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref } from "vue";
-import { useYAuth } from "../provider";
+import { onUnmounted, ref } from "vue";
+import { registerChangePasswordForm, useYAuth } from "../provider";
 
 const props = defineProps<{
 	onSuccess?: () => void;
@@ -8,6 +8,12 @@ const props = defineProps<{
 }>();
 
 const { client } = useYAuth();
+
+// Tell the provider a rotation UI is on screen, so its development-only
+// "held in must-change with no way out" warning stays quiet. Costs one
+// counter increment in production.
+onUnmounted(registerChangePasswordForm());
+
 const currentPassword = ref("");
 const newPassword = ref("");
 const confirmPassword = ref("");

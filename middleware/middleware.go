@@ -448,11 +448,42 @@ func (m *Middleware) auditMismatch(ctx context.Context, sess *domain.Session, ev
 // RequireAuth wraps next so requests must carry a valid identity. On
 // failure it writes a 401 and aborts. On success the AuthUser is placed in
 // the request context.
+//
+// It ALSO enforces the must_change_password gate, exactly as the huma
+// RequireAuthHuma does: a human (cookie-session) caller whose account was
+// provisioned out-of-band is 403'd with MustChangePasswordDetail until the
+// credential is rotated. Machine callers (bearer JWT / X-Api-Key) are never
+// gated. Use RequireAuthAllowMustChange for the narrow set of routes such a
+// user must still reach (your own change-password / logout screens).
+//
+// Body shape: this wrapper writes plain-text http.Error bodies, matching the
+// existing "Unauthorized" / "Forbidden" responses on the net/http path — the
+// 403 body is MustChangePasswordDetail ("password change required\n").
+// huma-native yauth routes render the same condition as RFC 9457
+// problem+json. Clients should key on the 403 status plus the detail string,
+// not on the body's media type.
 func (m *Middleware) RequireAuth(next http.Handler) http.Handler {
+	return m.requireAuth(next, false)
+}
+
+// RequireAuthAllowMustChange is RequireAuth without the must_change_password
+// gate — the net/http twin of RequireAuthHumaAllowMustChange. Wrap the routes
+// a locked-out user MUST still reach with it (a host-owned change-password
+// endpoint, logout, or a "who am I" probe); every other route should use
+// RequireAuth so the gate holds.
+func (m *Middleware) RequireAuthAllowMustChange(next http.Handler) http.Handler {
+	return m.requireAuth(next, true)
+}
+
+func (m *Middleware) requireAuth(next http.Handler, allowMustChange bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		au, err := m.ResolveAuth(r)
 		if err != nil || au == nil {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if !allowMustChange && enforceMustChange(au) {
+			http.Error(w, MustChangePasswordDetail, http.StatusForbidden)
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(withAuthUser(r.Context(), au)))
@@ -462,6 +493,12 @@ func (m *Middleware) RequireAuth(next http.Handler) http.Handler {
 // OptionalAuth wraps next so the request always proceeds. If identity
 // resolves it is injected into the context; otherwise the context is
 // passed through unchanged.
+//
+// It deliberately does NOT apply the must_change_password gate: OptionalAuth
+// authorizes nothing on its own, and a public route that merely personalizes
+// its output should not start 403ing for a bootstrapped account. Handlers that
+// act on the injected AuthUser should either sit behind RequireAuth or check
+// au.User.MustChangePassword themselves.
 func (m *Middleware) OptionalAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		au, err := m.ResolveAuth(r)
@@ -511,6 +548,12 @@ func (m *Middleware) ResolveAdmin(r *http.Request) (*domain.AuthUser, error) {
 // user is an admin: only cookie sessions count. AuthUser.Method is the
 // signal — empty Method is treated as cookie for backwards compat with
 // hand-built principals.
+//
+// Like RequireAuth (and RequireAdminHuma) it also enforces the
+// must_change_password gate — unconditionally, since no admin route can be in
+// the exempt set. A bootstrapped admin cannot touch a RequireAdmin-protected
+// route until the provisioned password is rotated; the 403 body is the
+// plain-text MustChangePasswordDetail.
 func (m *Middleware) RequireAdmin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		au, err := m.ResolveAdmin(r)
@@ -520,6 +563,10 @@ func (m *Middleware) RequireAdmin(next http.Handler) http.Handler {
 				return
 			}
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if enforceMustChange(au) {
+			http.Error(w, MustChangePasswordDetail, http.StatusForbidden)
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(withAuthUser(r.Context(), au)))

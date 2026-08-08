@@ -122,12 +122,30 @@ they could keep using the seeded password. yauth enforces the rotation
    response shape is **unchanged**: `{ "user": { …, "must_change_password":
    true } }`. `GET /session` reports the same flag.
 2. **Gate.** While `must_change_password` is set, every authenticated route
-   **except** `change-password`, `logout`, and `/session` returns
-   **`403` problem+json** with `detail: "password change required"`. This is
-   enforced centrally in the auth middleware, so it covers **admin routes too** —
-   a bootstrapped admin cannot touch the admin API until they rotate the
-   password. It applies to **cookie sessions only**; bearer/api-key callers are
-   never gated (must-change is a password concept).
+   **except** `change-password`, `logout`, and `/session` returns **`403`** with
+   `detail: "password change required"`. This is enforced centrally in the auth
+   middleware, so it covers **admin routes too** — a bootstrapped admin cannot
+   touch the admin API until they rotate the password. It applies to **cookie
+   sessions only**; bearer/api-key callers are never gated (must-change is a
+   password concept).
+
+   The gate runs on **both** middleware stacks:
+
+   | Wrapper | Applies to | 403 body |
+   | ------- | ---------- | -------- |
+   | `RequireAuthHuma` / `RequireAdminHuma` | yauth's own huma-native routes, plus host huma routes wired with them | RFC 9457 problem+json: `{"title":"Forbidden","status":403,"detail":"password change required"}` |
+   | `middleware.RequireAuth` / `RequireAdmin` | host routes wrapped the `net/http` way (see the README's "Protecting your own routes") | plain text `password change required\n` — `http.Error`, matching those wrappers' existing `Unauthorized` / `Forbidden` bodies |
+
+   > **Behaviour change (unreleased).** The `net/http` row is new. `RequireAuth`
+   > / `RequireAdmin` previously resolved the identity and let a must-change
+   > user straight through, so an app that protected its own routes with them —
+   > the pattern the README documents — served `200`s to an account this page
+   > describes as locked out. On upgrade, must-change users start getting `403`s
+   > from those routes. That is the intent. The escape hatch is
+   > `RequireAuthAllowMustChange`, the `net/http` twin of
+   > `RequireAuthHumaAllowMustChange`: wrap a host-owned change-password or
+   > logout route with it so the user can escape the gate. `OptionalAuth` stays
+   > ungated — it authorizes nothing on its own.
 3. **Change.** `POST /change-password` (`current_password` + `new_password`)
    rotates the password, **clears `must_change_password`**, revokes other
    sessions, and re-issues a fresh cookie for the caller.

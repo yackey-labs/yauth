@@ -21,15 +21,21 @@ import (
 	"github.com/yackey-labs/yauth/yautherr"
 )
 
-// MustChangePasswordDetail is the RFC 9457 `detail` returned by the auth gate
-// when a human (cookie-session) caller whose account has
-// must_change_password=true tries to use any route other than the
-// password-change exempt set (change-password, logout, /session). Clients can
-// match on this exact string (alongside HTTP 403) to drive a "change your
-// password" challenge. The login response itself is unchanged — it still
-// returns must_change_password=true in the user body — so the happy path is
-// driven from /login or /session; this 403 is the server-side backstop that
-// guarantees the rest of the API stays locked until the password is rotated.
+// MustChangePasswordDetail is the `detail` returned by the auth gate when a
+// human (cookie-session) caller whose account has must_change_password=true
+// tries to use any route other than the password-change exempt set
+// (change-password, logout, /session). Clients can match on this exact string
+// (alongside HTTP 403) to drive a "change your password" challenge. The login
+// response itself is unchanged — it still returns must_change_password=true in
+// the user body — so the happy path is driven from /login or /session; this
+// 403 is the server-side backstop that guarantees the rest of the API stays
+// locked until the password is rotated.
+//
+// Both gates use this string, in the body shape native to their stack: the
+// huma middlewares below render it as the RFC 9457 problem+json `detail`; the
+// net/http RequireAuth / RequireAdmin wrappers write it as the plain-text
+// http.Error body, matching their existing "Unauthorized" / "Forbidden"
+// responses. Key on status + string, not on the media type.
 const MustChangePasswordDetail = "password change required"
 
 // enforceMustChange reports whether the resolved principal must rotate an
@@ -39,7 +45,11 @@ const MustChangePasswordDetail = "password change required"
 // machine credentials (bearer JWT / api-key) are never gated; such a caller
 // could not have logged in with a must-change password anyway. The exempt
 // routes (change-password, logout, /session) call the *AllowMustChange gate
-// variants below instead of this enforcement.
+// variants instead of this enforcement.
+//
+// Shared by BOTH stacks: the huma middlewares in this file and the net/http
+// RequireAuth / RequireAdmin wrappers in middleware.go. It lives here because
+// this is where the gate was first introduced; it is not huma-specific.
 func enforceMustChange(au *domain.AuthUser) bool {
 	if au == nil || !au.User.MustChangePassword {
 		return false

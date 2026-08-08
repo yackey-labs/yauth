@@ -161,6 +161,10 @@ mux.Handle("/api/profile", ya.Middleware().RequireAuth(profileHandler))
 // Require admin role
 mux.Handle("/api/admin/", ya.Middleware().RequireAdmin(adminHandler))
 
+// Same as RequireAuth, but WITHOUT the must_change_password gate — for the
+// narrow set of host routes a locked-out user must still reach.
+mux.Handle("/api/change-password", ya.Middleware().RequireAuthAllowMustChange(changePwHandler))
+
 // Extract the resolved user inside a handler.
 // Returns (*domain.AuthUser, bool) — the bool is true when the request was
 // authenticated. RequireAuth guarantees that, but in unprotected handlers
@@ -178,6 +182,28 @@ func profileHandler(w http.ResponseWriter, r *http.Request) {
 `RequireAuth` returns `401` for unauthenticated requests; `RequireAdmin`
 returns `403` for non-admin users. Import `middleware` from
 `github.com/yackey-labs/yauth/middleware`.
+
+> **Behaviour change (unreleased):** `RequireAuth` and `RequireAdmin` now also
+> enforce the `must_change_password` gate — the same gate the huma
+> `RequireAuthHuma` / `RequireAdminHuma` middlewares have always applied, and
+> the one `yauth docs admin-bootstrap` has always documented as "enforced
+> centrally in the auth middleware". It was previously missing on the net/http
+> path, so a bootstrapped or admin-provisioned account could reach every
+> host-owned route the docs tell you to protect this way. A **cookie-session**
+> caller whose account has `must_change_password=true` now gets `403` with the
+> body `password change required`; bearer-JWT / `X-Api-Key` callers are never
+> gated. If your app has its own change-password or logout route, switch it to
+> `RequireAuthAllowMustChange` so the user can escape the gate.
+>
+> Body shapes differ by stack, on purpose: the net/http wrappers write
+> `http.Error` **plain text** (`"password change required\n"` — note the
+> trailing newline `http.Error` adds), matching their existing
+> `Unauthorized` / `Forbidden` bodies, while yauth's own huma-native routes
+> render RFC 9457 problem+json (`{"detail": "password change required", …}`).
+> Match on the `403` status plus the string; trim before comparing.
+>
+> `OptionalAuth` is deliberately **not** gated — it authorizes nothing on its
+> own.
 
 **Event system** — every authentication operation emits an
 `events.AuthEvent` (`UserRegistered`, `LoginAttempt`, `LoginSucceeded`,

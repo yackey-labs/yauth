@@ -214,6 +214,24 @@ returns `403` for non-admin users. Import `middleware` from
 >
 > `OptionalAuth` is deliberately **not** gated — it authorizes nothing on its
 > own.
+>
+> **If you don't use these wrappers, this fix does not reach you.** Apps that
+> resolve identity with `ResolveAuth` / `ResolveAdmin` in an edge middleware and
+> enforce with their own framework-native guard never see the gate at all — a
+> bootstrapped or admin-provisioned account can use the whole API on its
+> provisioned password. Export-only helper for exactly that case:
+>
+> ```go
+> au, err := ya.Middleware().ResolveAuth(r)
+> // …your own 401 handling…
+> if middleware.MustRotatePassword(au) {
+>     // 403 + middleware.MustChangePasswordDetail; exempt only your
+>     // change-password / logout / session routes.
+> }
+> ```
+>
+> `MustRotatePassword` is the same predicate both built-in gates use, so your
+> guard cannot drift from them.
 
 **Event system** — every authentication operation emits an
 `events.AuthEvent` (`UserRegistered`, `LoginAttempt`, `LoginSucceeded`,

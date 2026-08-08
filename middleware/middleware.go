@@ -479,7 +479,7 @@ func (m *Middleware) requireAuth(next http.Handler, allowMustChange bool) http.H
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
-		if !allowMustChange && enforceMustChange(au) {
+		if !allowMustChange && MustRotatePassword(au) {
 			writeMustChangeProblem(w)
 			return
 		}
@@ -595,7 +595,7 @@ func (m *Middleware) RequireAdmin(next http.Handler) http.Handler {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
-		if enforceMustChange(au) {
+		if MustRotatePassword(au) {
 			writeMustChangeProblem(w)
 			return
 		}

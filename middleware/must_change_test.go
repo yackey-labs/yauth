@@ -128,7 +128,7 @@ func TestRequireAuthAllowMustChange_LetsThrough(t *testing.T) {
 }
 
 // must_change_password is a password concept: machine credentials are never
-// gated by RequireAuth, mirroring enforceMustChange's contract.
+// gated by RequireAuth, mirroring MustRotatePassword's contract.
 func TestRequireAuth_MachineCallersNotGated(t *testing.T) {
 	r := newFakeRepo()
 	ctx := context.Background()
@@ -259,5 +259,31 @@ func TestMustChangeGate_HumaAndNetHTTPAgreeByteForByte(t *testing.T) {
 	if humaRec.Body.String() != wantMustChangeBody {
 		t.Errorf("huma body drifted from the documented shape:\n got %q\nwant %q",
 			humaRec.Body.String(), wantMustChangeBody)
+	}
+}
+
+// MustRotatePassword is exported for consumers that resolve identity with
+// ResolveAuth / ResolveAdmin and enforce with their own guard — a pattern that
+// otherwise misses the gate entirely. Pin its contract.
+func TestMustRotatePassword_Predicate(t *testing.T) {
+	flagged := domain.User{ID: "u1", MustChangePassword: true}
+	clean := domain.User{ID: "u2"}
+
+	cases := []struct {
+		name string
+		au   *domain.AuthUser
+		want bool
+	}{
+		{"nil principal", nil, false},
+		{"clean cookie user", &domain.AuthUser{User: clean}, false},
+		{"flagged cookie user", &domain.AuthUser{User: flagged}, true},
+		{"flagged, explicit cookie method", &domain.AuthUser{User: flagged, Method: domain.AuthMethodCookie}, true},
+		{"flagged bearer", &domain.AuthUser{User: flagged, Method: domain.AuthMethodBearer}, false},
+		{"flagged api-key", &domain.AuthUser{User: flagged, Method: domain.AuthMethodAPIKey}, false},
+	}
+	for _, tc := range cases {
+		if got := MustRotatePassword(tc.au); got != tc.want {
+			t.Errorf("%s: MustRotatePassword = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }

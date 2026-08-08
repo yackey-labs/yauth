@@ -148,6 +148,15 @@ they could keep using the seeded password. yauth enforces the rotation
    the `net/http` wrappers render as problem+json rather than a plain-text
    `http.Error`; their `401` and their non-admin `403` are unchanged.
 
+   **Rolling your own guard?** If your app resolves identity with `ResolveAuth`
+   / `ResolveAdmin` and enforces with its own middleware instead of wrapping
+   with `RequireAuth`, neither stack runs and this gate does not apply to you —
+   a bootstrapped admin can use your whole API on the seeded password. Call
+   `middleware.MustRotatePassword(au)` (the same predicate both built-in gates
+   use) in your guard and return a 403 with
+   `middleware.MustChangePasswordDetail`, exempting only your change-password /
+   logout / session routes.
+
    > **Behaviour change (unreleased).** The `net/http` row is new. `RequireAuth`
    > / `RequireAdmin` previously resolved the identity and let a must-change
    > user straight through, so an app that protected its own routes with them —

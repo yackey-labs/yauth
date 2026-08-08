@@ -26,8 +26,10 @@ import (
 )
 
 // rpWithSigner builds an RP with asymjwt + SelfIssuer (handshake-capable) and
-// an admin api-key, plus a plain-user api-key for the authz check.
-func rpWithSigner(t *testing.T) (srv *httptest.Server, adminKey, userKey string) {
+// an admin api-key, plus a plain-user api-key for the authz check. The repo is
+// returned too so callers can seed extra principals — the must-change-password
+// gate tests need cookie sessions, which only exist in the repo.
+func rpWithSigner(t *testing.T) (srv *httptest.Server, repo *memrepo.Repo, adminKey, userKey string) {
 	t.Helper()
 	r := memrepo.New()
 	cfg := yauth.NewDefaultConfig()
@@ -87,7 +89,7 @@ func rpWithSigner(t *testing.T) (srv *httptest.Server, adminKey, userKey string)
 	mux.Handle("/api/auth/", http.StripPrefix("/api/auth", ya.Router()))
 	srv = httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	return srv, adminKey, userKey
+	return srv, r, adminKey, userKey
 }
 
 func getWithKey(t *testing.T, rawURL, key string) *http.Response {
@@ -110,7 +112,7 @@ func getWithKey(t *testing.T, rawURL, key string) *http.Response {
 // admin only, and the signed federation_request carries an initiate_login_uri
 // keyed by a pre-minted connection_id (no org slug anywhere).
 func TestFederateStartGlobal(t *testing.T) {
-	srv, adminKey, userKey := rpWithSigner(t)
+	srv, _, adminKey, userKey := rpWithSigner(t)
 
 	// Plain user → 403 (install-wide admin required for global mode).
 	res := getWithKey(t, srv.URL+"/api/auth/sso/federate/start?idp=https://idp.test.example", userKey)

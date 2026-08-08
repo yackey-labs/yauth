@@ -209,12 +209,27 @@ func (p *oauth2Plugin) handleDCRRegister(host plugin.PluginHost, prefix string) 
 		// the operator sets DCRRequireAdminForLoopback.
 		anonymousAllowed := isPublic && allLoopback && !p.cfg.DCRRequireAdminForLoopback
 		if !anonymousAllowed && trusted == nil {
-			if _, err := host.Middleware().ResolveAdmin(r); err != nil {
+			au, err := host.Middleware().ResolveAdmin(r)
+			if err != nil {
 				if errors.Is(err, yautherr.ErrForbidden) {
 					writeDCRError(w, http.StatusForbidden, "access_denied", "administrator privileges are required to register this client; a public client restricted to loopback redirect_uris may register without authentication")
 					return
 				}
 				writeDCRError(w, http.StatusUnauthorized, "invalid_token", "authentication is required to register this client; a public client restricted to loopback redirect_uris may register without authentication")
+				return
+			}
+			// This handler runs unwrapped (see the doc comment above), so it does
+			// NOT inherit RequireAdmin's must-change-password gate — without this,
+			// a bootstrapped or admin-provisioned account still holding an
+			// unrotated temp password could register OAuth clients while being
+			// correctly 403'd on every other admin route. middleware.MustRotatePassword
+			// is the same predicate both middleware stacks use (machine callers —
+			// bearer / api-key — are never gated), so this cannot drift from them.
+			// Rendered in this endpoint's RFC 7591 §3.2.2 error shape rather than
+			// problem+json, carrying middleware.MustChangePasswordDetail as the
+			// description so clients match the same string as everywhere else.
+			if middleware.MustRotatePassword(au) {
+				writeDCRError(w, http.StatusForbidden, "access_denied", middleware.MustChangePasswordDetail)
 				return
 			}
 		}

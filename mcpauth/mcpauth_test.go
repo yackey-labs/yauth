@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -81,6 +82,87 @@ func seedSession(t *testing.T, r *memrepo.Repo) string {
 		t.Fatalf("issue session: %v", err)
 	}
 	return raw
+}
+
+// seedMustChangeSession creates a user whose account still owes a password
+// rotation (the shape the secure admin bootstrap produces) and returns the raw
+// session cookie for them.
+func seedMustChangeSession(t *testing.T, r *memrepo.Repo) string {
+	t.Helper()
+	ctx := context.Background()
+	now := time.Now().UTC()
+	u, err := r.CreateUser(ctx, domain.NewUser{
+		ID:                 uuid.NewString(),
+		Email:              "bootstrap-admin@idp.test",
+		EmailVerified:      true,
+		Role:               "admin",
+		MustChangePassword: true,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	})
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	raw, _, err := auth.IssueSession(ctx, r, u.ID, nil, nil, time.Hour)
+	if err != nil {
+		t.Fatalf("issue session: %v", err)
+	}
+	return raw
+}
+
+// mintBearerToken provisions a password user, exchanges the credentials for a
+// real bearer access token via yauth's /token endpoint, then flips
+// must_change_password on the account — the only way an unrotated account can
+// hold a bearer token, since /token itself refuses to mint one for a flagged
+// user. It returns the access token and the user id.
+func mintBearerToken(t *testing.T, srv *httptest.Server, r *memrepo.Repo) string {
+	t.Helper()
+	ctx := context.Background()
+	now := time.Now().UTC()
+	const email, password = "machine@idp.test", "correct horse battery staple"
+
+	u, err := r.CreateUser(ctx, domain.NewUser{
+		ID:            uuid.NewString(),
+		Email:         email,
+		EmailVerified: true,
+		Role:          "user",
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	})
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	hash, err := auth.HashPassword(password)
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	if err := r.UpsertPassword(ctx, domain.NewPassword{UserID: u.ID, PasswordHash: hash}); err != nil {
+		t.Fatalf("upsert password: %v", err)
+	}
+
+	body := `{"email":"` + email + `","password":"` + password + `"}`
+	resp, err := http.Post(srv.URL+"/api/auth/token", "application/json", strings.NewReader(body)) //nolint:noctx
+	if err != nil {
+		t.Fatalf("POST /api/auth/token: %v", err)
+	}
+	defer resp.Body.Close() //nolint:errcheck
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /api/auth/token: status = %d, want 200", resp.StatusCode)
+	}
+	var tok struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&tok); err != nil || tok.AccessToken == "" {
+		t.Fatalf("decode token response: %v (token=%q)", err, tok.AccessToken)
+	}
+
+	// The flag lands after the token was issued: from here on the machine
+	// credential must still work, because must_change_password is a password
+	// concept and bearer callers are never gated.
+	if err := r.SetUserMustChangePassword(ctx, u.ID, true); err != nil {
+		t.Fatalf("set must_change_password: %v", err)
+	}
+	return tok.AccessToken
 }
 
 func getJSON(t *testing.T, url string) (int, map[string]any) {
@@ -214,6 +296,62 @@ func TestGuardAuthorizedInjectsUser(t *testing.T) {
 	// 200 here also proves the AuthUser was injected for downstream handlers.
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (Guard rejected a valid session)", resp.StatusCode)
+	}
+}
+
+// Guard must apply the same must-change-password gate RequireAuth applies.
+// /mcp is normally mounted same-origin with the app's SPA, so a browser cookie
+// resolves here — without this, an account holding an unrotated provisioned
+// credential could drive the MCP tools while being 403'd everywhere else.
+// The body is Guard's own application/json shape (NOT problem+json), carrying
+// middleware.MustChangePasswordDetail so clients match one string API-wide.
+func TestGuardMustChangePasswordCookie403(t *testing.T) {
+	srv, repo := testServer(t, mcpauth.Config{AuthBasePath: "/api/auth", ConsentPath: "/authorize"})
+	cookie := seedMustChangeSession(t, repo)
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/mcp", nil) //nolint:noctx
+	req.AddCookie(&http.Cookie{Name: "yauth_session", Value: cookie})
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /mcp: %v", err)
+	}
+	defer resp.Body.Close() //nolint:errcheck
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (must-change caller reached the MCP endpoint)", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json (Guard's convention, not problem+json)", ct)
+	}
+	var doc map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
+		t.Fatalf("body is not JSON: %v", err)
+	}
+	if doc["error"] != "forbidden" {
+		t.Errorf("error = %v, want forbidden", doc["error"])
+	}
+	if doc["error_description"] != middleware.MustChangePasswordDetail {
+		t.Errorf("error_description = %v, want %q", doc["error_description"], middleware.MustChangePasswordDetail)
+	}
+}
+
+// The mirror image: must_change_password is a password concept, so a bearer
+// (machine) caller is never gated even when the account carries the flag. This
+// is the intended MCP path and must stay untouched by the gate above.
+func TestGuardMustChangePasswordBearerNotGated(t *testing.T) {
+	srv, repo := testServer(t, mcpauth.Config{AuthBasePath: "/api/auth", ConsentPath: "/authorize"})
+	token := mintBearerToken(t, srv, repo)
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/mcp", nil) //nolint:noctx
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /mcp: %v", err)
+	}
+	defer resp.Body.Close() //nolint:errcheck
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (bearer caller must not be must-change gated)", resp.StatusCode)
 	}
 }
 

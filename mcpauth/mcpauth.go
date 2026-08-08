@@ -265,9 +265,23 @@ func proxyFetch(yaRouter http.Handler, r *http.Request, internalPath string) (in
 //   - answers application/json, so MCP/REST clients get a parseable body instead
 //     of yauth's text/plain "Unauthorized".
 //
+// It also applies the same must-change-password gate RequireAuth applies: a
+// cookie-session caller whose account still owes a password rotation gets 403
+// with middleware.MustChangePasswordDetail. Machine callers (bearer / api-key)
+// are never gated — must_change_password is a password concept, and
+// middleware.MustRotatePassword encodes exactly that rule, so both stacks share
+// one predicate and cannot drift. This matters because /mcp is normally mounted
+// same-origin with the app's SPA, so a browser cookie resolves here too: without
+// the gate, an admin holding an unrotated provisioned credential could drive the
+// MCP tools while being correctly 403'd on every other route.
+//
 // Guard intentionally does not impose tenant/org policy — layer that in your
-// own handler using the injected AuthUser. It is the thin auth seam that makes
-// the MCP endpoint discoverable; everything domain-specific stays yours.
+// own handler using the injected AuthUser. The must-change gate is not an
+// exception to that boundary: it is credential state, not tenant policy — the
+// same class of check RequireAuth already makes before any handler runs.
+//
+// It is the thin auth seam that makes the MCP endpoint discoverable; everything
+// domain-specific stays yours.
 func Guard(ya *yauth.YAuth, next http.Handler) http.Handler {
 	mw := ya.Middleware()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -278,6 +292,18 @@ func Guard(ya *yauth.YAuth, next http.Handler) http.Handler {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{
 				"error":             "unauthorized",
 				"error_description": "authentication required",
+			})
+			return
+		}
+		// Deliberately Guard's own application/json error shape rather than
+		// yauth's problem+json: an MCP/REST client parses one body format from
+		// this endpoint. The description is the shared
+		// middleware.MustChangePasswordDetail string, so a client can match the
+		// same condition here as on the rest of the API.
+		if middleware.MustRotatePassword(au) {
+			writeJSON(w, http.StatusForbidden, map[string]string{
+				"error":             "forbidden",
+				"error_description": middleware.MustChangePasswordDetail,
 			})
 			return
 		}

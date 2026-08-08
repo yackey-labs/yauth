@@ -49,7 +49,7 @@ Open <http://localhost:5173> in a browser.
    redirects you to `/login` after the success toast.
 2. **Login** — `/login` → enter the seeded admin
    `admin@example.com` / `correct horse battery staple` → `POST /api/auth/login`
-   returns 200 (or `{mfa_required, pending_session_id}` if MFA is on) and
+   returns 200 (or `{require_mfa, pending_session_id}` if MFA is on) and
    sets the cookie. The form redirects to `/dashboard`.
 3. **Dashboard** — `/dashboard` reads `useSession()`, which calls
    `GET /api/auth/session`. The wrapped response (`{user, expires_at?}`)
@@ -63,7 +63,7 @@ The seeded admin has no MFA enabled, but the `MfaSetup` and `MfaChallenge`
 components from `@yackey-labs/yauth-ui-vue` work against the same backend.
 To extend the example, mount `MfaSetup` on the dashboard and add a route
 that the login flow redirects to when the server returns
-`{mfa_required: true, pending_session_id: "..."}`.
+`{require_mfa: true, pending_session_id: "..."}`.
 
 ## Why this exists
 

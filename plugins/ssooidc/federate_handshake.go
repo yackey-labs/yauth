@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/yackey-labs/yauth/auth"
+	"github.com/yackey-labs/yauth/middleware"
 	"github.com/yackey-labs/yauth/plugin"
 )
 
@@ -206,10 +207,25 @@ func (p *ssoOIDCPlugin) launchTarget(claims map[string]any) string {
 
 // requireFlowAdmin authenticates the request and requires org-admin on orgID —
 // or, when orgID is empty (global connection), the install-wide admin role.
+//
+// The federation flow routes carry flowGuards (StashHTTPHuma only — no auth
+// middleware), so this helper is the whole gate: authn, the must-change-password
+// check RequireAuthHuma would otherwise have applied, then authz.
 func (p *ssoOIDCPlugin) requireFlowAdmin(ctx context.Context, host plugin.PluginHost, r *http.Request, orgID string) error {
 	au, err := host.Middleware().ResolveAuth(r)
 	if err != nil || au == nil {
 		return huma.Error401Unauthorized("authentication required")
+	}
+	// Resolving identity ourselves means we do not inherit RequireAuthHuma's
+	// must-change-password gate: without this, an admin still holding an
+	// unrotated provisioned password could drive the guided federation handshake
+	// (seeding an SSO connection for the whole install) while being correctly
+	// 403'd everywhere else. middleware.MustRotatePassword is the one predicate
+	// both middleware stacks use — machine callers (bearer / api-key) are never
+	// gated — so this cannot drift from them. Checked before authz so the answer
+	// is the same whether the caller is an org admin or the install admin.
+	if middleware.MustRotatePassword(au) {
+		return huma.Error403Forbidden(middleware.MustChangePasswordDetail)
 	}
 	if orgID == "" {
 		if au.User.Role != auth.RoleAdmin {

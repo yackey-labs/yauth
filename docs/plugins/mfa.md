@@ -16,6 +16,12 @@ session, and the client completes login via `/mfa/verify`.
 | POST   | `/mfa/backup-codes/regenerate`| replace backup codes (auth-gated)                   |
 | POST   | `/mfa/verify`                 | consume a pending session → issue a real session    |
 
+A native client that logs in through the `bearer` plugin's `/token` gets the
+same `{require_mfa, pending_session_id}` body, but completes the challenge at
+`/token/mfa` instead — `/mfa/verify` ends in a session cookie, which such a
+client cannot carry. Both routes consume the same pending session; whichever
+is used first spends it.
+
 ## Wiring (builder API)
 
 ```go
@@ -41,7 +47,12 @@ ya, err := yauth.New(repo, yauth.NewDefaultConfig()).
   existing TOTP secrets unrecoverable**, so manage it like any AES key.
   `yauth gen-secrets` emits a suitable random key.
 - MFA works by intercepting the `login.succeeded` event, so it needs a login
-  source that emits it (e.g. `emailpassword`). It's standalone otherwise.
+  source that emits it (e.g. `emailpassword`, `bearer`). It's standalone
+  otherwise.
+- The plugin also publishes a `plugin.MFAVerifier` on the host. That is how
+  `bearer`'s `/token/mfa` completes a challenge without importing this package
+  or holding the TOTP encryption key; drop the mfa plugin and that route fails
+  closed.
 - **YAML:** `NewFromConfig` wires mfa from the `plugins.mfa` section;
   `encryption_key_env` names the env var holding the base64-encoded 32-byte key
   (as emitted by `yauth gen-secrets`). `NewFromConfig` errors if it's missing or

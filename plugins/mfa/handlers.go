@@ -375,17 +375,13 @@ func (p *mfaPlugin) handleVerify(host plugin.PluginHost) func(context.Context, *
 
 		repoRef := host.Repo()
 
-		ch, err := repoRef.ConsumeChallenge(ctx, pendingSessionKeyPrefix+pendingSessionID)
+		userID, found, err := p.consumePendingSession(ctx, repoRef, pendingSessionID)
 		if err != nil {
-			if errors.Is(err, yautherr.ErrNotFound) {
-				return nil, huma.Error401Unauthorized("pending session not found or expired")
-			}
 			return nil, huma.Error500InternalServerError("unable to consume pending session")
 		}
-		if ch == nil || ch.Value == "" {
+		if !found {
 			return nil, huma.Error401Unauthorized("pending session not found or expired")
 		}
-		userID := ch.Value
 
 		ok, err := p.verifyCode(ctx, repoRef, userID, code)
 		if err != nil {
@@ -413,6 +409,25 @@ func (p *mfaPlugin) handleVerify(host plugin.PluginHost) func(context.Context, *
 		}
 		return &mfaVerifyOutput{Body: resp}, nil
 	}
+}
+
+// consumePendingSession consumes the mfa_pending:<id> challenge row and
+// returns the user id it was created for. found=false means the id is
+// unknown, expired or already spent; err is a backend failure. The row is
+// consumed before the code is checked (here and in the bearer exchange),
+// so one challenge buys exactly one guess.
+func (p *mfaPlugin) consumePendingSession(ctx context.Context, repoRef repo.Repository, pendingSessionID string) (userID string, found bool, err error) {
+	ch, err := repoRef.ConsumeChallenge(ctx, pendingSessionKeyPrefix+pendingSessionID)
+	if err != nil {
+		if errors.Is(err, yautherr.ErrNotFound) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	if ch == nil || ch.Value == "" {
+		return "", false, nil
+	}
+	return ch.Value, true, nil
 }
 
 // verifyCode tries TOTP first, then backup-code consumption. Returns

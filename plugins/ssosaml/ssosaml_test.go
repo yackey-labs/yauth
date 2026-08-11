@@ -309,6 +309,8 @@ func (h *fakeHost) RegisterAuthResolver(r plugin.AuthResolver) { h.mw.AddResolve
 func (h *fakeHost) PluginNames() []string                      { return nil }
 func (h *fakeHost) JWTSigner() plugin.JWTSigner                { return nil }
 func (h *fakeHost) JWTSecret() []byte                          { return nil }
+func (h *fakeHost) RegisterMFAVerifier(plugin.MFAVerifier)     {}
+func (h *fakeHost) MFAVerifier() plugin.MFAVerifier            { return nil }
 func (h *fakeHost) Emit(_ context.Context, _ events.AuthEvent) (events.Decision, error) {
 	return events.Continue(), nil
 }

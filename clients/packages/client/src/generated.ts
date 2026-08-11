@@ -221,6 +221,12 @@ export interface BearerRevokeRequest {
   refresh_token?: string;
 }
 
+export interface BearerTokenMFARequest {
+  code?: string;
+  org?: string;
+  pending_session_id?: string;
+}
+
 export interface BearerTokenRequest {
   email?: string;
   org?: string;
@@ -675,6 +681,15 @@ export interface GroupMemberJSON {
 
 export interface ImpersonateResponse {
   user: UserJSON;
+}
+
+export interface IssueResponse {
+  access_token?: string;
+  expires_in?: number;
+  pending_session_id?: string;
+  refresh_token?: string;
+  require_mfa?: boolean;
+  token_type?: string;
 }
 
 export interface LinkRequest {
@@ -5356,16 +5371,42 @@ export const getBearerIssueTokenUrl = () => {
 }
 
 /**
+ * Returns {require_mfa, pending_session_id} instead of tokens when the account has a second factor; complete it at /token/mfa.
  * @summary Exchange email+password for an access+refresh token pair
  */
-export const bearerIssueToken = async (bearerTokenRequest: BearerTokenRequest, options?: Parameters<typeof customFetch>[1]): Promise<TokenResponse> => {
+export const bearerIssueToken = async (bearerTokenRequest: BearerTokenRequest, options?: Parameters<typeof customFetch>[1]): Promise<IssueResponse> => {
 
-  return customFetch<TokenResponse>(getBearerIssueTokenUrl(),
+  return customFetch<IssueResponse>(getBearerIssueTokenUrl(),
   {
     ...options,
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...options?.headers },
     body: JSON.stringify(bearerTokenRequest)
+  }
+);}
+
+
+
+export const getBearerIssueTokenMfaUrl = () => {
+
+
+
+
+  return `/token/mfa`
+}
+
+/**
+ * Exchange the pending_session_id returned by /token, plus a TOTP or backup code, for an access+refresh token pair.
+ * @summary Complete an MFA challenge from /token and issue tokens
+ */
+export const bearerIssueTokenMfa = async (bearerTokenMFARequest: BearerTokenMFARequest, options?: Parameters<typeof customFetch>[1]): Promise<TokenResponse> => {
+
+  return customFetch<TokenResponse>(getBearerIssueTokenMfaUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(bearerTokenMFARequest)
   }
 );}
 

@@ -10,8 +10,41 @@ JWKS, that's the OIDC-provider path — see `yauth docs plugins/oidc-provider`.)
 | Method | Path             | Purpose                                        |
 | ------ | ---------------- | ---------------------------------------------- |
 | POST   | `/token`         | email + password → `{access_token, refresh_token}` |
+| POST   | `/token/mfa`     | `pending_session_id` + code → `{access_token, refresh_token}` |
 | POST   | `/token/refresh` | rotate the refresh token (family rotation, reuse-revocation) |
 | POST   | `/token/revoke`  | revoke a refresh-token family (auth-gated)     |
+
+## Second factor / lockout on `/token`
+
+`/token` runs the same auth-event pipeline as the cookie `/login`
+(`login.attempt` → `login.failed` / `login.succeeded`), so plugins that
+interpose on login apply to native clients too: `lockout` throttles brute
+force, `mfa` steps up, `auditexport`/`webhooks` see the login.
+
+When a handler answers `login.succeeded` with a `RequireMfa` decision (the
+`mfa` plugin does this for a user with verified TOTP), `/token` issues **no
+tokens** and returns the same step-up body the cookie login returns:
+
+```json
+{ "require_mfa": true, "pending_session_id": "…" }
+```
+
+The client then completes the challenge at `/token/mfa` with that id plus a
+TOTP or backup code (`{"pending_session_id": "…", "code": "123456"}`, plus an
+optional `org`), and receives the ordinary `{access_token, refresh_token,
+token_type, expires_in}` pair. `/mfa/verify` is the cookie-flow equivalent and
+ends in a session cookie a native client cannot carry, which is why the token
+exchange lives here.
+
+The pending session is single-use and short-lived (5 minutes): a wrong code
+burns it, and the caller must start again at `/token`. `/token/mfa` returns
+400 when no `mfa` plugin is loaded — it fails closed rather than waving a
+challenge through — and one opaque 401 for an unknown, expired or spent
+pending session as well as a wrong code.
+
+**Backwards compatible:** a caller with no second factor enrolled still gets
+the token pair from a single `/token` call, byte for byte. A deployment that
+wires neither `mfa` nor `lockout` sees no behavioural change.
 
 ## Wiring (builder API)
 

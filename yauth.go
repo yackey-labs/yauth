@@ -45,6 +45,7 @@ type YAuth struct {
 	authResolvers []plugin.AuthResolver
 	jwtSigner     plugin.JWTSigner
 	jwtSecret     []byte
+	mfaVerifier   plugin.MFAVerifier
 	logger        *slog.Logger
 
 	// humaAPI is the huma API every plugin registered its routes on. Its
@@ -366,6 +367,20 @@ func (y *YAuth) JWTSigner() plugin.JWTSigner { return y.jwtSigner }
 
 // JWTSecret implements plugin.PluginHost.
 func (y *YAuth) JWTSecret() []byte { return y.jwtSecret }
+
+// MFAVerifier implements plugin.PluginHost. Returns nil when no MFA
+// plugin registered a verifier.
+func (y *YAuth) MFAVerifier() plugin.MFAVerifier { return y.mfaVerifier }
+
+// RegisterMFAVerifier implements plugin.PluginHost. It is invoked by the
+// mfa plugin from its Routes hook to publish its challenge verifier to
+// plugins that complete a login without a cookie session (bearer). First
+// verifier wins, matching SetJWTSigner.
+func (y *YAuth) RegisterMFAVerifier(v plugin.MFAVerifier) {
+	if y.mfaVerifier == nil {
+		y.mfaVerifier = v
+	}
+}
 
 // SetJWTSigner is invoked by the asymmetric-jwt plugin from its Routes
 // hook to publish its signer to the rest of the host. Plugins should not

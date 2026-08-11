@@ -572,6 +572,21 @@
         },
         "type": "object"
       },
+      "BearerTokenMFARequest": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "org": {
+            "type": "string"
+          },
+          "pending_session_id": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "BearerTokenRequest": {
         "additionalProperties": false,
         "properties": {
@@ -1745,6 +1760,31 @@
           "expires_at",
           "created_at"
         ],
+        "type": "object"
+      },
+      "IssueResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "access_token": {
+            "type": "string"
+          },
+          "expires_in": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "pending_session_id": {
+            "type": "string"
+          },
+          "refresh_token": {
+            "type": "string"
+          },
+          "require_mfa": {
+            "type": "boolean"
+          },
+          "token_type": {
+            "type": "string"
+          }
+        },
         "type": "object"
       },
       "LinkRequest": {
@@ -11865,12 +11905,56 @@
     },
     "/token": {
       "post": {
+        "description": "Returns {require_mfa, pending_session_id} instead of tokens when the account has a second factor; complete it at /token/mfa.",
         "operationId": "bearer-issue-token",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/BearerTokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssueResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [],
+        "summary": "Exchange email+password for an access+refresh token pair",
+        "tags": [
+          "bearer"
+        ]
+      }
+    },
+    "/token/mfa": {
+      "post": {
+        "description": "Exchange the pending_session_id returned by /token, plus a TOTP or backup code, for an access+refresh token pair.",
+        "operationId": "bearer-issue-token-mfa",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BearerTokenMFARequest"
               }
             }
           },
@@ -11899,7 +11983,7 @@
           }
         },
         "security": [],
-        "summary": "Exchange email+password for an access+refresh token pair",
+        "summary": "Complete an MFA challenge from /token and issue tokens",
         "tags": [
           "bearer"
         ]

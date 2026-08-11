@@ -17,8 +17,13 @@
 // login.succeeded events: when the authenticating user has a verified
 // TOTP secret, the handler creates a pending-session record in the
 // challenge repository and returns a RequireMfa decision so the
-// triggering plugin (email-password) returns {require_mfa, pending_session_id}
-// instead of issuing a real session.
+// triggering plugin (email-password, bearer) returns
+// {require_mfa, pending_session_id} instead of issuing a real session.
+//
+// Finally it publishes a plugin.MFAVerifier on the host. /mfa/verify ends
+// in a cookie session, which a native client cannot carry, so the bearer
+// plugin completes the challenge through that verifier at
+// POST {prefix}/token/mfa and answers with a token pair instead.
 package mfa
 
 import (
@@ -86,6 +91,10 @@ func (p *mfaPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.A
 		encryptionKey:     p.cfg.EncryptionKey,
 		pendingSessionTTL: pendingSessionTTL,
 	})
+
+	// Publish the challenge verifier so token-issuing plugins (bearer)
+	// can complete the same challenge for a client that has no cookie.
+	host.RegisterMFAVerifier(&challengeVerifier{p: p, repo: host.Repo()})
 
 	authMw := huma.Middlewares{
 		middleware.RequireAuthHuma(api, mw),

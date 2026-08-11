@@ -97,6 +97,17 @@ type PluginHost interface {
 	// if no bearer plugin is loaded.
 	JWTSecret() []byte
 
+	// RegisterMFAVerifier publishes v as the host's second-factor
+	// verifier. The mfa plugin calls this from its Routes hook; the
+	// contract is "first verifier wins", like SetJWTSigner.
+	RegisterMFAVerifier(v MFAVerifier)
+
+	// MFAVerifier returns the registered MFAVerifier, or nil if no MFA
+	// plugin is loaded. Plugins that complete a login outside the cookie
+	// flow (bearer) must look it up lazily inside their handlers —
+	// plugin registration order is not guaranteed.
+	MFAVerifier() MFAVerifier
+
 	// Emit fans an AuthEvent through every registered events.Handler in
 	// registration order. The first non-Continue decision short-circuits
 	// and is returned to the caller; the caller is responsible for
@@ -110,6 +121,33 @@ type PluginHost interface {
 	// max<=0 or window<=0 disables the limiter — callers can pass the
 	// configured rule without branching.
 	RateLimit(name string, max int, window time.Duration) func(http.Handler) http.Handler
+}
+
+// MFAVerifier completes a second-factor challenge that an events.Handler
+// opened with an events.RequireMfa decision. The mfa plugin registers an
+// implementation via PluginHost.RegisterMFAVerifier; plugins that finish a
+// login without a cookie session (bearer's /token) retrieve it via
+// PluginHost.MFAVerifier and MUST refuse the exchange when it is nil, so a
+// challenge can never be waved through by a deployment that dropped the mfa
+// plugin.
+//
+// This mirrors the JWTSigner brokering pattern: one plugin supplies a
+// capability, another consumes it, and neither imports the other.
+type MFAVerifier interface {
+	// VerifyPendingChallenge consumes the pending session identified by
+	// pendingSessionID and validates code against the user's second
+	// factor (TOTP or a backup code). It returns the authenticated user's
+	// id with ok=true only when both succeed.
+	//
+	// ok=false covers every credential-level failure — unknown, expired
+	// or already-consumed pending session, wrong code — and callers MUST
+	// answer with a single opaque 401 so the cases stay
+	// indistinguishable. A non-nil error means a backend failure (500),
+	// never a failed verification.
+	//
+	// The pending session is single-use and is consumed even when the
+	// code turns out to be wrong, so a challenge cannot be brute-forced.
+	VerifyPendingChallenge(ctx context.Context, pendingSessionID, code string) (userID string, ok bool, err error)
 }
 
 // JWTSigner is the abstraction asymmetric-JWT and OIDC plugins use to

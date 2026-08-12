@@ -221,6 +221,13 @@ func NewBuilderFromConfig(ctx context.Context, cfg *yauthcfg.Config, opts ...Con
 	for _, warn := range cfg.DeprecationWarnings() {
 		logger.Warn("yauth: deprecated config field set (ignored)", "detail", warn)
 	}
+	// Settings that are dangerous in production but legitimate in development,
+	// so they are permitted and SAID rather than rejected — the console
+	// mailer's one-time WARN is the house precedent. The unsafe-and-never-
+	// legitimate combinations are refused by cfg.Validate() above instead.
+	for _, warn := range cfg.SecurityWarnings() {
+		logger.Warn("yauth: insecure setting", "detail", warn)
+	}
 
 	if o.repoSet && o.poolSet {
 		return nil, errors.New("yauth: WithRepo and WithPool are mutually exclusive — pass at most one")
@@ -364,7 +371,7 @@ func NewBuilderFromConfig(ctx context.Context, cfg *yauthcfg.Config, opts ...Con
 		builder = builder.WithPlugin(emailpassword.New(epCfg))
 	}
 
-	builder, err = addAuthPlugins(builder, cfg, mailer)
+	builder, err = addAuthPlugins(builder, cfg, mailer, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -382,21 +389,38 @@ func firstNonEmpty(a, b string) string {
 
 // resolveAESKey loads a 32-byte AES key from the named env var. It accepts the
 // base64-std form emitted by `yauth gen-secrets`, or a raw 32-byte value.
-func resolveAESKey(envName string) ([32]byte, error) {
+//
+// The second return reports that the RAW form was used, so the caller can warn.
+// A 32-character value that is not base64 is nearly always a human-typed
+// passphrase being used verbatim as AES-256 key material with no key
+// derivation — far less entropy than the 256 bits its length implies. That is
+// only a warning, never an error: introducing a KDF here would change the key
+// derived from every existing value and make already-encrypted OAuth tokens,
+// SAML SP private keys and MFA secrets permanently undecryptable.
+func resolveAESKey(envName string) ([32]byte, bool, error) {
 	var key [32]byte
 	raw := os.Getenv(envName)
 	if raw == "" {
-		return key, fmt.Errorf("env %q is empty or unset", envName)
+		return key, false, fmt.Errorf("env %q is empty or unset", envName)
 	}
 	if b, err := base64.StdEncoding.DecodeString(raw); err == nil && len(b) == 32 {
 		copy(key[:], b)
-		return key, nil
+		return key, false, nil
 	}
 	if len(raw) == 32 {
 		copy(key[:], raw)
-		return key, nil
+		return key, true, nil
 	}
-	return key, fmt.Errorf("env %q must hold a base64-encoded 32-byte key (or 32 raw bytes)", envName)
+	return key, false, fmt.Errorf("env %q must hold a base64-encoded 32-byte key (or 32 raw bytes)", envName)
+}
+
+// warnRawAESKey emits the advisory for a key supplied in the raw form.
+func warnRawAESKey(logger *slog.Logger, envName string) {
+	if logger == nil {
+		return
+	}
+	logger.Warn("yauth: insecure setting",
+		"detail", fmt.Sprintf("env %q holds 32 raw characters rather than a base64-encoded 32-byte key. If that is a passphrase it is being used verbatim as AES-256 key material with NO key derivation — generate a real key with `yauth gen-secrets`", envName))
 }
 
 // buildOAuthProviders maps the yaml provider catalog onto concrete
@@ -442,7 +466,7 @@ func buildOAuthProviders(c yauthcfg.OAuthPluginConfig) ([]oauth.Provider, error)
 // environment. Returns the first construction error. Plugins are added in the
 // same order as yauthcfg.EnabledPlugins so asymjwt's signer is registered
 // before oidc/oauth2server (which read it).
-func addAuthPlugins(builder *YAuthBuilder, cfg *yauthcfg.Config, mailer Mailer) (*YAuthBuilder, error) {
+func addAuthPlugins(builder *YAuthBuilder, cfg *yauthcfg.Config, mailer Mailer, logger *slog.Logger) (*YAuthBuilder, error) {
 	p := &cfg.Plugins
 
 	// One IdP issuer/base-path, applied to both oidc and oauth2server so their
@@ -454,6 +478,16 @@ func addAuthPlugins(builder *YAuthBuilder, cfg *yauthcfg.Config, mailer Mailer) 
 		secret := []byte(os.Getenv(p.Bearer.JWTSecretEnv))
 		if len(secret) == 0 {
 			return nil, fmt.Errorf("yauth: bearer enabled but env %q is empty or unset", p.Bearer.JWTSecretEnv)
+		}
+		// Length was never checked, so JWT_SECRET=a started cleanly and signed
+		// every bearer access token, every refresh binding and every machine
+		// credential in the deployment with a key recoverable offline from one
+		// captured token. RFC 7518 §3.2 requires at least the hash output size
+		// for HS256; anything shorter is a forgery oracle, not a
+		// misconfiguration to warn about.
+		if len(secret) < yauthcfg.MinJWTSecretBytes {
+			return nil, fmt.Errorf("yauth: env %q holds a %d-byte HS256 secret; at least %d bytes are required (RFC 7518 §3.2). Generate one with `yauth gen-secrets`. Note that changing it invalidates outstanding access and refresh tokens",
+				p.Bearer.JWTSecretEnv, len(secret), yauthcfg.MinJWTSecretBytes)
 		}
 		builder = builder.WithJWTSecret(secret)
 		builder = builder.WithPlugin(bearer.New(bearer.Config{
@@ -505,9 +539,12 @@ func addAuthPlugins(builder *YAuthBuilder, cfg *yauthcfg.Config, mailer Mailer) 
 	}
 
 	if p.MFA.Enabled {
-		key, err := resolveAESKey(p.MFA.EncryptionKeyEnv)
+		key, rawKey, err := resolveAESKey(p.MFA.EncryptionKeyEnv)
 		if err != nil {
 			return nil, fmt.Errorf("yauth: mfa encryption key: %w", err)
+		}
+		if rawKey {
+			warnRawAESKey(logger, p.MFA.EncryptionKeyEnv)
 		}
 		plug, err := mfa.New(mfa.Config{EncryptionKey: key, Issuer: p.MFA.Issuer})
 		if err != nil {
@@ -530,9 +567,12 @@ func addAuthPlugins(builder *YAuthBuilder, cfg *yauthcfg.Config, mailer Mailer) 
 	}
 
 	if p.OAuth.Enabled {
-		key, err := resolveAESKey(p.OAuth.EncryptionKeyEnv)
+		key, rawKey, err := resolveAESKey(p.OAuth.EncryptionKeyEnv)
 		if err != nil {
 			return nil, fmt.Errorf("yauth: oauth encryption key: %w", err)
+		}
+		if rawKey {
+			warnRawAESKey(logger, p.OAuth.EncryptionKeyEnv)
 		}
 		provs, err := buildOAuthProviders(p.OAuth)
 		if err != nil {
@@ -550,9 +590,12 @@ func addAuthPlugins(builder *YAuthBuilder, cfg *yauthcfg.Config, mailer Mailer) 
 	}
 
 	if p.SSOOIDC.Enabled {
-		key, err := resolveAESKey(p.SSOOIDC.EncryptionKeyEnv)
+		key, rawKey, err := resolveAESKey(p.SSOOIDC.EncryptionKeyEnv)
 		if err != nil {
 			return nil, fmt.Errorf("yauth: sso_oidc encryption key: %w", err)
+		}
+		if rawKey {
+			warnRawAESKey(logger, p.SSOOIDC.EncryptionKeyEnv)
 		}
 		plug, err := ssooidc.New(ssooidc.Config{
 			EncryptionKey:       key,

@@ -42,6 +42,9 @@ func newStatusCmd() *cobra.Command {
 			for _, warn := range cfg.DeprecationWarnings() {
 				fmt.Fprintln(cmd.ErrOrStderr(), "warning: "+warn)
 			}
+			for _, warn := range cfg.SecurityWarnings() {
+				fmt.Fprintln(cmd.ErrOrStderr(), "security: "+warn)
+			}
 			if ep.BootstrapAdmin.Enabled && cfg.Server.AutoAdminFirstUser {
 				fmt.Fprintln(cmd.ErrOrStderr(), "warning: both bootstrap_admin and auto_admin_first_user are set; bootstrap_admin provisions the admin at startup, so auto_admin_first_user (promote-first-registrant) will not fire — disable it.")
 			}

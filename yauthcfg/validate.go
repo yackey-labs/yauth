@@ -23,6 +23,11 @@ func (c *Config) Validate() error {
 	if c.Session.TTL < 0 {
 		return fmt.Errorf("session.ttl must be non-negative")
 	}
+	// Cookie/CORS combinations that are unsafe or outright non-functional. See
+	// security.go for why each of these rejects instead of warning.
+	if err := c.validateSecurity(); err != nil {
+		return err
+	}
 	if css := c.Session.CookieSameSite; css != "" {
 		switch css {
 		case "lax", "strict", "none", "Lax", "Strict", "None":
@@ -42,6 +47,8 @@ func (c *Config) Validate() error {
 		if p.Bearer.JWTSecretEnv == "" {
 			return fmt.Errorf("plugins.bearer.jwt_secret_env is required when bearer is enabled")
 		}
+		// The secret's LENGTH is checked where the value is resolved
+		// (from_config.go), since only the environment holds it.
 		if p.Bearer.AccessTTL < 0 || p.Bearer.RefreshTTL < 0 {
 			return fmt.Errorf("plugins.bearer access_ttl/refresh_ttl must be non-negative")
 		}

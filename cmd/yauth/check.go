@@ -22,6 +22,9 @@ func newCheckCmd() *cobra.Command {
 			for _, warn := range cfg.DeprecationWarnings() {
 				fmt.Fprintln(cmd.ErrOrStderr(), "warning: "+warn)
 			}
+			for _, warn := range cfg.SecurityWarnings() {
+				fmt.Fprintln(cmd.ErrOrStderr(), "security: "+warn)
+			}
 			ctx := cmd.Context()
 			if err := yauth.SchemaCheck(ctx, cfg); err != nil {
 				return err

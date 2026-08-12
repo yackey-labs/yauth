@@ -202,8 +202,11 @@ func (p *oauth2Plugin) grantDeviceCode(host plugin.PluginHost, w http.ResponseWr
 		writeOAuthError(w, "invalid_grant", "user not found")
 		return
 	}
-	if user.Banned {
-		writeOAuthError(w, "invalid_grant", "user is banned")
+	// Banned, suspended (offboarded) or staged — the device flow's approval
+	// may be minutes or hours old, so the account state is re-checked at
+	// redemption, not just at approval.
+	if !user.CanAuthenticate(time.Now().UTC()) {
+		writeOAuthError(w, "invalid_grant", "user is not permitted to authenticate")
 		return
 	}
 	if err2 := host.Repo().UpdateDeviceCodeStatus(r.Context(), dc.ID, "consumed", dc.UserID); err2 != nil {

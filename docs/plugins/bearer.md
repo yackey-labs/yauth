@@ -52,6 +52,25 @@ brute force.
 the token pair from a single `/token` call, byte for byte. A deployment that
 wires neither `mfa` nor `lockout` sees no behavioural change.
 
+## What terminates a refresh token
+
+Refresh tokens outlive sessions (30 days by default) and roll forward on every
+rotation, so what revokes them matters more than what revokes a cookie. Each of
+these revokes **every** refresh token the user holds:
+
+- the user changing their password (`POST /change-password`) or completing a
+  reset (`POST /reset-password`). Change-password re-issues the caller's own
+  session cookie afterwards, so the device that performed the rotation stays
+  signed in; nothing else does;
+- an admin banning or suspending the account, and SCIM deprovisioning it;
+- SSO back-channel logout and SAML single-logout;
+- `POST /token/revoke`, and presenting an already-rotated token (reuse revokes
+  the whole family).
+
+Separately, the bearer resolver re-reads the user on **every** request, so a
+banned, suspended or not-yet-active account stops authenticating at once even
+while its access token is still inside its 15-minute lifetime.
+
 ## Wiring (builder API)
 
 ```go

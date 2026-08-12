@@ -517,6 +517,22 @@ func (p *oauthPlugin) completeLogin(
 			return nil, huma.Error500InternalServerError("unable to look up user")
 		}
 		if err == nil && existingUser != nil {
+			// Adopting an existing account on a matching email address makes
+			// the provider's word on that address the whole authentication.
+			// Google and GitHub only report addresses they verified, but the
+			// generic OIDC provider is pointed at whatever IdP an operator
+			// configures — one that permits self-registration with an
+			// unverified address would let an attacker register the victim's
+			// email there and be handed the victim's existing password
+			// account. Refuse the adoption unless the provider verified it.
+			// (Creating a NEW user from an unverified address is a different
+			// question: it takes over nothing, and the address is stored with
+			// email_verified=false.)
+			if !info.EmailVerified {
+				// Says why the provider was refused, not whether an account
+				// exists here.
+				return nil, huma.Error403Forbidden("your identity provider has not verified this email address, so it cannot be used to sign in")
+			}
 			if existingUser.Banned {
 				return nil, huma.Error403Forbidden("account suspended")
 			}

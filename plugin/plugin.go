@@ -8,6 +8,7 @@ package plugin
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/yackey-labs/yauth/events"
 	"github.com/yackey-labs/yauth/middleware"
 	"github.com/yackey-labs/yauth/repo"
+	"github.com/yackey-labs/yauth/yautherr"
 )
 
 // AuthResolver is an alternative identity-resolution path that plugins can
@@ -206,6 +208,20 @@ func RunFederatedLogin(
 	em := email
 	m := method
 
+	// Account lifecycle gate. The three federated callbacks resolve the
+	// identity by hand and each checked only user.Banned, so a suspended
+	// (offboarded) or staged (start date not yet reached) account still
+	// opened a full session through Google or a corporate IdP — while the
+	// cookie middleware, the bearer resolver and OAuth2 introspection all
+	// apply the tri-state domain.User.CanAuthenticate. It lives here rather
+	// than at each callback so the flows cannot drift apart again, and it
+	// runs before any event is emitted: a suspended account is an
+	// administrative state, not a failed credential, so it must not feed
+	// lockout counters or read as a login attempt to observers.
+	if err := federatedUserCanAuthenticate(ctx, host, userID); err != nil {
+		return err
+	}
+
 	attempt := events.AuthEvent{
 		Type:      events.EventLoginAttempt,
 		UserID:    &uid,
@@ -233,6 +249,29 @@ func RunFederatedLogin(
 		return huma.NewError(decisionStatus(dec), decisionMessage(dec))
 	case events.DecisionKindRequireMfa:
 		return huma.Error403Forbidden("multi-factor authentication is required and cannot be completed on this login method")
+	}
+	return nil
+}
+
+// federatedUserCanAuthenticate fails a federated login CLOSED unless the
+// resolved account may currently authenticate. A missing user is a refusal
+// too — the callbacks pass an id they just created or read, so "not found"
+// means the account went away underneath the flow, which is not a session
+// we should issue. A backend error is a 500 rather than a silent pass: an
+// unreadable account state cannot be read as "allowed".
+//
+// The message deliberately does not distinguish suspended from staged from
+// missing; an external IdP's user has no business learning which.
+func federatedUserCanAuthenticate(ctx context.Context, host PluginHost, userID string) error {
+	u, err := host.Repo().GetUserByID(ctx, userID)
+	if err != nil || u == nil {
+		if errors.Is(err, yautherr.ErrNotFound) || u == nil {
+			return huma.Error403Forbidden("this account is not permitted to sign in")
+		}
+		return huma.Error500InternalServerError("unable to load account")
+	}
+	if !u.CanAuthenticate(time.Now().UTC()) {
+		return huma.Error403Forbidden("this account is not permitted to sign in")
 	}
 	return nil
 }

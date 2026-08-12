@@ -184,8 +184,11 @@ func (p *oauth2Plugin) grantAuthCode(host plugin.PluginHost, w http.ResponseWrit
 		writeOAuthError(w, "invalid_grant", "user not found")
 		return
 	}
-	if user.Banned {
-		writeOAuthError(w, "invalid_grant", "user is banned")
+	// Banned, suspended (offboarded) or staged: the same tri-state predicate
+	// introspect.go already applies, so a code cannot be exchanged for tokens
+	// that introspection would immediately report inactive.
+	if !user.CanAuthenticate(time.Now().UTC()) {
+		writeOAuthError(w, "invalid_grant", "user is not permitted to authenticate")
 		return
 	}
 
@@ -264,8 +267,11 @@ func (p *oauth2Plugin) grantRefreshToken(host plugin.PluginHost, w http.Response
 			writeOAuthError(w, "invalid_grant", "user not found")
 			return
 		}
-		if user.Banned {
-			writeOAuthError(w, "invalid_grant", "user is banned")
+		// Re-checked on every rotation, so suspending a user stops their
+		// OAuth2 refresh token at the next exchange rather than at its
+		// expiry.
+		if !user.CanAuthenticate(time.Now().UTC()) {
+			writeOAuthError(w, "invalid_grant", "user is not permitted to authenticate")
 			return
 		}
 	}

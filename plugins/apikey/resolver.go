@@ -146,6 +146,16 @@ func (r *apiKeyResolver) Resolve(req *http.Request) (*domain.AuthUser, bool, err
 	if user.Banned {
 		return nil, true, yautherr.ErrUserBanned
 	}
+	// A user-scoped key is the owner's credential, so it lives and dies with
+	// the owner's ability to authenticate — suspended (offboarded) or staged
+	// (scheduled start not yet reached) rejects the key on every request, the
+	// same predicate the cookie path (middleware) and the bearer resolver
+	// apply. Without this, POST /admin/users/{id}/suspend killed sessions and
+	// refresh tokens while the offboarded user's personal API key kept
+	// working.
+	if !user.CanAuthenticate(time.Now().UTC()) {
+		return nil, true, yautherr.ErrUnauthorized
+	}
 
 	r.touchLastUsed(rec.ID)
 

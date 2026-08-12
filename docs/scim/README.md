@@ -90,6 +90,8 @@ GET /Users?startIndex=1&count=100
 - **`POST /Users` will not adopt an account belonging to another tenant.** yauth users are global, so an existing `userName` may belong to any org. A POST naming one binds to that account only where your org can already claim it — the user is **already a member of your org** (any membership status, so re-provisioning someone you previously de-provisioned still works), or the address sits under a **verified** `OrganizationDomain` of your org. Otherwise: 409 `uniqueness`. Provisioning a genuinely new address is unaffected. Without this, an org-A key could post an org-B user's address, mint an org-A membership for them, and from there rewrite their global login email or trip the global `active:false` kill switch.
 - Unknown schema URNs in `schemas[]` are rejected with 400 `invalidSyntax` rather than passed through. Arbitrary extension JSON does NOT get persisted. (Pentest cases 3 + 4.)
 - DELETE on a user not a member of the URL's org returns 404, not 204. (Pentest case 5.)
+- **The API key's role and permissions are enforced.** A SCIM key must hold `members:view` to read, and `members:view` + `members:invite` + `members:change_role` + `members:remove` to write (create, replace, patch, delete, and every `/Groups` write). Under the default catalogue that means a **read-only** SCIM key is `role: "viewer"` (or any role) with `permissions: ["members:view"]`, and a **provisioning** key is `role: "admin"`. The key's `permissions` list narrows its role, never widens it — a key minted at `role: "admin"` with `permissions: ["members:view"]` is read-only. Refusals are 403, and nothing is written.
+- **Legacy keys are grandfathered, loudly.** A key carrying *neither* a role *nor* a permission list — the shape produced by the setup steps below before this was enforced — keeps full SCIM access and logs a `WARN` (once per key, per process) naming the key id. Set `scim.Config{RequireKeyPermissions: true}` to refuse those keys with 403 instead; do it once every SCIM key in the deployment has been re-minted with a role or permissions. New deployments should set it from the start.
 - Audit events fire on every SCIM operation. The actor is `scim_api_key:<key_id>` — yauth-go NEVER logs the bearer token, even masked. (Pentest cases 6 + 7.)
 
 ## Operator setup (high level)
@@ -104,7 +106,7 @@ GET /Users?startIndex=1&count=100
        Build()
    ```
 
-2. **Mint** an org-scoped API key from the org admin UI (yauth-go #19). The plaintext is `yak_<8hex>_<32hex>` and shown once — paste it into the IdP's SCIM connector config.
+2. **Mint** an org-scoped API key from the org admin UI (yauth-go #19) **with `role: "admin"`** (a full-lifecycle SCIM connector), or with `permissions: ["members:view"]` for a read-only directory sync. The plaintext is `yak_<8hex>_<32hex>` and shown once — paste it into the IdP's SCIM connector config.
 3. **Give** the IdP admin the **SCIM Base URL** for their org: `{base}/api/auth/scim/v2/organizations/{org_id}`.
 4. **Per-IdP config**: see [`okta.md`](./okta.md), [`entra.md`](./entra.md), [`onelogin.md`](./onelogin.md).
 

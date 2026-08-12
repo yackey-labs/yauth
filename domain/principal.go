@@ -72,6 +72,19 @@ type Principal struct {
 	// and the bound OrgID, never the creator's membership row — see
 	// middleware.EffectiveOrgMembership.
 	Role *string
+
+	// Scopes is the explicit permission list recorded on the service-account
+	// key row (domain.APIKey.Scopes, surfaced on the org API as
+	// `permissions`), decoded. Nil when the key carries no list, which means
+	// "bounded by Role alone" — NOT "holds no permissions".
+	//
+	// Like Role it is copied straight off the credential and is authoritative
+	// for a machine principal. Authorization must read it through
+	// auth.EffectiveKeyPermissions (or middleware.EffectiveOrgPermissions)
+	// rather than testing the role in isolation: a key minted at role=viewer
+	// with permissions ["members:view"] must not hold member-lifecycle
+	// authority anywhere. Always nil for user principals.
+	Scopes []string
 }
 
 // IsUser reports whether p is a human user principal.

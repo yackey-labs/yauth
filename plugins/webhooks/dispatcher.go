@@ -367,10 +367,18 @@ func (d *Dispatcher) deliver(ctx context.Context, job *deliveryJob) deliveryOutc
 	}
 
 	deliveryID := uuid.NewString()
-	rawSecret, err := decryptSecret(d.secretKey, job.webhook.Secret)
+	rawSecret, legacy, err := decryptSecret(d.secretKey, job.webhook.Secret)
 	if err != nil {
 		d.recordDelivery(ctx, job, body, nil, fmt.Sprintf("decrypt secret: %v", err), false)
 		return deliveryOutcome{success: false, retryable: false}
+	}
+	// A cleartext row reaching dispatch after the startup sweep means one was
+	// written by another process (an older build, or a direct DB insert). Say
+	// so — the whole point of this change is that plaintext is never silent.
+	if legacy && len(d.secretKey) > 0 {
+		d.logf("webhooks: webhook %s has a signing secret stored in CLEARTEXT; it will be "+
+			"re-encrypted on the next restart, but treat it as disclosed and rotate it",
+			job.webhook.ID)
 	}
 	signature := signPayload(rawSecret, body)
 

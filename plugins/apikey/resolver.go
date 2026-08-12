@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/yackey-labs/yauth/auth"
 	"github.com/yackey-labs/yauth/domain"
 	"github.com/yackey-labs/yauth/plugin"
 	"github.com/yackey-labs/yauth/yautherr"
@@ -119,6 +120,11 @@ func (r *apiKeyResolver) Resolve(req *http.Request) (*domain.AuthUser, bool, err
 		// could otherwise land on a machine principal. The principal is
 		// what org authorization reads.
 		principal.Role = rec.Role
+		// Same reasoning for the key's explicit permission list: it is a
+		// least-privilege control the operator set at mint time, so it has to
+		// travel with the credential to the gate that reads it. See
+		// middleware.EffectiveOrgPermissions.
+		principal.Scopes = auth.DecodeScopes(rec.Scopes)
 		au := &domain.AuthUser{
 			User:        *creator,
 			Method:      domain.AuthMethodServiceAccount,

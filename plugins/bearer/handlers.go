@@ -483,6 +483,21 @@ func (p *bearerPlugin) registerRefresh(host plugin.PluginHost, api huma.API, pre
 			return nil, huma.Error500InternalServerError("unable to look up refresh token")
 		}
 
+		// Issuer check, BEFORE anything else is done with the row.
+		// yauth_refresh_tokens is shared with the oauth2server plugin,
+		// which stamps every row it mints with the client it was issued
+		// to. A non-nil ClientID therefore means "this token belongs to
+		// an OAuth2 client, not to the first-party app" — redeeming it
+		// here would convert a scoped, third-party consent (say a
+		// read-only "openid") into a first-party access token that every
+		// RequireAuth route accepts as the full user. Reject it as
+		// unrecognised: this endpoint issues only first-party tokens and
+		// so only redeems first-party ones. (nil = pre-migration or
+		// bearer-minted; see domain.RefreshToken.)
+		if stored.ClientID != nil {
+			return nil, huma.Error401Unauthorized("refresh token not recognised")
+		}
+
 		// Reuse detection: a previously revoked refresh token has been
 		// presented again. Revoke the entire family — this is the
 		// standard rotation-attack mitigation.
@@ -552,6 +567,11 @@ func (p *bearerPlugin) registerRevoke(host plugin.PluginHost, api huma.API, mw *
 		DefaultStatus: http.StatusNoContent,
 		Middlewares: huma.Middlewares{
 			middleware.RequireAuthHuma(api, mw),
+			// Ownership below is "stored.UserID == au.User.ID", and on a
+			// service-account principal au.User is the human who minted the
+			// key — so an org-scoped key could sign that person out of every
+			// device by revoking their token family.
+			middleware.RequireUserPrincipalHuma(api),
 		},
 	}, func(ctx context.Context, in *bearerRevokeInput) (*emptyOutput, error) {
 		au, ok := middleware.AuthUserFromContext(ctx)

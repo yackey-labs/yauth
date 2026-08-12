@@ -180,7 +180,7 @@ func (p *orgsPlugin) registerGetOrgPolicy(host plugin.PluginHost, api huma.API, 
 			return nil, err
 		}
 		orgID := in.ID
-		if _, err := requireOrgMember(ctx, host, orgID, au.User.ID); err != nil {
+		if _, err := requireOrgMember(ctx, host, orgID, au); err != nil {
 			return nil, err
 		}
 		policy, err := host.Repo().GetOrganizationPolicy(ctx, orgID)
@@ -240,7 +240,7 @@ func (p *orgsPlugin) registerPatchOrgPolicy(host plugin.PluginHost, api huma.API
 			return nil, err
 		}
 		orgID := in.ID
-		if _, err := requireOrgAdmin(ctx, host, orgID, au.User.ID); err != nil {
+		if _, err := requireOrgAdmin(ctx, host, orgID, au); err != nil {
 			return nil, err
 		}
 		req := in.Body

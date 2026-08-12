@@ -1,0 +1,160 @@
+// Package middleware — org-scoped authorization: the single place that
+// answers "what authority does this caller hold inside org X?".
+//
+// It exists because the answer is NOT the same question for the two kinds of
+// principal yauth resolves:
+//
+//   - A human principal (cookie, bearer JWT, user-scoped API key) holds the
+//     authority of its membership row: look up (org_id, user_id).
+//   - A service account (org-scoped API key) holds the authority recorded ON
+//     THE KEY: the org it is bound to, and the role stamped on that row. Its
+//     AuthUser.User is the human who minted the key — carried for audit only.
+//     Resolving membership for that human is what let a key bound to org-ci
+//     with role=member act as its creator (typically an owner) in every other
+//     org the creator belonged to, which is the bug this file closes.
+//
+// Every org-scoped gate in yauth — organizations, ssooidc, ssosaml, and the
+// exported RequireOrgRole/RequireOrgPermission helpers — routes through
+// EffectiveOrgMembership so the distinction cannot be forgotten at one call
+// site.
+package middleware
+
+import (
+	"context"
+	"net/http"
+
+	"github.com/danielgtaylor/huma/v2"
+
+	"github.com/yackey-labs/yauth/auth"
+	"github.com/yackey-labs/yauth/domain"
+	"github.com/yackey-labs/yauth/repo"
+	"github.com/yackey-labs/yauth/yautherr"
+)
+
+// EffectiveOrgMembership resolves the authority au holds inside orgID.
+//
+// Returns:
+//
+//   - (m, nil): the caller is a member of orgID; m.Role is the role to test
+//     with auth.RoleAtLeast / auth.HasPermission.
+//   - (nil, yautherr.ErrUnauthorized): no AuthUser.
+//   - (nil, yautherr.ErrForbidden): not a member of orgID — for a service
+//     account, that includes every org other than the one its key is bound
+//     to, regardless of what its creator can reach.
+//   - (nil, err): backend failure, for the caller to map to 500.
+//
+// For a service account the returned membership is synthetic: it is not a row
+// in the database, it is the key's own binding expressed in the shape callers
+// already handle. UserID is the creator's id so audit trails keep their human
+// breadcrumb; Role is the key's role, which is nil/empty when the key was
+// minted without one. A roleless key is a member of its org and nothing more:
+// it passes membership gates and fails every RoleAtLeast test, exactly like a
+// membership row with no built-in role.
+func EffectiveOrgMembership(ctx context.Context, r repo.Repository, au *domain.AuthUser, orgID string) (*domain.Membership, error) {
+	if au == nil {
+		return nil, yautherr.ErrUnauthorized
+	}
+
+	if au.Principal.IsServiceAccount() {
+		bound := au.Principal.OrgID
+		if bound == nil || *bound == "" || *bound != orgID {
+			return nil, yautherr.ErrForbidden
+		}
+		role := ""
+		if au.Principal.Role != nil {
+			role = *au.Principal.Role
+		}
+		return &domain.Membership{
+			OrganizationID: orgID,
+			UserID:         au.User.ID,
+			Role:           role,
+			Status:         domain.MembershipActive,
+		}, nil
+	}
+
+	m, err := r.GetMembershipByOrgUser(ctx, orgID, au.User.ID)
+	if err != nil {
+		return nil, err
+	}
+	if m == nil {
+		return nil, yautherr.ErrForbidden
+	}
+	return m, nil
+}
+
+// RequireOrgRole returns nil iff the AuthUser in ctx holds at least the
+// required built-in role in the given org.
+//
+// "At least" follows auth.RoleAtLeast (owner > admin > billing_admin >
+// member > viewer). Comparing against a custom role string always returns
+// ErrForbidden — for custom roles use RequireOrgPermission with an explicit
+// permission instead.
+//
+// Service-account callers are evaluated against their key's org binding and
+// role, not against their creator's memberships. See EffectiveOrgMembership.
+func RequireOrgRole(ctx context.Context, r repo.Repository, orgID, requiredRole string) error {
+	au, ok := AuthUserFromContext(ctx)
+	if !ok || au == nil {
+		return yautherr.ErrUnauthorized
+	}
+	m, err := EffectiveOrgMembership(ctx, r, au, orgID)
+	if err != nil {
+		return err
+	}
+	if !auth.RoleAtLeast(m.Role, requiredRole) {
+		return yautherr.ErrForbidden
+	}
+	return nil
+}
+
+// RequireOrgPermission returns nil iff the AuthUser in ctx holds a role in
+// the given org that grants perm under the default permission catalogue.
+//
+// Custom roles always return ErrForbidden under this helper — callers who
+// ship custom roles must layer their own permission check. yauth's default
+// catalogue is for built-in roles.
+//
+// Service-account callers are evaluated against their key's org binding and
+// role, not against their creator's memberships. See EffectiveOrgMembership.
+func RequireOrgPermission(ctx context.Context, r repo.Repository, orgID string, perm auth.Permission) error {
+	au, ok := AuthUserFromContext(ctx)
+	if !ok || au == nil {
+		return yautherr.ErrUnauthorized
+	}
+	m, err := EffectiveOrgMembership(ctx, r, au, orgID)
+	if err != nil {
+		return err
+	}
+	if !auth.HasPermission(m.Role, perm) {
+		return yautherr.ErrForbidden
+	}
+	return nil
+}
+
+// RequireUserPrincipalHuma returns a huma per-operation middleware that
+// refuses service-account callers with 403. Chain it AFTER RequireAuthHuma —
+// that is what puts the AuthUser on the operation context.
+//
+// It guards the routes that act on a PERSON rather than on an org: consent and
+// authorization ceremonies, credential management (passkeys, MFA, personal API
+// keys), profile and password changes. An org-scoped API key resolves to an
+// AuthUser whose User is the human who MINTED it — the row is carried for
+// audit — so on those routes the key acts AS that person: it can register a
+// passkey on their account, strip their MFA, change their email, or approve an
+// OAuth2 authorization in their name. None of that authority is on the key,
+// whose scope is one org and one role.
+//
+// Machine callers that are NOT service accounts (bearer JWT, user-scoped API
+// key) are unaffected: those credentials genuinely belong to the user they
+// resolve to.
+func RequireUserPrincipalHuma(api huma.API) func(huma.Context, func(huma.Context)) {
+	return func(ctx huma.Context, next func(huma.Context)) {
+		au, ok := AuthUserFromContext(ctx.Context())
+		if ok && au != nil && au.Principal.IsServiceAccount() {
+			_ = huma.WriteErr(api, ctx, http.StatusForbidden,
+				"service accounts cannot act on a user's personal account")
+			return
+		}
+		next(ctx)
+	}
+}

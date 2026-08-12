@@ -83,6 +83,11 @@ func stashGuards(api huma.API, mw *middleware.Middleware) huma.Middlewares {
 	return huma.Middlewares{
 		middleware.StashHTTPHuma(api),
 		middleware.RequireAuthHuma(api, mw),
+		// These routes edit the caller's own account. An org-scoped API key
+		// resolves to the human who minted it, so without this a service
+		// account could change that person's email — and from there take the
+		// account over via password reset.
+		middleware.RequireUserPrincipalHuma(api),
 	}
 }
 
@@ -94,6 +99,8 @@ func stashGuardsAllowMustChange(api huma.API, mw *middleware.Middleware) huma.Mi
 	return huma.Middlewares{
 		middleware.StashHTTPHuma(api),
 		middleware.RequireAuthHumaAllowMustChange(api, mw),
+		// Personal-account routes: see stashGuards.
+		middleware.RequireUserPrincipalHuma(api),
 	}
 }
 

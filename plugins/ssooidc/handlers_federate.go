@@ -57,12 +57,8 @@ func (p *ssoOIDCPlugin) registerFederate(host plugin.PluginHost, api huma.API, m
 		DefaultStatus: http.StatusCreated,
 		Middlewares:   ssoConnAuthGuards(api, mw),
 	}, func(ctx context.Context, in *federateInput) (*output, error) {
-		uid, err := authUserID(ctx)
-		if err != nil {
-			return nil, err
-		}
 		orgID := in.ID
-		if _, err := requireOrgAdmin(ctx, host, orgID, uid); err != nil {
+		if _, err := requireOrgAdmin(ctx, host, orgID); err != nil {
 			return nil, err
 		}
 		req := in.Body

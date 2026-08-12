@@ -69,6 +69,23 @@ func decodeScopes(raw json.RawMessage) []string {
 	return out
 }
 
+// requireUserPrincipal rejects service-account callers on the personal
+// key-management routes.
+//
+// An org-scoped API key resolves to an AuthUser whose User is the human who
+// MINTED it, so these handlers — which read and write "the caller's" keys via
+// au.User.ID — would otherwise let a machine credential enumerate its
+// creator's personal keys, delete them, and (worst) mint a NEW user-scoped
+// key for that person: a credential with no org binding at all, which
+// resolves as the human on every route. A service account's authority is its
+// own key row; issuing itself a human one is a straight escalation.
+func requireUserPrincipal(au *domain.AuthUser) error {
+	if au != nil && au.Principal.IsServiceAccount() {
+		return huma.Error403Forbidden("service accounts cannot manage a user's personal API keys")
+	}
+	return nil
+}
+
 // --- GET /api-keys ------------------------------------------------------
 
 // listResponse wraps the GET /api-keys collection with pagination
@@ -104,6 +121,9 @@ func (p *apiKeyPlugin) registerList(host plugin.PluginHost, api huma.API, mw *mi
 		au, ok := middleware.AuthUserFromContext(ctx)
 		if !ok || au == nil {
 			return nil, huma.Error401Unauthorized("not authenticated")
+		}
+		if err := requireUserPrincipal(au); err != nil {
+			return nil, err
 		}
 		r, err := reqFromCtx(ctx)
 		if err != nil {
@@ -234,6 +254,9 @@ func (p *apiKeyPlugin) registerCreate(host plugin.PluginHost, api huma.API, mw *
 		if !ok || au == nil {
 			return nil, huma.Error401Unauthorized("not authenticated")
 		}
+		if err := requireUserPrincipal(au); err != nil {
+			return nil, err
+		}
 		req := in.Body
 		req.Name = strings.TrimSpace(req.Name)
 		if req.Name == "" {
@@ -347,6 +370,9 @@ func (p *apiKeyPlugin) registerDelete(host plugin.PluginHost, api huma.API, mw *
 		au, ok := middleware.AuthUserFromContext(ctx)
 		if !ok || au == nil {
 			return nil, huma.Error401Unauthorized("not authenticated")
+		}
+		if err := requireUserPrincipal(au); err != nil {
+			return nil, err
 		}
 
 		repo := host.Repo()

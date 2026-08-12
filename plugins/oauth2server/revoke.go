@@ -25,7 +25,8 @@ func (p *oauth2Plugin) handleRevoke(host plugin.PluginHost) http.HandlerFunc {
 		// Authenticate as a registered client. RFC 7009 §2.1 requires
 		// confidential clients to authenticate; public clients may
 		// revoke their own tokens.
-		if _, e := p.authenticateClient(r.Context(), host, f, false); e != nil {
+		client, e := p.authenticateClient(r.Context(), host, f, false)
+		if e != nil {
 			writeOAuthError(w, e.code, e.desc)
 			return
 		}
@@ -36,9 +37,18 @@ func (p *oauth2Plugin) handleRevoke(host plugin.PluginHost) http.HandlerFunc {
 			return
 		}
 
-		// Try as a refresh token first.
+		// Try as a refresh token first. RFC 7009 §2.1: the server "verifies
+		// whether the token was issued to the client making the revocation
+		// request". Without that check any registered client — including a
+		// public one, which authenticates with client_id alone — could
+		// revoke another client's family, or a first-party bearer family
+		// (client_id nil), and log the user out of an app it has nothing to
+		// do with. A non-matching token is treated as unknown: still 200,
+		// per the idempotency rule, but nothing is revoked.
 		if stored, err := host.Repo().GetRefreshTokenByHash(r.Context(), auth.HashToken(token)); err == nil {
-			_, _ = host.Repo().RevokeRefreshTokenFamily(r.Context(), stored.FamilyID)
+			if stored.ClientID != nil && *stored.ClientID == client.ClientID {
+				_, _ = host.Repo().RevokeRefreshTokenFamily(r.Context(), stored.FamilyID)
+			}
 			w.WriteHeader(http.StatusOK)
 			return
 		} else if !errors.Is(err, yautherr.ErrNotFound) {

@@ -108,7 +108,7 @@ func (p *orgsPlugin) registerListGroups(host plugin.PluginHost, api huma.API, mw
 			return nil, err
 		}
 		orgID := in.ID
-		if _, err := requireOrgMember(ctx, host, orgID, au.User.ID); err != nil {
+		if _, err := requireOrgMember(ctx, host, orgID, au); err != nil {
 			return nil, err
 		}
 		groups, err := host.Repo().ListGroupsByOrg(ctx, orgID)
@@ -159,7 +159,7 @@ func (p *orgsPlugin) registerCreateGroup(host plugin.PluginHost, api huma.API, m
 			return nil, err
 		}
 		orgID := in.ID
-		if _, err := requireOrgAdmin(ctx, host, orgID, au.User.ID); err != nil {
+		if _, err := requireOrgAdmin(ctx, host, orgID, au); err != nil {
 			return nil, err
 		}
 		req := in.Body
@@ -202,7 +202,7 @@ func (p *orgsPlugin) registerGetGroup(host plugin.PluginHost, api huma.API, mw *
 			return nil, err
 		}
 		orgID := in.ID
-		if _, err := requireOrgMember(ctx, host, orgID, au.User.ID); err != nil {
+		if _, err := requireOrgMember(ctx, host, orgID, au); err != nil {
 			return nil, err
 		}
 		g, err := loadGroupInOrg(ctx, host, orgID, in.GID)
@@ -242,7 +242,7 @@ func (p *orgsPlugin) registerPatchGroup(host plugin.PluginHost, api huma.API, mw
 			return nil, err
 		}
 		orgID := in.ID
-		if _, err := requireOrgAdmin(ctx, host, orgID, au.User.ID); err != nil {
+		if _, err := requireOrgAdmin(ctx, host, orgID, au); err != nil {
 			return nil, err
 		}
 		g, err := loadGroupInOrg(ctx, host, orgID, in.GID)
@@ -288,7 +288,7 @@ func (p *orgsPlugin) registerDeleteGroup(host plugin.PluginHost, api huma.API, m
 			return nil, err
 		}
 		orgID := in.ID
-		if _, err := requireOrgAdmin(ctx, host, orgID, au.User.ID); err != nil {
+		if _, err := requireOrgAdmin(ctx, host, orgID, au); err != nil {
 			return nil, err
 		}
 		g, err := loadGroupInOrg(ctx, host, orgID, in.GID)
@@ -320,7 +320,7 @@ func (p *orgsPlugin) registerListGroupMembers(host plugin.PluginHost, api huma.A
 			return nil, err
 		}
 		orgID := in.ID
-		if _, err := requireOrgMember(ctx, host, orgID, au.User.ID); err != nil {
+		if _, err := requireOrgMember(ctx, host, orgID, au); err != nil {
 			return nil, err
 		}
 		g, err := loadGroupInOrg(ctx, host, orgID, in.GID)
@@ -370,7 +370,7 @@ func (p *orgsPlugin) registerAddGroupMember(host plugin.PluginHost, api huma.API
 			return nil, err
 		}
 		orgID := in.ID
-		if _, err := requireOrgAdmin(ctx, host, orgID, au.User.ID); err != nil {
+		if _, err := requireOrgAdmin(ctx, host, orgID, au); err != nil {
 			return nil, err
 		}
 		g, err := loadGroupInOrg(ctx, host, orgID, in.GID)
@@ -413,7 +413,7 @@ func (p *orgsPlugin) registerRemoveGroupMember(host plugin.PluginHost, api huma.
 			return nil, err
 		}
 		orgID := in.ID
-		if _, err := requireOrgAdmin(ctx, host, orgID, au.User.ID); err != nil {
+		if _, err := requireOrgAdmin(ctx, host, orgID, au); err != nil {
 			return nil, err
 		}
 		g, err := loadGroupInOrg(ctx, host, orgID, in.GID)

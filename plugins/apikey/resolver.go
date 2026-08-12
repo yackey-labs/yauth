@@ -111,13 +111,20 @@ func (r *apiKeyResolver) Resolve(req *http.Request) (*domain.AuthUser, bool, err
 		// own (the key belongs to the org, not the creator). The
 		// upstream audit trail records the creator anyway.
 		r.touchLastUsed(rec.ID)
+		principal := domain.NewServiceAccountPrincipal(
+			*rec.OrganizationID, rec.ID, rec.CreatedByUserID)
+		// Carry the key's role on the principal, not just on the
+		// mutable AuthUser.OrgRole field: active-org hydration resolves
+		// OrgRole from the user row it is handed, so the creator's role
+		// could otherwise land on a machine principal. The principal is
+		// what org authorization reads.
+		principal.Role = rec.Role
 		au := &domain.AuthUser{
 			User:        *creator,
 			Method:      domain.AuthMethodServiceAccount,
 			ActiveOrgID: rec.OrganizationID,
 			OrgRole:     rec.Role,
-			Principal: domain.NewServiceAccountPrincipal(
-				*rec.OrganizationID, rec.ID, rec.CreatedByUserID),
+			Principal:   principal,
 		}
 		return au, true, nil
 	}

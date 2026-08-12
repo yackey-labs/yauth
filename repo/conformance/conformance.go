@@ -876,6 +876,36 @@ var refreshTokenCases = []testCase{
 		if err != nil || got == nil || got.UserID != "u1" {
 			t.Fatalf("unexpected: %+v err=%v", got, err)
 		}
+		// A row written without a ClientID is first-party and MUST read
+		// back as nil — the bearer plugin refuses any row that carries a
+		// client, so a backend that invented one would lock out every
+		// first-party refresh.
+		if got.ClientID != nil {
+			t.Fatalf("expected nil ClientID for a first-party row; got %q", *got.ClientID)
+		}
+	}},
+	{"client_id_round_trips", func(t *testing.T, r repo.Repository) {
+		// The refresh-token issuer discriminator: oauth2server stamps the
+		// client it minted for, and both redeem paths compare against it.
+		// It has to survive the round-trip through every backend or the
+		// comparison silently degrades to "no client".
+		mustCreateUser(t, r, "u1", "alice@example.com")
+		now := nowUTC()
+		client := "third-party-app"
+		if err := r.CreateRefreshToken(ctx(), domain.NewRefreshToken{
+			ID: "rt1", UserID: "u1", TokenHash: "h", FamilyID: "fam",
+			ClientID:  &client,
+			ExpiresAt: now.Add(time.Hour), CreatedAt: now,
+		}); err != nil {
+			t.Fatalf("CreateRefreshToken: %v", err)
+		}
+		got, err := r.GetRefreshTokenByHash(ctx(), "h")
+		if err != nil || got == nil {
+			t.Fatalf("GetRefreshTokenByHash: %+v err=%v", got, err)
+		}
+		if got.ClientID == nil || *got.ClientID != client {
+			t.Fatalf("ClientID did not round-trip: %+v", got.ClientID)
+		}
 	}},
 	{"revoke_token", func(t *testing.T, r repo.Repository) {
 		mustCreateUser(t, r, "u1", "alice@example.com")

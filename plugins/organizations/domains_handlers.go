@@ -175,7 +175,7 @@ func (p *orgsPlugin) registerCreateOrgDomain(host plugin.PluginHost, api huma.AP
 			return nil, err
 		}
 		orgID := in.ID
-		if _, err := requireOrgAdmin(ctx, host, orgID, au.User.ID); err != nil {
+		if _, err := requireOrgAdmin(ctx, host, orgID, au); err != nil {
 			return nil, err
 		}
 		req := in.Body
@@ -250,7 +250,7 @@ func (p *orgsPlugin) registerListOrgDomains(host plugin.PluginHost, api huma.API
 			return nil, err
 		}
 		orgID := in.ID
-		if _, err := requireOrgAdmin(ctx, host, orgID, au.User.ID); err != nil {
+		if _, err := requireOrgAdmin(ctx, host, orgID, au); err != nil {
 			return nil, err
 		}
 		rows, err := host.Repo().ListOrganizationDomainsByOrg(ctx, orgID)
@@ -302,7 +302,7 @@ func (p *orgsPlugin) registerVerifyOrgDomain(host plugin.PluginHost, api huma.AP
 			return nil, err
 		}
 		orgID := in.ID
-		if _, err := requireOrgAdmin(ctx, host, orgID, au.User.ID); err != nil {
+		if _, err := requireOrgAdmin(ctx, host, orgID, au); err != nil {
 			return nil, err
 		}
 		domainID := in.DID
@@ -359,7 +359,7 @@ func (p *orgsPlugin) registerDeleteOrgDomain(host plugin.PluginHost, api huma.AP
 			return nil, err
 		}
 		orgID := in.ID
-		if _, err := requireOrgAdmin(ctx, host, orgID, au.User.ID); err != nil {
+		if _, err := requireOrgAdmin(ctx, host, orgID, au); err != nil {
 			return nil, err
 		}
 		domainID := in.DID
@@ -397,7 +397,7 @@ func (p *orgsPlugin) registerPatchOrgDomain(host plugin.PluginHost, api huma.API
 			return nil, err
 		}
 		orgID := in.ID
-		if _, err := requireOrgAdmin(ctx, host, orgID, au.User.ID); err != nil {
+		if _, err := requireOrgAdmin(ctx, host, orgID, au); err != nil {
 			return nil, err
 		}
 		domainID := in.DID

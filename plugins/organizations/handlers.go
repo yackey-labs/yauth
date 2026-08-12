@@ -181,14 +181,16 @@ func hashInvitationToken(raw string) string {
 // permission helpers (auth.RoleAtLeast) implement the comparison so the
 // owner role automatically passes every admin gate.
 //
-// Returns the membership row or a huma error (403/500).
-func requireOrgAdmin(ctx context.Context, host plugin.PluginHost, orgID, userID string) (*domain.Membership, error) {
-	m, err := host.Repo().GetMembershipByOrgUser(ctx, orgID, userID)
+// It takes the whole AuthUser rather than a user id on purpose: for a
+// service-account caller the authority is the KEY's org binding and role,
+// not the membership of the human who minted it (au.User is that human,
+// carried for audit). middleware.EffectiveOrgMembership makes that call.
+//
+// Returns the (possibly synthetic) membership row or a huma error (403/500).
+func requireOrgAdmin(ctx context.Context, host plugin.PluginHost, orgID string, au *domain.AuthUser) (*domain.Membership, error) {
+	m, err := requireOrgMember(ctx, host, orgID, au)
 	if err != nil {
-		return nil, huma.Error500InternalServerError("membership lookup failed")
-	}
-	if m == nil {
-		return nil, huma.Error403Forbidden("not a member of this organization")
+		return nil, err
 	}
 	if !auth.RoleAtLeast(m.Role, auth.RoleAdmin) {
 		return nil, huma.Error403Forbidden("organization admin role required")
@@ -196,16 +198,34 @@ func requireOrgAdmin(ctx context.Context, host plugin.PluginHost, orgID, userID 
 	return m, nil
 }
 
-// requireOrgMember is the weaker check used for read endpoints.
-func requireOrgMember(ctx context.Context, host plugin.PluginHost, orgID, userID string) (*domain.Membership, error) {
-	m, err := host.Repo().GetMembershipByOrgUser(ctx, orgID, userID)
+// requireOrgMember is the weaker check used for read endpoints. See
+// requireOrgAdmin on why it takes the AuthUser.
+func requireOrgMember(ctx context.Context, host plugin.PluginHost, orgID string, au *domain.AuthUser) (*domain.Membership, error) {
+	m, err := middleware.EffectiveOrgMembership(ctx, host.Repo(), au, orgID)
 	if err != nil {
-		return nil, huma.Error500InternalServerError("membership lookup failed")
-	}
-	if m == nil {
-		return nil, huma.Error403Forbidden("not a member of this organization")
+		switch {
+		case errors.Is(err, yautherr.ErrUnauthorized):
+			return nil, huma.Error401Unauthorized("not authenticated")
+		case errors.Is(err, yautherr.ErrForbidden):
+			return nil, huma.Error403Forbidden("not a member of this organization")
+		default:
+			return nil, huma.Error500InternalServerError("membership lookup failed")
+		}
 	}
 	return m, nil
+}
+
+// requireUserPrincipal rejects machine principals that act as the human who
+// minted them. An org-scoped API key resolves to an AuthUser whose User is
+// its CREATOR, so a handler that treats au.User as "the caller" — personal
+// key management, accepting an invitation, creating an org, reading "my"
+// orgs — would let the key act as that person. Those routes are for humans;
+// a service account's own scope is its key.
+func requireUserPrincipal(au *domain.AuthUser) error {
+	if au != nil && au.Principal.IsServiceAccount() {
+		return huma.Error403Forbidden("service accounts cannot act on a user's personal account")
+	}
+	return nil
 }
 
 // authUser returns the AuthUser injected onto the operation context by
@@ -254,6 +274,13 @@ func (p *orgsPlugin) registerList(host plugin.PluginHost, api huma.API, mw *midd
 		if err != nil {
 			return nil, err
 		}
+		// "the caller's organizations" is a personal question: for a
+		// service account au.User is the human who minted the key, so
+		// answering it would enumerate THEIR orgs to a machine credential
+		// scoped to exactly one.
+		if err := requireUserPrincipal(au); err != nil {
+			return nil, err
+		}
 		orgs, err := host.Repo().ListOrganizationsForUser(ctx, au.User.ID)
 		if err != nil {
 			return nil, huma.Error500InternalServerError("list organizations failed")
@@ -290,6 +317,12 @@ func (p *orgsPlugin) registerCreate(host plugin.PluginHost, api huma.API, mw *mi
 	}, func(ctx context.Context, in *createOrgInput) (*organizationOutput, error) {
 		au, err := authUser(ctx)
 		if err != nil {
+			return nil, err
+		}
+		// The creator becomes the owner of the new org — which for a
+		// service account would be the human who minted the key, silently
+		// granting them an org they never asked for.
+		if err := requireUserPrincipal(au); err != nil {
 			return nil, err
 		}
 		req := in.Body
@@ -357,7 +390,7 @@ func (p *orgsPlugin) registerGet(host plugin.PluginHost, api huma.API, mw *middl
 			return nil, err
 		}
 		id := in.ID
-		if _, err := requireOrgMember(ctx, host, id, au.User.ID); err != nil {
+		if _, err := requireOrgMember(ctx, host, id, au); err != nil {
 			return nil, err
 		}
 		org, err := host.Repo().GetOrganizationByID(ctx, id)
@@ -406,7 +439,7 @@ func (p *orgsPlugin) registerUpdate(host plugin.PluginHost, api huma.API, mw *mi
 			return nil, err
 		}
 		id := in.ID
-		if _, err := requireOrgAdmin(ctx, host, id, au.User.ID); err != nil {
+		if _, err := requireOrgAdmin(ctx, host, id, au); err != nil {
 			return nil, err
 		}
 		req := in.Body
@@ -477,7 +510,7 @@ func (p *orgsPlugin) registerDelete(host plugin.PluginHost, api huma.API, mw *mi
 			return nil, err
 		}
 		id := in.ID
-		if _, err := requireOrgAdmin(ctx, host, id, au.User.ID); err != nil {
+		if _, err := requireOrgAdmin(ctx, host, id, au); err != nil {
 			return nil, err
 		}
 		if err := host.Repo().DeleteOrganization(ctx, id); err != nil {
@@ -512,7 +545,7 @@ func (p *orgsPlugin) registerListMembers(host plugin.PluginHost, api huma.API, m
 			return nil, err
 		}
 		id := in.ID
-		if _, err := requireOrgMember(ctx, host, id, au.User.ID); err != nil {
+		if _, err := requireOrgMember(ctx, host, id, au); err != nil {
 			return nil, err
 		}
 		ms, err := host.Repo().ListMembershipsByOrg(ctx, id)
@@ -583,12 +616,19 @@ func (p *orgsPlugin) registerAddMember(host plugin.PluginHost, api huma.API, mw 
 		// Caller must be admin-or-higher IN the org, or an install-wide admin
 		// (user.role=="admin") — the latter covers realm-flat consoles where the
 		// install admin manages a single auto-managed org.
-		caller, err := host.Repo().GetMembershipByOrgUser(ctx, orgID, au.User.ID)
-		if err != nil {
+		caller, err := middleware.EffectiveOrgMembership(ctx, host.Repo(), au, orgID)
+		if err != nil && !errors.Is(err, yautherr.ErrForbidden) && !errors.Is(err, yautherr.ErrUnauthorized) {
 			return nil, huma.Error500InternalServerError("membership lookup failed")
 		}
 		isOrgAdmin := caller != nil && auth.RoleAtLeast(caller.Role, auth.RoleAdmin)
-		if !isOrgAdmin && au.User.Role != auth.RoleAdmin {
+		// The install-wide admin escape hatch is for HUMANS only. On a
+		// service-account principal au.User is the human who minted the key,
+		// so au.User.Role is THEIR global role — honouring it here would let
+		// any key minted by an install admin enrol members into any org,
+		// which is exactly what the RequireAdmin machine-caller gate refuses
+		// elsewhere.
+		isInstallAdmin := !au.Principal.IsServiceAccount() && au.User.Role == auth.RoleAdmin
+		if !isOrgAdmin && !isInstallAdmin {
 			return nil, huma.Error403Forbidden("organization admin role required")
 		}
 
@@ -662,7 +702,7 @@ func (p *orgsPlugin) registerCreateInvitation(host plugin.PluginHost, api huma.A
 			return nil, err
 		}
 		id := in.ID
-		if _, err := requireOrgAdmin(ctx, host, id, au.User.ID); err != nil {
+		if _, err := requireOrgAdmin(ctx, host, id, au); err != nil {
 			return nil, err
 		}
 		req := in.Body
@@ -725,6 +765,13 @@ func (p *orgsPlugin) registerAcceptInvitation(host plugin.PluginHost, api huma.A
 	}, func(ctx context.Context, in *acceptInvitationInput) (*output, error) {
 		au, err := authUser(ctx)
 		if err != nil {
+			return nil, err
+		}
+		// Accepting an invitation enrols au.User into an org. On a
+		// service-account principal that is the human who minted the key,
+		// so a leaked invitation token plus any org key would join that
+		// person to an org they never accepted.
+		if err := requireUserPrincipal(au); err != nil {
 			return nil, err
 		}
 		req := in.Body

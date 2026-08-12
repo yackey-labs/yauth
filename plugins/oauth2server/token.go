@@ -225,6 +225,26 @@ func (p *oauth2Plugin) grantRefreshToken(host plugin.PluginHost, w http.Response
 		writeOAuthError(w, "server_error", "refresh token lookup failed")
 		return
 	}
+	// Client binding, checked BEFORE reuse detection and before any state
+	// is mutated. yauth_refresh_tokens is shared with the bearer plugin and
+	// across every OAuth2 client, and the row used to be redeemed on its
+	// hash alone. Without this check:
+	//
+	//   - a first-party (bearer) refresh token, which carries no client,
+	//     is redeemable here by ANY registered public client — client_id
+	//     alone authenticates a public client — yielding an access token
+	//     and an id_token for the user at the attacker's client; and
+	//   - client A's refresh token is redeemable by client B.
+	//
+	// Rows minted before the discriminator existed carry a nil ClientID and
+	// are treated as first-party, so they are refused here too; those
+	// clients re-run the authorization-code flow. Same message as the
+	// not-found branch so a foreign token is not distinguishable from an
+	// unknown one.
+	if stored.ClientID == nil || *stored.ClientID != client.ClientID {
+		writeOAuthError(w, "invalid_grant", "refresh token not recognised")
+		return
+	}
 	if stored.Revoked {
 		_, _ = repo.RevokeRefreshTokenFamily(r.Context(), stored.FamilyID)
 		writeOAuthError(w, "invalid_grant", "refresh token reuse detected; family revoked")
@@ -345,11 +365,16 @@ func (p *oauth2Plugin) mintTokensWithFamily(
 		return nil, err
 	}
 	refreshHash := auth.HashToken(rawRefresh)
+	// Stamp the issuing client on the row. This is what makes the token
+	// redeemable ONLY by this client at /oauth/token, and never at the
+	// first-party bearer /token/refresh. See domain.RefreshToken.
+	issuingClient := client.ClientID
 	if err := host.Repo().CreateRefreshToken(ctx, domain.NewRefreshToken{
 		ID:        uuid.NewString(),
 		UserID:    subject,
 		TokenHash: refreshHash,
 		FamilyID:  familyID,
+		ClientID:  &issuingClient,
 		ExpiresAt: now.Add(p.cfg.RefreshTTL),
 		CreatedAt: now,
 	}); err != nil {

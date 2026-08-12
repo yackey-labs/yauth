@@ -9,12 +9,63 @@ session, and the client completes login via `/mfa/verify`.
 
 | Method | Path                          | Purpose                                             |
 | ------ | ----------------------------- | --------------------------------------------------- |
-| POST   | `/mfa/totp/setup`             | create an unverified TOTP secret + backup codes (auth-gated) |
-| POST   | `/mfa/totp/confirm`           | verify a code and activate TOTP (auth-gated)        |
-| DELETE | `/mfa/totp`                   | remove TOTP + backup codes (auth-gated)             |
+| POST   | `/mfa/totp/setup`             | issue a **candidate** TOTP secret + backup codes (auth-gated, step-up) |
+| POST   | `/mfa/totp/confirm`           | verify a code and promote the candidate (auth-gated)|
+| DELETE | `/mfa/totp`                   | remove TOTP + backup codes (auth-gated, step-up)    |
 | GET    | `/mfa/backup-codes`           | count remaining unused backup codes (auth-gated)    |
-| POST   | `/mfa/backup-codes/regenerate`| replace backup codes (auth-gated)                   |
+| POST   | `/mfa/backup-codes/regenerate`| replace backup codes (auth-gated, step-up)          |
 | POST   | `/mfa/verify`                 | consume a pending session → issue a real session    |
+
+## Step-up on the management routes
+
+The three routes marked **step-up** change *how the account authenticates*, so
+authentication alone does not open them. A user who already has a verified
+factor must present a current TOTP code — or an unused backup code — in the
+`X-MFA-Code` request header:
+
+```http
+DELETE /mfa/totp
+Authorization: Bearer <token>
+X-MFA-Code: 123456
+```
+
+Without it the server answers `403` with `detail: "current mfa code required"`;
+a wrong code answers `403 invalid mfa code` and is counted as a failed login,
+so lockout throttles brute force here as it does at `/mfa/verify`. A **first**
+enrolment needs no header: there is no factor to prove and none to lose.
+
+A header rather than a body field, so it works uniformly on `DELETE`, where
+request bodies are widely dropped by proxies and client libraries.
+
+The reasoning: a second factor that can be removed without presenting it is not
+a second factor. Anything that can ride a session — a stolen cookie, an XSS
+payload — could otherwise disable the very control that exists to survive a
+compromised primary credential.
+
+## Enrolment is non-destructive
+
+`POST /mfa/totp/setup` issues a **candidate**. The account keeps its existing
+secret and its existing backup codes until `POST /mfa/totp/confirm` accepts a
+code for the new secret; only then is the old factor replaced. An abandoned or
+failed enrolment therefore changes nothing.
+
+The candidate lives in the challenge store for 10 minutes. Starting setup again
+discards the previous candidate — never a confirmed factor.
+
+## TOTP codes are single-use
+
+RFC 6238 §5.2: a code is accepted at most once. The time step of an accepted
+code is recorded on the secret, and that step and every earlier one are refused
+afterwards — so a code phished or shoulder-surfed in flight is dead as soon as
+the real login lands, instead of staying valid for the rest of its window and
+the skew either side of it.
+
+Two consequences worth knowing:
+
+- The code that CONFIRMS an enrolment is spent by confirming, and cannot be
+  reused to sign in during the same 30-second window.
+- Existing secrets carry no counter until their first use after upgrading
+  (migration `011` adds the column as `NULL`), so nobody is locked out.
 
 A native client that logs in through the `bearer` plugin's `/token` gets the
 same `{require_mfa, pending_session_id}` body, but completes the challenge at

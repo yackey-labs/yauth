@@ -182,29 +182,56 @@ func RequireOrgPermission(ctx context.Context, r repo.Repository, orgID string, 
 }
 
 // RequireUserPrincipalHuma returns a huma per-operation middleware that
-// refuses service-account callers with 403. Chain it AFTER RequireAuthHuma —
-// that is what puts the AuthUser on the operation context.
+// refuses any caller who is not the user acting in their OWN right. Chain it
+// AFTER RequireAuthHuma — that is what puts the AuthUser on the operation
+// context.
 //
 // It guards the routes that act on a PERSON rather than on an org: consent and
 // authorization ceremonies, credential management (passkeys, MFA, personal API
-// keys), profile and password changes. An org-scoped API key resolves to an
-// AuthUser whose User is the human who MINTED it — the row is carried for
-// audit — so on those routes the key acts AS that person: it can register a
-// passkey on their account, strip their MFA, change their email, or approve an
-// OAuth2 authorization in their name. None of that authority is on the key,
-// whose scope is one org and one role.
+// keys), profile and password changes. Two kinds of caller resolve to a user
+// they are not:
 //
-// Machine callers that are NOT service accounts (bearer JWT, user-scoped API
-// key) are unaffected: those credentials genuinely belong to the user they
-// resolve to.
+//   - SERVICE ACCOUNTS. An org-scoped API key resolves to an AuthUser whose
+//     User is the human who MINTED it — the row is carried for audit — so on
+//     those routes the key acts AS that person: it can register a passkey on
+//     their account, strip their MFA, change their email, or approve an OAuth2
+//     authorization in their name. None of that authority is on the key, whose
+//     scope is one org and one role.
+//
+//   - DELEGATED CREDENTIALS. An OAuth2 access token issued to a relying party
+//     resolves to the resource owner, but the owner consented to a scope, not
+//     to their account. Without this gate, clicking "sign in with yauth" on any
+//     registered app handed that app a permanent personal API key outliving the
+//     grant, plus the ability to strip the user's MFA — see
+//     bearer.Config.ResourceIdentifiers for which tokens count as delegated and
+//     how a deployment declares its own first-party audiences.
+//
+// FIRST-PARTY machine callers are unaffected: the token pair from POST /token
+// and a user-scoped API key genuinely belong to the user they resolve to, and
+// keep working exactly as before. So does a session cookie.
 func RequireUserPrincipalHuma(api huma.API) func(huma.Context, func(huma.Context)) {
 	return func(ctx huma.Context, next func(huma.Context)) {
 		au, ok := AuthUserFromContext(ctx.Context())
-		if ok && au != nil && au.Principal.IsServiceAccount() {
-			_ = huma.WriteErr(api, ctx, http.StatusForbidden,
-				"service accounts cannot act on a user's personal account")
-			return
+		if ok && au != nil {
+			switch {
+			case au.Principal.IsServiceAccount():
+				_ = huma.WriteErr(api, ctx, http.StatusForbidden,
+					"service accounts cannot act on a user's personal account")
+				return
+			case au.Principal.IsDelegated():
+				_ = huma.WriteErr(api, ctx, http.StatusForbidden,
+					DelegatedCredentialDetail)
+				return
+			}
 		}
 		next(ctx)
 	}
 }
+
+// DelegatedCredentialDetail is the `detail` returned when a delegated
+// credential — an OAuth2 access token held by a relying party — is refused on
+// a route that mints a lasting credential or changes an authentication factor.
+// Clients can match on this exact string (alongside HTTP 403) to tell "your
+// grant does not cover this" apart from an ordinary authorization failure, and
+// send the user to re-authenticate first-party instead.
+const DelegatedCredentialDetail = "a delegated access token cannot act on a user's personal account"

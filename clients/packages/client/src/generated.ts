@@ -2456,7 +2456,7 @@ export const getMfaBackupCodesRegenerateUrl = () => {
 }
 
 /**
- * Replace all backup codes with a fresh set.
+ * Replace all backup codes with a fresh set, invalidating the ones already issued. When the account has a verified factor, a current code must be supplied in the X-MFA-Code header.
  * @summary Regenerate backup codes
  */
 export const mfaBackupCodesRegenerate = async ( options?: Parameters<typeof customFetch>[1]): Promise<MfaRegenerateResponse> => {
@@ -2481,7 +2481,7 @@ export const getMfaTotpDeleteUrl = () => {
 }
 
 /**
- * Remove the user's TOTP secret and all backup codes.
+ * Remove the user's TOTP secret and all backup codes. Requires the current code in the X-MFA-Code header — the factor being removed must be presented to remove it.
  * @summary Disable TOTP
  */
 export const mfaTotpDelete = async ( options?: Parameters<typeof customFetch>[1]): Promise<MfaMessageResponse> => {
@@ -2506,7 +2506,7 @@ export const getMfaTotpConfirmUrl = () => {
 }
 
 /**
- * Validate a TOTP code against the pending secret and mark it verified.
+ * Validate a code against the pending secret and promote it to the account's second factor, replacing any previous secret and backup codes. The confirming code is recorded as spent and cannot be reused to sign in.
  * @summary Confirm + activate TOTP
  */
 export const mfaTotpConfirm = async (mfaConfirmRequest: MfaConfirmRequest, options?: Parameters<typeof customFetch>[1]): Promise<MfaMessageResponse> => {
@@ -2531,7 +2531,7 @@ export const getMfaTotpSetupUrl = () => {
 }
 
 /**
- * Create (or reset) an unverified TOTP secret and a fresh set of backup codes.
+ * Issue a candidate TOTP secret and a fresh set of backup codes. Neither replaces the account's current second factor until POST /mfa/totp/confirm accepts a code for the new secret, so an abandoned enrollment leaves existing MFA intact. When the account already has a verified factor, a current code must be supplied in the X-MFA-Code header.
  * @summary Begin TOTP enrollment
  */
 export const mfaTotpSetup = async ( options?: Parameters<typeof customFetch>[1]): Promise<MfaSetupResponse> => {

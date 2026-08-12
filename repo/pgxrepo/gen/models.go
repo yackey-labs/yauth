@@ -354,6 +354,7 @@ type YauthTotpSecret struct {
 	EncryptedSecret string
 	Verified        bool
 	CreatedAt       pgtype.Timestamptz
+	LastUsedStep    *int64
 }
 
 type YauthUnlockToken struct {

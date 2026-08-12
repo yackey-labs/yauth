@@ -66,8 +66,8 @@ func (q *Queries) CreatePasskey(ctx context.Context, arg CreatePasskeyParams) er
 }
 
 const createTOTP = `-- name: CreateTOTP :exec
-INSERT INTO yauth_totp_secrets (id, user_id, encrypted_secret, verified, created_at)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO yauth_totp_secrets (id, user_id, encrypted_secret, verified, created_at, last_used_step)
+VALUES ($1, $2, $3, $4, $5, $6)
 `
 
 type CreateTOTPParams struct {
@@ -76,6 +76,7 @@ type CreateTOTPParams struct {
 	EncryptedSecret string
 	Verified        bool
 	CreatedAt       pgtype.Timestamptz
+	LastUsedStep    *int64
 }
 
 func (q *Queries) CreateTOTP(ctx context.Context, arg CreateTOTPParams) error {
@@ -85,6 +86,7 @@ func (q *Queries) CreateTOTP(ctx context.Context, arg CreateTOTPParams) error {
 		arg.EncryptedSecret,
 		arg.Verified,
 		arg.CreatedAt,
+		arg.LastUsedStep,
 	)
 	return err
 }
@@ -191,7 +193,7 @@ func (q *Queries) GetPasskeysByUserID(ctx context.Context, userID string) ([]Yau
 }
 
 const getTOTPByUserID = `-- name: GetTOTPByUserID :one
-SELECT id, user_id, encrypted_secret, verified, created_at FROM yauth_totp_secrets
+SELECT id, user_id, encrypted_secret, verified, created_at, last_used_step FROM yauth_totp_secrets
 WHERE user_id = $1
 AND ($2::bool = false OR verified = true)
 LIMIT 1
@@ -211,6 +213,7 @@ func (q *Queries) GetTOTPByUserID(ctx context.Context, arg GetTOTPByUserIDParams
 		&i.EncryptedSecret,
 		&i.Verified,
 		&i.CreatedAt,
+		&i.LastUsedStep,
 	)
 	return i, err
 }
@@ -251,6 +254,30 @@ UPDATE yauth_backup_codes SET used = true WHERE id = $1 AND used = false
 
 func (q *Queries) MarkBackupCodeUsed(ctx context.Context, id string) (int64, error) {
 	result, err := q.db.Exec(ctx, markBackupCodeUsed, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const markTOTPUsed = `-- name: MarkTOTPUsed :execrows
+UPDATE yauth_totp_secrets
+SET last_used_step = $2
+WHERE id = $1
+AND COALESCE(last_used_step, -1) < $2
+`
+
+type MarkTOTPUsedParams struct {
+	ID           string
+	LastUsedStep *int64
+}
+
+// MarkTOTPUsed only ever ADVANCES the replay counter: the COALESCE guard means
+// a concurrent verification of an OLDER code cannot rewind it and re-open the
+// newer step to replay. Zero rows affected therefore means either "row gone"
+// or "already at/past this step" — both are fine outcomes for the caller.
+func (q *Queries) MarkTOTPUsed(ctx context.Context, arg MarkTOTPUsedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markTOTPUsed, arg.ID, arg.LastUsedStep)
 	if err != nil {
 		return 0, err
 	}

@@ -82,6 +82,7 @@ ya, err := yauth.New(repo, yauth.NewDefaultConfig()).
         RefreshTTL: 720 * time.Hour,    // default 30d
         Issuer:     "yauth",            // JWT "iss"
         // Audience: "my-api",          // optional "aud", enforced on verify
+        // ResourceIdentifiers: []string{"my-api"},  // see "Delegated tokens"
     })).
     Build()
 ```
@@ -90,6 +91,42 @@ ya, err := yauth.New(repo, yauth.NewDefaultConfig()).
 `host.JWTSecret()` from `WithJWTSecret(...)`. **A secret is required** — the
 plugin panics at wiring time if neither is present. Generate one with
 `yauth gen-secrets`.
+
+## Delegated tokens (OAuth2 access tokens)
+
+The resolver also accepts **OAuth2 access tokens** — the ones the
+`oauth2server` plugin mints, carrying `token_use: "access"`. It has to: an OIDC
+relying party presents exactly that token to `/userinfo`.
+
+Such a token is not the user's own credential. Its `aud` is the relying party,
+and its `scope` is what the user consented to on the consent screen — not their
+whole account. It is therefore resolved as **delegated**:
+
+- it still authenticates, and reaches every ordinary `RequireAuth` route;
+- it is **refused with 403** on the routes that mint a lasting credential or
+  change an authentication factor — personal API keys, MFA enrolment/reset,
+  passkey enrolment, password and email changes, OAuth2 consent — with
+  `detail: "a delegated access token cannot act on a user's personal account"`;
+- its audience and scope are readable at
+  `AuthUser.Principal.Audience` / `.Scope`, with `Principal.HasScope(s)` for
+  per-scope authorization in your own handlers. A **non**-delegated credential
+  is unrestricted and satisfies every scope.
+
+`ResourceIdentifiers` lists the `aud` values that name **this** deployment's own
+API. An OAuth2 access token audienced at one of them is first-party and keeps
+full authority; every other one is delegated. Set it when your own SPA is a
+registered OAuth client whose tokens should behave like a session.
+
+**Empty is the default and closes the escalation without configuration.** It
+rejects nothing that worked before: first-party credentials — a session cookie,
+the token pair from `POST /token`, an API key — carry no `token_use` claim and
+are never delegated. Only OAuth2 access tokens narrow, and only on the
+personal-credential routes.
+
+This applies to the HS256 path too. When no `asymjwt` signer is loaded,
+`oauth2server` signs access tokens with the same `host.JWTSecret()` this plugin
+verifies against, so the `token_use` claim — which `POST /token` never emits —
+is what tells the two apart.
 
 ## Notes
 

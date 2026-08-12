@@ -6384,8 +6384,19 @@
     },
     "/mfa/backup-codes/regenerate": {
       "post": {
-        "description": "Replace all backup codes with a fresh set.",
+        "description": "Replace all backup codes with a fresh set, invalidating the ones already issued. When the account has a verified factor, a current code must be supplied in the X-MFA-Code header.",
         "operationId": "mfa-backup-codes-regenerate",
+        "parameters": [
+          {
+            "description": "Current TOTP code or an unused backup code. Required when the account already has a verified second factor: enrolling, disabling, or regenerating recovery codes is a change to how the account authenticates, so it must be proved with the factor being changed.",
+            "in": "header",
+            "name": "X-MFA-Code",
+            "schema": {
+              "description": "Current TOTP code or an unused backup code. Required when the account already has a verified second factor: enrolling, disabling, or regenerating recovery codes is a change to how the account authenticates, so it must be proved with the factor being changed.",
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -6427,8 +6438,19 @@
     },
     "/mfa/totp": {
       "delete": {
-        "description": "Remove the user's TOTP secret and all backup codes.",
+        "description": "Remove the user's TOTP secret and all backup codes. Requires the current code in the X-MFA-Code header — the factor being removed must be presented to remove it.",
         "operationId": "mfa-totp-delete",
+        "parameters": [
+          {
+            "description": "Current TOTP code or an unused backup code. Required when the account already has a verified second factor: enrolling, disabling, or regenerating recovery codes is a change to how the account authenticates, so it must be proved with the factor being changed.",
+            "in": "header",
+            "name": "X-MFA-Code",
+            "schema": {
+              "description": "Current TOTP code or an unused backup code. Required when the account already has a verified second factor: enrolling, disabling, or regenerating recovery codes is a change to how the account authenticates, so it must be proved with the factor being changed.",
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -6470,7 +6492,7 @@
     },
     "/mfa/totp/confirm": {
       "post": {
-        "description": "Validate a TOTP code against the pending secret and mark it verified.",
+        "description": "Validate a code against the pending secret and promote it to the account's second factor, replacing any previous secret and backup codes. The confirming code is recorded as spent and cannot be reused to sign in.",
         "operationId": "mfa-totp-confirm",
         "requestBody": {
           "content": {
@@ -6523,8 +6545,19 @@
     },
     "/mfa/totp/setup": {
       "post": {
-        "description": "Create (or reset) an unverified TOTP secret and a fresh set of backup codes.",
+        "description": "Issue a candidate TOTP secret and a fresh set of backup codes. Neither replaces the account's current second factor until POST /mfa/totp/confirm accepts a code for the new secret, so an abandoned enrollment leaves existing MFA intact. When the account already has a verified factor, a current code must be supplied in the X-MFA-Code header.",
         "operationId": "mfa-totp-setup",
+        "parameters": [
+          {
+            "description": "Current TOTP code or an unused backup code. Required when the account already has a verified second factor: enrolling, disabling, or regenerating recovery codes is a change to how the account authenticates, so it must be proved with the factor being changed.",
+            "in": "header",
+            "name": "X-MFA-Code",
+            "schema": {
+              "description": "Current TOTP code or an unused backup code. Required when the account already has a verified second factor: enrolling, disabling, or regenerating recovery codes is a change to how the account authenticates, so it must be proved with the factor being changed.",
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {

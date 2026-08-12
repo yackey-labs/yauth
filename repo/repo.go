@@ -155,6 +155,21 @@ type TOTPRepository interface {
 	// DeleteTOTPForUser deletes the user's TOTP secret. If verifiedOnly is
 	// non-nil, only matching secrets are deleted.
 	DeleteTOTPForUser(ctx context.Context, userID string, verifiedOnly *bool) (int64, error)
+	// MarkTOTPUsed records step as the newest RFC 6238 time step accepted
+	// for this secret, so the same code cannot be replayed within its
+	// validity window (domain.TOTPSecret.LastUsedStep).
+	//
+	// The write is CONDITIONAL: it must only ADVANCE the counter, never
+	// move it backwards, so two concurrent verifications of codes from
+	// different steps cannot leave the older one recorded and re-open the
+	// newer one to replay.
+	//
+	// A no-op is not an error. "Already at or past this step" is a
+	// concurrent verifier having won the race with an equal-or-newer code,
+	// and "row is gone" is an enrolment deleted mid-verification; both leave
+	// the replay defence intact, and a single guarded UPDATE cannot tell
+	// them apart anyway. Only a backend failure is reported.
+	MarkTOTPUsed(ctx context.Context, id string, step int64) error
 }
 
 // BackupCodeRepository covers MFA recovery codes.

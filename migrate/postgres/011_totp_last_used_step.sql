@@ -1,0 +1,40 @@
+-- +goose Up
+-- +goose StatementBegin
+-- last_used_step records the RFC 6238 time-step counter (unix seconds / 30) of
+-- the most recent TOTP code accepted for this secret.
+--
+-- RFC 6238 §5.2: "The verifier MUST NOT accept the second attempt of the OTP
+-- after the successful validation has been issued for the first OTP." The
+-- verifier had nothing to compare against — the row carried no counter — so a
+-- code stayed valid for the whole of its 30-second window and, with the
+-- customary one-step skew, the neighbouring windows too. A code phished,
+-- shoulder-surfed, or read off a proxied login page could simply be replayed
+-- for the rest of that period: the second factor was, for up to ~90 seconds,
+-- not single-use at all.
+--
+-- Semantics:
+--   NULL       → no code has been accepted for this secret yet (rows minted
+--                before this migration, and freshly confirmed enrolments that
+--                predate it). The first verification after upgrade accepts
+--                normally and stamps the step.
+--   BIGINT     → the newest step accepted. Verification refuses any code whose
+--                step is <= this value, and the write only ever advances the
+--                counter so a concurrent verify of an older code cannot rewind
+--                it and re-open the newer step.
+--
+-- Backwards compatibility: NULL is permissive by construction — it means "we
+-- have not seen a code yet", which is true of every pre-existing row, so no
+-- enrolled user is locked out on upgrade. The window in which an old code
+-- remains replayable is at most one skew period per secret, and closes the
+-- first time that secret is used.
+--
+-- BIGINT rather than a timestamp because the step, not the wall clock, is what
+-- the comparison is against: two codes from the same window are the SAME
+-- credential regardless of when each was presented.
+ALTER TABLE yauth_totp_secrets ADD COLUMN IF NOT EXISTS last_used_step BIGINT;
+-- +goose StatementEnd
+
+-- +goose Down
+-- +goose StatementBegin
+ALTER TABLE yauth_totp_secrets DROP COLUMN IF EXISTS last_used_step;
+-- +goose StatementEnd

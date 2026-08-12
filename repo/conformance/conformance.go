@@ -764,6 +764,72 @@ var totpCases = []testCase{
 			t.Fatalf("expected verified TOTP; got %+v err=%v", got, err)
 		}
 	}},
+	// The replay counter (RFC 6238 §5.2). A backend that silently drops it,
+	// or that lets it move BACKWARDS, re-opens a spent code to replay — so
+	// both properties are pinned here rather than only in the MFA plugin.
+	{"last_used_step_advances_only", func(t *testing.T, r repo.Repository) {
+		mustCreateUser(t, r, "u1", "alice@example.com")
+		now := nowUTC()
+		_ = r.CreateTOTP(ctx(), domain.NewTOTPSecret{
+			ID: "t1", UserID: "u1", EncryptedSecret: "s", Verified: true, CreatedAt: now,
+		})
+
+		got, err := r.GetTOTPByUserID(ctx(), "u1", nil)
+		if err != nil || got == nil {
+			t.Fatalf("get totp: %+v err=%v", got, err)
+		}
+		if got.LastUsedStep != nil {
+			t.Fatalf("a fresh secret must have no last-used step; got %d", *got.LastUsedStep)
+		}
+
+		if err := r.MarkTOTPUsed(ctx(), "t1", 100); err != nil {
+			t.Fatalf("MarkTOTPUsed: %v", err)
+		}
+		got, err = r.GetTOTPByUserID(ctx(), "u1", nil)
+		if err != nil || got == nil || got.LastUsedStep == nil || *got.LastUsedStep != 100 {
+			t.Fatalf("expected last_used_step=100; got %+v err=%v", got, err)
+		}
+
+		// An older step must not rewind the counter.
+		if err := r.MarkTOTPUsed(ctx(), "t1", 99); err != nil {
+			t.Fatalf("MarkTOTPUsed(older): %v", err)
+		}
+		got, _ = r.GetTOTPByUserID(ctx(), "u1", nil)
+		if got == nil || got.LastUsedStep == nil || *got.LastUsedStep != 100 {
+			t.Fatalf("an older step rewound the replay counter: %+v", got)
+		}
+
+		// A newer step advances it.
+		if err := r.MarkTOTPUsed(ctx(), "t1", 101); err != nil {
+			t.Fatalf("MarkTOTPUsed(newer): %v", err)
+		}
+		got, _ = r.GetTOTPByUserID(ctx(), "u1", nil)
+		if got == nil || got.LastUsedStep == nil || *got.LastUsedStep != 101 {
+			t.Fatalf("expected last_used_step=101; got %+v", got)
+		}
+
+		// A missing row is a no-op, not an error: a single guarded UPDATE
+		// cannot tell "gone" from "already advanced".
+		if err := r.MarkTOTPUsed(ctx(), "no-such-row", 1); err != nil {
+			t.Fatalf("MarkTOTPUsed on a missing row: %v", err)
+		}
+	}},
+	// Enrolment seeds the counter with the step of the CONFIRMING code, so
+	// that code cannot be turned around and replayed as a login.
+	{"create_with_last_used_step", func(t *testing.T, r repo.Repository) {
+		mustCreateUser(t, r, "u1", "alice@example.com")
+		step := int64(4242)
+		if err := r.CreateTOTP(ctx(), domain.NewTOTPSecret{
+			ID: "t1", UserID: "u1", EncryptedSecret: "s", Verified: true,
+			CreatedAt: nowUTC(), LastUsedStep: &step,
+		}); err != nil {
+			t.Fatalf("CreateTOTP: %v", err)
+		}
+		got, err := r.GetTOTPByUserID(ctx(), "u1", nil)
+		if err != nil || got == nil || got.LastUsedStep == nil || *got.LastUsedStep != 4242 {
+			t.Fatalf("expected the seeded last_used_step to round-trip; got %+v err=%v", got, err)
+		}
+	}},
 }
 
 // ----- backup codes -----

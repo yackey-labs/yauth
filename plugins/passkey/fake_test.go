@@ -299,6 +299,7 @@ func (f *fakeRepo) GetTOTPByUserID(_ context.Context, _ string, _ *bool) (*domai
 }
 func (f *fakeRepo) CreateTOTP(_ context.Context, _ domain.NewTOTPSecret) error { return nil }
 func (f *fakeRepo) MarkTOTPVerified(_ context.Context, _ string) error         { return yautherr.ErrNotFound }
+func (f *fakeRepo) MarkTOTPUsed(_ context.Context, _ string, _ int64) error    { return nil }
 func (f *fakeRepo) DeleteTOTPForUser(_ context.Context, _ string, _ *bool) (int64, error) {
 	return 0, nil
 }

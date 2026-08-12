@@ -69,8 +69,8 @@ func decodeScopes(raw json.RawMessage) []string {
 	return out
 }
 
-// requireUserPrincipal rejects service-account callers on the personal
-// key-management routes.
+// requireUserPrincipal rejects callers who are not the user acting in their
+// own right on the personal key-management routes.
 //
 // An org-scoped API key resolves to an AuthUser whose User is the human who
 // MINTED it, so these handlers — which read and write "the caller's" keys via
@@ -79,9 +79,22 @@ func decodeScopes(raw json.RawMessage) []string {
 // key for that person: a credential with no org binding at all, which
 // resolves as the human on every route. A service account's authority is its
 // own key row; issuing itself a human one is a straight escalation.
+//
+// A DELEGATED OAuth2 access token — one a relying party holds on the user's
+// behalf — is refused for the same reason and then some: POST /api-keys hands
+// it a permanent secret that OUTLIVES the OAuth grant and is not revoked when
+// the user revokes the app. Signing in to a third-party app with yauth must
+// not be a way for that app to issue itself a standing credential. See
+// bearer.Config.ResourceIdentifiers for which tokens count as delegated.
 func requireUserPrincipal(au *domain.AuthUser) error {
-	if au != nil && au.Principal.IsServiceAccount() {
+	if au == nil {
+		return nil
+	}
+	if au.Principal.IsServiceAccount() {
 		return huma.Error403Forbidden("service accounts cannot manage a user's personal API keys")
+	}
+	if au.Principal.IsDelegated() {
+		return huma.Error403Forbidden(middleware.DelegatedCredentialDetail)
 	}
 	return nil
 }

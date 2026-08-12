@@ -564,6 +564,17 @@ func (m *Middleware) ResolveAdmin(r *http.Request) (*domain.AuthUser, error) {
 	if au.User.Role != "admin" {
 		return nil, yautherr.ErrForbidden
 	}
+	// A delegated credential never reaches an admin route, whatever
+	// AllowAdminMachineCallers says. That flag is an operator's decision to
+	// trust MACHINE credentials the deployment itself issued; an OAuth2
+	// access token held by a relying party is not one of those, and the
+	// admin who authorised the app consented to a scope, not to their admin
+	// role. Without this, a deployment that turns the flag on to let its own
+	// automation call /admin/* hands the same power to every registered
+	// OAuth client an admin has ever signed in to.
+	if au.Principal.IsDelegated() {
+		return nil, yautherr.ErrForbidden
+	}
 	if !m.cfg.AllowAdminMachineCallers && isMachineMethod(au.Method) {
 		return nil, yautherr.ErrForbidden
 	}

@@ -466,6 +466,61 @@ func TestAudit_RecorderRunsEvenWhenAGateBlocks(t *testing.T) {
 	}
 }
 
+// An unauthenticated stranger presenting a junk credential must write NO
+// audit row. Resolver-level failures — a bad API key, a bad bearer token,
+// no credential at all — are not authentication EVENTS: they are the
+// tri-mode resolver declining to recognise a caller, they happen on every
+// route rather than at a deliberate credential submission, and they are
+// free for an unauthenticated attacker to generate. Auditing them would let
+// a stranger drive unbounded rows into the table, swamp the export
+// pipeline, and bury the genuine login.failed rows this change exists to
+// create.
+//
+// This holds today because the resolvers emit no AuthEvent — the audit sink
+// hangs off Emit, so it inherits that boundary rather than having to re-draw
+// it. The test pins the boundary: the sink is a denylist, so a resolver that
+// started emitting would land in the audit log by default, and this is what
+// catches it.
+func TestAudit_ResolverLevelCredentialFailuresAreNotAudited(t *testing.T) {
+	h := newPentestHarness(t, pentestOpts{})
+	c := &http.Client{}
+
+	do := func(hdr, val string) {
+		req, err := http.NewRequest(http.MethodGet, h.url+"/api/auth/session", nil)
+		if err != nil {
+			t.Fatalf("new request: %v", err)
+		}
+		if hdr != "" {
+			req.Header.Set(hdr, val)
+		}
+		res, err := c.Do(req)
+		if err != nil {
+			t.Fatalf("call: %v", err)
+		}
+		res.Body.Close()
+	}
+
+	for i := 0; i < 25; i++ {
+		do("X-Api-Key", "yak_aaaaaaaa_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+		do("Authorization", "Bearer not-a-real-token")
+		do("", "")
+	}
+
+	rows, err := h.repo.ListAuditLog(context.Background(), domain.ListAuditFilters{Limit: 10000})
+	if err != nil {
+		t.Fatalf("list audit log: %v", err)
+	}
+	if len(rows) != 0 {
+		kinds := map[string]int{}
+		for _, r := range rows {
+			kinds[r.EventType]++
+		}
+		t.Fatalf("75 unauthenticated junk-credential requests wrote %d audit rows (%v); "+
+			"an unauthenticated caller must not be able to drive rows into the audit table",
+			len(rows), kinds)
+	}
+}
+
 // --- test plugins ----------------------------------------------------------
 
 // gatePlugin blocks one event type, standing in for lockout / IP blocking.

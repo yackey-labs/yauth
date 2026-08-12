@@ -48,6 +48,32 @@ short-circuits the handler stage.
 MFA enrolment and API-key minting emit no `AuthEvent` today, so they are not
 in the trail; they need an emission at the point of enrolment/mint first.
 
+### Resolver-level failures are deliberately out of scope
+
+A bad API key, a bad bearer token or no credential at all writes **nothing**.
+Those are not authentication events — they are the tri-mode resolver
+declining to recognise a caller, they occur on every route rather than at a
+deliberate credential submission, and they are free for an unauthenticated
+stranger to generate. Auditing them would let anyone on the internet drive
+unbounded rows into the table, swamp the export pipeline, and bury the
+`login.failed` rows that are the actual signal.
+
+This falls out of the design rather than needing a rule: the resolvers emit
+no `AuthEvent`, and the audit sink hangs off `Emit`. Because the sink is a
+denylist, a resolver that started emitting would be audited by default —
+`TestAudit_ResolverLevelCredentialFailuresAreNotAudited` is what catches
+that.
+
+A `login.failed` for an address that does not exist **is** recorded, and that
+is intentional even though an unauthenticated caller triggers it. A
+credential-stuffing sweep is mostly non-existent addresses; an audit log that
+recorded failures only for accounts that exist would be blind to the
+commonest attack there is, and would hand an attacker a documented way to
+probe without leaving a trace. The control for request volume is the request
+rate limiter — `RateLimitConfig.Login` defaults to 10/60s — not silently
+dropping audit entries. An audit log that discards rows under load is worse
+than one with a documented scope.
+
 ### What never lands
 
 - No password, token, TOTP code or secret. `AuthEvent` has no field for one,

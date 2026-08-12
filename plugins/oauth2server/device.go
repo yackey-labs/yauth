@@ -59,6 +59,13 @@ func (p *oauth2Plugin) handleDeviceAuth(host plugin.PluginHost) http.HandlerFunc
 		}
 
 		scopes := splitScopes(r.PostForm.Get("scope"))
+		// Same self-asserted scope as /authorize had, and worse here: the
+		// user approving a device never sees a scope list, they type a code.
+		// Hold the request to the client's registration (RFC 6749 §3.3).
+		if !clientScopesAllowed(client, scopes) {
+			writeOAuthError(w, "invalid_scope", "requested scope exceeds the scopes registered for this client")
+			return
+		}
 
 		rawDeviceCode, err := randomHex(32)
 		if err != nil {

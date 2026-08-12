@@ -29,8 +29,8 @@ WHERE id = $1;
 DELETE FROM yauth_oauth_accounts WHERE id = $1;
 
 -- name: CreateRefreshToken :exec
-INSERT INTO yauth_refresh_tokens (id, user_id, token_hash, family_id, client_id, expires_at, revoked, created_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8);
+INSERT INTO yauth_refresh_tokens (id, user_id, token_hash, family_id, client_id, scopes, expires_at, revoked, created_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9);
 
 -- name: GetRefreshTokenByHash :one
 SELECT * FROM yauth_refresh_tokens WHERE token_hash = $1 LIMIT 1;

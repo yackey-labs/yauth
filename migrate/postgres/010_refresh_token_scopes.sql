@@ -1,0 +1,59 @@
+-- +goose Up
+-- +goose StatementBegin
+-- scopes records what the resource owner ACTUALLY granted to the token.
+--
+-- RFC 6749 §6: a refresh request's scope "MUST NOT include any scope not
+-- originally granted by the resource owner". grantRefreshToken had nothing to
+-- compare against — the row carried no scopes — so it took the requested scope
+-- at face value and fell back to the client's REGISTERED scopes when none was
+-- sent. A user who consented to "openid" could therefore have that client
+-- refresh into "openid groups admin billing:write" and receive an access token
+-- carrying exactly that, plus an id_token whose "groups" claim (gated on the
+-- groups scope) leaked group membership that was never consented to. Anything
+-- reading `scope` off /oauth/introspect was misled in the same direction.
+--
+-- Semantics:
+--   NULL          → the grant was never recorded (rows minted before this
+--                   migration). See the compatibility note below.
+--   JSON array    → the scopes granted when this token was minted. A refresh
+--                   request may ask for a SUBSET of these; anything outside is
+--                   invalid_scope. An empty/absent request means "the same as
+--                   granted", which is what RFC 6749 §6 specifies.
+--
+-- TEXT, not JSONB, to match every other scopes column in this schema
+-- (yauth_consents.scopes, yauth_device_codes.scopes,
+-- yauth_authorization_codes.scopes) — they are all JSON-in-TEXT and the repo
+-- layer marshals/unmarshals them the same way.
+--
+-- Backwards compatibility for NULL rows. Refusing them outright would sign out
+-- every live OAuth2 integration on upgrade; honouring the request would simply
+-- reopen the hole. So a NULL row's granted set is RECONSTRUCTED, never taken
+-- from the request, in this order:
+--
+--   1. the consent record for (user_id, client_id) — the resource owner's
+--      actual recorded grant, and the closest thing to the truth we still
+--      have; every authorization-code flow writes one;
+--   2. failing that, the client's REGISTERED scopes — an admin-controlled
+--      ceiling, and exactly the fallback the pre-fix code already used when no
+--      scope was requested. It covers grants that write no consent row (the
+--      device flow) and client_credentials-derived rows with no user.
+--
+-- The resolved set is then written onto the rotated row, so a token family
+-- takes this path at most once and is exactly recorded from then on.
+--
+-- In practice the window is narrow: migration 009 (unreleased at the time this
+-- one was written) made every pre-009 row NULL in client_id and therefore
+-- already unredeemable at /oauth/token, so in an install upgrading from a
+-- release there is no NULL-scopes row that /oauth/token will even look at. The
+-- reconstruction exists for installs tracking main between 009 and 010.
+--
+-- Deployments that want no reconstruction at all can revoke outstanding tokens
+-- after migrating:
+--   UPDATE yauth_refresh_tokens SET revoked = true WHERE revoked = false;
+ALTER TABLE yauth_refresh_tokens ADD COLUMN IF NOT EXISTS scopes TEXT;
+-- +goose StatementEnd
+
+-- +goose Down
+-- +goose StatementBegin
+ALTER TABLE yauth_refresh_tokens DROP COLUMN IF EXISTS scopes;
+-- +goose StatementEnd

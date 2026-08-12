@@ -258,6 +258,33 @@ func (p *oauth2Plugin) grantRefreshToken(host plugin.PluginHost, w http.Response
 		return
 	}
 
+	// RFC 6749 §6: "the requested scope MUST NOT include any scope not
+	// originally granted by the resource owner". The grant lives on the row
+	// (written at mint time from the authorization code's scopes); the
+	// request is only ever allowed to NARROW it.
+	//
+	// This used to read `splitScopes(f.Scope)` and fall back to the client's
+	// REGISTERED scopes, comparing against nothing: a user who consented to
+	// "openid" could have the client refresh into "openid groups admin
+	// billing:write" and get an access token carrying exactly that, plus an
+	// id_token whose "groups" claim (gated on the groups scope in
+	// mintTokensWithFamily) exposed membership that was never consented to.
+	//
+	// Validated BEFORE the rotation below mutates anything, for the same
+	// reason the client binding above is: an over-broad request must be a
+	// no-op, not something that burns the caller's token and then trips reuse
+	// detection — that would turn a client bug into a family-wide sign-out.
+	granted := p.grantedScopes(r.Context(), host, stored, client)
+	scopes := splitScopes(f.Scope)
+	if len(scopes) == 0 {
+		// RFC 6749 §6: omitted scope means "identical to the scope
+		// originally granted".
+		scopes = granted
+	} else if !consentCovers(granted, scopes) {
+		writeOAuthError(w, "invalid_scope", "requested scope exceeds the scope granted to this refresh token")
+		return
+	}
+
 	// For refresh_token granted under the client_credentials flow there
 	// is no user; sub == client_id. Detect by UserID == ClientID.
 	var user *domain.User
@@ -281,12 +308,11 @@ func (p *oauth2Plugin) grantRefreshToken(host plugin.PluginHost, w http.Response
 		return
 	}
 
-	scopes := splitScopes(f.Scope)
-	if len(scopes) == 0 {
-		scopes = decodeScopes(client.Scopes)
-	}
-
-	resp, err3 := p.mintTokensWithFamily(r.Context(), host, client, user, stored.UserID, scopes, nil, stored.FamilyID, true)
+	// The rotated row keeps the ORIGINAL grant, not the (possibly narrowed)
+	// request: RFC 6749 §6 lets a client ask for less on one exchange without
+	// forfeiting the rest of what the user consented to. Only the access
+	// token and id_token are narrowed.
+	resp, err3 := p.mintTokensWithFamily(r.Context(), host, client, user, stored.UserID, scopes, granted, nil, stored.FamilyID, true)
 	if err3 != nil {
 		writeOAuthError(w, "server_error", err3.Error())
 		return
@@ -312,6 +338,12 @@ func (p *oauth2Plugin) grantClientCredentials(host plugin.PluginHost, w http.Res
 	scopes := splitScopes(f.Scope)
 	if len(scopes) == 0 {
 		scopes = decodeScopes(client.Scopes)
+	} else if !clientScopesAllowed(client, scopes) {
+		// There is no resource owner on this grant, so registration IS the
+		// grant — a client registered for "read" must not mint itself an
+		// "admin" token by asking (RFC 6749 §3.3).
+		writeOAuthError(w, "invalid_scope", "requested scope exceeds the scopes registered for this client")
+		return
 	}
 	access, err2 := p.signAccessToken(host, client.ClientID, client.ClientID, scopes)
 	if err2 != nil {
@@ -337,13 +369,53 @@ func (p *oauth2Plugin) mintTokens(
 	nonce *string,
 ) (*tokenResponse, error) {
 	familyID := uuid.NewString()
-	return p.mintTokensWithFamily(ctx, host, client, user, user.ID, scopes, nonce, familyID, false)
+	return p.mintTokensWithFamily(ctx, host, client, user, user.ID, scopes, scopes, nonce, familyID, false)
+}
+
+// grantedScopes answers "what did the resource owner actually grant this
+// refresh token?" — the ceiling a refresh request may not exceed.
+//
+// Normally that is recorded on the row itself. Rows written before migration
+// 010 have no record, and the two ways of handling that are both wrong on
+// their own: honouring the request reopens the escalation hole, and refusing
+// outright signs out live integrations at the deploy. So the grant is
+// RECONSTRUCTED — never taken from the request — from, in order:
+//
+//   - the consent record for (user, client): the resource owner's own
+//     recorded grant, written by every authorization-code flow; then
+//   - the client's registered scopes: an admin-controlled ceiling, and
+//     exactly what the pre-fix code already fell back to when no scope was
+//     requested. This covers the device flow (which writes no consent row)
+//     and client_credentials-derived rows, which have no user at all.
+//
+// The resolved set is written onto the rotated row by the caller, so a family
+// takes this path at most once. See migration 010.
+func (p *oauth2Plugin) grantedScopes(ctx context.Context, host plugin.PluginHost, stored *domain.RefreshToken, client *domain.OAuth2Client) []string {
+	if recorded, ok := recordedScopes(stored.Scopes); ok {
+		return recorded
+	}
+	// stored.UserID == client.ClientID marks a row with no user behind it
+	// (the client_credentials shape); there is no consent to consult.
+	if stored.UserID != client.ClientID {
+		if consent, err := host.Repo().GetConsentByUserAndClient(ctx, stored.UserID, client.ClientID); err == nil && consent != nil {
+			if granted := decodeScopes(consent.Scopes); len(granted) > 0 {
+				return granted
+			}
+		}
+	}
+	return decodeScopes(client.Scopes)
 }
 
 // mintTokensWithFamily is the shared issuance path for both
 // authorization_code (fresh family) and refresh_token rotation
 // (existing family). When user is nil, the access token sub is set to
 // fallbackSubject and no id_token is emitted.
+//
+// scopes drives the access token and the id_token; grant is what gets
+// recorded on the refresh-token row as the resource owner's grant, and is the
+// ceiling every later refresh of this family is held to. They differ only on
+// a deliberately down-scoped refresh, where the client asked for less than it
+// holds and must not forfeit the rest.
 func (p *oauth2Plugin) mintTokensWithFamily(
 	ctx context.Context,
 	host plugin.PluginHost,
@@ -351,6 +423,7 @@ func (p *oauth2Plugin) mintTokensWithFamily(
 	user *domain.User,
 	fallbackSubject string,
 	scopes []string,
+	grant []string,
 	nonce *string,
 	familyID string,
 	rotation bool,
@@ -381,6 +454,10 @@ func (p *oauth2Plugin) mintTokensWithFamily(
 		TokenHash: refreshHash,
 		FamilyID:  familyID,
 		ClientID:  &issuingClient,
+		// The grant, recorded so a later refresh has something to be held
+		// to. Without it the refresh grant took the requested scope on
+		// trust. See domain.RefreshToken and migration 010.
+		Scopes:    scopesJSON(grant),
 		ExpiresAt: now.Add(p.cfg.RefreshTTL),
 		CreatedAt: now,
 	}); err != nil {
@@ -507,6 +584,31 @@ func decodeScopes(raw json.RawMessage) []string {
 		return nil
 	}
 	return ss
+}
+
+// scopesJSON encodes a granted scope set for storage. It always emits a JSON
+// ARRAY, never "null": a genuinely empty grant has to stay distinguishable
+// from a row that never recorded one, or a user who consented to nothing
+// would silently inherit the client's registered scopes on the next refresh.
+func scopesJSON(scopes []string) json.RawMessage {
+	if scopes == nil {
+		return json.RawMessage(`[]`)
+	}
+	return rawJSON(scopes)
+}
+
+// recordedScopes decodes a stored grant. The bool reports whether a grant was
+// recorded at all — see scopesJSON for why "granted nothing" and "never
+// recorded" must not collapse into each other.
+func recordedScopes(raw json.RawMessage) ([]string, bool) {
+	if len(raw) == 0 {
+		return nil, false
+	}
+	var ss []string
+	if err := json.Unmarshal(raw, &ss); err != nil || ss == nil {
+		return nil, false
+	}
+	return ss, true
 }
 
 func splitScopes(s string) []string {

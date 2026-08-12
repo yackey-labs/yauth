@@ -908,6 +908,17 @@ func (p *emailPasswordPlugin) registerChangePassword(host plugin.PluginHost, api
 		if _, err := repoRef.DeleteUserSessions(ctx, au.User.ID); err != nil {
 			return nil, huma.Error500InternalServerError("unable to revoke sessions")
 		}
+		// Cookie sessions are only half of the credential surface: a bearer
+		// client holds a refresh token that outlives them (30 days by
+		// default) and rolls forward indefinitely. Rotating the password is
+		// THE control a user reaches for after a compromise, so it has to
+		// terminate those too — the same pairing admin-suspend, SCIM
+		// deprovision and back-channel logout already do. The session issued
+		// below is minted after this call, so the caller keeps the device
+		// they just rotated on; only pre-rotation refresh tokens die.
+		if _, err := repoRef.RevokeAllUserRefreshTokens(ctx, au.User.ID); err != nil {
+			return nil, huma.Error500InternalServerError("unable to revoke refresh tokens")
+		}
 		raw, _, err := auth.IssueSession(ctx, repoRef, au.User.ID, middleware.RequestIP(r), requestUA(r), host.SessionTTL())
 		if err != nil {
 			return nil, huma.Error500InternalServerError("unable to re-issue session")
@@ -1377,6 +1388,14 @@ func (p *emailPasswordPlugin) registerResetPassword(host plugin.PluginHost, api 
 		// caller has not authenticated, so no session is preserved.
 		if _, err := repoRef.DeleteUserSessions(ctx, pr.UserID); err != nil {
 			p.logger.ErrorContext(ctx, "email-password: delete sessions after reset failed", "user_id", pr.UserID, "err", err)
+		}
+		// ...and every refresh token with them. A reset is the recovery path
+		// out of a compromise; leaving bearer refresh tokens alive would let
+		// whoever prompted the reset keep minting access tokens on a rolling
+		// TTL long after the password they stole stopped working. The reset
+		// caller is unauthenticated, so nothing is re-issued here.
+		if _, err := repoRef.RevokeAllUserRefreshTokens(ctx, pr.UserID); err != nil {
+			p.logger.ErrorContext(ctx, "email-password: revoke refresh tokens after reset failed", "user_id", pr.UserID, "err", err)
 		}
 
 		uid := pr.UserID

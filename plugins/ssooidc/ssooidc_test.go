@@ -62,6 +62,9 @@ type fakeIDP struct {
 	overrideEmail    string
 	overrideExtraSub string
 	overrideGroups   []string
+	// emailUnverified makes the IdP report email_verified=false — the shape
+	// of an IdP that lets anyone self-register any address.
+	emailUnverified bool
 	// counters
 	tokenCalls int
 	jwksCalls  int
@@ -175,7 +178,7 @@ func (i *fakeIDP) handleToken(w http.ResponseWriter, r *http.Request) {
 		"iat":            now,
 		"exp":            exp,
 		"email":          email,
-		"email_verified": true,
+		"email_verified": !i.emailUnverified,
 		"name":           "Test User",
 	}
 	if nonceVal != "" {

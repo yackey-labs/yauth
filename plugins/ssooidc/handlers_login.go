@@ -450,6 +450,11 @@ func (p *ssoOIDCPlugin) registerSsoCallback(host plugin.PluginHost, api huma.API
 			if errors.Is(err, errEmailRequired) {
 				return nil, huma.Error400BadRequest("IdP did not return an email claim")
 			}
+			if errors.Is(err, errUnverifiedEmail) {
+				// Names the provider's failure rather than confirming that
+				// an account with this address exists here.
+				return nil, huma.Error403Forbidden("your identity provider has not verified this email address, so it cannot be used to sign in")
+			}
 			return nil, huma.Error500InternalServerError(err.Error())
 		}
 
@@ -530,8 +535,11 @@ func (p *ssoOIDCPlugin) registerSsoCallback(host plugin.PluginHost, api huma.API
 // --- helpers -----------------------------------------------------------
 
 var (
-	errJITDisabled   = errors.New("ssooidc: jit disabled")
-	errEmailRequired = errors.New("ssooidc: email claim required")
+	errJITDisabled = errors.New("ssooidc: jit disabled")
+	// errUnverifiedEmail is returned when the IdP's email is unverified and
+	// linking it would take over an EXISTING account. See resolveOrJITUser.
+	errUnverifiedEmail = errors.New("ssooidc: idp did not verify the email address")
+	errEmailRequired   = errors.New("ssooidc: email claim required")
 )
 
 // resolveOrJITUser looks up an ExternalIdentity for (provider, extID).
@@ -582,6 +590,24 @@ func (p *ssoOIDCPlugin) resolveOrJITUser(ctx context.Context, host plugin.Plugin
 	var userID string
 	isNew := false
 	if existing != nil {
+		// Adopting an account the IdP did not create makes that IdP's word on
+		// the address the whole authentication for it. emailVerified is the
+		// id_token's email_verified claim and was consulted ONLY when creating
+		// a user, never before taking one over — the same hole the oauth
+		// plugin's callback had.
+		//
+		// SSO connections are admin-wired per organization, which is thinner
+		// mitigation than it sounds: an IdP that permits self-registration
+		// with unverified addresses lets an attacker register
+		// victim@corp.example there and be bound to the victim's existing
+		// yauth account, password and all. Refuse the adoption unless the IdP
+		// says it verified the address. Creating a NEW user from an unverified
+		// address is a different question and is deliberately left alone: it
+		// takes over nothing, and the address is stored with
+		// email_verified=false.
+		if !emailVerified {
+			return "", false, errUnverifiedEmail
+		}
 		if existing.Banned {
 			return "", false, errors.New("ssooidc: account suspended")
 		}

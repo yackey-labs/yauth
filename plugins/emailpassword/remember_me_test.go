@@ -78,14 +78,14 @@ func TestLogin_RememberMe(t *testing.T) {
 	const email = "alice@example.com"
 	const password = "correct horse battery staple"
 
-	// Register so the user exists. The register response also sets a cookie,
-	// but we ignore it and exercise login below.
+	// Register so the user exists. /register issues no session of its own
+	// (it is enumeration-neutral), which is fine — this test is about /login.
 	res := postJSON(t, srv.URL+"/api/auth/register", map[string]any{
 		"email":    email,
 		"password": password,
 	})
 	res.Body.Close()
-	if res.StatusCode != http.StatusCreated {
+	if res.StatusCode != http.StatusOK {
 		t.Fatalf("register: %d", res.StatusCode)
 	}
 

@@ -78,7 +78,7 @@ func TestChangePassword_ClearsMustChangeFlag(t *testing.T) {
 		"email": email, "password": password,
 	})
 	res.Body.Close()
-	if res.StatusCode != http.StatusCreated {
+	if res.StatusCode != http.StatusOK {
 		t.Fatalf("register: %d", res.StatusCode)
 	}
 	u, err := r.GetUserByEmail(context.Background(), email)
@@ -168,7 +168,7 @@ func TestLogin_MustChange_GatesUntilChanged(t *testing.T) {
 
 	res := postJSON(t, srv.URL+"/api/auth/register", map[string]any{"email": email, "password": password})
 	res.Body.Close()
-	if res.StatusCode != http.StatusCreated {
+	if res.StatusCode != http.StatusOK {
 		t.Fatalf("register: %d", res.StatusCode)
 	}
 	u, err := r.GetUserByEmail(context.Background(), email)
@@ -246,7 +246,7 @@ func TestResetPassword_ClearsMustChangeFlag(t *testing.T) {
 		"email": email, "password": password,
 	})
 	res.Body.Close()
-	if res.StatusCode != http.StatusCreated {
+	if res.StatusCode != http.StatusOK {
 		t.Fatalf("register: %d", res.StatusCode)
 	}
 	u, err := r.GetUserByEmail(context.Background(), email)

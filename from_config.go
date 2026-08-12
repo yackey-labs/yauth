@@ -343,13 +343,14 @@ func NewBuilderFromConfig(ctx context.Context, cfg *yauthcfg.Config, opts ...Con
 	if cfg.Plugins.EmailPassword.Enabled {
 		ep := cfg.Plugins.EmailPassword
 		epCfg := emailpassword.Config{
-			MinPasswordLength:        ep.MinPasswordLength,
-			RequireEmailVerification: ep.RequireEmailVerification,
-			RememberMeTTL:            ep.RememberMeTTL,
-			VerificationTokenTTL:     ep.VerificationTokenTTL,
-			PasswordResetTokenTTL:    ep.PasswordResetTokenTTL,
-			VerificationLinkBaseURL:  ep.VerificationLinkBaseURL,
-			PasswordResetLinkBaseURL: ep.PasswordResetLinkBaseURL,
+			MinPasswordLength:         ep.MinPasswordLength,
+			RequireEmailVerification:  ep.RequireEmailVerification,
+			RevealRegistrationOutcome: ep.RevealRegistrationOutcome,
+			RememberMeTTL:             ep.RememberMeTTL,
+			VerificationTokenTTL:      ep.VerificationTokenTTL,
+			PasswordResetTokenTTL:     ep.PasswordResetTokenTTL,
+			VerificationLinkBaseURL:   ep.VerificationLinkBaseURL,
+			PasswordResetLinkBaseURL:  ep.PasswordResetLinkBaseURL,
 			PasswordPolicy: passwordpolicy.Policy{
 				MinLength:      ep.PasswordPolicy.MinLength,
 				MaxLength:      ep.PasswordPolicy.MaxLength,

@@ -172,8 +172,10 @@ func TestWebhookDelivery_OnUserRegistered(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 	res.Body.Close()
-	if res.StatusCode != http.StatusCreated {
-		t.Fatalf("register: expected 201, got %d", res.StatusCode)
+	// /register is enumeration-neutral and answers 200 for a fresh account as
+	// well as an existing one; the user.registered event it emits is unchanged.
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("register: expected 200, got %d", res.StatusCode)
 	}
 
 	if !waitFor(t, 2*time.Second, func() bool { return len(rcv.Hits()) >= 1 }) {
@@ -359,8 +361,10 @@ func TestWebhookRetry_RecoversAfterTransientFailure(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 	res.Body.Close()
-	if res.StatusCode != http.StatusCreated {
-		t.Fatalf("register: expected 201, got %d", res.StatusCode)
+	// /register is enumeration-neutral and answers 200 for a fresh account as
+	// well as an existing one; the user.registered event it emits is unchanged.
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("register: expected 200, got %d", res.StatusCode)
 	}
 
 	if !waitFor(t, 5*time.Second, func() bool { return rcv.Hits() >= 3 }) {

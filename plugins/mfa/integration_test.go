@@ -129,8 +129,21 @@ func (e *testEnv) register(t *testing.T) {
 		"email":    testEmail,
 		"password": testPassword,
 	})
-	if res.StatusCode != http.StatusCreated {
+	if res.StatusCode != http.StatusOK && res.StatusCode != http.StatusCreated {
 		t.Fatalf("register: %d (%s)", res.StatusCode, drain(res))
+	}
+	res.Body.Close()
+
+	// /register is enumeration-neutral: it answers 200 with the same body
+	// whether or not the address was free and issues NO session (see
+	// emailpassword.Config.RevealRegistrationOutcome), so sign in afterwards —
+	// which is what a client does now.
+	res = e.post(t, "/api/auth/login", map[string]string{
+		"email":    testEmail,
+		"password": testPassword,
+	})
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("login after register: %d (%s)", res.StatusCode, drain(res))
 	}
 	res.Body.Close()
 }

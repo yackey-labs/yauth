@@ -72,7 +72,7 @@ func TestAutoJoin_AtRegistrationWhenEmailVerificationNotRequired(t *testing.T) {
 		"password": "correct horse battery staple",
 	})
 	res.Body.Close()
-	if res.StatusCode != http.StatusCreated {
+	if res.StatusCode != http.StatusOK {
 		t.Fatalf("register status: %d", res.StatusCode)
 	}
 
@@ -102,7 +102,7 @@ func TestAutoJoin_SkippedAtRegistrationWhenRequireEmailVerified(t *testing.T) {
 		"password": "correct horse battery staple",
 	})
 	res.Body.Close()
-	if res.StatusCode != http.StatusCreated {
+	if res.StatusCode != http.StatusOK {
 		t.Fatalf("register status: %d", res.StatusCode)
 	}
 	user, err := r.GetUserByEmail(context.Background(), "alice@acme.com")
@@ -127,7 +127,7 @@ func TestAutoJoin_NoMatchingDomain(t *testing.T) {
 		"password": "correct horse battery staple",
 	})
 	res.Body.Close()
-	if res.StatusCode != http.StatusCreated {
+	if res.StatusCode != http.StatusOK {
 		t.Fatalf("register status: %d", res.StatusCode)
 	}
 	user, _ := r.GetUserByEmail(context.Background(), "bob@other.com")

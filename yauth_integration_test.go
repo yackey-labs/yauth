@@ -51,6 +51,34 @@ func newJSONClient(t *testing.T) *jsonClient {
 	return &jsonClient{c: &http.Client{Jar: jar}}
 }
 
+// registerAndSignIn creates an account and leaves its session cookie in the
+// client's jar.
+//
+// /register is enumeration-neutral by default: it answers 200 with the same
+// "pending verification" body whether or not the address was already taken, and
+// it issues NO session — telling the two apart was an account-existence oracle.
+// See emailpassword.Config.RevealRegistrationOutcome. Callers that want a
+// signed-in client therefore register and then log in, which is what a client
+// application does now.
+func registerAndSignIn(t *testing.T, j *jsonClient, baseURL, email, password string) {
+	t.Helper()
+	res := j.post(t, baseURL+"/api/auth/register", map[string]string{
+		"email": email, "password": password,
+	})
+	if res.StatusCode != http.StatusOK && res.StatusCode != http.StatusCreated {
+		t.Fatalf("register %s: %d (%s)", email, res.StatusCode, drain(res))
+	}
+	res.Body.Close()
+
+	res = j.post(t, baseURL+"/api/auth/login", map[string]string{
+		"email": email, "password": password,
+	})
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("login after register %s: %d (%s)", email, res.StatusCode, drain(res))
+	}
+	res.Body.Close()
+}
+
 func (j *jsonClient) post(t *testing.T, url string, body any) *http.Response {
 	t.Helper()
 	buf, err := json.Marshal(body)
@@ -115,18 +143,14 @@ func TestEmailPasswordEndToEnd(t *testing.T) {
 	const oldPW = "correct horse battery staple"
 	const newPW = "another long sufficient password 123"
 
-	// 1. register
-	res := cl.post(t, srv.URL+"/api/auth/register", map[string]string{
-		"email":    email,
-		"password": oldPW,
-	})
-	if res.StatusCode != http.StatusCreated {
-		t.Fatalf("register: expected 201, got %d (%s)", res.StatusCode, drain(res))
-	}
-	res.Body.Close()
+	// 1. register + sign in. /register is enumeration-neutral: it answers 200
+	//    with the same body whether or not the address was free and issues no
+	//    session, so the client signs in afterwards (see
+	//    emailpassword.Config.RevealRegistrationOutcome).
+	registerAndSignIn(t, cl, srv.URL, email, oldPW)
 
-	// 2. /session via cookie set by register
-	res = cl.get(t, srv.URL+"/api/auth/session")
+	// 2. /session via the cookie set by the sign-in
+	res := cl.get(t, srv.URL+"/api/auth/session")
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("session after register: expected 200, got %d (%s)", res.StatusCode, drain(res))
 	}
@@ -315,14 +339,7 @@ func TestVerifyEmail_RoundTrip(t *testing.T) {
 	const email = "verify@example.com"
 	const password = "correct horse battery staple"
 
-	res := cl.post(t, srv.URL+"/api/auth/register", map[string]string{
-		"email":    email,
-		"password": password,
-	})
-	if res.StatusCode != http.StatusCreated {
-		t.Fatalf("register: %d (%s)", res.StatusCode, drain(res))
-	}
-	res.Body.Close()
+	registerAndSignIn(t, cl, srv.URL, email, password)
 
 	mail, ok := mailer.lastVerification()
 	if !ok {
@@ -333,7 +350,7 @@ func TestVerifyEmail_RoundTrip(t *testing.T) {
 	}
 
 	token := extractToken(t, mail.link)
-	res = cl.post(t, srv.URL+"/api/auth/verify-email", map[string]string{"token": token})
+	res := cl.post(t, srv.URL+"/api/auth/verify-email", map[string]string{"token": token})
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("verify-email: %d (%s)", res.StatusCode, drain(res))
 	}
@@ -357,16 +374,9 @@ func TestForgotPassword_ResetPassword_RoundTrip(t *testing.T) {
 	const oldPW = "correct horse battery staple"
 	const newPW = "another sufficient pw 12345"
 
-	res := cl.post(t, srv.URL+"/api/auth/register", map[string]string{
-		"email":    email,
-		"password": oldPW,
-	})
-	if res.StatusCode != http.StatusCreated {
-		t.Fatalf("register: %d", res.StatusCode)
-	}
-	res.Body.Close()
+	registerAndSignIn(t, cl, srv.URL, email, oldPW)
 
-	res = cl.post(t, srv.URL+"/api/auth/forgot-password", map[string]string{"email": email})
+	res := cl.post(t, srv.URL+"/api/auth/forgot-password", map[string]string{"email": email})
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("forgot-password: %d (%s)", res.StatusCode, drain(res))
 	}
@@ -441,21 +451,14 @@ func TestResendVerification_AlreadyVerified_DoesNotLeak(t *testing.T) {
 
 	cl := newJSONClient(t)
 	const email = "resend@example.com"
-	res := cl.post(t, srv.URL+"/api/auth/register", map[string]string{
-		"email":    email,
-		"password": "correct horse battery staple",
-	})
-	if res.StatusCode != http.StatusCreated {
-		t.Fatalf("register: %d", res.StatusCode)
-	}
-	res.Body.Close()
+	registerAndSignIn(t, cl, srv.URL, email, "correct horse battery staple")
 
 	// Verify the email so subsequent resend is a no-op.
 	mail, ok := mailer.lastVerification()
 	if !ok {
 		t.Fatal("no verification email")
 	}
-	res = cl.post(t, srv.URL+"/api/auth/verify-email", map[string]string{
+	res := cl.post(t, srv.URL+"/api/auth/verify-email", map[string]string{
 		"token": extractToken(t, mail.link),
 	})
 	if res.StatusCode != http.StatusOK {
@@ -510,7 +513,7 @@ func TestRegister_DuplicateEmail_DoesNotLeak(t *testing.T) {
 		"password": "correct horse battery staple",
 	}
 	res := cl.post(t, srv.URL+"/api/auth/register", body)
-	if res.StatusCode != http.StatusCreated {
+	if res.StatusCode != http.StatusOK {
 		t.Fatalf("first register: %d (%s)", res.StatusCode, drain(res))
 	}
 	res.Body.Close()
@@ -577,16 +580,9 @@ func TestPatchMe_UpdatesDisplayName(t *testing.T) {
 	defer stop()
 
 	cl := newJSONClient(t)
-	res := cl.post(t, srv.URL+"/api/auth/register", map[string]string{
-		"email":    "patch@example.com",
-		"password": "correct horse battery staple",
-	})
-	if res.StatusCode != http.StatusCreated {
-		t.Fatalf("register: %d (%s)", res.StatusCode, drain(res))
-	}
-	res.Body.Close()
+	registerAndSignIn(t, cl, srv.URL, "patch@example.com", "correct horse battery staple")
 
-	res = cl.patch(t, srv.URL+"/api/auth/me", map[string]any{
+	res := cl.patch(t, srv.URL+"/api/auth/me", map[string]any{
 		"display_name": "Patch User",
 	})
 	if res.StatusCode != http.StatusOK {
@@ -659,15 +655,8 @@ func TestRegister_AutoAdminFirstUser(t *testing.T) {
 	defer stop()
 
 	cl1 := newJSONClient(t)
-	res := cl1.post(t, srv.URL+"/api/auth/register", map[string]string{
-		"email":    "first@example.com",
-		"password": "correct horse battery staple",
-	})
-	if res.StatusCode != http.StatusCreated {
-		t.Fatalf("register first: %d (%s)", res.StatusCode, drain(res))
-	}
-	res.Body.Close()
-	res = cl1.get(t, srv.URL+"/api/auth/session")
+	registerAndSignIn(t, cl1, srv.URL, "first@example.com", "correct horse battery staple")
+	res := cl1.get(t, srv.URL+"/api/auth/session")
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("session first: %d", res.StatusCode)
 	}
@@ -685,14 +674,7 @@ func TestRegister_AutoAdminFirstUser(t *testing.T) {
 	}
 
 	cl2 := newJSONClient(t)
-	res = cl2.post(t, srv.URL+"/api/auth/register", map[string]string{
-		"email":    "second@example.com",
-		"password": "correct horse battery staple",
-	})
-	if res.StatusCode != http.StatusCreated {
-		t.Fatalf("register second: %d", res.StatusCode)
-	}
-	res.Body.Close()
+	registerAndSignIn(t, cl2, srv.URL, "second@example.com", "correct horse battery staple")
 	res = cl2.get(t, srv.URL+"/api/auth/session")
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("session second: %d", res.StatusCode)

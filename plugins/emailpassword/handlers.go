@@ -277,6 +277,12 @@ func (p *emailPasswordPlugin) registerRegister(host plugin.PluginHost, api huma.
 					p.logger.ErrorContext(context.Background(), "email-password: send account-exists notice failed", "email", redactEmail(email), "err", err)
 				}
 			}(req.Email)
+			// Burn the same Argon2id cost the create path pays below. Without
+			// this the duplicate branch returns an order of magnitude faster
+			// than a real registration, which hands the account-existence
+			// answer straight back however neutral the response body is. The
+			// sibling mitigation on /login is the same call.
+			_ = auth.DummyVerify(req.Password)
 			return pendingRegisterOutput(), nil
 		} else if err != nil && !errors.Is(err, yautherr.ErrNotFound) {
 			return nil, huma.Error500InternalServerError("unable to look up user")
@@ -320,6 +326,7 @@ func (p *emailPasswordPlugin) registerRegister(host plugin.PluginHost, api huma.
 						p.logger.ErrorContext(context.Background(), "email-password: send account-exists notice failed", "email", redactEmail(email), "err", err)
 					}
 				}(req.Email)
+				_ = auth.DummyVerify(req.Password)
 				return pendingRegisterOutput(), nil
 			}
 			return nil, huma.Error500InternalServerError("unable to create user")
@@ -373,17 +380,8 @@ func (p *emailPasswordPlugin) registerRegister(host plugin.PluginHost, api huma.
 			}
 		}
 
-		var raw string
-		err = telemetry.WithSpan(ctx, "yauth.session.create", trace.SpanKindInternal, func(ctx context.Context) error {
-			r2, _, serr := auth.IssueSession(ctx, repo, user.ID, middleware.RequestIP(r), requestUA(r), host.SessionTTL())
-			raw = r2
-			return serr
-		})
-		if err != nil {
-			return nil, huma.Error500InternalServerError("unable to issue session")
-		}
-
-		// Informational: webhooks/audit listen, decisions ignored.
+		// Informational: webhooks/audit listen, decisions ignored. Emitted
+		// before the response branch so both modes fire it identically.
 		uid := user.ID
 		emailCopy := user.Email
 		method := "email-password"
@@ -394,6 +392,27 @@ func (p *emailPasswordPlugin) registerRegister(host plugin.PluginHost, api huma.
 			IPAddress: middleware.RequestIP(r),
 			Method:    &method,
 		})
+
+		// Enumeration-neutral by default: the account was created, but saying
+		// so — 201 vs 200, a user object vs none, a Set-Cookie vs none — is an
+		// account-existence oracle on a public endpoint, and the duplicate
+		// branch above only pretends to be neutral if this branch agrees with
+		// it. So the successful registration answers with the SAME body the
+		// duplicate does and issues no session; the client signs in at /login.
+		// See Config.RevealRegistrationOutcome for the opt-out and its cost.
+		if !p.cfg.RevealRegistrationOutcome {
+			return pendingRegisterOutput(), nil
+		}
+
+		var raw string
+		err = telemetry.WithSpan(ctx, "yauth.session.create", trace.SpanKindInternal, func(ctx context.Context) error {
+			r2, _, serr := auth.IssueSession(ctx, repo, user.ID, middleware.RequestIP(r), requestUA(r), host.SessionTTL())
+			raw = r2
+			return serr
+		})
+		if err != nil {
+			return nil, huma.Error500InternalServerError("unable to issue session")
+		}
 
 		http.SetCookie(w, auth.SessionCookie(
 			cookieOptionsFromHost(host, r, int(host.SessionTTL().Seconds())),

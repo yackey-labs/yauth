@@ -37,6 +37,26 @@ type Config struct {
 	// RequireEmailVerification, when true, will reject /login for
 	// unverified accounts. MVP leaves this off (false).
 	RequireEmailVerification bool
+
+	// RevealRegistrationOutcome restores the pre-hardening /register
+	// behaviour: a fresh account answers 201 with the created user AND a
+	// session cookie, while an address that already has an account answers
+	// 200 {"status":"pending_verification"}.
+	//
+	// That difference IS an account-existence oracle on a public,
+	// unauthenticated endpoint — status, body shape and the presence of
+	// Set-Cookie all disagree — which is precisely what the pending branch was
+	// written to avoid. Default false: both outcomes answer with the same 200
+	// and neither sets a cookie, matching how /login, /forgot-password and
+	// /resend-verification already refuse to confirm whether an address is
+	// known here.
+	//
+	// The cost of the default is that a genuinely new user does not get a
+	// session for free and the client must call /login afterwards. Set this to
+	// true if that round-trip is not worth the privacy property in your
+	// deployment — it is a deliberate, documented trade, not an oversight.
+	RevealRegistrationOutcome bool
+
 	// RememberMeTTL is the session TTL applied when /login receives
 	// remember_me=true. If zero, defaults to 30 days. When the login
 	// request has remember_me unset or false, the host's default

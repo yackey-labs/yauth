@@ -919,6 +919,11 @@ func (p *emailPasswordPlugin) registerChangePassword(host plugin.PluginHost, api
 		if _, err := repoRef.RevokeAllUserRefreshTokens(ctx, au.User.ID); err != nil {
 			return nil, huma.Error500InternalServerError("unable to revoke refresh tokens")
 		}
+		// Sessions and refresh tokens are still not the whole credential
+		// surface. An outstanding password-reset link, magic link or unlock
+		// token each authenticates on its own, in an inbox the attacker may be
+		// the reason the user is here. See invalidateRecoveryTokens.
+		p.invalidateRecoveryTokens(ctx, repoRef, au.User.ID, au.User.Email)
 		raw, _, err := auth.IssueSession(ctx, repoRef, au.User.ID, middleware.RequestIP(r), requestUA(r), host.SessionTTL())
 		if err != nil {
 			return nil, huma.Error500InternalServerError("unable to re-issue session")
@@ -1250,6 +1255,17 @@ func (p *emailPasswordPlugin) registerForgotPassword(host plugin.PluginHost, api
 			return ok, nil
 		}
 
+		// Retire any earlier unused reset link before minting this one, so at
+		// most ONE live reset token exists per account at a time. Previously
+		// every call added a token and invalidated none, so an attacker who had
+		// captured a link once kept a working one no matter how many times the
+		// real user requested a fresh one — and each request grew the set of
+		// links that had to stay out of the wrong hands. The user's most recent
+		// request is the one they are looking at in their inbox.
+		if _, err := repoRef.DeleteUnusedPasswordResetsForUser(ctx, user.ID); err != nil {
+			p.logger.ErrorContext(ctx, "email-password: retire prior password resets failed", "user_id", user.ID, "err", err)
+		}
+
 		raw, hash, err := generateRawToken()
 		if err != nil {
 			return ok, nil
@@ -1397,6 +1413,21 @@ func (p *emailPasswordPlugin) registerResetPassword(host plugin.PluginHost, api 
 		if _, err := repoRef.RevokeAllUserRefreshTokens(ctx, pr.UserID); err != nil {
 			p.logger.ErrorContext(ctx, "email-password: revoke refresh tokens after reset failed", "user_id", pr.UserID, "err", err)
 		}
+		// ...and every OTHER outstanding recovery token. ConsumePasswordReset
+		// above burned this one link; a second reset link from an earlier
+		// /forgot-password, a magic link, or an unlock token all still sign in
+		// or re-set the password. See invalidateRecoveryTokens.
+		//
+		// The email is needed to reach the magic-link rows (they are keyed by
+		// address, not user id). A lookup failure only costs us that one class,
+		// so it is logged rather than fatal — the reset itself has committed.
+		resetEmail := ""
+		if u, lookupErr := repoRef.GetUserByID(ctx, pr.UserID); lookupErr == nil && u != nil {
+			resetEmail = u.Email
+		} else {
+			p.logger.ErrorContext(ctx, "email-password: user lookup for magic-link invalidation after reset failed", "user_id", pr.UserID, "err", lookupErr)
+		}
+		p.invalidateRecoveryTokens(ctx, repoRef, pr.UserID, resetEmail)
 
 		uid := pr.UserID
 		_, _ = host.Emit(ctx, events.AuthEvent{
@@ -1438,6 +1469,56 @@ func buildLink(base, raw string) string {
 		sep = "&"
 	}
 	return base + sep + "token=" + url.QueryEscape(raw)
+}
+
+// recoveryTokenRepo is the slice of the repository invalidateRecoveryTokens
+// needs. Declared narrowly so the intent — "delete outstanding recovery
+// credentials" — is visible at the call site rather than buried in
+// repo.Repository.
+type recoveryTokenRepo interface {
+	DeleteUnusedPasswordResetsForUser(ctx context.Context, userID string) (int64, error)
+	DeleteUnusedMagicLinksForEmail(ctx context.Context, email string) (int64, error)
+	DeleteAllUnlockTokensForUser(ctx context.Context, userID string) (int64, error)
+}
+
+// invalidateRecoveryTokens deletes every outstanding credential that could
+// authenticate this user, or re-set their password, WITHOUT their new password.
+//
+// Deleting sessions and revoking refresh tokens (#81) closed the credentials a
+// signed-in attacker holds. It did not close the ones sitting in an inbox: an
+// unclicked /forgot-password link sets a new password outright, a magic link
+// signs in outright, and an unlock token clears a lockout that is very likely
+// the trace of the attack in progress. Each of those is individually single-use
+// and atomically consumed, so nothing here is a race fix — the gap is that
+// rotating the password, the control a user reaches for after a compromise, did
+// not revoke them in bulk. A leaked reset link outlived the rotation meant to
+// close it.
+//
+// EMAIL VERIFICATION TOKENS ARE DELIBERATELY LEFT ALONE. Unlike the three
+// above, consuming one mints no session and changes no credential — it only
+// flips email_verified — and the only issuers (registration and
+// /resend-verification) bind it to the account's OWN current address, with no
+// change-email flow anywhere in the plugin. So a leaked one grants an attacker
+// nothing that a password rotation should be closing, while deleting it would
+// silently kill the inbox link of a not-yet-verified user who changed their
+// password for unrelated reasons, with no signal in the UI that they now need
+// to request another.
+//
+// Failures are logged, never fatal: every caller has already durably committed
+// the new password, and failing the request at that point would tell the user
+// their password did not change when it did.
+func (p *emailPasswordPlugin) invalidateRecoveryTokens(ctx context.Context, repoRef recoveryTokenRepo, userID, email string) {
+	if _, err := repoRef.DeleteUnusedPasswordResetsForUser(ctx, userID); err != nil {
+		p.logger.ErrorContext(ctx, "email-password: invalidate outstanding password resets failed", "user_id", userID, "err", err)
+	}
+	if email != "" {
+		if _, err := repoRef.DeleteUnusedMagicLinksForEmail(ctx, email); err != nil {
+			p.logger.ErrorContext(ctx, "email-password: invalidate outstanding magic links failed", "user_id", userID, "err", err)
+		}
+	}
+	if _, err := repoRef.DeleteAllUnlockTokensForUser(ctx, userID); err != nil {
+		p.logger.ErrorContext(ctx, "email-password: invalidate outstanding unlock tokens failed", "user_id", userID, "err", err)
+	}
 }
 
 // issueVerificationEmail mints a verification token, persists it,

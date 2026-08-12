@@ -168,6 +168,7 @@ func (r *Repo) CreateRefreshToken(ctx context.Context, input domain.NewRefreshTo
 		UserID:    input.UserID,
 		TokenHash: input.TokenHash,
 		FamilyID:  input.FamilyID,
+		ClientID:  strPtrCopy(input.ClientID),
 		ExpiresAt: input.ExpiresAt.UTC(),
 		Revoked:   input.Revoked,
 		CreatedAt: created.UTC(),

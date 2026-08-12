@@ -439,6 +439,7 @@ func cloneRefreshToken(t *domain.RefreshToken) *domain.RefreshToken {
 		return nil
 	}
 	c := *t
+	c.ClientID = strPtrCopy(t.ClientID)
 	return &c
 }
 

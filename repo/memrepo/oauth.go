@@ -173,6 +173,9 @@ func (r *Repo) CreateRefreshToken(ctx context.Context, input domain.NewRefreshTo
 		Revoked:   input.Revoked,
 		CreatedAt: created.UTC(),
 	}
+	if len(input.Scopes) > 0 {
+		t.Scopes = append([]byte(nil), input.Scopes...)
+	}
 	r.refreshTokens[t.ID] = t
 	r.refreshTokenIdx[t.TokenHash] = t.ID
 	return nil

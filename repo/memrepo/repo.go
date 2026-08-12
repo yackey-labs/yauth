@@ -440,6 +440,9 @@ func cloneRefreshToken(t *domain.RefreshToken) *domain.RefreshToken {
 	}
 	c := *t
 	c.ClientID = strPtrCopy(t.ClientID)
+	if t.Scopes != nil {
+		c.Scopes = append([]byte(nil), t.Scopes...)
+	}
 	return &c
 }
 

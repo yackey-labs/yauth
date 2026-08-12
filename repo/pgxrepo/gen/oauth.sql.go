@@ -68,8 +68,8 @@ func (q *Queries) CreateOAuthState(ctx context.Context, arg CreateOAuthStatePara
 }
 
 const createRefreshToken = `-- name: CreateRefreshToken :exec
-INSERT INTO yauth_refresh_tokens (id, user_id, token_hash, family_id, client_id, expires_at, revoked, created_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+INSERT INTO yauth_refresh_tokens (id, user_id, token_hash, family_id, client_id, scopes, expires_at, revoked, created_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 `
 
 type CreateRefreshTokenParams struct {
@@ -78,6 +78,7 @@ type CreateRefreshTokenParams struct {
 	TokenHash string
 	FamilyID  string
 	ClientID  *string
+	Scopes    *string
 	ExpiresAt pgtype.Timestamptz
 	Revoked   bool
 	CreatedAt pgtype.Timestamptz
@@ -90,6 +91,7 @@ func (q *Queries) CreateRefreshToken(ctx context.Context, arg CreateRefreshToken
 		arg.TokenHash,
 		arg.FamilyID,
 		arg.ClientID,
+		arg.Scopes,
 		arg.ExpiresAt,
 		arg.Revoked,
 		arg.CreatedAt,
@@ -215,7 +217,7 @@ func (q *Queries) GetOAuthAccountsByUserID(ctx context.Context, userID string) (
 }
 
 const getRefreshTokenByHash = `-- name: GetRefreshTokenByHash :one
-SELECT id, user_id, token_hash, family_id, expires_at, revoked, created_at, client_id FROM yauth_refresh_tokens WHERE token_hash = $1 LIMIT 1
+SELECT id, user_id, token_hash, family_id, expires_at, revoked, created_at, client_id, scopes FROM yauth_refresh_tokens WHERE token_hash = $1 LIMIT 1
 `
 
 func (q *Queries) GetRefreshTokenByHash(ctx context.Context, tokenHash string) (YauthRefreshToken, error) {
@@ -230,6 +232,7 @@ func (q *Queries) GetRefreshTokenByHash(ctx context.Context, tokenHash string) (
 		&i.Revoked,
 		&i.CreatedAt,
 		&i.ClientID,
+		&i.Scopes,
 	)
 	return i, err
 }

@@ -116,6 +116,16 @@ func (p *oauth2Plugin) handleAuthorize(host plugin.PluginHost) http.HandlerFunc 
 			writeOAuthError(w, "invalid_request", "redirect_uri is not registered")
 			return
 		}
+		// Scope was self-asserted from the very start of the flow: nothing
+		// compared it against the client's registration, so the only bound on
+		// what a client could ask for — and then carry through consent, the
+		// authorization code and every later refresh — was whatever the first
+		// consent prompt happened to show the user. RFC 6749 §3.3 lets the AS
+		// refuse a scope the client is not registered for.
+		if !clientScopesAllowed(client, scopes) {
+			writeOAuthError(w, "invalid_scope", "requested scope exceeds the scopes registered for this client")
+			return
+		}
 
 		// Application group assignment gate (Okta-style). When the client
 		// enforces it, only members of an assigned group may proceed.
@@ -357,6 +367,25 @@ func redirectURIAllowed(c *domain.OAuth2Client, candidate string) bool {
 		}
 	}
 	return false
+}
+
+// clientScopesAllowed reports whether every requested scope is one the client
+// is registered for.
+//
+// A client that registers NO scopes is treated as unconstrained rather than as
+// "may request nothing". Scope registration is optional throughout this
+// package — dynamic registration omits it whenever the client sends no
+// `scope`, and the admin create endpoint accepts an empty list — so reading an
+// empty registration as a zero ceiling would refuse every such client outright
+// on upgrade. The registration is a ceiling for clients that declare one; the
+// per-token grant recorded on the refresh row (see grantedScopes) is the check
+// that binds unconditionally.
+func clientScopesAllowed(c *domain.OAuth2Client, requested []string) bool {
+	registered := decodeScopes(c.Scopes)
+	if len(registered) == 0 {
+		return true
+	}
+	return consentCovers(registered, requested)
 }
 
 // consentCovers reports whether the previously stored scopes cover all

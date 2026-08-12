@@ -907,6 +907,75 @@ var refreshTokenCases = []testCase{
 			t.Fatalf("ClientID did not round-trip: %+v", got.ClientID)
 		}
 	}},
+	{"scopes_round_trip", func(t *testing.T, r repo.Repository) {
+		// The recorded grant. RFC 6749 §6 caps a refresh request at the
+		// scopes the resource owner granted, and this row is the only place
+		// that grant survives the authorization code being consumed. A
+		// backend that drops it degrades every refresh to "grant not
+		// recorded" and hands the ceiling back to the client's registration.
+		mustCreateUser(t, r, "u1", "alice@example.com")
+		now := nowUTC()
+		client := "third-party-app"
+		if err := r.CreateRefreshToken(ctx(), domain.NewRefreshToken{
+			ID: "rt1", UserID: "u1", TokenHash: "h", FamilyID: "fam",
+			ClientID:  &client,
+			Scopes:    json.RawMessage(`["openid","read"]`),
+			ExpiresAt: now.Add(time.Hour), CreatedAt: now,
+		}); err != nil {
+			t.Fatalf("CreateRefreshToken: %v", err)
+		}
+		got, err := r.GetRefreshTokenByHash(ctx(), "h")
+		if err != nil || got == nil {
+			t.Fatalf("GetRefreshTokenByHash: %+v err=%v", got, err)
+		}
+		var scopes []string
+		if err := json.Unmarshal(got.Scopes, &scopes); err != nil {
+			t.Fatalf("Scopes did not round-trip as JSON: %q err=%v", got.Scopes, err)
+		}
+		if len(scopes) != 2 || scopes[0] != "openid" || scopes[1] != "read" {
+			t.Fatalf("Scopes did not round-trip: %v", scopes)
+		}
+
+		// An EMPTY grant must stay distinguishable from an unrecorded one:
+		// collapsing "[]" to nil would let a zero-scope grant fall back to
+		// the client's registered scopes on the next refresh.
+		if err := r.CreateRefreshToken(ctx(), domain.NewRefreshToken{
+			ID: "rt2", UserID: "u1", TokenHash: "h2", FamilyID: "fam",
+			ClientID:  &client,
+			Scopes:    json.RawMessage(`[]`),
+			ExpiresAt: now.Add(time.Hour), CreatedAt: now,
+		}); err != nil {
+			t.Fatalf("CreateRefreshToken (empty scopes): %v", err)
+		}
+		got2, err := r.GetRefreshTokenByHash(ctx(), "h2")
+		if err != nil || got2 == nil {
+			t.Fatalf("GetRefreshTokenByHash: %+v err=%v", got2, err)
+		}
+		var empty []string
+		if err := json.Unmarshal(got2.Scopes, &empty); err != nil || empty == nil {
+			t.Fatalf("empty grant must read back as an empty JSON array, got %q err=%v", got2.Scopes, err)
+		}
+		if len(empty) != 0 {
+			t.Fatalf("empty grant grew scopes: %v", empty)
+		}
+
+		// A first-party (bearer) row records no grant at all and must read
+		// back nil, not "[]" — that is what tells oauth2server the grant was
+		// never recorded.
+		if err := r.CreateRefreshToken(ctx(), domain.NewRefreshToken{
+			ID: "rt3", UserID: "u1", TokenHash: "h3", FamilyID: "fam",
+			ExpiresAt: now.Add(time.Hour), CreatedAt: now,
+		}); err != nil {
+			t.Fatalf("CreateRefreshToken (no scopes): %v", err)
+		}
+		got3, err := r.GetRefreshTokenByHash(ctx(), "h3")
+		if err != nil || got3 == nil {
+			t.Fatalf("GetRefreshTokenByHash: %+v err=%v", got3, err)
+		}
+		if len(got3.Scopes) != 0 {
+			t.Fatalf("expected no recorded grant, got %q", got3.Scopes)
+		}
+	}},
 	{"revoke_token", func(t *testing.T, r repo.Repository) {
 		mustCreateUser(t, r, "u1", "alice@example.com")
 		now := nowUTC()

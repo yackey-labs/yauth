@@ -306,6 +306,7 @@ type YauthRefreshToken struct {
 	Revoked   bool
 	CreatedAt pgtype.Timestamptz
 	ClientID  *string
+	Scopes    *string
 }
 
 type YauthRevocation struct {

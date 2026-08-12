@@ -49,6 +49,20 @@ ya, err := yauth.New(repo, yauth.NewDefaultConfig()).
 - MFA works by intercepting the `login.succeeded` event, so it needs a login
   source that emits it (e.g. `emailpassword`, `bearer`). It's standalone
   otherwise.
+- The step-up is registered as a pipeline **gate**, so it runs ahead of every
+  `RegisterEventHandler` observer whatever order the plugins were registered
+  in. That is what stops `lockout` clearing a user's failure counter for a
+  login that is still waiting on its second factor.
+- Completing a challenge — `/mfa/verify`, or bearer's `/token/mfa` — emits its
+  own `login.succeeded` carrying `events.MetaMFAVerified`. The login has only
+  actually completed at that point, so that is when `lockout` clears its
+  counter and what audit/webhook consumers should read as a finished login.
+  The marker is also the loop breaker: without it the gate would re-challenge
+  its own completion forever. A handler that ignores the marker and demands a
+  further step-up is failed closed (403) rather than looped.
+- A wrong code emits `login.failed`, so `lockout` throttles MFA brute force.
+  The plugin has **no rate limiter of its own**, and before this no event
+  reached one either — a 6-digit code could be guessed without limit.
 - The plugin also publishes a `plugin.MFAVerifier` on the host. That is how
   `bearer`'s `/token/mfa` completes a challenge without importing this package
   or holding the TOTP encryption key; drop the mfa plugin and that route fails

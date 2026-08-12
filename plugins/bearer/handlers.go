@@ -286,6 +286,9 @@ func (p *bearerPlugin) registerTokenMFA(host plugin.PluginHost, api huma.API, pr
 		Description: "Exchange the pending_session_id returned by /token, plus a TOTP or backup code, for an access+refresh token pair.",
 		Tags:        []string{"bearer"},
 		Security:    []map[string][]string{}, // explicitly public
+		// Stashed for the same reason as /token: the completion event
+		// should carry the caller's IP.
+		Middlewares: huma.Middlewares{middleware.StashHTTPHuma(api)},
 	}, func(ctx context.Context, in *bearerTokenMFAInput) (*tokenOutput, error) {
 		pendingSessionID := strings.TrimSpace(in.Body.PendingSessionID)
 		code := strings.TrimSpace(in.Body.Code)
@@ -326,10 +329,30 @@ func (p *bearerPlugin) registerTokenMFA(host plugin.PluginHost, api huma.API, pr
 			return nil, huma.Error403Forbidden(middleware.MustChangePasswordDetail)
 		}
 
-		// No second login.succeeded here: the pipeline already ran at
-		// /token (that is what opened this challenge), and re-emitting it
-		// would hand the MFA handler its own decision back and loop. The
-		// cookie flow's /mfa/verify emits nothing either.
+		// The login COMPLETES here. The login.succeeded emitted at /token
+		// only meant "password verified" — it is what opened this
+		// challenge — so observers that act on a finished login (lockout
+		// clearing its failure counter, audit, webhooks) need this one.
+		// events.MFACompleted() marks it, which is what stops the MFA
+		// gate opening another challenge and looping forever.
+		dec, _ := host.Emit(ctx, events.AuthEvent{
+			Type:      events.EventLoginSucceeded,
+			UserID:    &user.ID,
+			Email:     &user.Email,
+			IPAddress: callerIP(ctx),
+			Method:    strPtr(loginMethod),
+			Metadata:  events.MFACompleted(),
+		})
+		switch dec.Kind {
+		case events.DecisionKindBlock:
+			return nil, huma.NewError(decBlockStatus(dec), decBlockMessage(dec))
+		case events.DecisionKindRequireMfa:
+			// Unreachable with the mfa plugin's gate, which stands down
+			// for a marked event. Fail closed rather than mint tokens a
+			// handler has just said need another factor.
+			return nil, huma.Error403Forbidden("request blocked")
+		}
+
 		resp, err := p.issueFor(ctx, host, user, in.Body.Org)
 		if err != nil {
 			return nil, err

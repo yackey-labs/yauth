@@ -80,6 +80,23 @@ type PluginHost interface {
 	// short-circuits the chain.
 	RegisterEventHandler(h events.Handler)
 
+	// RegisterEventGate appends h to the pipeline's GATE stage, which runs
+	// to completion before any RegisterEventHandler handler, whatever
+	// order the plugins were registered in. Gates fire in their own
+	// registration order and short-circuit the same way.
+	//
+	// Reserved for handlers that decide whether a login may proceed —
+	// today only mfa's step-up. The distinction is not cosmetic: a gate
+	// answering login.succeeded with RequireMfa is saying "this login has
+	// NOT completed", so observers that mutate per-login state (lockout
+	// clearing its failure counter) must not already have run. Which of
+	// the two happened first used to depend on plugin registration order:
+	// mfa before lockout meant an MFA user's counter was never cleared and
+	// they were eventually locked out despite always authenticating
+	// correctly; lockout before mfa meant wrong TOTP codes were forgiven
+	// by the next password login, so MFA brute force went unthrottled.
+	RegisterEventGate(h events.Handler)
+
 	// RegisterAuthResolver appends r to the list of alternative identity
 	// resolvers consulted by the middleware after the cookie path.
 	RegisterAuthResolver(r AuthResolver)

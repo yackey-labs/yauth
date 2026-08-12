@@ -237,6 +237,7 @@ func (h *captureHost) PluginNames() []string                      { return nil }
 func (h *captureHost) JWTSigner() plugin.JWTSigner                { return h.signer }
 func (h *captureHost) JWTSecret() []byte                          { return nil }
 func (h *captureHost) RegisterMFAVerifier(plugin.MFAVerifier)     {}
+func (h *captureHost) RegisterEventGate(events.Handler)           {}
 func (h *captureHost) MFAVerifier() plugin.MFAVerifier            { return nil }
 func (h *captureHost) Emit(_ context.Context, _ events.AuthEvent) (events.Decision, error) {
 	return events.Continue(), nil

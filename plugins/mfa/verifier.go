@@ -15,6 +15,7 @@ import (
 // encryption key.
 type challengeVerifier struct {
 	p    *mfaPlugin
+	host plugin.PluginHost
 	repo repo.Repository
 }
 
@@ -23,6 +24,11 @@ type challengeVerifier struct {
 // code against TOTP and the backup codes — and deliberately collapses
 // "unknown pending session" and "wrong code" into a single ok=false so the
 // caller cannot tell them apart.
+//
+// A wrong code emits login.failed HERE rather than in the caller: this is
+// the one place both completion paths pass through, so MFA brute force is
+// counted by lockout whether the challenge came from the cookie login or
+// from /token, and a future caller cannot forget to report it.
 func (v *challengeVerifier) VerifyPendingChallenge(ctx context.Context, pendingSessionID, code string) (string, bool, error) {
 	userID, found, err := v.p.consumePendingSession(ctx, v.repo, pendingSessionID)
 	if err != nil {
@@ -36,6 +42,7 @@ func (v *challengeVerifier) VerifyPendingChallenge(ctx context.Context, pendingS
 		return "", false, err
 	}
 	if !ok {
+		emitMFAFailed(ctx, v.host, userID)
 		return "", false, nil
 	}
 	return userID, true, nil

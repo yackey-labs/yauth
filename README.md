@@ -144,6 +144,16 @@ doesn't issue a session yet). Plugins can implement `ShutdownAware` to
 drain background work before process exit (the webhooks dispatcher uses
 this).
 
+The pipeline has two stages: **gates** (`RegisterEventGate`) all run
+before **handlers** (`RegisterEventHandler`), whatever order the plugins
+were registered in. A gate decides whether a login may proceed — only
+mfa's step-up today — so observers that mutate per-login state (lockout
+clearing its failure counter) never act on a login still waiting on a
+second factor. `login.succeeded` means "the primary credential checked
+out"; a stepped-up login emits a *second* `login.succeeded` carrying the
+`events.MetaMFAVerified` marker when the challenge is answered, and that
+is the one that means the login completed.
+
 **Tri-mode auth middleware** (`middleware.Middleware`) tries credentials
 in order: session cookie, then `Authorization: Bearer <jwt>`, then
 `X-Api-Key`. The first plugin that registers an `AuthResolver` for a

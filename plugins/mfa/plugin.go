@@ -86,7 +86,12 @@ func (p *mfaPlugin) Name() string { return "mfa" }
 func (p *mfaPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.API, prefix string) {
 	mw := host.Middleware()
 
-	host.RegisterEventHandler(&loginEventHandler{
+	// A GATE, not a plain handler: the step-up decision must land before
+	// observers act on the event (see PluginHost.RegisterEventGate), so
+	// lockout does not clear its failure counter for a login that is still
+	// waiting on a second factor — whatever order the plugins were
+	// registered in.
+	host.RegisterEventGate(&loginEventHandler{
 		repo:              host.Repo(),
 		encryptionKey:     p.cfg.EncryptionKey,
 		pendingSessionTTL: pendingSessionTTL,
@@ -94,7 +99,7 @@ func (p *mfaPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.A
 
 	// Publish the challenge verifier so token-issuing plugins (bearer)
 	// can complete the same challenge for a client that has no cookie.
-	host.RegisterMFAVerifier(&challengeVerifier{p: p, repo: host.Repo()})
+	host.RegisterMFAVerifier(&challengeVerifier{p: p, host: host, repo: host.Repo()})
 
 	authMw := huma.Middlewares{
 		middleware.RequireAuthHuma(api, mw),

@@ -464,9 +464,11 @@ type fakeHost struct {
 	jwtSecret []byte
 	signer    plugin.JWTSigner // nil unless a test wires an asymmetric signer
 	resolvers []plugin.AuthResolver
-	// handlers is a real event pipeline: bearer now emits login.attempt /
-	// login.failed / login.succeeded, and the tests interpose on them the
-	// same way the mfa and lockout plugins do.
+	// gates and handlers are a real two-stage event pipeline: bearer now
+	// emits login.attempt / login.failed / login.succeeded, and the tests
+	// interpose on them the same way the mfa and lockout plugins do.
+	// Gates run first, exactly as on the real host.
+	gates    []events.Handler
 	handlers []events.Handler
 	// verifier is the plugin.MFAVerifier a test registers to stand in for
 	// the mfa plugin; nil means "mfa not loaded".
@@ -492,6 +494,9 @@ func (h *fakeHost) SessionBinding() (bool, bool)       { return false, false }
 func (h *fakeHost) RegisterEventHandler(eh events.Handler) {
 	h.handlers = append(h.handlers, eh)
 }
+func (h *fakeHost) RegisterEventGate(eh events.Handler) {
+	h.gates = append(h.gates, eh)
+}
 func (h *fakeHost) RegisterAuthResolver(r plugin.AuthResolver) {
 	h.resolvers = append(h.resolvers, r)
 	h.mw.AddResolver(r)
@@ -506,11 +511,11 @@ func (h *fakeHost) RegisterMFAVerifier(v plugin.MFAVerifier) {
 }
 func (h *fakeHost) MFAVerifier() plugin.MFAVerifier { return h.verifier }
 
-// Emit mirrors YAuth.Emit: handlers run in registration order and the first
-// non-Continue decision short-circuits.
+// Emit mirrors YAuth.Emit: every gate first, then every handler, each in
+// registration order, and the first non-Continue decision short-circuits.
 func (h *fakeHost) Emit(ctx context.Context, ev events.AuthEvent) (events.Decision, error) {
 	h.emitted = append(h.emitted, ev)
-	for _, eh := range h.handlers {
+	for _, eh := range append(append([]events.Handler{}, h.gates...), h.handlers...) {
 		dec, err := eh.Handle(ctx, ev)
 		if err != nil {
 			return dec, err

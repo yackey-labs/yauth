@@ -26,6 +26,12 @@ const pendingSessionKeyPrefix = "mfa_pending:"
 // mfa_pending:<uuid> challenge row and returns a RequireMfa decision
 // so the upstream plugin returns {require_mfa, pending_session_id}
 // instead of issuing a real session.
+//
+// It is registered as a pipeline GATE (host.RegisterEventGate), so it
+// always runs before observers such as lockout, whatever order the
+// plugins were registered in. That ordering is load-bearing: while a
+// challenge is outstanding the login has not completed, and lockout must
+// not clear its failure counter yet.
 type loginEventHandler struct {
 	repo              repo.Repository
 	encryptionKey     [32]byte
@@ -38,6 +44,14 @@ func (h *loginEventHandler) Handle(ctx context.Context, ev events.AuthEvent) (ev
 		return events.Continue(), nil
 	}
 	if ev.UserID == nil || *ev.UserID == "" {
+		return events.Continue(), nil
+	}
+	// Completing a challenge emits its own login.succeeded — that is how
+	// lockout learns the login actually finished. Opening a fresh
+	// challenge for it would hand the client require_mfa forever, so the
+	// marker is the loop breaker. Only an in-process plugin can set it;
+	// no request field is ever unmarshalled into an AuthEvent.
+	if ev.MFAVerified() {
 		return events.Continue(), nil
 	}
 

@@ -42,6 +42,12 @@ burns it, and the caller must start again at `/token`. `/token/mfa` returns
 challenge through — and one opaque 401 for an unknown, expired or spent
 pending session as well as a wrong code.
 
+`/token/mfa` emits the `login.succeeded` that marks the login **completed** —
+the one at `/token` only meant "password verified" — so `lockout` clears its
+failure counter and audit/webhook consumers see the finished login. Wrong
+codes emit `login.failed`, so MFA brute force is throttled like password
+brute force.
+
 **Backwards compatible:** a caller with no second factor enrolled still gets
 the token pair from a single `/token` call, byte for byte. A deployment that
 wires neither `mfa` nor `lockout` sees no behavioural change.

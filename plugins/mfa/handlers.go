@@ -21,6 +21,7 @@ import (
 
 	"github.com/yackey-labs/yauth/auth"
 	"github.com/yackey-labs/yauth/domain"
+	"github.com/yackey-labs/yauth/events"
 	"github.com/yackey-labs/yauth/middleware"
 	"github.com/yackey-labs/yauth/plugin"
 	"github.com/yackey-labs/yauth/repo"
@@ -383,15 +384,46 @@ func (p *mfaPlugin) handleVerify(host plugin.PluginHost) func(context.Context, *
 			return nil, huma.Error401Unauthorized("pending session not found or expired")
 		}
 
+		ip := middleware.RequestIP(r)
+
 		ok, err := p.verifyCode(ctx, repoRef, userID, code)
 		if err != nil {
 			return nil, huma.Error500InternalServerError("unable to verify mfa code")
 		}
 		if !ok {
+			// Count the wrong code so lockout throttles MFA brute force.
+			// Fire-and-forget: the 401 below is fixed either way.
+			emitMFAFailed(ctx, host, userID)
 			return nil, huma.Error401Unauthorized("invalid mfa code")
 		}
 
-		raw, _, err := auth.IssueSession(ctx, repoRef, userID, middleware.RequestIP(r), requestUA(r), host.SessionTTL())
+		resp := mfaVerifyResponse{User: mfaVerifyUser{ID: userID}}
+		var email string
+		if u, err := repoRef.GetUserByID(ctx, userID); err == nil && u != nil {
+			resp.User.Email = u.Email
+			resp.User.DisplayName = u.DisplayName
+			resp.User.EmailVerified = u.EmailVerified
+			resp.User.Role = u.Role
+			email = u.Email
+		}
+
+		// The login COMPLETES here, not when the password was checked —
+		// this is the event lockout clears its failure counter on, and
+		// the one audit/webhook consumers should read as a finished
+		// login. The marker keeps this plugin's own gate from opening
+		// another challenge for it.
+		dec, _ := host.Emit(ctx, mfaCompletedEvent(userID, email, ip, loginMethod))
+		switch dec.Kind {
+		case events.DecisionKindBlock:
+			return nil, huma.NewError(decBlockStatus(dec), decBlockMessage(dec))
+		case events.DecisionKindRequireMfa:
+			// Unreachable with this plugin's gate (it stands down for a
+			// marked event). Fail closed rather than issue a session a
+			// handler just said needs another factor.
+			return nil, huma.Error403Forbidden("request blocked")
+		}
+
+		raw, _, err := auth.IssueSession(ctx, repoRef, userID, ip, requestUA(r), host.SessionTTL())
 		if err != nil {
 			return nil, huma.Error500InternalServerError("unable to issue session")
 		}
@@ -400,13 +432,6 @@ func (p *mfaPlugin) handleVerify(host plugin.PluginHost) func(context.Context, *
 			raw,
 		))
 
-		resp := mfaVerifyResponse{User: mfaVerifyUser{ID: userID}}
-		if u, err := repoRef.GetUserByID(ctx, userID); err == nil && u != nil {
-			resp.User.Email = u.Email
-			resp.User.DisplayName = u.DisplayName
-			resp.User.EmailVerified = u.EmailVerified
-			resp.User.Role = u.Role
-		}
 		return &mfaVerifyOutput{Body: resp}, nil
 	}
 }

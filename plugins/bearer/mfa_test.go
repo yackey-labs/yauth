@@ -26,8 +26,23 @@ func (s stubHandler) Handle(ctx context.Context, ev events.AuthEvent) (events.De
 
 // requireMfaOn returns a handler that answers login.succeeded with a
 // RequireMfa decision carrying pendingID — what plugins/mfa does for a
-// TOTP-enrolled user.
+// TOTP-enrolled user. Like the real gate it stands down for the marked
+// completion event; that marker is what stops the challenge repeating.
 func requireMfaOn(pendingID string) stubHandler {
+	return stubHandler{fn: func(_ context.Context, ev events.AuthEvent) (events.Decision, error) {
+		if ev.Type == events.EventLoginSucceeded && ev.UserID != nil && !ev.MFAVerified() {
+			return events.RequireMfa(*ev.UserID, pendingID), nil
+		}
+		return events.Continue(), nil
+	}}
+}
+
+// requireMfaAlways is a deliberately broken gate: it ignores the completion
+// marker and demands a second factor even for the event saying one was just
+// verified. Nothing in-tree behaves this way — it stands in for a
+// third-party handler that would otherwise leave the client in an infinite
+// challenge loop.
+func requireMfaAlways(pendingID string) stubHandler {
 	return stubHandler{fn: func(_ context.Context, ev events.AuthEvent) (events.Decision, error) {
 		if ev.Type == events.EventLoginSucceeded && ev.UserID != nil {
 			return events.RequireMfa(*ev.UserID, pendingID), nil
@@ -95,7 +110,7 @@ func decodeIssue(t *testing.T, body []byte) issueResponse {
 func TestToken_MFARequired_IssuesNoTokens(t *testing.T) {
 	h, fr, user := newHarness(t)
 	mustPassword(t, fr, user.ID, "correct horse battery staple")
-	h.host.RegisterEventHandler(requireMfaOn("pending-abc"))
+	h.host.RegisterEventGate(requireMfaOn("pending-abc"))
 
 	resp := h.do(t, "POST", "/token", `{"email":"alice@example.com","password":"correct horse battery staple"}`, nil)
 	if resp.Code != http.StatusOK {
@@ -145,7 +160,7 @@ func TestToken_NoMFA_BodyUnchanged(t *testing.T) {
 func TestTokenMFA_CompletesChallenge(t *testing.T) {
 	h, fr, user := newHarness(t)
 	mustPassword(t, fr, user.ID, "pw")
-	h.host.RegisterEventHandler(requireMfaOn("pending-abc"))
+	h.host.RegisterEventGate(requireMfaOn("pending-abc"))
 	h.host.RegisterMFAVerifier(&stubVerifier{userID: user.ID, pending: "pending-abc", code: "123456"})
 
 	resp := h.do(t, "POST", "/token", `{"email":"alice@example.com","password":"pw"}`, nil)
@@ -183,7 +198,7 @@ func TestTokenMFA_CompletesChallenge(t *testing.T) {
 func TestTokenMFA_WrongCodeBurnsChallenge(t *testing.T) {
 	h, fr, user := newHarness(t)
 	mustPassword(t, fr, user.ID, "pw")
-	h.host.RegisterEventHandler(requireMfaOn("pending-abc"))
+	h.host.RegisterEventGate(requireMfaOn("pending-abc"))
 	h.host.RegisterMFAVerifier(&stubVerifier{userID: user.ID, pending: "pending-abc", code: "123456"})
 
 	resp := h.do(t, "POST", "/token", `{"email":"alice@example.com","password":"pw"}`, nil)
@@ -200,6 +215,94 @@ func TestTokenMFA_WrongCodeBurnsChallenge(t *testing.T) {
 	}
 	if len(fr.refreshTokens) != 0 {
 		t.Fatalf("a failed challenge minted %d refresh tokens; want 0", len(fr.refreshTokens))
+	}
+}
+
+// TestTokenMFA_EmitsCompletion proves the second leg emits the marked
+// login.succeeded that observers (lockout's clear, audit, webhooks) need to
+// see a login as finished — and that it is marked, so the MFA gate stands
+// down instead of re-challenging.
+func TestTokenMFA_EmitsCompletion(t *testing.T) {
+	h, fr, user := newHarness(t)
+	mustPassword(t, fr, user.ID, "pw")
+	h.host.RegisterEventGate(requireMfaOn("pending-abc"))
+	h.host.RegisterMFAVerifier(&stubVerifier{userID: user.ID, pending: "pending-abc", code: "123456"})
+
+	resp := h.do(t, "POST", "/token", `{"email":"alice@example.com","password":"pw"}`, nil)
+	pending := decodeIssue(t, resp.Body.Bytes()).PendingSessionID
+
+	before := len(h.host.emitted)
+	resp = h.do(t, "POST", "/token/mfa", `{"pending_session_id":"`+pending+`","code":"123456"}`, nil)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", resp.Code, resp.Body.String())
+	}
+
+	var completion *events.AuthEvent
+	for i := before; i < len(h.host.emitted); i++ {
+		e := h.host.emitted[i]
+		if e.Type == events.EventLoginSucceeded {
+			completion = &h.host.emitted[i]
+		}
+	}
+	if completion == nil {
+		t.Fatalf("no login.succeeded emitted on MFA completion; lockout would never clear")
+	}
+	if !completion.MFAVerified() {
+		t.Fatalf("completion event is missing the mfa_verified marker: %+v", completion.Metadata)
+	}
+	if completion.UserID == nil || *completion.UserID != user.ID {
+		t.Fatalf("completion must carry the user id, got %+v", completion)
+	}
+}
+
+// TestTokenMFA_NoInfiniteChallengeLoop: a handler that ignores the
+// completion marker must NOT be able to hand the client another challenge.
+// The exchange fails closed instead — no tokens, no second pending session.
+func TestTokenMFA_NoInfiniteChallengeLoop(t *testing.T) {
+	h, fr, user := newHarness(t)
+	mustPassword(t, fr, user.ID, "pw")
+	h.host.RegisterEventGate(requireMfaAlways("pending-abc"))
+	h.host.RegisterMFAVerifier(&stubVerifier{userID: user.ID, pending: "pending-abc", code: "123456"})
+
+	resp := h.do(t, "POST", "/token", `{"email":"alice@example.com","password":"pw"}`, nil)
+	pending := decodeIssue(t, resp.Body.Bytes()).PendingSessionID
+
+	resp = h.do(t, "POST", "/token/mfa", `{"pending_session_id":"`+pending+`","code":"123456"}`, nil)
+	if resp.Code != http.StatusForbidden {
+		t.Fatalf("expected a closed 403, got %d body=%s", resp.Code, resp.Body.String())
+	}
+	if strings.Contains(resp.Body.String(), "pending_session_id") {
+		t.Fatalf("the exchange handed back another challenge — that is the loop: %s", resp.Body.String())
+	}
+	if len(fr.refreshTokens) != 0 {
+		t.Fatalf("failed-closed exchange minted %d refresh tokens; want 0", len(fr.refreshTokens))
+	}
+}
+
+// TestTokenMFA_HonoursBlockOnCompletion: a Block on the completion event
+// (e.g. the account was locked meanwhile) must stop the token pair.
+func TestTokenMFA_HonoursBlockOnCompletion(t *testing.T) {
+	h, fr, user := newHarness(t)
+	mustPassword(t, fr, user.ID, "pw")
+	h.host.RegisterEventGate(requireMfaOn("pending-abc"))
+	h.host.RegisterMFAVerifier(&stubVerifier{userID: user.ID, pending: "pending-abc", code: "123456"})
+
+	resp := h.do(t, "POST", "/token", `{"email":"alice@example.com","password":"pw"}`, nil)
+	pending := decodeIssue(t, resp.Body.Bytes()).PendingSessionID
+
+	h.host.RegisterEventHandler(stubHandler{fn: func(_ context.Context, ev events.AuthEvent) (events.Decision, error) {
+		if ev.Type == events.EventLoginSucceeded && ev.MFAVerified() {
+			return events.Block(http.StatusTooManyRequests, "Account locked"), nil
+		}
+		return events.Continue(), nil
+	}})
+
+	resp = h.do(t, "POST", "/token/mfa", `{"pending_session_id":"`+pending+`","code":"123456"}`, nil)
+	if resp.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected 429, got %d body=%s", resp.Code, resp.Body.String())
+	}
+	if len(fr.refreshTokens) != 0 {
+		t.Fatalf("blocked completion minted %d refresh tokens; want 0", len(fr.refreshTokens))
 	}
 }
 
@@ -246,7 +349,7 @@ func TestTokenMFA_RequiresBothFields(t *testing.T) {
 func TestTokenMFA_ReRunsAccountGates(t *testing.T) {
 	h, fr, user := newHarness(t)
 	mustPassword(t, fr, user.ID, "pw")
-	h.host.RegisterEventHandler(requireMfaOn("pending-abc"))
+	h.host.RegisterEventGate(requireMfaOn("pending-abc"))
 	h.host.RegisterMFAVerifier(&stubVerifier{userID: user.ID, pending: "pending-abc", code: "123456"})
 
 	resp := h.do(t, "POST", "/token", `{"email":"alice@example.com","password":"pw"}`, nil)
@@ -381,7 +484,7 @@ func TestToken_BlockDecisionOnFailure(t *testing.T) {
 func TestToken_BadPassword_NoLoginSucceeded(t *testing.T) {
 	h, fr, user := newHarness(t)
 	mustPassword(t, fr, user.ID, "pw")
-	h.host.RegisterEventHandler(requireMfaOn("pending-abc"))
+	h.host.RegisterEventGate(requireMfaOn("pending-abc"))
 
 	resp := h.do(t, "POST", "/token", `{"email":"alice@example.com","password":"wrong"}`, nil)
 	if resp.Code != http.StatusUnauthorized {

@@ -121,8 +121,10 @@ type bearerTokenInput struct {
 // handler ever saw it, so a TOTP-enrolled account opened with the password
 // only and a locked account was never throttled.
 //
-// StashHTTPHuma is applied so the events carry the caller's IP, like /login's.
-func (p *bearerPlugin) registerToken(host plugin.PluginHost, api huma.API, prefix string) {
+// StashHTTPHuma is applied so the events carry the caller's IP, like /login's,
+// and rl (the rate_limit.login limiter, shared with /login) is outermost so a
+// blocked request is turned away before the password is ever compared.
+func (p *bearerPlugin) registerToken(host plugin.PluginHost, api huma.API, prefix string, rl func(http.Handler) http.Handler) {
 	huma.Register(api, huma.Operation{
 		OperationID: "bearer-issue-token",
 		Method:      http.MethodPost,
@@ -131,7 +133,7 @@ func (p *bearerPlugin) registerToken(host plugin.PluginHost, api huma.API, prefi
 		Description: "Returns {require_mfa, pending_session_id} instead of tokens when the account has a second factor; complete it at /token/mfa.",
 		Tags:        []string{"bearer"},
 		Security:    []map[string][]string{}, // explicitly public
-		Middlewares: huma.Middlewares{middleware.StashHTTPHuma(api)},
+		Middlewares: huma.Middlewares{middleware.RateLimitHuma(rl), middleware.StashHTTPHuma(api)},
 	}, func(ctx context.Context, in *bearerTokenInput) (*issueOutput, error) {
 		req := in.Body
 		req.Email = strings.TrimSpace(strings.ToLower(req.Email))
@@ -277,7 +279,7 @@ type bearerTokenMFAInput struct {
 // Public (Security: none), like /token: the pending_session_id IS the
 // credential, and it was handed only to a caller that already proved the
 // password.
-func (p *bearerPlugin) registerTokenMFA(host plugin.PluginHost, api huma.API, prefix string) {
+func (p *bearerPlugin) registerTokenMFA(host plugin.PluginHost, api huma.API, prefix string, rl func(http.Handler) http.Handler) {
 	huma.Register(api, huma.Operation{
 		OperationID: "bearer-issue-token-mfa",
 		Method:      http.MethodPost,
@@ -286,9 +288,10 @@ func (p *bearerPlugin) registerTokenMFA(host plugin.PluginHost, api huma.API, pr
 		Description: "Exchange the pending_session_id returned by /token, plus a TOTP or backup code, for an access+refresh token pair.",
 		Tags:        []string{"bearer"},
 		Security:    []map[string][]string{}, // explicitly public
-		// Stashed for the same reason as /token: the completion event
-		// should carry the caller's IP.
-		Middlewares: huma.Middlewares{middleware.StashHTTPHuma(api)},
+		// Rate-limited on the shared mfa_verify bucket (a six-digit code
+		// is guessable at volume), then stashed for the same reason as
+		// /token: the completion event should carry the caller's IP.
+		Middlewares: huma.Middlewares{middleware.RateLimitHuma(rl), middleware.StashHTTPHuma(api)},
 	}, func(ctx context.Context, in *bearerTokenMFAInput) (*tokenOutput, error) {
 		pendingSessionID := strings.TrimSpace(in.Body.PendingSessionID)
 		code := strings.TrimSpace(in.Body.Code)

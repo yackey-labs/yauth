@@ -134,8 +134,19 @@ func (p *bearerPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api hum
 	host.RegisterAuthResolver(newResolver(host, p.cfg))
 
 	mw := host.Middleware()
-	p.registerToken(host, api, prefix)
-	p.registerTokenMFA(host, api, prefix)
+
+	// POST /token is a password login: it verifies email+password exactly
+	// as the cookie POST /login does. It carried no per-IP throttle at
+	// all, so an attacker spraying a couple of guesses each across many
+	// accounts — which never trips per-account lockout — ran at line rate
+	// on the route /login would have metered. It buckets on the SAME key
+	// as /login so alternating the two cannot double that budget;
+	// /token/mfa likewise shares the mfa_verify bucket with /mfa/verify.
+	tokenRL := plugin.RateLimitFor(host, plugin.RateLimitLogin, 10, 60*time.Second)
+	tokenMFARL := plugin.RateLimitFor(host, plugin.RateLimitMFAVerify, 10, 60*time.Second)
+
+	p.registerToken(host, api, prefix, tokenRL)
+	p.registerTokenMFA(host, api, prefix, tokenMFARL)
 	p.registerRefresh(host, api, prefix)
 	p.registerRevoke(host, api, mw, prefix)
 }

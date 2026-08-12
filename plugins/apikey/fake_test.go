@@ -452,8 +452,8 @@ func (f *fakeRepo) GetAccountLockByUserID(_ context.Context, _ string) (*domain.
 func (f *fakeRepo) CreateAccountLock(_ context.Context, _ domain.NewAccountLock) (domain.AccountLock, error) {
 	return domain.AccountLock{}, yautherr.ErrInternal
 }
-func (f *fakeRepo) IncrementAccountLockFailedCount(_ context.Context, _ string, _ time.Time) error {
-	return yautherr.ErrNotFound
+func (f *fakeRepo) IncrementAccountLockFailedCount(_ context.Context, _ string, _ time.Time) (int, error) {
+	return 0, yautherr.ErrNotFound
 }
 func (f *fakeRepo) SetAccountLockState(_ context.Context, _ string, _ domain.LockState, _ time.Time) error {
 	return yautherr.ErrNotFound

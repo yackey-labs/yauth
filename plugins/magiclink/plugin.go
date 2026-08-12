@@ -93,6 +93,13 @@ func (p *magicLinkPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api 
 		lm.logger = p.logger
 		p.logger.Warn("magic-link: using the console LoggingMailer — login links (single-use tokens) are written to logs and NO email is sent; set Config.Mailer for production")
 	}
-	p.registerSend(host, api, prefix)
+	// POST /magic-link/send had no limiter at all, despite rate_limit.
+	// magic_link_send being advertised in the schema and its defaults: one
+	// unauthenticated request sends an email to any address the caller
+	// names, which makes it both a mail-send amplifier pointed at third
+	// parties and a cheap way to burn the deployment's sending reputation.
+	sendRL := plugin.RateLimitFor(host, plugin.RateLimitMagicLinkSend, 5, 60*time.Second)
+
+	p.registerSend(host, api, prefix, sendRL)
 	p.registerVerify(host, api, prefix)
 }

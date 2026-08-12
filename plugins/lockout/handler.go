@@ -101,23 +101,35 @@ func (h *loginEventHandler) onFailed(ctx context.Context, e events.AuthEvent) (e
 			CreatedAt:   now,
 			UpdatedAt:   now,
 		})
-		if cErr != nil {
+		if cErr == nil {
+			// If MaxAttempts == 1, lock immediately.
+			if 1 >= h.cfg.MaxAttempts {
+				_ = h.applyLock(ctx, created.ID, 0, now)
+			}
 			return events.Continue(), nil
 		}
-		// If MaxAttempts == 1, lock immediately.
-		if 1 >= h.cfg.MaxAttempts {
-			_ = h.applyLock(ctx, created.ID, 0, now)
-		}
-		return events.Continue(), nil
+		// Lost the race to a concurrent first failure for the same user
+		// (user_id is unique). The row exists now, so fall through to the
+		// atomic increment instead of dropping this failure on the floor
+		// — a dropped failure is a free guess for the attacker.
+		lock, err = repo.GetAccountLockByUserID(ctx, uid)
 	}
 	if err != nil || lock == nil {
 		return events.Continue(), nil
 	}
 
-	if err := repo.IncrementAccountLockFailedCount(ctx, lock.ID, now); err != nil {
+	// The count is read back FROM the increment, never computed off the
+	// GetAccountLockByUserID above: that read is already stale whenever
+	// another attempt on the same account is in flight. Every concurrent
+	// failure used to see FailedCount=0 and compute newCount=1, so a
+	// parallel guessing run drove the stored counter far past MaxAttempts
+	// while `newCount >= MaxAttempts` never once held — the account was
+	// simply never locked. Now each caller observes a distinct count, so
+	// exactly one of them observes the threshold being crossed.
+	newCount, err := repo.IncrementAccountLockFailedCount(ctx, lock.ID, now)
+	if err != nil {
 		return events.Continue(), nil
 	}
-	newCount := lock.FailedCount + 1
 	if newCount >= h.cfg.MaxAttempts {
 		_ = h.applyLock(ctx, lock.ID, lock.LockCount, now)
 	}

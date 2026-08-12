@@ -25,9 +25,12 @@ import (
 // window <= 0 disables the limiter (the middleware becomes a passthrough)
 // so callers can inline the wiring without conditionals.
 //
-// The clientIdentifier is r.RemoteAddr's host portion. X-Forwarded-For
-// handling is intentionally deferred until a TrustedProxies config
-// surface lands — see PARITY_GAPS.md.
+// The clientIdentifier is the request's client IP as resolved by the
+// deployment's trusted-proxy policy (see [TrustedProxies]), NOT
+// r.RemoteAddr. Behind a reverse proxy RemoteAddr is the proxy, so keying
+// on it handed the whole internet ONE shared bucket: any single client
+// could exhaust it for everybody else, and an attacker's own budget was
+// whatever happened to be left in it.
 func RateLimit(r repo.RateLimitRepository, name string, max int, window time.Duration) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		if r == nil || max <= 0 || window <= 0 {

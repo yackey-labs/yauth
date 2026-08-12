@@ -125,7 +125,9 @@ type sendOutput struct {
 // same generic 200 body so the response never admits whether the email is
 // registered. No StashHTTPHuma bridge — /send needs neither the raw request nor
 // the writer.
-func (p *magicLinkPlugin) registerSend(host plugin.PluginHost, api huma.API, prefix string) {
+// rl is the rate_limit.magic_link_send limiter; it is the route's only
+// middleware and turns a blocked caller away before any mail is dispatched.
+func (p *magicLinkPlugin) registerSend(host plugin.PluginHost, api huma.API, prefix string, rl func(http.Handler) http.Handler) {
 	huma.Register(api, huma.Operation{
 		OperationID: "magicLinkSend",
 		Method:      http.MethodPost,
@@ -133,6 +135,7 @@ func (p *magicLinkPlugin) registerSend(host plugin.PluginHost, api huma.API, pre
 		Summary:     "Request a single-use magic-link login email",
 		Tags:        []string{"magic-link"},
 		Security:    []map[string][]string{}, // explicitly public
+		Middlewares: huma.Middlewares{middleware.RateLimitHuma(rl)},
 	}, func(ctx context.Context, in *magicSendInput) (*sendOutput, error) {
 		req := in.Body
 		req.Email = strings.TrimSpace(strings.ToLower(req.Email))

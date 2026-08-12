@@ -837,6 +837,7 @@ func configToYAuthConfig(c *yauthcfg.Config) YAuthConfig {
 		UAMismatchAction: c.Session.UAMismatchAction,
 	}
 	out.AllowAdminMachineCallers = c.Plugins.Admin.AllowMachineCallers
+	out.TrustedProxies = c.Server.TrustedProxies
 	overrideRule(&out.RateLimit.Login, c.RateLimit.Login)
 	overrideRule(&out.RateLimit.Register, c.RateLimit.Register)
 	overrideRule(&out.RateLimit.ForgotPassword, c.RateLimit.ForgotPassword)
@@ -930,9 +931,15 @@ func buildCloudflareMailer(cfg yauthcfg.MailerConfig) (Mailer, error) {
 	}), nil
 }
 
+// overrideRule overlays an operator-supplied rule onto the default. A nil
+// Max means the key was omitted (keep the default); a non-nil Max is taken
+// verbatim, INCLUDING zero, which the schema documents as "no limit". The
+// old `if src.Max > 0` made `max: 0` a no-op, so the documented way to turn
+// a limiter off silently kept the default instead.
 func overrideRule(dst *RateLimitRule, src yauthcfg.RateLimitRule) {
-	if src.Max > 0 {
-		dst.Max = src.Max
+	if src.Max != nil {
+		v := *src.Max
+		dst.Max = &v
 	}
 	if src.Window > 0 {
 		dst.Window = src.Window

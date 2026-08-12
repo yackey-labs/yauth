@@ -787,8 +787,72 @@ Notable fields beyond cookie/session settings:
 | `AutoAdminFirstUser` | `false` | Promote the first registered user to role `admin`. **Legacy** — prefer `plugins.email_password.bootstrap_admin` (`yauth docs admin-bootstrap`), which deterministically provisions the admin at startup with a forced password change instead of letting whoever registers first become admin. |
 | `CORS.AllowedOrigins` | `[]` (off) | CORS middleware; empty slice disables it entirely |
 | `AllowAdminMachineCallers` | `false` | Allow machine callers — bearer, user-scoped API key, or org-scoped API key (service account) — to pass `RequireAdmin` (default: cookie-only) |
-| `RateLimit.*` | various | Per-operation max+window pairs; `Max=0` disables that operation's limit |
+| `RateLimit.*` | various | Per-operation max+window pairs, enforced on the routes of that operation. `Max` is a `*int`: unset keeps yauth's default, `RateLimitMax(0)` (yaml `max: 0`) means no limit |
 | `SessionBinding.BindIP/UA` | `false` | Reject sessions on IP or User-Agent mismatch |
+| `TrustedProxies` | `["private"]` | Whose `X-Forwarded-For` / `X-Real-IP` is believed when resolving the client IP. IPs, CIDRs, or `private` / `all` / `none` |
+
+### Rate limits
+
+`rate_limit.*` maps operations to routes. The routes of one operation share a
+single per-client-IP bucket, so alternating between them cannot double an
+attacker's budget:
+
+| Operation | Default | Routes |
+| --- | --- | --- |
+| `login` | 10 / 60s | `POST /login`, `POST /token` |
+| `register` | 10 / 60s | `POST /register` |
+| `forgot_password` | 5 / 60s | `POST /forgot-password` |
+| `magic_link_send` | 5 / 60s | `POST /magic-link/send` |
+| `unlock_request` | 10 / 60s | `POST /account/request-unlock` |
+| `mfa_verify` | 10 / 60s | `POST /mfa/verify`, `POST /token/mfa` |
+
+```yaml
+rate_limit:
+  login:           { max: 3, window: 60s }
+  magic_link_send: { max: 0 }              # explicitly unlimited
+```
+
+An omitted `max` keeps yauth's default; `max: 0` is an explicit "no limit".
+
+### Trusted proxies and the client IP
+
+The client IP decides what is written to a session's `ip_address`, to every
+audit row and auth event, what the per-IP rate limiter buckets on, and what
+session IP-binding compares against. It is resolved once, in one place, under
+the trusted-proxy policy:
+
+```yaml
+server:
+  trusted_proxies: ["private"]          # the default when omitted
+  # trusted_proxies: ["10.0.0.0/8", "173.245.48.0/20"]
+  # trusted_proxies: ["none"]           # the listener is exposed directly
+  # trusted_proxies: ["all"]            # something upstream already strips XFF
+```
+
+`private` (loopback, RFC1918, CGNAT, link-local, unique-local) is where a
+reverse proxy, ingress controller or sidecar lives, so the usual deployment
+keeps recording the real client. A listener that clients reach **directly**
+sees a public peer, and a forwarding header from an untrusted peer is ignored,
+so a caller can no longer name the address recorded against it. Add your load
+balancer's or CDN's ranges when the hop in front of yauth has a public address.
+
+Within a trusted chain the client is the **rightmost** `X-Forwarded-For` entry
+that is not itself a trusted proxy — the leftmost entry is whatever the client
+wrote. If a CDN sits in front of your ingress, list its ranges too, otherwise
+the CDN edge (not the browser) is the outermost untrusted hop.
+
+**Upgrading.** yauth used to believe `X-Forwarded-For` from any peer, and used
+`RemoteAddr` for the rate-limit bucket and the IP-binding comparison. Three
+things change for a deployment that sets nothing:
+
+- A listener clients reach **directly** now records the peer instead of a
+  client-supplied header. That is the fix — the old value was forgeable.
+- Rate limiting is now genuinely per-client behind a proxy, where it used to
+  meter the proxy (one bucket for everyone). Expect limits to start biting
+  individual abusers instead of the aggregate.
+- `plugins.organizations` IP allowlists are matched against the real client.
+  If you worked around the old behaviour by allowlisting your proxy's address,
+  replace it with the client ranges you actually mean.
 
 To layer a Redis read-cache over any primary backend, add a `cache:` block
 to `yauth.yaml`:

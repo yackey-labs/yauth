@@ -291,17 +291,20 @@ func (r *Repo) CreateAccountLock(ctx context.Context, input domain.NewAccountLoc
 	return *cloneAccountLock(a), nil
 }
 
-func (r *Repo) IncrementAccountLockFailedCount(ctx context.Context, id string, updatedAt time.Time) error {
+// IncrementAccountLockFailedCount bumps the counter under the repo mutex and
+// returns the post-increment value, so concurrent callers each observe a
+// distinct count and exactly one of them sees the threshold crossed.
+func (r *Repo) IncrementAccountLockFailedCount(ctx context.Context, id string, updatedAt time.Time) (int, error) {
 	_ = ensureCtx(ctx)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	a, ok := r.accountLocks[id]
 	if !ok {
-		return yautherr.ErrNotFound
+		return 0, yautherr.ErrNotFound
 	}
 	a.FailedCount++
 	a.UpdatedAt = updatedAt.UTC()
-	return nil
+	return a.FailedCount, nil
 }
 
 func (r *Repo) SetAccountLockState(ctx context.Context, id string, state domain.LockState, updatedAt time.Time) error {

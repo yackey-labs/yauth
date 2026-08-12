@@ -164,8 +164,16 @@ func (p *lockoutPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api hu
 	host.RegisterEventHandler(&loginEventHandler{cfg: p.cfg, host: host})
 
 	mw := host.Middleware()
+
+	// POST /account/request-unlock had no limiter, despite rate_limit.
+	// unlock_request being advertised in the schema and in the defaults.
+	// It is an unauthenticated mail-send: an attacker who has just locked
+	// an account can flood its owner's inbox with unlock tokens, and
+	// anyone can point it at a third party as an amplifier.
+	unlockReqRL := plugin.RateLimitFor(host, plugin.RateLimitUnlockRequest, 10, 60*time.Second)
+
 	p.registerUnlock(host, api, prefix)
-	p.registerUnlockRequest(host, api, prefix)
+	p.registerUnlockRequest(host, api, prefix, unlockReqRL)
 	p.registerAdminUnlock(host, api, mw, prefix)
 	p.registerLockoutState(host, api, mw, prefix)
 }

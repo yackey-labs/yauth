@@ -12,7 +12,6 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/google/uuid"
 
-	"github.com/yackey-labs/yauth/auth"
 	"github.com/yackey-labs/yauth/middleware"
 	"github.com/yackey-labs/yauth/plugin"
 )
@@ -228,12 +227,27 @@ func (p *ssoOIDCPlugin) requireFlowAdmin(ctx context.Context, host plugin.Plugin
 		return huma.Error403Forbidden(middleware.MustChangePasswordDetail)
 	}
 	if orgID == "" {
-		if au.User.Role != auth.RoleAdmin {
+		// A GLOBAL connection is install-wide, so the gate is the install-wide
+		// admin gate — ResolveAdmin, the same predicate RequireAdmin applies,
+		// which also honours AllowAdminMachineCallers. Reading au.User.Role
+		// directly (what this used to do) skipped that machine-caller rule and,
+		// worse, honoured the WRONG PERSON on a service account: an org-scoped
+		// API key resolves to an AuthUser whose User is the human who MINTED
+		// it, so a key bound to one org at role=member seeded a global SSO
+		// connection on its creator's install-admin role. Mirrors the
+		// isInstallAdmin term in plugins/organizations/handlers.go.
+		adminAU, aerr := host.Middleware().ResolveAdmin(r)
+		if aerr != nil || adminAU == nil || adminAU.Principal.IsServiceAccount() {
 			return huma.Error403Forbidden("admin role required")
 		}
 		return nil
 	}
-	if _, err := requireOrgAdmin(ctx, host, orgID); err != nil {
+	// requireOrgAdmin reads the AuthUser off the CONTEXT, and flowGuards is
+	// StashHTTPHuma only — nothing on these routes ever put one there, so this
+	// branch answered 401 to every caller, org admins included. We resolved the
+	// credential by hand above; publish it under the key RequireAuth would have
+	// used so the shared helper can see it.
+	if _, err := requireOrgAdmin(middleware.WithAuthUser(ctx, au), host, orgID); err != nil {
 		return err
 	}
 	return nil

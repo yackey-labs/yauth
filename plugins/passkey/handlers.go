@@ -341,8 +341,21 @@ type passkeyLoginFinishInput struct {
 
 // passkeyLoginFinishResponse wraps the authenticated user under `user`. The
 // session cookie is set on the stashed response writer.
+//
+// When a handler answers the login with events.RequireMfa (which needs
+// Config.SatisfiesMFA=false, or a consumer's own handler) the login is
+// NOT finished: `user` is omitted, no session is created, NO Set-Cookie is
+// written, and the body carries {require_mfa, pending_session_id} — the
+// same field names the cookie password login and bearer /token use. The
+// caller finishes at POST /mfa/verify.
 type passkeyLoginFinishResponse struct {
-	User passkeyLoginFinishUser `json:"user"`
+	User *passkeyLoginFinishUser `json:"user,omitempty"`
+	// RequireMfa reports that a second factor is outstanding. Present
+	// only on the challenge response.
+	RequireMfa bool `json:"require_mfa,omitempty"`
+	// PendingSessionID identifies the challenge to complete at
+	// POST /mfa/verify. Present only on the challenge response.
+	PendingSessionID string `json:"pending_session_id,omitempty"`
 }
 
 // passkeyLoginFinishOutput wraps the response body so huma marshals it after the
@@ -361,7 +374,7 @@ type passkeyLoginFinishUser struct {
 
 func toLoginFinishResponse(u domain.User) passkeyLoginFinishResponse {
 	return passkeyLoginFinishResponse{
-		User: passkeyLoginFinishUser{
+		User: &passkeyLoginFinishUser{
 			ID:            u.ID,
 			Email:         u.Email,
 			DisplayName:   u.DisplayName,
@@ -369,6 +382,23 @@ func toLoginFinishResponse(u domain.User) passkeyLoginFinishResponse {
 			Role:          u.Role,
 		},
 	}
+}
+
+// decBlockStatus / decBlockMessage map a Block decision onto an HTTP
+// response the same way the email-password, bearer and mfa login paths do,
+// so a lockout 429 reads identically wherever a login is finished.
+func decBlockStatus(d events.Decision) int {
+	if d.BlockStatus == 0 {
+		return http.StatusForbidden
+	}
+	return d.BlockStatus
+}
+
+func decBlockMessage(d events.Decision) string {
+	if d.BlockMessage == "" {
+		return "request blocked"
+	}
+	return d.BlockMessage
 }
 
 func (p *passkeyPlugin) handleLoginFinish(host plugin.PluginHost) func(context.Context, *passkeyLoginFinishInput) (*passkeyLoginFinishOutput, error) {
@@ -445,29 +475,89 @@ func (p *passkeyPlugin) handleLoginFinish(host plugin.PluginHost) func(context.C
 			return nil, huma.Error500InternalServerError("unable to update credential")
 		}
 
-		ip := middleware.RequestIP(r)
-		raw, _, err := auth.IssueSession(ctx, repoRef, matchedUser.ID, ip, requestUA(r), host.SessionTTL())
-		if err != nil {
-			return nil, huma.Error500InternalServerError("unable to issue session")
-		}
-
-		method := "passkey"
-		uid := matchedUser.ID
-		em := matchedUser.Email
-		_, _ = host.Emit(ctx, events.AuthEvent{
-			Type:      events.EventLoginSucceeded,
-			UserID:    &uid,
-			Email:     &em,
-			IPAddress: ip,
-			Method:    &method,
-		})
-
-		http.SetCookie(w, auth.SessionCookie(
-			cookieOptionsFromHost(host, r, int(host.SessionTTL().Seconds())),
-			raw,
-		))
-		return &passkeyLoginFinishOutput{Body: toLoginFinishResponse(*matchedUser)}, nil
+		return p.completeLogin(ctx, host, w, r, matchedUser)
 	}
+}
+
+// loginMethod is the events.AuthEvent Method for a passkey assertion.
+const loginMethod = "passkey"
+
+// completeLogin runs the auth-event pipeline for a verified assertion and,
+// only if the pipeline lets the login through, issues the session and sets
+// the cookie.
+//
+// This is the half of /passkey/login/finish that does NOT need a real
+// authenticator, split out so it is reachable from tests: go-webauthn ships
+// no virtual authenticator, so an end-to-end assertion cannot be driven
+// in-process.
+//
+// Two decisions are honoured here that used to be discarded:
+//
+//   - Block, on login.attempt as well as login.succeeded. lockout answers
+//     Block on login.attempt only (its onSucceeded merely clears state), so
+//     without the attempt event a locked account could still open a session
+//     with its passkey.
+//   - RequireMfa, when Config.SatisfiesMFA is explicitly false. Otherwise
+//     the login.succeeded carries events.MetaMFAVerified, which says
+//     explicitly that the passkey IS the second factor: mfa's gate stands
+//     down instead of minting a challenge nobody would answer, and
+//     observers such as lockout see a COMPLETED login and clear the
+//     failure counter. Silently dropping a RequireMfa decision, as before,
+//     did neither.
+func (p *passkeyPlugin) completeLogin(
+	ctx context.Context,
+	host plugin.PluginHost,
+	w http.ResponseWriter,
+	r *http.Request,
+	user *domain.User,
+) (*passkeyLoginFinishOutput, error) {
+	ip := middleware.RequestIP(r)
+	method := loginMethod
+	uid := user.ID
+	em := user.Email
+
+	if dec, _ := host.Emit(ctx, events.AuthEvent{
+		Type:      events.EventLoginAttempt,
+		UserID:    &uid,
+		Email:     &em,
+		IPAddress: ip,
+		Method:    &method,
+	}); dec.Kind == events.DecisionKindBlock {
+		return nil, huma.NewError(decBlockStatus(dec), decBlockMessage(dec))
+	}
+
+	ev := events.AuthEvent{
+		Type:      events.EventLoginSucceeded,
+		UserID:    &uid,
+		Email:     &em,
+		IPAddress: ip,
+		Method:    &method,
+	}
+	if p.cfg.satisfiesMFA() {
+		ev.Metadata = events.MFACompleted()
+	}
+	dec, _ := host.Emit(ctx, ev)
+	switch dec.Kind {
+	case events.DecisionKindBlock:
+		return nil, huma.NewError(decBlockStatus(dec), decBlockMessage(dec))
+	case events.DecisionKindRequireMfa:
+		// No session, no cookie — the login finishes at /mfa/verify.
+		return &passkeyLoginFinishOutput{Body: passkeyLoginFinishResponse{
+			RequireMfa:       true,
+			PendingSessionID: dec.PendingSessionID,
+		}}, nil
+	}
+
+	raw, _, err := auth.IssueSession(ctx, host.Repo(), user.ID, ip, requestUA(r), host.SessionTTL())
+	if err != nil {
+		return nil, huma.Error500InternalServerError("unable to issue session")
+	}
+
+	http.SetCookie(w, auth.SessionCookie(
+		cookieOptionsFromHost(host, r, int(host.SessionTTL().Seconds())),
+		raw,
+	))
+	return &passkeyLoginFinishOutput{Body: toLoginFinishResponse(*user)}, nil
 }
 
 // persistVerifiedCredential updates the stored credential JSON so the

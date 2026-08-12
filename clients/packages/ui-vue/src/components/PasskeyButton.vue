@@ -12,6 +12,12 @@ const props = defineProps<{
 	email?: string;
 	onSuccess?: (user: AuthUser) => void;
 	onError?: (error: Error) => void;
+	// onMfaRequired fires when login/finish answers with a second-factor
+	// challenge instead of a session. That only happens when the passkey
+	// plugin is configured with satisfies_mfa=false — by default a passkey
+	// IS the second factor and the login completes in one leg. Mirrors
+	// LoginForm's prop of the same name; hand the id to <MfaChallenge>.
+	onMfaRequired?: (pendingSessionId: string) => void;
 }>();
 
 const { client } = useYAuth();
@@ -32,10 +38,22 @@ const handleLogin = async () => {
 			typeof startAuthentication
 		>[0]["optionsJSON"],
 	});
-	await pk!.loginFinish({
+	const result = await pk!.loginFinish({
 		challenge_id: rcr.challenge_id,
 		credential: credential as unknown as Record<string, unknown>,
 	});
+	// A step-up is a **200** with no cookie, exactly like the password
+	// login. Without this branch the getSession() below would 401 on a
+	// login that simply has not finished yet.
+	if (result?.require_mfa) {
+		if (!result.pending_session_id) {
+			throw new Error(
+				"Server requested MFA but returned no pending_session_id.",
+			);
+		}
+		props.onMfaRequired?.(result.pending_session_id);
+		return;
+	}
 	const session = await client.getSession();
 	props.onSuccess?.(session.user as unknown as AuthUser);
 };

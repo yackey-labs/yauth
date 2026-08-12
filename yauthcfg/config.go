@@ -340,6 +340,13 @@ type APIKeyPluginConfig struct {
 type MagicLinkPluginConfig struct {
 	Enabled bool          `yaml:"enabled" toml:"enabled"`
 	TTL     time.Duration `yaml:"ttl" toml:"ttl"`
+
+	// SatisfiesMFA declares that clicking a magic link counts as the
+	// second factor, so a TOTP-enrolled user is not stepped up after
+	// /magic-link/verify. Default false: a link proves control of an
+	// inbox, usually the same channel as password reset, so it is
+	// treated as a first factor and the login completes at /mfa/verify.
+	SatisfiesMFA bool `yaml:"satisfies_mfa" toml:"satisfies_mfa" doc:"Treat clicking a magic link as the second factor. Default false: a link only proves control of an inbox, so a TOTP-enrolled user is stepped up and finishes at /mfa/verify."`
 }
 
 // AccountLockPluginConfig configures the account-lockout plugin.
@@ -391,6 +398,14 @@ type PasskeyPluginConfig struct {
 	RPID     string `yaml:"rp_id" toml:"rp_id"`
 	RPName   string `yaml:"rp_name" toml:"rp_name"`
 	RPOrigin string `yaml:"rp_origin" toml:"rp_origin"`
+
+	// SatisfiesMFA declares whether a passkey assertion is itself the
+	// second factor. nil pointer = true: a passkey is possession plus
+	// user verification and is phishing-resistant, so /passkey/login/finish
+	// completes the login in one leg. Set false to demand a TOTP step-up
+	// anyway — which prompts existing passkey users who have TOTP
+	// enrolled for a code they were never asked for before.
+	SatisfiesMFA *bool `yaml:"satisfies_mfa,omitempty" toml:"satisfies_mfa,omitempty" doc:"Treat a passkey assertion as the second factor. nil = true: a passkey is possession plus user verification and is phishing-resistant, so the login completes in one leg. false demands a TOTP step-up as well."`
 }
 
 // OAuthProvider configures one upstream OAuth/OIDC provider.
@@ -411,6 +426,13 @@ type OAuthPluginConfig struct {
 	// enabled. Generate one with `yauth gen-secrets`.
 	EncryptionKeyEnv string                   `yaml:"encryption_key_env" toml:"encryption_key_env"`
 	Providers        map[string]OAuthProvider `yaml:"providers" toml:"providers"`
+
+	// SatisfiesMFA declares whether the upstream provider's own
+	// authentication counts as the second factor. nil pointer = true (the
+	// long-standing behaviour). Set false to demand local TOTP anyway;
+	// because the callback is a browser redirect and cannot carry a
+	// challenge, a step-up then fails closed with 403 and no session.
+	SatisfiesMFA *bool `yaml:"satisfies_mfa,omitempty" toml:"satisfies_mfa,omitempty" doc:"Treat the upstream provider's authentication as the second factor. nil = true. false fails the login closed with 403 — the callback is a browser redirect and cannot carry an MFA challenge."`
 }
 
 // SSOOIDCPluginConfig configures the sso_oidc plugin — this app acting as an
@@ -435,6 +457,14 @@ type SSOOIDCPluginConfig struct {
 	// enabled) the runtime federate endpoint signs a software_statement so the
 	// app can self-register at a trusted upstream IdP with no admin key.
 	SelfIssuer string `yaml:"self_issuer" toml:"self_issuer"`
+
+	// SatisfiesMFA declares whether the upstream IdP's own authentication
+	// counts as the second factor. nil pointer = true (the long-standing
+	// behaviour, and the usual reason an org buys SSO). Set false to
+	// demand local TOTP anyway; because the callback is a browser redirect
+	// and cannot carry a challenge, a step-up then fails closed with 403
+	// and no session.
+	SatisfiesMFA *bool `yaml:"satisfies_mfa,omitempty" toml:"satisfies_mfa,omitempty" doc:"Treat the upstream IdP's authentication as the second factor. nil = true — the usual reason an org buys SSO. false fails the login closed with 403 — the callback is a browser redirect and cannot carry an MFA challenge."`
 }
 
 // WebhooksPluginConfig configures outbound webhook delivery. Per-webhook HMAC

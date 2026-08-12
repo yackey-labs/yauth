@@ -2910,13 +2910,16 @@
       "PasskeyLoginFinishResponse": {
         "additionalProperties": false,
         "properties": {
+          "pending_session_id": {
+            "type": "string"
+          },
+          "require_mfa": {
+            "type": "boolean"
+          },
           "user": {
             "$ref": "#/components/schemas/PasskeyLoginFinishUser"
           }
         },
-        "required": [
-          "user"
-        ],
         "type": "object"
       },
       "PasskeyLoginFinishUser": {
@@ -4088,13 +4091,16 @@
       "VerifyResponse": {
         "additionalProperties": false,
         "properties": {
+          "pending_session_id": {
+            "type": "string"
+          },
+          "require_mfa": {
+            "type": "boolean"
+          },
           "user": {
             "$ref": "#/components/schemas/VerifyUser"
           }
         },
-        "required": [
-          "user"
-        ],
         "type": "object"
       },
       "VerifyUser": {
@@ -6180,6 +6186,7 @@
     },
     "/magic-link/verify": {
       "post": {
+        "description": "Returns {require_mfa, pending_session_id} and sets no cookie when the account has a second factor outstanding; complete it at /mfa/verify.",
         "operationId": "magicLinkVerify",
         "requestBody": {
           "content": {
@@ -10531,6 +10538,7 @@
     },
     "/passkey/login/finish": {
       "post": {
+        "description": "A passkey satisfies MFA by default. With Config.SatisfiesMFA=false it returns {require_mfa, pending_session_id} and sets no cookie when the account has a second factor; complete it at /mfa/verify.",
         "operationId": "passkey-login-finish",
         "requestBody": {
           "content": {

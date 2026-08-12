@@ -85,6 +85,31 @@ type Config struct {
 	// (asymjwt), the runtime federate endpoint signs a software_statement so the
 	// app self-registers at a trusted upstream IdP with NO admin key. Optional.
 	SelfIssuer string
+
+	// SatisfiesMFA declares whether the upstream IdP's own authentication
+	// counts as the second factor. nil (the default) means TRUE, which is
+	// both what /sso/callback has always done and the usual enterprise
+	// arrangement: an org buys SSO precisely so the IdP owns
+	// authentication policy, MFA included. The difference is that it is
+	// now asserted in the login event instead of being the side effect of
+	// a discarded step-up decision, so mfa's gate stands down and lockout
+	// sees a completed login.
+	//
+	// Set a pointer to false where local TOTP must be enforced regardless
+	// of the IdP. The callback is a browser redirect and cannot carry a
+	// {require_mfa, pending_session_id} challenge, so a step-up decision
+	// then FAILS CLOSED with 403 and no session. See
+	// plugin.RunFederatedLogin.
+	SatisfiesMFA *bool
+}
+
+// satisfiesMFA reports the effective SatisfiesMFA value, defaulting to
+// true when the caller left the pointer nil.
+func (c *Config) satisfiesMFA() bool {
+	if c.SatisfiesMFA == nil {
+		return true
+	}
+	return *c.SatisfiesMFA
 }
 
 const (

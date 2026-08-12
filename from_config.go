@@ -471,7 +471,10 @@ func addAuthPlugins(builder *YAuthBuilder, cfg *yauthcfg.Config, mailer Mailer) 
 	}
 
 	if p.MagicLink.Enabled {
-		mlCfg := magiclink.Config{TokenTTL: p.MagicLink.TTL}
+		mlCfg := magiclink.Config{
+			TokenTTL:     p.MagicLink.TTL,
+			SatisfiesMFA: p.MagicLink.SatisfiesMFA,
+		}
 		if mailer != nil {
 			mlCfg.Mailer = mailer
 		}
@@ -515,9 +518,10 @@ func addAuthPlugins(builder *YAuthBuilder, cfg *yauthcfg.Config, mailer Mailer) 
 
 	if p.Passkey.Enabled {
 		plug, err := passkey.New(passkey.Config{
-			RPID:      p.Passkey.RPID,
-			RPName:    p.Passkey.RPName,
-			RPOrigins: []string{p.Passkey.RPOrigin},
+			RPID:         p.Passkey.RPID,
+			RPName:       p.Passkey.RPName,
+			RPOrigins:    []string{p.Passkey.RPOrigin},
+			SatisfiesMFA: p.Passkey.SatisfiesMFA,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("yauth: passkey: %w", err)
@@ -534,7 +538,11 @@ func addAuthPlugins(builder *YAuthBuilder, cfg *yauthcfg.Config, mailer Mailer) 
 		if err != nil {
 			return nil, err
 		}
-		plug, err := oauth.New(oauth.Config{EncryptionKey: key, Providers: provs})
+		plug, err := oauth.New(oauth.Config{
+			EncryptionKey: key,
+			Providers:     provs,
+			SatisfiesMFA:  p.OAuth.SatisfiesMFA,
+		})
 		if err != nil {
 			return nil, fmt.Errorf("yauth: oauth: %w", err)
 		}
@@ -551,6 +559,7 @@ func addAuthPlugins(builder *YAuthBuilder, cfg *yauthcfg.Config, mailer Mailer) 
 			StateTTL:            p.SSOOIDC.StateTTL,
 			AllowedRedirectURLs: p.SSOOIDC.AllowedRedirectURLs,
 			SelfIssuer:          p.SSOOIDC.SelfIssuer,
+			SatisfiesMFA:        p.SSOOIDC.SatisfiesMFA,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("yauth: sso_oidc: %w", err)

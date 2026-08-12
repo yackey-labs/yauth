@@ -469,6 +469,24 @@ func (p *ssoOIDCPlugin) registerSsoCallback(host plugin.PluginHost, api huma.API
 			}
 		}
 
+		uid := userID
+		em := email
+		emitMethod := "ssooidc:" + IssuerKeyFromDiscoveryURL(cfg.DiscoveryURL)
+		if isNew {
+			// Informational: registration carries no decision.
+			_, _ = host.Emit(ctx, events.AuthEvent{
+				Type: events.EventUserRegistered, UserID: &uid, Email: &em,
+				IPAddress: middleware.RequestIP(r), Method: &emitMethod,
+			})
+		}
+
+		// The login pipeline runs BEFORE the session is issued. It used to
+		// run after, with the decision discarded, so a Block (lockout, an
+		// IP deny handler) still ended in a cookie.
+		if err := plugin.RunFederatedLogin(ctx, host, p.cfg.satisfiesMFA(), uid, em, middleware.RequestIP(r), emitMethod); err != nil {
+			return nil, err
+		}
+
 		// Issue session and set the cookie.
 		raw, sess, err := auth.IssueSession(ctx, host.Repo(), userID, middleware.RequestIP(r), requestUA(r), host.SessionTTL())
 		if err != nil {
@@ -484,22 +502,6 @@ func (p *ssoOIDCPlugin) registerSsoCallback(host plugin.PluginHost, api huma.API
 			cookieOptionsFromHost(host, r, int(host.SessionTTL().Seconds())),
 			raw,
 		))
-
-		// Audit events. Failures are informational; we don't roll
-		// back the session.
-		uid := userID
-		em := email
-		emitMethod := "ssooidc:" + IssuerKeyFromDiscoveryURL(cfg.DiscoveryURL)
-		if isNew {
-			_, _ = host.Emit(ctx, events.AuthEvent{
-				Type: events.EventUserRegistered, UserID: &uid, Email: &em,
-				IPAddress: middleware.RequestIP(r), Method: &emitMethod,
-			})
-		}
-		_, _ = host.Emit(ctx, events.AuthEvent{
-			Type: events.EventLoginSucceeded, UserID: &uid, Email: &em,
-			IPAddress: middleware.RequestIP(r), Method: &emitMethod,
-		})
 
 		if st.RedirectURL != "" {
 			// Bodyless 302 to the stored redirect target; the Set-Cookie

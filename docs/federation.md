@@ -196,6 +196,14 @@ install-admin gated, idempotent) — no invitation round-trip.
 7. **Connection `redirect_url`** (the post-login landing) must be the param the
    RP reads (`redirect_url`) and either a relative `/path` or an entry in
    `ssooidc.Config.AllowedRedirectURLs`.
+8. **The IdP owns MFA on the RP side.** An SSO login declares the upstream
+   IdP's authentication to be the second factor, so a user with local TOTP
+   enrolled is not stepped up (`sso_oidc.satisfies_mfa`, default `true`; same
+   for `oauth` and ssosaml). The callback is a browser redirect with nowhere
+   to put a `{require_mfa, pending_session_id}` challenge, so setting it
+   `false` does not produce a step-up — it refuses the login with 403. A
+   `Block` from `lockout` is honoured regardless: a locked account gets no
+   session through SSO either.
 
 ## IdP launcher
 

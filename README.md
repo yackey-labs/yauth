@@ -154,6 +154,15 @@ out"; a stepped-up login emits a *second* `login.succeeded` carrying the
 `events.MetaMFAVerified` marker when the challenge is answered, and that
 is the one that means the login completed.
 
+Every login plugin **honours the decision**: a `Block` issues no session by
+any route, and a `RequireMfa` either becomes a
+`{require_mfa, pending_session_id}` challenge or fails closed. A method
+that counts as a second factor in its own right says so with the
+`MetaMFAVerified` marker rather than dropping the decision — a passkey does
+by default, a magic link does not, and the federated flows (`oauth`,
+`sso_oidc`, `ssosaml`) do. All configurable; see
+[docs/plugins/mfa.md](docs/plugins/mfa.md).
+
 **Tri-mode auth middleware** (`middleware.Middleware`) tries credentials
 in order: session cookie, then `Authorization: Bearer <jwt>`, then
 `X-Api-Key`. The first plugin that registers an `AuthResolver` for a

@@ -40,6 +40,45 @@ ya, err := yauth.New(repo, yauth.NewDefaultConfig()).
     Build()
 ```
 
+## Which login methods step up
+
+`mfa` gates every `login.succeeded`, but not every login method should end in
+a TOTP prompt, and not every method can express one. Each login plugin
+therefore declares whether the credential it just checked counts as the second
+factor. The decision is now made explicitly in each plugin and asserted in the
+event (`events.MetaMFAVerified`) — it used to be an accident of whether the
+plugin read `Emit`'s return value at all, and a plugin that did not both
+skipped MFA silently and ignored a `Block` from `lockout`.
+
+| Login method             | Steps up by default? | Config                                | Where the challenge is answered |
+| ------------------------ | -------------------- | ------------------------------------- | ------------------------------- |
+| `emailpassword` `/login` | yes                  | —                                     | `/mfa/verify`                   |
+| `bearer` `/token`        | yes                  | —                                     | `/token/mfa`                    |
+| `magiclink` `/verify`    | yes                  | `magic_link.satisfies_mfa` (def false)| `/mfa/verify`                   |
+| `passkey` login/finish   | **no**               | `passkey.satisfies_mfa` (def true)    | `/mfa/verify`, when enabled     |
+| `oauth` callback         | **no**               | `oauth.satisfies_mfa` (def true)      | n/a — fails closed with 403     |
+| `sso_oidc` callback      | **no**               | `sso_oidc.satisfies_mfa` (def true)   | n/a — fails closed with 403     |
+| `ssosaml` ACS            | **no**               | `Config.SatisfiesMFA` (def true)      | n/a — fails closed with 403     |
+
+- **magic link steps up.** A link proves control of an inbox and nothing more
+  — the same class of evidence as a password, and usually the same channel as
+  the password reset, so treating it as a second factor collapses both factors
+  onto one mailbox.
+- **a passkey does not.** It is possession plus user verification and is
+  phishing-resistant; see [passkey.md](passkey.md) for the full argument and
+  for what changes if you set `satisfies_mfa: false`.
+- **the federated flows do not, and cannot be made to cheaply.** `oauth`,
+  `sso_oidc` and `ssosaml` end in a browser redirect, which has no body to
+  carry `{require_mfa, pending_session_id}` and no agreed redirect target for
+  a challenge page. Their default (`satisfies_mfa: true`) says the upstream
+  IdP's authentication IS the second factor — the usual reason an org buys SSO
+  in the first place. Setting `satisfies_mfa: false` there does not produce a
+  step-up; it **fails the login closed with a 403**, for deployments that would
+  rather refuse than let a federated login skip local MFA.
+
+`Block` is separate and unconditional: **every** login method above honours it
+and issues no session, so a locked account cannot get in by any route.
+
 ## Notes
 
 - `mfa.New` returns `(plugin, error)` — it errors if `EncryptionKey` is the zero

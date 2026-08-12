@@ -970,7 +970,9 @@ export interface PasskeyLoginFinishUser {
 }
 
 export interface PasskeyLoginFinishResponse {
-  user: PasskeyLoginFinishUser;
+  pending_session_id?: string;
+  require_mfa?: boolean;
+  user?: PasskeyLoginFinishUser;
 }
 
 export interface PasskeyRegisterBeginResponse {
@@ -1271,7 +1273,9 @@ export interface VerifyUser {
 }
 
 export interface VerifyResponse {
-  user: VerifyUser;
+  pending_session_id?: string;
+  require_mfa?: boolean;
+  user?: VerifyUser;
 }
 
 export interface WebhookJSON {
@@ -2379,6 +2383,7 @@ export const getMagicLinkVerifyUrl = () => {
 }
 
 /**
+ * Returns {require_mfa, pending_session_id} and sets no cookie when the account has a second factor outstanding; complete it at /mfa/verify.
  * @summary Exchange a magic-link token for a session
  */
 export const magicLinkVerify = async (magicVerifyRequest: MagicVerifyRequest, options?: Parameters<typeof customFetch>[1]): Promise<VerifyResponse> => {
@@ -4649,6 +4654,7 @@ export const getPasskeyLoginFinishUrl = () => {
 }
 
 /**
+ * A passkey satisfies MFA by default. With Config.SatisfiesMFA=false it returns {require_mfa, pending_session_id} and sets no cookie when the account has a second factor; complete it at /mfa/verify.
  * @summary Verify assertion and issue a session
  */
 export const passkeyLoginFinish = async (passkeyLoginFinishRequest: PasskeyLoginFinishRequest, options?: Parameters<typeof customFetch>[1]): Promise<PasskeyLoginFinishResponse> => {

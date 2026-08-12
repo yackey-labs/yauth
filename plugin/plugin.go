@@ -167,6 +167,93 @@ type MFAVerifier interface {
 	VerifyPendingChallenge(ctx context.Context, pendingSessionID, code string) (userID string, ok bool, err error)
 }
 
+// RunFederatedLogin runs the login half of the auth-event pipeline for a
+// login completed by an EXTERNAL identity provider — the oauth client, the
+// SSO OIDC relying party and the SSO SAML service provider — and reports
+// whether the login may proceed. A nil error means "issue the session"; a
+// non-nil error is a huma error the caller must return unchanged.
+//
+// Those three flows end in a browser redirect (or a bodyless 302), so
+// unlike the cookie password login they cannot hand the caller a
+// {require_mfa, pending_session_id} challenge to answer — there is no
+// response body to put it in, and no redirect contract for carrying it.
+// Both decisions are still honoured, they just have fewer shapes to land in:
+//
+//   - Block → the mapped status, no session. This is unconditional: a
+//     locked account must not obtain a session by any route, and before
+//     this the decision was discarded and the cookie was set anyway.
+//   - RequireMfa → 403, no session, when satisfiesMFA is false. Failing
+//     closed is the only honest option on a flow that cannot carry the
+//     challenge.
+//
+// satisfiesMFA=true (each plugin's default, preserving today's behaviour)
+// declares the IdP's own authentication to BE the second factor. It is
+// asserted in the event via events.MFACompleted() rather than by dropping
+// the decision: the marker stands mfa's gate down instead of minting a
+// challenge no one will answer, and lets observers such as lockout see a
+// COMPLETED login, which is what clears the failure counter. Dropping the
+// decision — the old behaviour — did neither, so an MFA-enrolled user's
+// lockout counter was never cleared by a federated login.
+func RunFederatedLogin(
+	ctx context.Context,
+	host PluginHost,
+	satisfiesMFA bool,
+	userID, email string,
+	ip *string,
+	method string,
+) error {
+	uid := userID
+	em := email
+	m := method
+
+	attempt := events.AuthEvent{
+		Type:      events.EventLoginAttempt,
+		UserID:    &uid,
+		IPAddress: ip,
+		Method:    &m,
+	}
+	if em != "" {
+		attempt.Email = &em
+	}
+	// login.attempt is what lockout answers with Block; its onSucceeded
+	// only ever clears state. Without this event a locked account could
+	// still open a session through an external IdP.
+	if dec, _ := host.Emit(ctx, attempt); dec.Kind == events.DecisionKindBlock {
+		return huma.NewError(decisionStatus(dec), decisionMessage(dec))
+	}
+
+	succeeded := attempt
+	succeeded.Type = events.EventLoginSucceeded
+	if satisfiesMFA {
+		succeeded.Metadata = events.MFACompleted()
+	}
+	dec, _ := host.Emit(ctx, succeeded)
+	switch dec.Kind {
+	case events.DecisionKindBlock:
+		return huma.NewError(decisionStatus(dec), decisionMessage(dec))
+	case events.DecisionKindRequireMfa:
+		return huma.Error403Forbidden("multi-factor authentication is required and cannot be completed on this login method")
+	}
+	return nil
+}
+
+// decisionStatus / decisionMessage map a Block decision onto an HTTP
+// response the same way the email-password, bearer and mfa login paths do,
+// so a lockout 429 reads identically wherever a login is finished.
+func decisionStatus(d events.Decision) int {
+	if d.BlockStatus == 0 {
+		return http.StatusForbidden
+	}
+	return d.BlockStatus
+}
+
+func decisionMessage(d events.Decision) string {
+	if d.BlockMessage == "" {
+		return "request blocked"
+	}
+	return d.BlockMessage
+}
+
 // JWTSigner is the abstraction asymmetric-JWT and OIDC plugins use to
 // produce and validate signed tokens. The asymjwt plugin registers an
 // implementation via PluginHost; other plugins (oidc, oauth2-server)

@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -1601,12 +1602,67 @@ var accountLockCases = []testCase{
 		if err != nil || got == nil || got.FailedCount != 0 {
 			t.Fatalf("unexpected: %+v err=%v", got, err)
 		}
-		if err := r.IncrementAccountLockFailedCount(ctx(), "l1", now.Add(time.Second)); err != nil {
+		// The returned count is the POST-increment value: the lockout
+		// plugin decides the threshold from it, so a backend that
+		// answered with the pre-increment value would never lock.
+		n, err := r.IncrementAccountLockFailedCount(ctx(), "l1", now.Add(time.Second))
+		if err != nil {
 			t.Fatalf("Increment: %v", err)
+		}
+		if n != 1 {
+			t.Fatalf("Increment returned %d; want the post-increment count 1", n)
 		}
 		got, _ = r.GetAccountLockByUserID(ctx(), "u1")
 		if got == nil || got.FailedCount != 1 {
 			t.Fatalf("expected FailedCount=1; got %+v", got)
+		}
+		if n, err = r.IncrementAccountLockFailedCount(ctx(), "l1", now.Add(2*time.Second)); err != nil || n != 2 {
+			t.Fatalf("second Increment = (%d, %v); want (2, nil)", n, err)
+		}
+	}},
+	{"increment_is_atomic_under_concurrency", func(t *testing.T, r repo.Repository) {
+		// N parallel increments must hand out N DISTINCT counts, 1..N.
+		// The lockout threshold is decided from this value, so two
+		// callers seeing the same number means one failed attempt was
+		// invisible to the policy.
+		mustCreateUser(t, r, "u1", "alice@example.com")
+		now := nowUTC()
+		if _, err := r.CreateAccountLock(ctx(), domain.NewAccountLock{
+			ID: "l1", UserID: "u1", CreatedAt: now, UpdatedAt: now,
+		}); err != nil {
+			t.Fatalf("CreateAccountLock: %v", err)
+		}
+
+		const n = 16
+		var wg sync.WaitGroup
+		seen := make([]int, n)
+		for i := 0; i < n; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				c, err := r.IncrementAccountLockFailedCount(ctx(), "l1", now)
+				if err != nil {
+					t.Errorf("Increment: %v", err)
+					return
+				}
+				seen[i] = c
+			}(i)
+		}
+		wg.Wait()
+
+		distinct := map[int]bool{}
+		for _, c := range seen {
+			if c < 1 || c > n {
+				t.Fatalf("count %d out of range 1..%d", c, n)
+			}
+			if distinct[c] {
+				t.Fatalf("count %d handed out twice — the increment is not atomic", c)
+			}
+			distinct[c] = true
+		}
+		got, _ := r.GetAccountLockByUserID(ctx(), "u1")
+		if got == nil || got.FailedCount != n {
+			t.Fatalf("expected FailedCount=%d; got %+v", n, got)
 		}
 	}},
 	{"set_state_and_auto_unlock", func(t *testing.T, r repo.Repository) {

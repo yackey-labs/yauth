@@ -135,11 +135,62 @@ type PluginHost interface {
 	Emit(ctx context.Context, event events.AuthEvent) (events.Decision, error)
 
 	// RateLimit returns a middleware that enforces a fixed-window rate
-	// limit on the wrapped handler. Plugins call this to wrap their
-	// public-facing routes (login, register, forgot-password, etc.).
+	// limit on the wrapped handler, with the max/window the CALLER picks.
 	// max<=0 or window<=0 disables the limiter — callers can pass the
 	// configured rule without branching.
+	//
+	// Prefer [RateLimitFor] for any operation the operator can configure
+	// (rate_limit.* in yauth.yaml); reach for this one only for a route
+	// that has no configuration surface of its own.
 	RateLimit(name string, max int, window time.Duration) func(http.Handler) http.Handler
+}
+
+// RateLimitOp names an operation whose rate-limit rule an operator can set
+// under rate_limit.* in yauth.yaml. The string value IS the yaml key.
+//
+// Several routes may share one op — /login and the bearer /token run the
+// same password check, /mfa/verify and /token/mfa the same challenge — and
+// they deliberately share ONE bucket per client IP, so alternating between
+// routes cannot double an attacker's budget.
+type RateLimitOp string
+
+const (
+	RateLimitLogin          RateLimitOp = "login"
+	RateLimitRegister       RateLimitOp = "register"
+	RateLimitForgotPassword RateLimitOp = "forgot_password"
+	RateLimitMagicLinkSend  RateLimitOp = "magic_link_send"
+	RateLimitUnlockRequest  RateLimitOp = "unlock_request"
+	RateLimitMFAVerify      RateLimitOp = "mfa_verify"
+)
+
+// RateLimitConfigurer is the optional extension a PluginHost implements to
+// answer with the OPERATOR-CONFIGURED rule for an operation. It is kept off
+// [PluginHost] so third-party hosts and the plugins' own test doubles keep
+// compiling; those fall back to the plugin's built-in defaults.
+//
+// *yauth.YAuth implements it.
+type RateLimitConfigurer interface {
+	// RateLimitForOp returns the limiter for op, applying the plugin's
+	// defMax/defWindow wherever the operator configured nothing. An
+	// explicitly configured max of 0 means "no limit" and MUST yield a
+	// passthrough.
+	RateLimitForOp(op RateLimitOp, defMax int, defWindow time.Duration) func(http.Handler) http.Handler
+}
+
+// RateLimitFor returns the limiter a plugin should wrap the route for op
+// with: the operator's configured rule when the host can supply one,
+// otherwise the plugin's own defaults. The bucket is op itself, which is
+// what makes the routes of one operation share a budget by construction
+// rather than by convention.
+//
+// This is the call every configurable public route must use. Wrapping with
+// host.RateLimit and literal numbers instead is what made rate_limit.*
+// inert — an operator who tightened rate_limit.login to 3 still got 10.
+func RateLimitFor(host PluginHost, op RateLimitOp, defMax int, defWindow time.Duration) func(http.Handler) http.Handler {
+	if c, ok := host.(RateLimitConfigurer); ok {
+		return c.RateLimitForOp(op, defMax, defWindow)
+	}
+	return host.RateLimit(string(op), defMax, defWindow)
 }
 
 // MFAVerifier completes a second-factor challenge that an events.Handler

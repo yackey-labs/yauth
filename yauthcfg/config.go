@@ -98,6 +98,24 @@ type ServerConfig struct {
 	// CORS controls cross-origin behaviour of the mounted Router. When
 	// AllowedOrigins is empty the CORS middleware is not installed.
 	CORS CORSConfig `yaml:"cors" toml:"cors"`
+
+	// TrustedProxies lists the peers whose X-Forwarded-For / X-Real-IP
+	// yauth believes when it decides a request's client IP — the address
+	// stored on a session, written to every audit row, carried on every
+	// auth event, and used as the per-IP rate-limit bucket.
+	//
+	// Entries are literal IPs, CIDRs, or one of the keywords:
+	//
+	//	private  loopback + RFC1918 + CGNAT + link-local + unique-local
+	//	all      trust every peer (pre-hardening behaviour)
+	//	none     never believe a forwarding header
+	//
+	// OMITTED means ["private"]. That keeps the recorded IP correct for
+	// the usual deployment — an ingress, sidecar or local nginx on private
+	// space — while a listener exposed directly to clients no longer
+	// believes a header the client itself wrote. Add your load balancer's
+	// or CDN's ranges when the hop in front of yauth has a public address.
+	TrustedProxies []string `yaml:"trusted_proxies,omitempty" toml:"trusted_proxies,omitempty" doc:"Peers whose X-Forwarded-For / X-Real-IP is believed when resolving the client IP (sessions, audit rows, auth events, rate-limit buckets, IP binding). Literal IPs, CIDRs, or the keywords private|all|none. Omitted means [\"private\"]: forwarding headers are honoured only from a loopback/RFC1918/link-local peer."`
 }
 
 // CORSConfig configures the cross-origin middleware. Empty AllowedOrigins
@@ -175,8 +193,20 @@ type SessionConfig struct {
 }
 
 // RateLimitConfig is the per-operation rate-limit surface exposed in
-// yauth.yaml. A zero Max disables the limiter for that op. Defaults are
-// applied in NewFromConfig when the section is omitted.
+// yauth.yaml. Every rule here is enforced on the route(s) implementing that
+// operation; an omitted rule keeps yauth's default and an explicit `max: 0`
+// turns the limiter off. Defaults are applied in NewFromConfig when the
+// section is omitted.
+//
+// Routes are grouped by operation, and the routes of one operation share a
+// single per-IP bucket:
+//
+//	login            POST /login, POST /token
+//	register         POST /register
+//	forgot_password  POST /forgot-password
+//	magic_link_send  POST /magic-link/send
+//	unlock_request   POST /account/request-unlock
+//	mfa_verify       POST /mfa/verify, POST /token/mfa
 type RateLimitConfig struct {
 	Login          RateLimitRule `yaml:"login" toml:"login"`
 	Register       RateLimitRule `yaml:"register" toml:"register"`
@@ -187,9 +217,13 @@ type RateLimitConfig struct {
 }
 
 // RateLimitRule is one (max, window) pair.
+//
+// Max is a pointer so an omitted key (keep the default) stays distinct from
+// `max: 0` (no limit). With a plain int the two were the same value, so the
+// documented "0 = no limit" could not be expressed at all.
 type RateLimitRule struct {
-	Max    int           `yaml:"max" toml:"max"`
-	Window time.Duration `yaml:"window" toml:"window"`
+	Max    *int          `yaml:"max,omitempty" toml:"max,omitempty" doc:"Requests allowed per window, per client IP. Omit to keep yauth's default; 0 means no limit."`
+	Window time.Duration `yaml:"window" toml:"window" doc:"Fixed window the max applies over. Omit to keep yauth's default (60s)."`
 }
 
 // TelemetryConfig wraps the OTel exporter settings.

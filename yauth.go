@@ -33,11 +33,15 @@ import (
 // YAuth is a fully-built authentication stack. Construct it via the
 // builder returned by New().
 type YAuth struct {
-	cfg              YAuthConfig
-	repo             repo.Repository
-	plugins          []plugin.Plugin
-	mux              *http.ServeMux
-	mw               *middleware.Middleware
+	cfg     YAuthConfig
+	repo    repo.Repository
+	plugins []plugin.Plugin
+	mux     *http.ServeMux
+	mw      *middleware.Middleware
+	// trusted is the parsed cfg.TrustedProxies policy. Parsed and validated
+	// once in Build so Router does not re-derive it per call and a
+	// malformed list can never reach a request.
+	trusted          middleware.TrustedProxies
 	telemetryEnabled bool
 	traceMiddleware  bool
 	telemetryShut    func(context.Context) error
@@ -195,12 +199,21 @@ func (b *YAuthBuilder) Build() (*YAuth, error) {
 		logger = slog.Default()
 	}
 
+	// Rejected here rather than at first request: a typo'd CIDR must not
+	// silently degrade to "trust nobody" (which would break the audit
+	// trail) or to "trust everybody" (which would restore the forgery).
+	trusted, err := middleware.ParseTrustedProxies(b.cfg.TrustedProxies)
+	if err != nil {
+		return nil, fmt.Errorf("yauth: %w", err)
+	}
+
 	mw := middleware.New(b.repo, middleware.Config{
 		CookieName:               b.cfg.CookieName,
 		BindIP:                   b.cfg.SessionBinding.BindIP,
 		BindUA:                   b.cfg.SessionBinding.BindUA,
 		IPMismatchAction:         b.cfg.SessionBinding.IPMismatchAction,
 		UAMismatchAction:         b.cfg.SessionBinding.UAMismatchAction,
+		TrustedProxies:           trusted,
 		AllowAdminMachineCallers: b.cfg.AllowAdminMachineCallers,
 		EnableOrgHydration:       enableOrgHydration,
 		Logger:                   logger,
@@ -223,6 +236,7 @@ func (b *YAuthBuilder) Build() (*YAuth, error) {
 		telemetryShut:    b.telemetryShut,
 		jwtSecret:        b.jwtSecret,
 		logger:           logger,
+		trusted:          trusted,
 	}
 
 	// Every plugin is huma-native: the huma.API is built over the bare mux
@@ -267,6 +281,11 @@ func (y *YAuth) Router() http.Handler {
 	if y.telemetryEnabled && y.traceMiddleware {
 		h = middleware.TraceMiddleware(h)
 	}
+	// Outermost: every handler below resolves the client IP under the
+	// deployment's trusted-proxy policy, so what a plugin writes to a
+	// session/audit row and what the rate limiter buckets on are the same
+	// value the session-binding check will later compare against.
+	h = middleware.TrustedProxiesMiddleware(y.trusted)(h)
 	return h
 }
 
@@ -440,5 +459,26 @@ func (y *YAuth) RateLimit(name string, max int, window time.Duration) func(http.
 	return middleware.RateLimit(y.repo, name, max, window)
 }
 
-// Compile-time check that *YAuth satisfies plugin.PluginHost.
-var _ plugin.PluginHost = (*YAuth)(nil)
+// RateLimitForOp implements plugin.RateLimitConfigurer: it resolves the
+// operator's rate_limit.<op> rule over the plugin's own defaults and binds
+// the limiter to the host repository. This is what makes the rate_limit
+// section of yauth.yaml load-bearing — before it, every plugin passed
+// literal numbers and the whole section was read by nothing.
+func (y *YAuth) RateLimitForOp(op plugin.RateLimitOp, defMax int, defWindow time.Duration) func(http.Handler) http.Handler {
+	rule, _ := y.cfg.RateLimit.Rule(op)
+	max, window := rule.Resolve(defMax, defWindow)
+	return middleware.RateLimit(y.repo, string(op), max, window)
+}
+
+// TrustedProxies returns the deployment's client-IP policy, parsed and
+// validated at Build. Consumers that guard their OWN routes with
+// Middleware().RequireAuth and run a non-default policy should wrap those
+// routes with middleware.TrustedProxiesMiddleware(ya.TrustedProxies()) so
+// the address they record matches the one yauth recorded at login.
+func (y *YAuth) TrustedProxies() middleware.TrustedProxies { return y.trusted }
+
+// Compile-time checks that *YAuth satisfies the host contracts.
+var (
+	_ plugin.PluginHost          = (*YAuth)(nil)
+	_ plugin.RateLimitConfigurer = (*YAuth)(nil)
+)

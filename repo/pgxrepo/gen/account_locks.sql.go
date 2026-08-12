@@ -186,8 +186,9 @@ func (q *Queries) GetUnlockTokenByHash(ctx context.Context, tokenHash string) (Y
 	return i, err
 }
 
-const incrementAccountLockFailedCount = `-- name: IncrementAccountLockFailedCount :execrows
+const incrementAccountLockFailedCount = `-- name: IncrementAccountLockFailedCount :one
 UPDATE yauth_account_locks SET failed_count = failed_count + 1, updated_at = $2 WHERE id = $1
+RETURNING failed_count
 `
 
 type IncrementAccountLockFailedCountParams struct {
@@ -195,12 +196,15 @@ type IncrementAccountLockFailedCountParams struct {
 	UpdatedAt pgtype.Timestamptz
 }
 
-func (q *Queries) IncrementAccountLockFailedCount(ctx context.Context, arg IncrementAccountLockFailedCountParams) (int64, error) {
-	result, err := q.db.Exec(ctx, incrementAccountLockFailedCount, arg.ID, arg.UpdatedAt)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
+// Returns the POST-increment count so the caller can compare it against the
+// lockout threshold without a second read. Deciding from a separately-read
+// count let concurrent failures all observe the same stale value, so the
+// threshold was never crossed and the account never locked.
+func (q *Queries) IncrementAccountLockFailedCount(ctx context.Context, arg IncrementAccountLockFailedCountParams) (int32, error) {
+	row := q.db.QueryRow(ctx, incrementAccountLockFailedCount, arg.ID, arg.UpdatedAt)
+	var failed_count int32
+	err := row.Scan(&failed_count)
+	return failed_count, err
 }
 
 const resetAccountLockFailedCount = `-- name: ResetAccountLockFailedCount :execrows

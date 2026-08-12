@@ -180,11 +180,17 @@ func (p *emailPasswordPlugin) Routes(host plugin.PluginHost, mux plugin.Router, 
 
 	mw := host.Middleware()
 
-	registerRL := host.RateLimit("emailpassword.register", 10, 60*time.Second)
-	loginRL := host.RateLimit("emailpassword.login", 10, 60*time.Second)
+	// The three operator-configurable operations resolve rate_limit.
+	// {login,register,forgot_password} from yauth.yaml, falling back to
+	// these literals when it is silent. The login bucket is shared with
+	// the bearer plugin's POST /token — same credential check, one budget
+	// per client IP.
+	registerRL := plugin.RateLimitFor(host, plugin.RateLimitRegister, 10, 60*time.Second)
+	loginRL := plugin.RateLimitFor(host, plugin.RateLimitLogin, 10, 60*time.Second)
+	forgotRL := plugin.RateLimitFor(host, plugin.RateLimitForgotPassword, 5, 60*time.Second)
+	// No configuration surface of their own — fixed limits.
 	verifyEmailRL := host.RateLimit("emailpassword.verify_email", 10, 60*time.Second)
 	resendVerifyRL := host.RateLimit("emailpassword.resend_verification", 5, 60*time.Second)
-	forgotRL := host.RateLimit("emailpassword.forgot_password", 5, 60*time.Second)
 	resetRL := host.RateLimit("emailpassword.reset_password", 5, 60*time.Second)
 
 	p.registerRegister(host, api, prefix, registerRL)

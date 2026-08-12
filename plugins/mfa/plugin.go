@@ -40,6 +40,7 @@ package mfa
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -111,6 +112,11 @@ func (p *mfaPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.A
 	// Publish the challenge verifier so token-issuing plugins (bearer)
 	// can complete the same challenge for a client that has no cookie.
 	host.RegisterMFAVerifier(&challengeVerifier{p: p, host: host, repo: host.Repo()})
+
+	// POST /mfa/verify had no limiter, despite rate_limit.mfa_verify
+	// being advertised in the schema and its defaults. Shared bucket with
+	// the bearer /token/mfa route, which completes the same challenge.
+	verifyRL := plugin.RateLimitFor(host, plugin.RateLimitMFAVerify, 10, 60*time.Second)
 
 	authMw := huma.Middlewares{
 		middleware.RequireAuthHuma(api, mw),
@@ -203,6 +209,11 @@ func (p *mfaPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.A
 		Description: "Consume a pending-session created by the login flow and issue a real session.",
 		Tags:        []string{"mfa"},
 		Security:    []map[string][]string{}, // public: gated by the pending-session id
-		Middlewares: huma.Middlewares{middleware.StashHTTPHuma(api)},
+		// Rate-limited on rate_limit.mfa_verify. The pending session is
+		// single-use, so one challenge cannot be brute-forced — but
+		// nothing stopped an attacker holding a valid password from
+		// opening challenge after challenge and guessing a fresh
+		// six-digit code at each one.
+		Middlewares: huma.Middlewares{middleware.RateLimitHuma(verifyRL), middleware.StashHTTPHuma(api)},
 	}, p.handleVerify(host))
 }

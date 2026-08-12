@@ -2,6 +2,7 @@ package yauthcfg
 
 import (
 	"fmt"
+	"net/netip"
 	"strings"
 )
 
@@ -22,6 +23,12 @@ func (c *Config) Validate() error {
 
 	if c.Session.TTL < 0 {
 		return fmt.Errorf("session.ttl must be non-negative")
+	}
+	if err := validateTrustedProxies(c.Server.TrustedProxies); err != nil {
+		return err
+	}
+	if err := validateRateLimits(&c.RateLimit); err != nil {
+		return err
 	}
 	// Cookie/CORS combinations that are unsafe or outright non-functional. See
 	// security.go for why each of these rejects instead of warning.
@@ -286,4 +293,54 @@ func (c *Config) ExpectedTables() []string {
 		)
 	}
 	return base
+}
+
+// validateTrustedProxies rejects a malformed server.trusted_proxies entry at
+// load time. A typo must not silently degrade to the default policy: this
+// list decides which peers may name the client IP that lands in every audit
+// row, so "it looked applied but wasn't" is precisely the failure to avoid.
+func validateTrustedProxies(specs []string) error {
+	for _, raw := range specs {
+		s := strings.TrimSpace(raw)
+		if s == "" {
+			continue
+		}
+		switch strings.ToLower(s) {
+		case "private", "all", "none":
+			continue
+		}
+		if _, err := netip.ParsePrefix(s); err == nil {
+			continue
+		}
+		if _, err := netip.ParseAddr(s); err == nil {
+			continue
+		}
+		return fmt.Errorf("server.trusted_proxies: %q is not an IP, a CIDR, or one of private|all|none", raw)
+	}
+	return nil
+}
+
+// validateRateLimits rejects a negative max or window. A negative max would
+// disable the limiter through the same code path as an explicit 0, which is
+// almost certainly not what the operator meant to write.
+func validateRateLimits(c *RateLimitConfig) error {
+	for _, r := range []struct {
+		name string
+		rule RateLimitRule
+	}{
+		{"login", c.Login},
+		{"register", c.Register},
+		{"forgot_password", c.ForgotPassword},
+		{"magic_link_send", c.MagicLinkSend},
+		{"unlock_request", c.UnlockRequest},
+		{"mfa_verify", c.MFAVerify},
+	} {
+		if r.rule.Max != nil && *r.rule.Max < 0 {
+			return fmt.Errorf("rate_limit.%s.max must be non-negative (0 means no limit)", r.name)
+		}
+		if r.rule.Window < 0 {
+			return fmt.Errorf("rate_limit.%s.window must be non-negative", r.name)
+		}
+	}
+	return nil
 }

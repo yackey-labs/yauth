@@ -15,7 +15,6 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
-	"net"
 	"net/http"
 	"time"
 
@@ -47,6 +46,14 @@ type Config struct {
 	IPMismatchAction string
 	// UAMismatchAction is "warn" or "invalidate". Empty defaults to "warn".
 	UAMismatchAction string
+
+	// TrustedProxies decides whose X-Forwarded-For / X-Real-IP is believed
+	// when the IP-binding check resolves the requesting address. The zero
+	// value trusts private/loopback peers only — the same default
+	// [RequestIP] applies when it writes the session's IPAddress, so both
+	// sides of the comparison agree. The YAuth builder sets it from
+	// YAuthConfig.TrustedProxies.
+	TrustedProxies TrustedProxies
 
 	// AllowAdminMachineCallers controls whether bearer-JWT, X-Api-Key or
 	// org-scoped API key (service account) callers can pass RequireAdmin.
@@ -356,7 +363,13 @@ func (m *Middleware) enforceBinding(r *http.Request, sess *domain.Session, token
 	}
 
 	if m.cfg.BindIP && sess.IPAddress != nil {
-		reqIP := clientIP(r)
+		// Resolved through the SAME trusted-proxy policy the session's
+		// IPAddress was written with (middleware.RequestIP). Comparing
+		// r.RemoteAddr against a stored X-Forwarded-For value made every
+		// request behind a proxy a mismatch: with action=invalidate that
+		// self-DoSed every session, and under the default warn it buried
+		// a real hijack in per-request false positives.
+		reqIP := m.cfg.TrustedProxies.ClientIP(r)
 		if reqIP != "" && reqIP != *sess.IPAddress {
 			if act := mismatchAction(m.cfg.IPMismatchAction); act == MismatchActionInvalidate {
 				m.invalidateAndAudit(r.Context(), sess, tokenHash, "session_ip_mismatch_invalidate", *sess.IPAddress, reqIP, "ip")
@@ -388,19 +401,17 @@ func mismatchAction(s string) string {
 	return MismatchActionWarn
 }
 
-// clientIP returns the host portion of r.RemoteAddr, stripping the port.
-// Trusted-proxy / X-Forwarded-For handling is intentionally deferred —
-// the caller typically terminates TLS in a proxy that also rewrites
-// RemoteAddr.
+// clientIP returns the address the request is attributed to, resolved
+// through the trusted-proxy policy carried by its context (see
+// [TrustedProxiesMiddleware]) and falling back to the private-ranges
+// default when none was installed.
+//
+// It used to return r.RemoteAddr's host unconditionally, which behind a
+// reverse proxy is the proxy: the per-IP rate limiter keyed EVERY request
+// on the same value (one shared bucket for the whole internet) and the
+// org IP allowlist matched the proxy instead of the caller.
 func clientIP(r *http.Request) string {
-	if r.RemoteAddr == "" {
-		return ""
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
+	return TrustedProxiesFromContext(r.Context()).ClientIP(r)
 }
 
 func (m *Middleware) warnMismatch(ctx context.Context, sess *domain.Session, eventType, sessionVal, reqVal, kind string) {

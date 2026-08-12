@@ -1572,18 +1572,22 @@ func (r *Repo) CreateAccountLock(ctx context.Context, input domain.NewAccountLoc
 	return accountLockToDomain(row), nil
 }
 
-func (r *Repo) IncrementAccountLockFailedCount(ctx context.Context, id string, updatedAt time.Time) error {
+// IncrementAccountLockFailedCount performs the bump and the read as ONE
+// statement (UPDATE ... RETURNING failed_count), so the value it returns is
+// this caller's own position in the sequence of concurrent failures. No row
+// updated means no lock row, which surfaces as pgx.ErrNoRows.
+func (r *Repo) IncrementAccountLockFailedCount(ctx context.Context, id string, updatedAt time.Time) (int, error) {
 	n, err := r.q.IncrementAccountLockFailedCount(ctx, pgxgen.IncrementAccountLockFailedCountParams{
 		ID:        id,
 		UpdatedAt: ts(updatedAt),
 	})
 	if err != nil {
-		return err
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, yautherr.ErrNotFound
+		}
+		return 0, err
 	}
-	if n == 0 {
-		return yautherr.ErrNotFound
-	}
-	return nil
+	return int(n), nil
 }
 
 func (r *Repo) SetAccountLockState(ctx context.Context, id string, state domain.LockState, updatedAt time.Time) error {

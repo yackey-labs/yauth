@@ -148,7 +148,9 @@ const unlockRequestMessage = "If the email exists, an unlock link has been sent.
 // always responds 200 for an existing-or-unknown email (enumeration
 // resistance) and only 400 on an email without '@'; the body-shaped
 // success/error semantics are otherwise unchanged.
-func (p *lockoutPlugin) registerUnlockRequest(host plugin.PluginHost, api huma.API, prefix string) {
+// rl is the rate_limit.unlock_request limiter; it is the route's only
+// middleware and turns a blocked caller away before any mail is dispatched.
+func (p *lockoutPlugin) registerUnlockRequest(host plugin.PluginHost, api huma.API, prefix string, rl func(http.Handler) http.Handler) {
 	huma.Register(api, huma.Operation{
 		OperationID: "lockout-unlock-request",
 		Method:      http.MethodPost,
@@ -157,6 +159,7 @@ func (p *lockoutPlugin) registerUnlockRequest(host plugin.PluginHost, api huma.A
 		Description: "Always responds 200 to prevent user enumeration.",
 		Tags:        []string{"lockout"},
 		Security:    []map[string][]string{}, // explicitly public
+		Middlewares: huma.Middlewares{middleware.RateLimitHuma(rl)},
 	}, func(ctx context.Context, in *lockoutUnlockReqInput) (*unlockRequestOutput, error) {
 		req := in.Body
 		req.Email = strings.TrimSpace(strings.ToLower(req.Email))

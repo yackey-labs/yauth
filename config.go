@@ -1,6 +1,10 @@
 package yauth
 
-import "time"
+import (
+	"time"
+
+	"github.com/yackey-labs/yauth/plugin"
+)
 
 // YAuthConfig holds runtime configuration for yauth-go.
 type YAuthConfig struct {
@@ -37,8 +41,28 @@ type YAuthConfig struct {
 	AllowAdminMachineCallers bool
 
 	// RateLimit holds per-operation rate-limit windows. Plugins read
-	// these via PluginHost.RateLimit when wrapping their handlers.
+	// these via plugin.RateLimitFor when wrapping their handlers; an
+	// unset rule falls back to the plugin's own built-in default.
 	RateLimit RateLimitConfig
+
+	// TrustedProxies decides whose X-Forwarded-For / X-Real-IP yauth
+	// believes when it resolves a request's client IP — the value written
+	// to a session's ip_address, to every audit row and every
+	// events.AuthEvent.IPAddress, and the key the per-IP rate limiter
+	// buckets on.
+	//
+	// Entries are literal IPs, CIDRs, or the keywords "private", "all" and
+	// "none" (see [middleware.ParseTrustedProxies]). EMPTY — the default —
+	// means "private": forwarding headers are honoured only from a
+	// loopback/RFC1918/link-local peer, which is where a reverse proxy,
+	// ingress controller or sidecar lives. A listener clients reach
+	// directly sees a public peer, so its headers are ignored and a caller
+	// can no longer forge the address recorded against it.
+	//
+	// Set it when the hop in front of yauth is NOT on private space (a
+	// public-IP load balancer, a CDN edge): add its ranges, or "all" to
+	// restore unconditional trust.
+	TrustedProxies []string
 }
 
 // CORSConfig is the runtime CORS policy. See yauthcfg.CORSConfig for
@@ -62,8 +86,9 @@ type SessionBindingConfig struct {
 	UAMismatchAction string
 }
 
-// RateLimitConfig holds per-operation max + window pairs. A zero Max
-// disables rate limiting for that operation.
+// RateLimitConfig holds per-operation max + window pairs. Each rule is
+// consulted by [plugin.RateLimitFor] when the plugin owning that operation
+// wraps its route.
 type RateLimitConfig struct {
 	Login          RateLimitRule
 	Register       RateLimitRule
@@ -73,10 +98,56 @@ type RateLimitConfig struct {
 	MFAVerify      RateLimitRule
 }
 
-// RateLimitRule is one (max, window) pair. Max=0 means "no limit".
+// Rule returns the rule configured for op, and whether op is one this
+// config covers. Unknown ops resolve to the zero rule (fall back to the
+// plugin's own defaults).
+func (c RateLimitConfig) Rule(op plugin.RateLimitOp) (RateLimitRule, bool) {
+	switch op {
+	case plugin.RateLimitLogin:
+		return c.Login, true
+	case plugin.RateLimitRegister:
+		return c.Register, true
+	case plugin.RateLimitForgotPassword:
+		return c.ForgotPassword, true
+	case plugin.RateLimitMagicLinkSend:
+		return c.MagicLinkSend, true
+	case plugin.RateLimitUnlockRequest:
+		return c.UnlockRequest, true
+	case plugin.RateLimitMFAVerify:
+		return c.MFAVerify, true
+	}
+	return RateLimitRule{}, false
+}
+
+// RateLimitRule is one (max, window) pair.
+//
+// Max is a POINTER so "the operator said nothing" and "the operator said
+// zero" stay distinguishable: nil means fall back to the plugin's built-in
+// default, and an explicit 0 means no limit — which is what the yaml schema
+// has always documented but could not previously express, because a
+// zero int was indistinguishable from an omitted key.
 type RateLimitRule struct {
-	Max    int
+	Max    *int
 	Window time.Duration
+}
+
+// RateLimitMax boxes n for [RateLimitRule.Max]. RateLimitMax(0) is an
+// explicit "no limit".
+func RateLimitMax(n int) *int { return &n }
+
+// Resolve applies the rule on top of the plugin's built-in defaults,
+// returning the (max, window) to enforce. An unset field takes the default;
+// max=0 disables the limiter (middleware.RateLimit becomes a passthrough).
+func (r RateLimitRule) Resolve(defMax int, defWindow time.Duration) (int, time.Duration) {
+	max := defMax
+	if r.Max != nil {
+		max = *r.Max
+	}
+	window := defWindow
+	if r.Window > 0 {
+		window = r.Window
+	}
+	return max, window
 }
 
 // NewDefaultConfig returns sensible dev defaults. Production callers should
@@ -91,12 +162,12 @@ func NewDefaultConfig() YAuthConfig {
 		CookieSameSite: "Lax",
 		AllowSignups:   true,
 		RateLimit: RateLimitConfig{
-			Login:          RateLimitRule{Max: 10, Window: 60 * time.Second},
-			Register:       RateLimitRule{Max: 10, Window: 60 * time.Second},
-			ForgotPassword: RateLimitRule{Max: 5, Window: 60 * time.Second},
-			MagicLinkSend:  RateLimitRule{Max: 5, Window: 60 * time.Second},
-			UnlockRequest:  RateLimitRule{Max: 10, Window: 60 * time.Second},
-			MFAVerify:      RateLimitRule{Max: 10, Window: 60 * time.Second},
+			Login:          RateLimitRule{Max: RateLimitMax(10), Window: 60 * time.Second},
+			Register:       RateLimitRule{Max: RateLimitMax(10), Window: 60 * time.Second},
+			ForgotPassword: RateLimitRule{Max: RateLimitMax(5), Window: 60 * time.Second},
+			MagicLinkSend:  RateLimitRule{Max: RateLimitMax(5), Window: 60 * time.Second},
+			UnlockRequest:  RateLimitRule{Max: RateLimitMax(10), Window: 60 * time.Second},
+			MFAVerify:      RateLimitRule{Max: RateLimitMax(10), Window: 60 * time.Second},
 		},
 	}
 }

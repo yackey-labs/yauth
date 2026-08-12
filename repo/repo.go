@@ -327,7 +327,16 @@ type OIDCNonceRepository interface {
 type AccountLockRepository interface {
 	GetAccountLockByUserID(ctx context.Context, userID string) (*domain.AccountLock, error)
 	CreateAccountLock(ctx context.Context, input domain.NewAccountLock) (domain.AccountLock, error)
-	IncrementAccountLockFailedCount(ctx context.Context, id string, updatedAt time.Time) error
+
+	// IncrementAccountLockFailedCount bumps failed_count by one and
+	// returns the POST-increment value. Implementations MUST make the
+	// read-modify-write atomic — a single UPDATE ... RETURNING, or a
+	// mutex-held bump — because that returned count is what decides
+	// whether the lockout threshold has been crossed. Deriving it from a
+	// separate earlier read (which is all the previous error-only shape
+	// allowed) meant N concurrent failures each computed the same "1", so
+	// a parallel guessing run never locked the account at all.
+	IncrementAccountLockFailedCount(ctx context.Context, id string, updatedAt time.Time) (int, error)
 	SetAccountLockState(ctx context.Context, id string, state domain.LockState, updatedAt time.Time) error
 	ResetAccountLockFailedCount(ctx context.Context, id string, updatedAt time.Time) error
 	AutoUnlockAccount(ctx context.Context, id string, updatedAt time.Time) error

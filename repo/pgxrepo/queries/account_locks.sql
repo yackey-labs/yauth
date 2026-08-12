@@ -6,8 +6,13 @@ INSERT INTO yauth_account_locks (id, user_id, failed_count, locked_until, lock_c
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 RETURNING *;
 
--- name: IncrementAccountLockFailedCount :execrows
-UPDATE yauth_account_locks SET failed_count = failed_count + 1, updated_at = $2 WHERE id = $1;
+-- Returns the POST-increment count so the caller can compare it against the
+-- lockout threshold without a second read. Deciding from a separately-read
+-- count let concurrent failures all observe the same stale value, so the
+-- threshold was never crossed and the account never locked.
+-- name: IncrementAccountLockFailedCount :one
+UPDATE yauth_account_locks SET failed_count = failed_count + 1, updated_at = $2 WHERE id = $1
+RETURNING failed_count;
 
 -- name: SetAccountLockState :execrows
 UPDATE yauth_account_locks

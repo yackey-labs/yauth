@@ -108,7 +108,7 @@ func (p *oauth2Plugin) handleDCRRegister(host plugin.PluginHost, prefix string) 
 		if req.SoftwareStatement != nil && strings.TrimSpace(*req.SoftwareStatement) != "" {
 			ts, err := p.verifySoftwareStatement(r.Context(), *req.SoftwareStatement)
 			if err != nil {
-				writeDCRError(w, http.StatusForbidden, "access_denied", "software_statement: "+sanitizeErr(err))
+				writeDCRError(w, http.StatusForbidden, "access_denied", "software_statement: "+statementErrMessage(r.Context(), host.Logger(), err))
 				return
 			}
 			trusted = ts

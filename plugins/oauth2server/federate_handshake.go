@@ -103,7 +103,7 @@ func (p *oauth2Plugin) handleFederateReview(host plugin.PluginHost) http.Handler
 		}
 		ts, err := p.verifyStatementSignature(r.Context(), body.FederationRequest)
 		if err != nil {
-			federateErr(w, http.StatusBadRequest, "invalid federation_request: "+sanitizeErr(err))
+			federateErr(w, http.StatusBadRequest, "invalid federation_request: "+statementErrMessage(r.Context(), host.Logger(), err))
 			return
 		}
 		federateJSON(w, http.StatusOK, map[string]any{
@@ -127,7 +127,7 @@ func (p *oauth2Plugin) handleFederateApprove(host plugin.PluginHost) http.Handle
 		}
 		ts, err := p.verifyStatementSignature(r.Context(), body.FederationRequest)
 		if err != nil {
-			federateErr(w, http.StatusBadRequest, "invalid federation_request: "+sanitizeErr(err))
+			federateErr(w, http.StatusBadRequest, "invalid federation_request: "+statementErrMessage(r.Context(), host.Logger(), err))
 			return
 		}
 		if len(ts.RedirectURIs) == 0 {

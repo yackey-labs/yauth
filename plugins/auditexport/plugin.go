@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/yackey-labs/yauth/domain"
-	"github.com/yackey-labs/yauth/events"
 	pluginpkg "github.com/yackey-labs/yauth/plugin"
 	"github.com/yackey-labs/yauth/repo"
 )
@@ -107,9 +106,10 @@ func New(cfg Config) pluginpkg.Plugin {
 func (p *plugin) Name() string { return "audit-export" }
 
 // Routes implements plugin.Plugin. Registers admin CRUD endpoints,
-// spawns one worker per active destination, and hooks an events.Handler
-// that fans every AuthEvent through EnqueueForAudit so the outbox
-// stays in sync with audit-log writes.
+// spawns one worker per active destination, and registers the audit
+// recorder that fans every audit row the host writes for an emitted
+// AuthEvent through EnqueueForAudit, so the outbox stays in sync with
+// audit-log writes.
 func (p *plugin) Routes(host pluginpkg.PluginHost, mux pluginpkg.Router, api huma.API, prefix string) {
 	p.host = host
 	p.auditRepo = host.Repo()
@@ -142,10 +142,18 @@ func (p *plugin) Routes(host pluginpkg.PluginHost, mux pluginpkg.Router, api hum
 	p.registerUpdate(api, mw, prefix, prefix+"/organizations/{org_id}/audit/destinations/{id}", http.MethodPut, "auditExport-org-put-destination", true)
 	p.registerDelete(api, mw, prefix, prefix+"/organizations/{org_id}/audit/destinations/{id}", "auditExport-org-delete-destination", true)
 
-	// AuthEvent handler — every emitted event becomes an audit row and
-	// outbox entries for matching destinations. We register here rather
-	// than at New() because we need the host's repo handle.
-	host.RegisterEventHandler(&eventHandler{p: p})
+	// Audit recorder — yauth writes the audit row for every emitted
+	// AuthEvent inside Emit (see the host's audit_events.go) and hands us
+	// the row id, which is exactly what the outbox needs and exactly what
+	// an events.Handler could never learn. Registering here rather than at
+	// New() because the host handle only exists from Routes onward.
+	//
+	// The capability is optional so a host that predates it still builds;
+	// on such a host the outbox simply carries only the rows this plugin's
+	// own routes enqueue, which is the pre-existing behaviour.
+	if reg, ok := host.(pluginpkg.AuditRecorderRegistrar); ok {
+		reg.RegisterAuditRecorder(p.recordAudit)
+	}
 
 	// Spawn workers for already-registered destinations. New destinations
 	// created via the admin API can be wired up by calling Refresh, or
@@ -251,29 +259,21 @@ var (
 	_ pluginpkg.ShutdownAware = (*plugin)(nil)
 )
 
-// eventHandler is the events.Handler installed onto the host so every
-// emitted AuthEvent generates an audit row + outbox entries.
-type eventHandler struct {
-	p *plugin
-}
-
-// Handle satisfies events.Handler. We do not block the auth flow —
-// every Decision returned is events.Continue() so login/register paths
-// proceed unchanged. The audit row is written via the host's repo, and
-// outbox enqueue uses the plugin's store under its own mutex.
-func (h *eventHandler) Handle(ctx context.Context, ev events.AuthEvent) (events.Decision, error) {
-	// We intentionally don't log audit rows here — yauth-go's middleware
-	// + handlers already do that. Instead we extract the org-id (if any)
-	// from event metadata and enqueue outbox entries against ANY pending
-	// audit rows that the call-stack just wrote.
-	//
-	// For test/correctness purposes we rely on the EnqueueForAudit hook
-	// being called directly by the route handlers (see auditEvent). This
-	// handler is reserved for future expansion when AuthEvent carries
-	// the audit log id explicitly.
+// recordAudit is the plugin.AuditRecorder the host calls immediately after
+// committing the audit row for an emitted AuthEvent. It enqueues one outbox
+// entry per destination whose scope matches (deployment-wide, or the event's
+// organization), which is what makes a login success, a login failure, a
+// logout or a password change reach a webhook / syslog / S3 destination.
+//
+// It never blocks the auth flow and returns nothing: enqueue failures are
+// the store's problem, and a login must not fail because an exporter is
+// unhappy.
+func (p *plugin) recordAudit(ctx context.Context, auditLogID string, organizationID *string) {
 	_ = ctx
-	_ = ev
-	return events.Continue(), nil
+	if auditLogID == "" {
+		return
+	}
+	p.store.EnqueueForAudit(auditLogID, organizationID)
 }
 
 // EnqueueForAudit is the public outbox-enqueue hook. Callers writing

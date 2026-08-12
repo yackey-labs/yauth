@@ -60,6 +60,16 @@ func IssueSession(
 // IssueSessionWithPolicy is the policy-aware variant of IssueSession.
 // Port of yauth Rust #92 / yauth-go #21 session-create enforcement.
 //
+// NOTHING IN YAUTH CALLS THIS. Every login path — emailpassword,
+// magiclink, mfa, oauth, passkey, ssooidc, ssosaml, admin impersonation —
+// calls plain IssueSession, so an organization's max_session_duration_secs
+// and max_concurrent_sessions are stored and returned by
+// GET /organizations/{id}/policy but applied to no session yauth issues.
+// Wiring it is not a drop-in swap: a user may belong to several orgs with
+// different caps, and turning a stored cap into a live one is a
+// behavioural change for deployments that have been setting it
+// decoratively. See docs/org-policy-enforcement.md.
+//
 // Behaviour:
 //
 //   - Clamps ttl to the enforcer's effective max-session-duration.

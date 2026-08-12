@@ -46,13 +46,14 @@ type YAuth struct {
 	traceMiddleware  bool
 	telemetryShut    func(context.Context) error
 
-	eventGates    []events.Handler
-	eventHandlers []events.Handler
-	authResolvers []plugin.AuthResolver
-	jwtSigner     plugin.JWTSigner
-	jwtSecret     []byte
-	mfaVerifier   plugin.MFAVerifier
-	logger        *slog.Logger
+	eventGates     []events.Handler
+	eventHandlers  []events.Handler
+	auditRecorders []plugin.AuditRecorder
+	authResolvers  []plugin.AuthResolver
+	jwtSigner      plugin.JWTSigner
+	jwtSecret      []byte
+	mfaVerifier    plugin.MFAVerifier
+	logger         *slog.Logger
 
 	// humaAPI is the huma API every plugin registered its routes on. Its
 	// auto-derived OpenAPI is exposed via OpenAPI() — the published spec source.
@@ -323,10 +324,24 @@ func (y *YAuth) Config() YAuthConfig { return y.cfg }
 //
 // The two stages exist so a gate's veto (mfa's RequireMfa) always lands
 // before observers act on the event; see PluginHost.RegisterEventGate.
+//
+// Emit also writes the event's audit-log row — see audit_events.go. That
+// happens AFTER the pipeline and whatever the decision, so a login a gate
+// refused is recorded as refused rather than not at all, and so every
+// credential plugin is covered by the single choke point they all already
+// pass through.
 func (y *YAuth) Emit(ctx context.Context, event events.AuthEvent) (events.Decision, error) {
 	if event.Timestamp.IsZero() {
 		event.Timestamp = time.Now().UTC()
 	}
+	dec, err := y.dispatchEvent(ctx, event)
+	y.recordAuthAudit(ctx, event, dec, err)
+	return dec, err
+}
+
+// dispatchEvent runs the gate stage then the handler stage, short-circuiting
+// on the first non-Continue decision or the first handler error.
+func (y *YAuth) dispatchEvent(ctx context.Context, event events.AuthEvent) (events.Decision, error) {
 	for _, h := range y.eventGates {
 		dec, err := h.Handle(ctx, event)
 		if err != nil {

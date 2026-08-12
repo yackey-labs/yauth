@@ -1651,13 +1651,17 @@
           "effective": {
             "$ref": "#/components/schemas/EffectivePolicyJSON"
           },
+          "enforcement": {
+            "$ref": "#/components/schemas/PolicyEnforcementJSON"
+          },
           "policy": {
             "$ref": "#/components/schemas/OrgPolicyJSON"
           }
         },
         "required": [
           "policy",
-          "effective"
+          "effective",
+          "enforcement"
         ],
         "type": "object"
       },
@@ -3120,6 +3124,48 @@
             "type": "string"
           }
         },
+        "type": "object"
+      },
+      "PolicyEnforcementJSON": {
+        "additionalProperties": false,
+        "properties": {
+          "enforced": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "not_enforced": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "note": {
+            "type": "string"
+          },
+          "requires_host_wiring": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "enforced",
+          "requires_host_wiring",
+          "not_enforced",
+          "note"
+        ],
         "type": "object"
       },
       "PublicKeyCredentialCreationOptions": {

@@ -100,6 +100,37 @@ func EffectiveOrgMembership(ctx context.Context, r repo.Repository, au *domain.A
 	return m, nil
 }
 
+// EffectiveOrgPermissions resolves the permission set au holds inside orgID.
+//
+// It exists separately from EffectiveOrgMembership because an org-scoped API
+// key carries TWO grants — the role stamped on the row and an explicit
+// permission list (domain.APIKey.Scopes, `permissions` on the org API) — and
+// the membership shape can only express the first. Reading the returned
+// membership's Role alone therefore silently discards the list, which is how a
+// key minted at role=viewer with permissions ["members:view"] came to hold
+// every permission viewer implies regardless of what its operator listed.
+//
+// This is the general enforcement point for APIKey.Scopes. Any gate that asks
+// "may this caller do X inside org Y" must route through here (or through
+// RequireOrgPermission, which does) rather than testing a role in isolation.
+//
+// For a human principal the answer is the default catalogue for their
+// membership role, unchanged.
+//
+// Applications shipping custom role strings must still layer their own map on
+// top; see auth.EffectiveKeyPermissions for how a scope list interacts with a
+// role yauth has no catalogue for.
+func EffectiveOrgPermissions(ctx context.Context, r repo.Repository, au *domain.AuthUser, orgID string) (auth.PermissionSet, error) {
+	m, err := EffectiveOrgMembership(ctx, r, au, orgID)
+	if err != nil {
+		return nil, err
+	}
+	if au.Principal.IsServiceAccount() {
+		return auth.EffectiveKeyPermissions(m.Role, au.Principal.Scopes), nil
+	}
+	return auth.DefaultPermissions(m.Role), nil
+}
+
 // RequireOrgRole returns nil iff the AuthUser in ctx holds at least the
 // required built-in role in the given org.
 //
@@ -132,18 +163,19 @@ func RequireOrgRole(ctx context.Context, r repo.Repository, orgID, requiredRole 
 // ship custom roles must layer their own permission check. yauth's default
 // catalogue is for built-in roles.
 //
-// Service-account callers are evaluated against their key's org binding and
-// role, not against their creator's memberships. See EffectiveOrgMembership.
+// Service-account callers are evaluated against their key's org binding, role
+// AND explicit permission list, not against their creator's memberships. See
+// EffectiveOrgPermissions.
 func RequireOrgPermission(ctx context.Context, r repo.Repository, orgID string, perm auth.Permission) error {
 	au, ok := AuthUserFromContext(ctx)
 	if !ok || au == nil {
 		return yautherr.ErrUnauthorized
 	}
-	m, err := EffectiveOrgMembership(ctx, r, au, orgID)
+	grants, err := EffectiveOrgPermissions(ctx, r, au, orgID)
 	if err != nil {
 		return err
 	}
-	if !auth.HasPermission(m.Role, perm) {
+	if !grants.Has(perm) {
 		return yautherr.ErrForbidden
 	}
 	return nil

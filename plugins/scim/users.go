@@ -215,7 +215,7 @@ func auditScim(ctx context.Context, host plugin.PluginHost, p *scimPrincipal, ev
 func (p *scimPlugin) handleCreateUser(host plugin.PluginHost) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		orgID := r.PathValue("org_id")
-		principal, scimErr := authenticate(r.Context(), host, requestAuthHeader(r), orgID, p.cfg.APIKeyPrefix)
+		principal, scimErr := p.authenticate(r.Context(), host, requestAuthHeader(r), orgID, scimWrite)
 		if scimErr != nil {
 			writeScimError(w, scimErr)
 			return
@@ -436,7 +436,7 @@ func (p *scimPlugin) handleCreateUser(host plugin.PluginHost) http.HandlerFunc {
 func (p *scimPlugin) handleListUsers(host plugin.PluginHost) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		orgID := r.PathValue("org_id")
-		if _, scimErr := authenticate(r.Context(), host, requestAuthHeader(r), orgID, p.cfg.APIKeyPrefix); scimErr != nil {
+		if _, scimErr := p.authenticate(r.Context(), host, requestAuthHeader(r), orgID, scimRead); scimErr != nil {
 			writeScimError(w, scimErr)
 			return
 		}
@@ -552,7 +552,7 @@ func (p *scimPlugin) handleGetUser(host plugin.PluginHost) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		orgID := r.PathValue("org_id")
 		userID := r.PathValue("user_id")
-		if _, scimErr := authenticate(r.Context(), host, requestAuthHeader(r), orgID, p.cfg.APIKeyPrefix); scimErr != nil {
+		if _, scimErr := p.authenticate(r.Context(), host, requestAuthHeader(r), orgID, scimRead); scimErr != nil {
 			writeScimError(w, scimErr)
 			return
 		}
@@ -602,7 +602,7 @@ func (p *scimPlugin) handlePutUser(host plugin.PluginHost) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		orgID := r.PathValue("org_id")
 		userID := r.PathValue("user_id")
-		principal, scimErr := authenticate(r.Context(), host, requestAuthHeader(r), orgID, p.cfg.APIKeyPrefix)
+		principal, scimErr := p.authenticate(r.Context(), host, requestAuthHeader(r), orgID, scimWrite)
 		if scimErr != nil {
 			writeScimError(w, scimErr)
 			return
@@ -720,7 +720,7 @@ func (p *scimPlugin) handlePatchUser(host plugin.PluginHost) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		orgID := r.PathValue("org_id")
 		userID := r.PathValue("user_id")
-		principal, scimErr := authenticate(r.Context(), host, requestAuthHeader(r), orgID, p.cfg.APIKeyPrefix)
+		principal, scimErr := p.authenticate(r.Context(), host, requestAuthHeader(r), orgID, scimWrite)
 		if scimErr != nil {
 			writeScimError(w, scimErr)
 			return
@@ -909,7 +909,7 @@ func (p *scimPlugin) handleDeleteUser(host plugin.PluginHost) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		orgID := r.PathValue("org_id")
 		userID := r.PathValue("user_id")
-		principal, scimErr := authenticate(r.Context(), host, requestAuthHeader(r), orgID, p.cfg.APIKeyPrefix)
+		principal, scimErr := p.authenticate(r.Context(), host, requestAuthHeader(r), orgID, scimWrite)
 		if scimErr != nil {
 			writeScimError(w, scimErr)
 			return

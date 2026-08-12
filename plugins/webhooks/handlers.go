@@ -248,10 +248,19 @@ func (p *webhooksPlugin) registerCreate(host plugin.PluginHost, api huma.API, mw
 			rawSecret = s
 		}
 
-		// Encrypt the secret at rest; decrypt key is derived from the JWT
-		// secret so it rotates with the application key.
-		webhookKey := deriveWebhookKey(host.JWTSecret())
-		storedSecret, err := encryptSecret(webhookKey, rawSecret)
+		// Encrypt the secret at rest. With no key available this now FAILS
+		// rather than persisting the secret in cleartext (see
+		// ErrNoEncryptionKey). Refusing to create the webhook is the lesser
+		// harm: a deployment that cannot protect a signing secret should not
+		// be handed one it believes is protected.
+		storedSecret, err := encryptSecret(p.encryptionKey(host), rawSecret)
+		if errors.Is(err, ErrNoEncryptionKey) {
+			host.Logger().Error("webhooks: refusing to create a webhook — no encryption key is "+
+				"configured, so the signing secret cannot be stored safely", "url", req.URL)
+			return nil, huma.Error500InternalServerError(
+				"webhook secrets cannot be stored: no encryption key is configured " +
+					"(set webhooks.Config.EncryptionKey or a JWT secret)")
+		}
 		if err != nil {
 			return nil, huma.Error500InternalServerError("unable to encrypt secret")
 		}
@@ -385,8 +394,14 @@ func (p *webhooksPlugin) registerUpdate(host plugin.PluginHost, api huma.API, mw
 		var newRawSecret string
 		if req.Secret != nil && *req.Secret != "" {
 			newRawSecret = *req.Secret
-			webhookKey := deriveWebhookKey(host.JWTSecret())
-			enc, err := encryptSecret(webhookKey, newRawSecret)
+			enc, err := encryptSecret(p.encryptionKey(host), newRawSecret)
+			if errors.Is(err, ErrNoEncryptionKey) {
+				host.Logger().Error("webhooks: refusing to rotate a webhook secret — no encryption "+
+					"key is configured, so the new secret cannot be stored safely", "webhook_id", in.ID)
+				return nil, huma.Error500InternalServerError(
+					"webhook secrets cannot be stored: no encryption key is configured " +
+						"(set webhooks.Config.EncryptionKey or a JWT secret)")
+			}
 			if err != nil {
 				return nil, huma.Error500InternalServerError("unable to encrypt secret")
 			}

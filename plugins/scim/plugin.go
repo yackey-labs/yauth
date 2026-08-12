@@ -58,6 +58,7 @@ import (
 	"net/http"
 	"reflect"
 	"strings"
+	"sync"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -85,6 +86,26 @@ type Config struct {
 	// prefix externally). Empty means the router is mounted at the host
 	// root, so self-URLs are <BaseURL>/scim/v2/...
 	BasePath string
+
+	// RequireKeyPermissions makes SCIM refuse an org-scoped API key that
+	// carries NEITHER a role NOR an explicit permission list.
+	//
+	// SCIM always enforces the authority a key DOES declare: it must hold
+	// members:view to read, and members:view + members:invite +
+	// members:change_role + members:remove to write (see scimAccess). What
+	// this flag governs is the one key shape that declares nothing at all —
+	// which is the shape every SCIM key minted before that enforcement
+	// existed has, because the setup docs never asked for a role or
+	// permissions.
+	//
+	// Default false: such a key keeps full SCIM access and logs a WARN once
+	// per key per process, so upgrading yauth does not silently stop
+	// deprovisioning across every existing integration.
+	//
+	// Set it true once every SCIM key in the deployment has been re-minted
+	// with role=admin (or the four permissions above). Deployments standing
+	// SCIM up fresh should set it true from the start.
+	RequireKeyPermissions bool
 }
 
 // defaultAPIKeyPrefix is the same default the apikey plugin uses. We
@@ -95,6 +116,11 @@ const defaultAPIKeyPrefix = "yak"
 
 type scimPlugin struct {
 	cfg Config
+
+	// warnedKeys records which unscoped API keys have already produced the
+	// grandfathering WARN, so a polling connector logs it once rather than
+	// once a minute forever. Keyed by api-key row id; never holds a secret.
+	warnedKeys sync.Map
 }
 
 // New constructs the SCIM plugin.
@@ -354,7 +380,7 @@ func attachScimSchema[Body any](api huma.API, method, path string) {
 func (p *scimPlugin) handleServiceProviderConfig(host plugin.PluginHost) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		orgID := r.PathValue("org_id")
-		if _, scimErr := authenticate(r.Context(), host, requestAuthHeader(r), orgID, p.cfg.APIKeyPrefix); scimErr != nil {
+		if _, scimErr := p.authenticate(r.Context(), host, requestAuthHeader(r), orgID, scimRead); scimErr != nil {
 			writeScimError(w, scimErr)
 			return
 		}
@@ -365,7 +391,7 @@ func (p *scimPlugin) handleServiceProviderConfig(host plugin.PluginHost) http.Ha
 func (p *scimPlugin) handleSchemas(host plugin.PluginHost) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		orgID := r.PathValue("org_id")
-		if _, scimErr := authenticate(r.Context(), host, requestAuthHeader(r), orgID, p.cfg.APIKeyPrefix); scimErr != nil {
+		if _, scimErr := p.authenticate(r.Context(), host, requestAuthHeader(r), orgID, scimRead); scimErr != nil {
 			writeScimError(w, scimErr)
 			return
 		}
@@ -376,7 +402,7 @@ func (p *scimPlugin) handleSchemas(host plugin.PluginHost) http.HandlerFunc {
 func (p *scimPlugin) handleResourceTypes(host plugin.PluginHost) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		orgID := r.PathValue("org_id")
-		if _, scimErr := authenticate(r.Context(), host, requestAuthHeader(r), orgID, p.cfg.APIKeyPrefix); scimErr != nil {
+		if _, scimErr := p.authenticate(r.Context(), host, requestAuthHeader(r), orgID, scimRead); scimErr != nil {
 			writeScimError(w, scimErr)
 			return
 		}

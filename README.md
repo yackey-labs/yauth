@@ -732,6 +732,30 @@ _ = ya.Shutdown(ctx)
 See [`examples/webhooks/main.go`](examples/webhooks/main.go) for a
 SIGTERM-aware setup with an in-process receiver.
 
+#### Webhook secrets require an encryption key
+
+Each webhook's HMAC signing secret is encrypted at rest (AES-256-GCM). The
+key comes from `webhooks.Config.EncryptionKey` if set, otherwise from the
+host's JWT secret — which is only populated when the bearer plugin is
+configured or `Builder.WithJWTSecret` is called.
+
+**With neither, the plugin refuses to store a secret**: `POST /webhooks` and
+a secret-rotating `PATCH`/`PUT` fail with 500, and `Routes()` logs an ERROR at
+startup. It previously wrote the secret to `yauth_webhooks.secret` in
+cleartext with no warning, which let anyone able to read that table forge a
+signed delivery to every endpoint the deployment trusts.
+
+```go
+WithPlugin(webhooks.New(webhooks.Config{
+    EncryptionKey: []byte(os.Getenv("YAUTH_WEBHOOK_ENCRYPTION_KEY")),
+}))
+```
+
+Any rows still holding a cleartext secret are **re-encrypted in place when the
+plugin starts** with a key available, and the migration logs a WARN with the
+count. Those secrets should be treated as disclosed and rotated — the
+re-encryption protects them going forward, not retroactively.
+
 ## Configuration
 
 `yauth.YAuthConfig` is the runtime config shape (cookie name/domain,

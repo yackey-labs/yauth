@@ -101,7 +101,7 @@ func addMemberIfOrgMember(ctx context.Context, host plugin.PluginHost, orgID, gr
 func (p *scimPlugin) handleCreateGroup(host plugin.PluginHost) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		orgID := r.PathValue("org_id")
-		if _, scimErr := authenticate(r.Context(), host, requestAuthHeader(r), orgID, p.cfg.APIKeyPrefix); scimErr != nil {
+		if _, scimErr := p.authenticate(r.Context(), host, requestAuthHeader(r), orgID, scimWrite); scimErr != nil {
 			writeScimError(w, scimErr)
 			return
 		}
@@ -173,7 +173,7 @@ func (p *scimPlugin) handleCreateGroup(host plugin.PluginHost) http.HandlerFunc 
 func (p *scimPlugin) handleListGroups(host plugin.PluginHost) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		orgID := r.PathValue("org_id")
-		if _, scimErr := authenticate(r.Context(), host, requestAuthHeader(r), orgID, p.cfg.APIKeyPrefix); scimErr != nil {
+		if _, scimErr := p.authenticate(r.Context(), host, requestAuthHeader(r), orgID, scimRead); scimErr != nil {
 			writeScimError(w, scimErr)
 			return
 		}
@@ -252,7 +252,7 @@ func (p *scimPlugin) handleGetGroup(host plugin.PluginHost) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		orgID := r.PathValue("org_id")
 		gid := r.PathValue("group_id")
-		if _, scimErr := authenticate(r.Context(), host, requestAuthHeader(r), orgID, p.cfg.APIKeyPrefix); scimErr != nil {
+		if _, scimErr := p.authenticate(r.Context(), host, requestAuthHeader(r), orgID, scimRead); scimErr != nil {
 			writeScimError(w, scimErr)
 			return
 		}
@@ -278,7 +278,7 @@ func (p *scimPlugin) handlePutGroup(host plugin.PluginHost) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		orgID := r.PathValue("org_id")
 		gid := r.PathValue("group_id")
-		if _, scimErr := authenticate(r.Context(), host, requestAuthHeader(r), orgID, p.cfg.APIKeyPrefix); scimErr != nil {
+		if _, scimErr := p.authenticate(r.Context(), host, requestAuthHeader(r), orgID, scimWrite); scimErr != nil {
 			writeScimError(w, scimErr)
 			return
 		}
@@ -359,7 +359,7 @@ func (p *scimPlugin) handlePatchGroup(host plugin.PluginHost) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		orgID := r.PathValue("org_id")
 		gid := r.PathValue("group_id")
-		if _, scimErr := authenticate(r.Context(), host, requestAuthHeader(r), orgID, p.cfg.APIKeyPrefix); scimErr != nil {
+		if _, scimErr := p.authenticate(r.Context(), host, requestAuthHeader(r), orgID, scimWrite); scimErr != nil {
 			writeScimError(w, scimErr)
 			return
 		}
@@ -464,7 +464,7 @@ func (p *scimPlugin) handleDeleteGroup(host plugin.PluginHost) http.HandlerFunc 
 	return func(w http.ResponseWriter, r *http.Request) {
 		orgID := r.PathValue("org_id")
 		gid := r.PathValue("group_id")
-		if _, scimErr := authenticate(r.Context(), host, requestAuthHeader(r), orgID, p.cfg.APIKeyPrefix); scimErr != nil {
+		if _, scimErr := p.authenticate(r.Context(), host, requestAuthHeader(r), orgID, scimWrite); scimErr != nil {
 			writeScimError(w, scimErr)
 			return
 		}

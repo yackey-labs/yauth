@@ -47,6 +47,24 @@ const (
 
 // Config tunes plugin behaviour. Zero value yields safe defaults.
 type Config struct {
+	// EncryptionKey is the key material webhook signing secrets are
+	// encrypted at rest with (AES-256-GCM; the AES key is derived from it
+	// via HKDF-SHA256, so any length is accepted — 32+ bytes recommended).
+	//
+	// When empty the plugin falls back to PluginHost.JWTSecret(), which is
+	// what it has always used. That fallback is only populated when the
+	// bearer plugin is configured (or yauth.Builder.WithJWTSecret is called
+	// by hand), so a deployment running webhooks WITHOUT bearer had no key
+	// at all — and every HMAC signing secret was written to
+	// yauth_webhooks.secret in cleartext, silently, with a read-side
+	// pass-through that made the rows indistinguishable from encrypted ones.
+	//
+	// With NEITHER source available the plugin now refuses to persist a
+	// secret: POST /webhooks and a secret-rotating PATCH/PUT fail with 500,
+	// and Routes() logs an ERROR at startup. Set this (or a JWT secret) to
+	// run webhooks at all.
+	EncryptionKey []byte
+
 	// WorkerCount is the number of goroutines draining the delivery
 	// channel. Defaults to 4.
 	WorkerCount int
@@ -136,11 +154,49 @@ func New(cfg Config) plugin.Plugin {
 // Name implements plugin.Plugin.
 func (p *webhooksPlugin) Name() string { return "webhooks" }
 
+// encryptionKey resolves the AES key used for webhook secrets at rest:
+// Config.EncryptionKey when set, otherwise the host's JWT secret (the
+// historical source). Returns nil when neither is available — callers must
+// treat nil as "cannot store a secret", never as plaintext mode.
+func (p *webhooksPlugin) encryptionKey(host plugin.PluginHost) []byte {
+	if len(p.cfg.EncryptionKey) > 0 {
+		return deriveWebhookKey(p.cfg.EncryptionKey)
+	}
+	return deriveWebhookKey(host.JWTSecret())
+}
+
 // Routes implements plugin.Plugin. It starts the dispatcher's worker
 // goroutines, registers the events.Handler that fans events out to it,
 // and mounts admin endpoints under prefix guarded by RequireAdmin.
 func (p *webhooksPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.API, prefix string) {
 	mw := host.Middleware()
+	key := p.encryptionKey(host)
+
+	// Say it once, loudly, at startup rather than never. Without a key the
+	// plugin still runs — existing webhooks keep delivering — but no new
+	// secret can be stored, so the operator needs to know before the first
+	// POST /webhooks fails.
+	if len(key) == 0 {
+		host.Logger().Error("webhooks: no encryption key configured — webhook signing secrets " +
+			"cannot be stored and creating or rotating a webhook secret will fail. Set " +
+			"webhooks.Config.EncryptionKey, or configure the bearer plugin / " +
+			"yauth.Builder.WithJWTSecret. Any secrets already stored in cleartext stay that way " +
+			"until a key is available.")
+	} else {
+		// A key exists: bring any rows still holding cleartext (written
+		// before encryption, or by the plaintext fallback that used to sit
+		// in encryptSecret) up to the current format.
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		migrated, err := migrateLegacySecrets(ctx, host.Repo(), key)
+		cancel()
+		if err != nil {
+			host.Logger().Error("webhooks: could not re-encrypt legacy plaintext webhook secrets; "+
+				"they remain in cleartext in yauth_webhooks.secret", "error", err, "migrated", migrated)
+		} else if migrated > 0 {
+			host.Logger().Warn("webhooks: re-encrypted webhook signing secrets that were stored "+
+				"in cleartext. Treat them as disclosed and rotate them.", "count", migrated)
+		}
+	}
 
 	httpClient := p.cfg.HTTPClient
 	if httpClient == nil {
@@ -162,7 +218,7 @@ func (p *webhooksPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api h
 		DeadLetterEnabled: *p.cfg.DeadLetterEnabled,
 		ClaimerInterval:   p.cfg.ClaimerInterval,
 		ClaimerBatchSize:  p.cfg.ClaimerBatchSize,
-	}, deriveWebhookKey(host.JWTSecret()))
+	}, key)
 	p.dispatcher.useLogger(host.Logger())
 	p.dispatcher.Start()
 

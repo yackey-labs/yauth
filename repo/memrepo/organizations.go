@@ -225,6 +225,11 @@ func membershipKey(orgID, userID string) string {
 
 func (r *Repo) CreateMembership(ctx context.Context, input domain.NewMembership) (domain.Membership, error) {
 	_ = ensureCtx(ctx)
+	// Owner ceiling — see "the owner ceiling" on domain.UpdateMembership. Only
+	// an explicitly authorized write may mint an owner.
+	if input.OwnerRoleRefused() {
+		return domain.Membership{}, yautherr.ErrOwnerProtected
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -303,6 +308,11 @@ func (r *Repo) countOwnersInOrg(orgID string) int {
 
 func (r *Repo) UpdateMembership(ctx context.Context, id string, changes domain.UpdateMembership) (domain.Membership, error) {
 	_ = ensureCtx(ctx)
+	// Owner ceiling — see "the owner ceiling" on domain.UpdateMembership. Only
+	// an explicitly authorized write may promote to owner.
+	if changes.OwnerRoleRefused() {
+		return domain.Membership{}, yautherr.ErrOwnerProtected
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	m, ok := r.memberships[id]

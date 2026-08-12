@@ -104,13 +104,14 @@ func seedTenant(t *testing.T, r repo.Repository, label string) tenant {
 		t.Fatalf("create org: %v", err)
 	}
 	if _, err := r.CreateMembership(ctx, domain.NewMembership{
-		ID:             uuid.NewString(),
-		OrganizationID: org.ID,
-		UserID:         admin.ID,
-		Role:           auth.RoleOwner,
-		Status:         domain.MembershipActive,
-		CreatedAt:      now,
-		UpdatedAt:      now,
+		OwnerRoleAuthorized: true, // test fixture: seeds state directly, bypassing the handler layer
+		ID:                  uuid.NewString(),
+		OrganizationID:      org.ID,
+		UserID:              admin.ID,
+		Role:                auth.RoleOwner,
+		Status:              domain.MembershipActive,
+		CreatedAt:           now,
+		UpdatedAt:           now,
 	}); err != nil {
 		t.Fatalf("create membership: %v", err)
 	}

@@ -116,6 +116,48 @@ func findExternalIDForUser(ctx context.Context, host plugin.PluginHost, orgID, u
 	return nil, nil
 }
 
+// requireAdoptable decides whether a SCIM POST /Users from orgID may bind
+// itself to an account that ALREADY EXISTS globally under the posted address.
+//
+// GetUserByEmail spans every tenant, so "the email is taken" says nothing
+// about who it is taken by. Adoption is permitted on exactly two grounds:
+//
+//   - the account is already a member of orgID (any status — a suspended or
+//     invited row is still this org's own user, and re-POSTing them is how an
+//     IdP re-provisions someone it previously de-provisioned); or
+//   - the address sits under a domain orgID has VERIFIED (proving control of
+//     the namespace the address lives in — the same proof
+//     plugins/organizations uses to let a domain auto-join new signups).
+//
+// Otherwise it returns 409. A 409 is the honest answer and it leaks nothing an
+// attacker did not already supply: the address is in use, somewhere this key
+// cannot see. Returning 201 would be the takeover.
+//
+// nil means "adoption allowed".
+func requireAdoptable(ctx context.Context, host plugin.PluginHost, orgID, email, userID string) *ScimResponseError {
+	m, err := host.Repo().GetMembershipByOrgUser(ctx, orgID, userID)
+	if err != nil {
+		return repoToScim(err)
+	}
+	if m != nil {
+		return nil
+	}
+	at := strings.LastIndex(email, "@")
+	if at >= 0 && at < len(email)-1 {
+		// GetOrganizationDomainByDomain is case-insensitive and globally
+		// unique on the domain, so this both finds the claim and tells us
+		// which org holds it.
+		d, err := host.Repo().GetOrganizationDomainByDomain(ctx, email[at+1:])
+		if err != nil && !errors.Is(err, yautherr.ErrNotFound) {
+			return repoToScim(err)
+		}
+		if d != nil && d.OrganizationID == orgID && d.Status == domain.DomainVerified {
+			return nil
+		}
+	}
+	return Conflict("a user with this userName already exists outside this organization")
+}
+
 // projectUser projects a domain.User + optional ExternalIdentity +
 // membership status into a ScimUser response shape.
 func projectUser(baseURL, orgID string, u *domain.User, ext *domain.ExternalIdentity, status domain.MembershipStatus) ScimUser {
@@ -238,8 +280,23 @@ func (p *scimPlugin) handleCreateUser(host plugin.PluginHost) http.HandlerFunc {
 		}
 		var u *domain.User
 		if existingByEmail != nil {
-			// Anti-takeover: if there is a SCIM link for this org under a
-			// DIFFERENT externalId already, refuse.
+			// Anti-takeover, part 1 — CROSS-TENANT. GetUserByEmail is GLOBAL,
+			// so without this an org-A SCIM key could POST an org-B user's
+			// address and adopt that account: it mints an org-A membership for
+			// them (which then satisfies requireUserInOrg, so PUT /Users/{id}
+			// can rewrite their GLOBAL login email), and applyScimActiveLifecycle
+			// reaches their GLOBAL account to suspend it and kill their
+			// sessions. Adoption is only legitimate where the caller's org can
+			// already claim the account — it is already a member, or the
+			// address sits under a domain this org has VERIFIED. Anything else
+			// is 409; SCIM's own semantics are unaffected because provisioning
+			// a genuinely new address takes the create branch below.
+			if scimErr := requireAdoptable(ctx, host, orgID, email, existingByEmail.ID); scimErr != nil {
+				writeScimError(w, scimErr)
+				return
+			}
+			// Anti-takeover, part 2 — if there is a SCIM link for this org under
+			// a DIFFERENT externalId already, refuse.
 			if payload.ExternalID != "" {
 				existing, scimErr := findExternalIDForUser(ctx, host, orgID, existingByEmail.ID)
 				if scimErr != nil {

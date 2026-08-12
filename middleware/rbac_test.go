@@ -25,7 +25,8 @@ func seedUserAndMembership(t *testing.T, r *memrepo.Repo, role string) (string, 
 		t.Fatalf("seed org: %v", err)
 	}
 	if _, err := r.CreateMembership(context.Background(), domain.NewMembership{
-		ID: uuid.NewString(), OrganizationID: orgID, UserID: userID, Role: role,
+		OwnerRoleAuthorized: true, // test fixture: seeds state directly, bypassing the handler layer
+		ID:                  uuid.NewString(), OrganizationID: orgID, UserID: userID, Role: role,
 		Status: domain.MembershipActive, CreatedAt: now, UpdatedAt: now,
 	}); err != nil {
 		t.Fatalf("seed membership: %v", err)

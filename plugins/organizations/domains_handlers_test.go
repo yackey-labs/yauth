@@ -58,7 +58,8 @@ func seedOrgWithAdmin(t *testing.T, r repo.Repository, userID, orgID, slug strin
 		t.Fatalf("seed org: %v", err)
 	}
 	if _, err := r.CreateMembership(context.Background(), domain.NewMembership{
-		ID: uuid.NewString(), OrganizationID: orgID, UserID: userID,
+		OwnerRoleAuthorized: true, // test fixture: seeds state directly, bypassing the handler layer
+		ID:                  uuid.NewString(), OrganizationID: orgID, UserID: userID,
 		Role: "owner", Status: domain.MembershipActive,
 		CreatedAt: now, UpdatedAt: now,
 	}); err != nil {
@@ -296,7 +297,8 @@ func TestDomain_NonAdminMemberDenied(t *testing.T) {
 		t.Fatalf("seed org: %v", err)
 	}
 	if _, err := r.CreateMembership(context.Background(), domain.NewMembership{
-		ID: uuid.NewString(), OrganizationID: "o1", UserID: user.ID,
+		OwnerRoleAuthorized: true, // test fixture: seeds state directly, bypassing the handler layer
+		ID:                  uuid.NewString(), OrganizationID: "o1", UserID: user.ID,
 		Role: "member", Status: domain.MembershipActive,
 		CreatedAt: now, UpdatedAt: now,
 	}); err != nil {

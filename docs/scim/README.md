@@ -87,6 +87,7 @@ GET /Users?startIndex=1&count=100
 
 - Each org-scoped API key MUST match the URL's `{org_id}` exactly. Mismatches return 403 `invalidValue`, NEVER 200. (Pentest case 1.)
 - An email change that would collide with another existing yauth user returns 409 `uniqueness`. We NEVER silently merge accounts. (Pentest case 2.)
+- **`POST /Users` will not adopt an account belonging to another tenant.** yauth users are global, so an existing `userName` may belong to any org. A POST naming one binds to that account only where your org can already claim it — the user is **already a member of your org** (any membership status, so re-provisioning someone you previously de-provisioned still works), or the address sits under a **verified** `OrganizationDomain` of your org. Otherwise: 409 `uniqueness`. Provisioning a genuinely new address is unaffected. Without this, an org-A key could post an org-B user's address, mint an org-A membership for them, and from there rewrite their global login email or trip the global `active:false` kill switch.
 - Unknown schema URNs in `schemas[]` are rejected with 400 `invalidSyntax` rather than passed through. Arbitrary extension JSON does NOT get persisted. (Pentest cases 3 + 4.)
 - DELETE on a user not a member of the URL's org returns 404, not 204. (Pentest case 5.)
 - Audit events fire on every SCIM operation. The actor is `scim_api_key:<key_id>` — yauth-go NEVER logs the bearer token, even masked. (Pentest cases 6 + 7.)

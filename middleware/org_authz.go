@@ -43,6 +43,18 @@ import (
 //     to, regardless of what its creator can reach.
 //   - (nil, err): backend failure, for the caller to map to 500.
 //
+// Only a membership whose Status is domain.MembershipActive confers authority.
+// A "suspended" row exists to keep audit history while blocking the member
+// from acting on the org (see domain.MembershipSuspended); an "invited" row is
+// a listing convenience for an invitation that has not been accepted yet. Both
+// used to authorize here, which meant an offboarded org-admin kept their org
+// authority the moment an operator cleared the GLOBAL suspension flag (the
+// routine POST /admin/users/{id}/unsuspend touches no membership row), and an
+// invitee held their offered role before accepting it. Every other consumer of
+// membership status in yauth — auth/active_org.go, plugins/bearer,
+// plugins/organizations/active_org_handlers.go — already filtered this way;
+// this is the gate that did not.
+//
 // For a service account the returned membership is synthetic: it is not a row
 // in the database, it is the key's own binding expressed in the shape callers
 // already handle. UserID is the creator's id so audit trails keep their human
@@ -77,6 +89,12 @@ func EffectiveOrgMembership(ctx context.Context, r repo.Repository, au *domain.A
 		return nil, err
 	}
 	if m == nil {
+		return nil, yautherr.ErrForbidden
+	}
+	// Anything other than "active" — suspended, invited, or a row carrying an
+	// unrecognised/empty status — confers no authority. Fail closed: an
+	// unknown value is not evidence of an active member.
+	if m.Status != domain.MembershipActive {
 		return nil, yautherr.ErrForbidden
 	}
 	return m, nil

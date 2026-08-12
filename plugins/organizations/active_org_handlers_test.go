@@ -29,7 +29,8 @@ func seedOrgAndMembership(t *testing.T, r repo.Repository, userID, orgID, name, 
 		t.Fatalf("seed org %q: %v", slug, err)
 	}
 	if _, err := r.CreateMembership(context.Background(), domain.NewMembership{
-		ID: uuid.NewString(), OrganizationID: orgID, UserID: userID,
+		OwnerRoleAuthorized: true, // test fixture: seeds state directly, bypassing the handler layer
+		ID:                  uuid.NewString(), OrganizationID: orgID, UserID: userID,
 		Role: role, Status: domain.MembershipActive,
 		CreatedAt: now, UpdatedAt: now,
 	}); err != nil {
@@ -151,7 +152,8 @@ func TestSetActiveOrg_ForbidsSuspendedMembership(t *testing.T) {
 		t.Fatalf("seed org: %v", err)
 	}
 	if _, err := r.CreateMembership(context.Background(), domain.NewMembership{
-		ID: uuid.NewString(), OrganizationID: "org-a", UserID: user.ID,
+		OwnerRoleAuthorized: true, // test fixture: seeds state directly, bypassing the handler layer
+		ID:                  uuid.NewString(), OrganizationID: "org-a", UserID: user.ID,
 		Role: "member", Status: domain.MembershipSuspended,
 		CreatedAt: now, UpdatedAt: now,
 	}); err != nil {

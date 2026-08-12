@@ -264,6 +264,13 @@ func (p *ssoOIDCPlugin) registerCreateConnection(host plugin.PluginHost, api hum
 		if role == "" {
 			role = auth.RoleMember
 		}
+		// JIT hands this role to CreateMembership/UpdateMembership for every
+		// user who signs in through the connection, so it needs the same
+		// ceiling add-member and set-role apply. (The repo refuses an owner
+		// membership regardless; this is the clean 400 at config time.)
+		if err := auth.ValidateAssignableRole(role); err != nil {
+			return nil, huma.Error400BadRequest("default_role_on_jit cannot be owner; use transfer-ownership")
+		}
 		now := time.Now().UTC()
 		created, err := host.Repo().CreateSsoConnection(ctx, domain.NewSsoConnection{
 			ID:                     uuid.NewString(),
@@ -418,6 +425,10 @@ func (p *ssoOIDCPlugin) registerUpdateConnection(host plugin.PluginHost, api hum
 			trimmed := strings.TrimSpace(*req.DefaultRoleOnJit)
 			if trimmed == "" {
 				trimmed = auth.RoleMember
+			}
+			// Same ceiling as create — PATCH is the other way in.
+			if err := auth.ValidateAssignableRole(trimmed); err != nil {
+				return nil, huma.Error400BadRequest("default_role_on_jit cannot be owner; use transfer-ownership")
 			}
 			changes.DefaultRoleOnJit = &trimmed
 		}

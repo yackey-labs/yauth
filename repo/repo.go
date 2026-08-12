@@ -387,6 +387,15 @@ type OrganizationRepository interface {
 //     returning yautherr.ErrOwnerProtected. The transfer-ownership
 //     handler is responsible for promoting the new owner before the
 //     destructive op runs against the prior owner.
+//   - Owner ceiling: CreateMembership and UpdateMembership MUST refuse
+//     to set role == "owner" unless the payload sets
+//     OwnerRoleAuthorized, returning yautherr.ErrOwnerProtected.
+//     domain.NewMembership.OwnerRoleRefused and
+//     domain.UpdateMembership.OwnerRoleRefused are the shared predicate
+//     — call them rather than re-deriving the rule. Exactly two paths
+//     set the flag: creating an organization and transfer-ownership.
+//     See "the owner ceiling" on domain.UpdateMembership for why the
+//     invariant lives down here rather than at each handler.
 type MembershipRepository interface {
 	GetMembershipByID(ctx context.Context, id string) (*domain.Membership, error)
 	// GetMembershipByOrgUser returns the join row tying user to org,

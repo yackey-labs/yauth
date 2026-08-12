@@ -303,7 +303,8 @@ func seedAdmin(t *testing.T, r repo.Repository) (domain.User, domain.Organizatio
 		t.Fatal(err)
 	}
 	_, err = r.CreateMembership(ctx, domain.NewMembership{
-		ID: uuid.NewString(), OrganizationID: org.ID, UserID: u.ID,
+		OwnerRoleAuthorized: true, // test fixture: seeds state directly, bypassing the handler layer
+		ID:                  uuid.NewString(), OrganizationID: org.ID, UserID: u.ID,
 		Role: auth.RoleOwner, Status: domain.MembershipActive,
 		CreatedAt: now, UpdatedAt: now,
 	})
@@ -495,7 +496,9 @@ func TestSsoLogin_HappyPath_JIT(t *testing.T) {
 	ctx := context.Background()
 	admin, _ := r.CreateUser(ctx, domain.NewUser{ID: uuid.NewString(), Email: "admin@example.com", Role: "user", CreatedAt: now, UpdatedAt: now})
 	org, _ := r.CreateOrganization(ctx, domain.NewOrganization{ID: uuid.NewString(), Name: "Acme", Slug: "acme", CreatedAt: now, UpdatedAt: now})
-	_, _ = r.CreateMembership(ctx, domain.NewMembership{ID: uuid.NewString(), OrganizationID: org.ID, UserID: admin.ID, Role: auth.RoleOwner, Status: domain.MembershipActive, CreatedAt: now, UpdatedAt: now})
+	_, _ = r.CreateMembership(ctx, domain.NewMembership{ID: uuid.NewString(), OrganizationID: org.ID, UserID: admin.ID, Role: auth.RoleOwner, Status: domain.MembershipActive, CreatedAt: now, UpdatedAt: now,
+		OwnerRoleAuthorized: true, // test fixture: seeds state directly, bypassing the handler layer
+	})
 
 	mux := http.NewServeMux()
 	host := newFakeHost(r, "")
@@ -693,7 +696,9 @@ func TestPentest_JITDisabled_BlocksUnknownUser(t *testing.T) {
 	ctx := context.Background()
 	admin, _ := r.CreateUser(ctx, domain.NewUser{ID: uuid.NewString(), Email: "admin@example.com", Role: "user", CreatedAt: now, UpdatedAt: now})
 	org, _ := r.CreateOrganization(ctx, domain.NewOrganization{ID: uuid.NewString(), Name: "Acme", Slug: "acme", CreatedAt: now, UpdatedAt: now})
-	_, _ = r.CreateMembership(ctx, domain.NewMembership{ID: uuid.NewString(), OrganizationID: org.ID, UserID: admin.ID, Role: auth.RoleOwner, Status: domain.MembershipActive, CreatedAt: now, UpdatedAt: now})
+	_, _ = r.CreateMembership(ctx, domain.NewMembership{ID: uuid.NewString(), OrganizationID: org.ID, UserID: admin.ID, Role: auth.RoleOwner, Status: domain.MembershipActive, CreatedAt: now, UpdatedAt: now,
+		OwnerRoleAuthorized: true, // test fixture: seeds state directly, bypassing the handler layer
+	})
 
 	mux := http.NewServeMux()
 	host := newFakeHost(r, "")
@@ -774,7 +779,9 @@ func setupForLogin(t *testing.T) (*ssoOIDCPlugin, *httptest.Server, repo.Reposit
 	ctx := context.Background()
 	admin, _ := r.CreateUser(ctx, domain.NewUser{ID: uuid.NewString(), Email: "admin@example.com", Role: "user", CreatedAt: now, UpdatedAt: now})
 	org, _ := r.CreateOrganization(ctx, domain.NewOrganization{ID: uuid.NewString(), Name: "Acme", Slug: "acme", CreatedAt: now, UpdatedAt: now})
-	_, _ = r.CreateMembership(ctx, domain.NewMembership{ID: uuid.NewString(), OrganizationID: org.ID, UserID: admin.ID, Role: auth.RoleOwner, Status: domain.MembershipActive, CreatedAt: now, UpdatedAt: now})
+	_, _ = r.CreateMembership(ctx, domain.NewMembership{ID: uuid.NewString(), OrganizationID: org.ID, UserID: admin.ID, Role: auth.RoleOwner, Status: domain.MembershipActive, CreatedAt: now, UpdatedAt: now,
+		OwnerRoleAuthorized: true, // test fixture: seeds state directly, bypassing the handler layer
+	})
 	mux := http.NewServeMux()
 	host := newFakeHost(r, "")
 	host.mw.AddResolver(&stubResolver{user: &domain.AuthUser{User: admin}})

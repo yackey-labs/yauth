@@ -127,30 +127,10 @@ func cookieOptionsFromHost(host plugin.PluginHost, r *http.Request, maxAge int) 
 }
 
 // safeRedirect filters the incoming redirect_url against the plugin's
-// AllowedRedirectURLs allow-list. Same algorithm as the ssooidc plugin.
+// AllowedRedirectURLs allow-list. The algorithm lives in auth.SafeRedirect,
+// shared with the oauth and sso_oidc plugins.
 func (p *ssoSAMLPlugin) safeRedirect(in string) string {
-	in = strings.TrimSpace(in)
-	if in == "" {
-		return ""
-	}
-	if strings.HasPrefix(in, "/") && !strings.HasPrefix(in, "//") {
-		return in
-	}
-	for _, allowed := range p.cfg.AllowedRedirectURLs {
-		if allowed == "" {
-			continue
-		}
-		if in == allowed {
-			return in
-		}
-		if strings.HasPrefix(in, allowed) {
-			rest := in[len(allowed):]
-			if rest == "" || rest[0] == '/' || rest[0] == '?' || rest[0] == '#' {
-				return in
-			}
-		}
-	}
-	return ""
+	return auth.SafeRedirect(in, p.cfg.AllowedRedirectURLs)
 }
 
 // resolveConnection picks the target SAML SsoConnection from the query

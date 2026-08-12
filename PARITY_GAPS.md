@@ -14,6 +14,22 @@ CI matrix: build × Go 1.22/1.23, vet, golangci-lint, test-sqlite, test-postgres
 
 ---
 
+## ⚠️ Shipped but NOT enforced
+
+Surfaces that exist, accept configuration and return it, while nothing acts
+on the value. Listed here because "the route exists" has repeatedly been
+read as "the control exists".
+
+| Surface | State | Reference |
+|---|---|---|
+| Per-org auth policy (`PATCH /organizations/{id}/policy`) | Stored and returned; **yauth enforces none of it by itself**. `ip_allowlist` and `idle_timeout_secs` apply only where the host installs `middleware.OrgPolicyEnforcer`; `max_session_duration_secs`, `max_concurrent_sessions`, `allowed_auth_methods`, `mfa_required` and the per-org `session_binding` are applied nowhere. | [docs/org-policy-enforcement.md](docs/org-policy-enforcement.md) |
+| `auth.IssueSessionWithPolicy` | Zero non-test callers. Every login path calls plain `auth.IssueSession`. | `auth/session.go` |
+
+The `enforcement` block on `GET /organizations/{id}/policy` reports the same
+breakdown to API clients.
+
+---
+
 ## ✅ Closed (chronological by commit cluster)
 
 ### Round 1 — top-10 priority list

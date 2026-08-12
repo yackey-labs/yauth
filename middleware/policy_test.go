@@ -137,6 +137,126 @@ func TestOrgPolicy_IdleTimeoutBlocks(t *testing.T) {
 	}
 }
 
+// Org B's allowlist must apply to /organizations/B/… even when the caller's
+// ACTIVE org is A. Keying enforcement off the active org alone made the
+// allowlist opt-out: switching active org is a self-service call, so the
+// caller chooses which policy governs them.
+func TestOrgPolicy_TargetOrgAllowlistAppliesRegardlessOfActiveOrg(t *testing.T) {
+	r := memrepo.New()
+	// Org A: no restriction. Org B: locked to 10.0.0.0/8.
+	_, _ = r.CreateOrganizationPolicy(context.Background(), domain.NewOrganizationPolicy{
+		OrganizationID: "orgA",
+		CreatedAt:      time.Now().UTC(),
+		UpdatedAt:      time.Now().UTC(),
+	})
+	_, _ = r.CreateOrganizationPolicy(context.Background(), domain.NewOrganizationPolicy{
+		OrganizationID: "orgB",
+		IPAllowlist:    []string{"10.0.0.0/8"},
+		CreatedAt:      time.Now().UTC(),
+		UpdatedAt:      time.Now().UTC(),
+	})
+
+	enf := middleware.NewOrgPolicyEnforcer(r, middleware.PolicyGlobals{SessionTTL: time.Hour})
+	called := false
+	h := enf.Wrap(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	au := &domain.AuthUser{
+		User:        domain.User{ID: "u1"},
+		Session:     domain.Session{UserID: "u1", CreatedAt: time.Now().UTC()},
+		ActiveOrgID: sp("orgA"),
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/auth/organizations/orgB/members", nil)
+	req.RemoteAddr = "172.16.0.1:1234" // outside orgB's allowlist
+	req = req.WithContext(contextWithAuthUserForTest(req.Context(), au))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("target org's allowlist not applied: got %d, want 403", rec.Code)
+	}
+	if called {
+		t.Fatal("next must NOT be called when the target org refuses the IP")
+	}
+}
+
+// The same request from inside orgB's allowlist passes.
+func TestOrgPolicy_TargetOrgAllowlistPermits(t *testing.T) {
+	r := memrepo.New()
+	_, _ = r.CreateOrganizationPolicy(context.Background(), domain.NewOrganizationPolicy{
+		OrganizationID: "orgB",
+		IPAllowlist:    []string{"10.0.0.0/8"},
+		CreatedAt:      time.Now().UTC(),
+		UpdatedAt:      time.Now().UTC(),
+	})
+	enf := middleware.NewOrgPolicyEnforcer(r, middleware.PolicyGlobals{SessionTTL: time.Hour})
+	called := false
+	h := enf.Wrap(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	au := &domain.AuthUser{
+		User:        domain.User{ID: "u1"},
+		Session:     domain.Session{UserID: "u1", CreatedAt: time.Now().UTC()},
+		ActiveOrgID: sp("orgA"),
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/auth/organizations/orgB/members", nil)
+	req.RemoteAddr = "10.0.0.9:1234"
+	req = req.WithContext(contextWithAuthUserForTest(req.Context(), au))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !called {
+		t.Fatalf("permitted IP was refused: %d", rec.Code)
+	}
+}
+
+// A caller with no active org at all still has to satisfy the target org.
+func TestOrgPolicy_TargetOrgAppliesWithNoActiveOrg(t *testing.T) {
+	r := memrepo.New()
+	_, _ = r.CreateOrganizationPolicy(context.Background(), domain.NewOrganizationPolicy{
+		OrganizationID: "orgB",
+		IPAllowlist:    []string{"10.0.0.0/8"},
+		CreatedAt:      time.Now().UTC(),
+		UpdatedAt:      time.Now().UTC(),
+	})
+	enf := middleware.NewOrgPolicyEnforcer(r, middleware.PolicyGlobals{SessionTTL: time.Hour})
+	h := enf.Wrap(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	au := &domain.AuthUser{
+		User:    domain.User{ID: "u1"},
+		Session: domain.Session{UserID: "u1", CreatedAt: time.Now().UTC()},
+	}
+	req := httptest.NewRequest(http.MethodPatch, "/api/auth/organizations/orgB/policy", nil)
+	req.RemoteAddr = "203.0.113.5:1234"
+	req = req.WithContext(contextWithAuthUserForTest(req.Context(), au))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("no-active-org caller escaped the target org's allowlist: %d", rec.Code)
+	}
+}
+
+func TestOrgPolicy_TargetOrgFromPath(t *testing.T) {
+	cases := map[string]string{
+		"/organizations/o1":                    "o1",
+		"/organizations/o1/members":            "o1",
+		"/api/auth/organizations/o2/policy":    "o2",
+		"/organizations/":                      "",
+		"/organizations":                       "",
+		"/users/u1":                            "",
+		"/api/auth/organizations/o3/audit/xyz": "o3",
+	}
+	for path, want := range cases {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		if got := middleware.TargetOrgFromPath(req); got != want {
+			t.Fatalf("TargetOrgFromPath(%q) = %q, want %q", path, got, want)
+		}
+	}
+}
+
 // contextWithAuthUserForTest mirrors the unexported test helper used by
 // the middleware package's other test files — but since AuthUserFromContext
 // is the only exported way to read the slot, we use the public injection

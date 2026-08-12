@@ -639,6 +639,16 @@ export interface ForgotPasswordResponse {
   message: string;
 }
 
+export interface PolicyEnforcementJSON {
+  /** @nullable */
+  enforced: string[] | null;
+  /** @nullable */
+  not_enforced: string[] | null;
+  note: string;
+  /** @nullable */
+  requires_host_wiring: string[] | null;
+}
+
 export interface OrgPolicyJSON {
   /** @nullable */
   allowed_auth_methods: string[] | null;
@@ -660,6 +670,7 @@ export interface OrgPolicyJSON {
 
 export interface GetOrgPolicyResponse {
   effective: EffectivePolicyJSON;
+  enforcement: PolicyEnforcementJSON;
   policy: OrgPolicyJSON;
 }
 

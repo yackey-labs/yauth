@@ -8,10 +8,17 @@
 // the UI can render appropriate session-timeout / MFA / IP warnings to
 // end users. PATCH is admin-gated.
 //
-// The response surfaces both the stored row (the raw on-disk values,
-// some of which may be nil meaning "inherit") AND the effective merged
-// policy after global defaults have been applied, so admins can verify
-// at a glance what the live policy is.
+// The response surfaces the stored row (the raw on-disk values, some of
+// which may be nil meaning "inherit"), the effective merged policy after
+// global defaults have been applied, and — because those two say nothing
+// about whether anything acts on them — an `enforcement` block naming
+// which fields yauth actually applies.
+//
+// yauth ENFORCES NONE OF THIS ON ITS OWN. These routes persist and return
+// organization configuration; ip_allowlist and idle_timeout_secs are
+// applied only where the host installs middleware.OrgPolicyEnforcer, and
+// the remaining fields have no enforcement anywhere in the module. See
+// docs/org-policy-enforcement.md.
 package organizations
 
 import (
@@ -52,9 +59,11 @@ type orgPolicyJSON struct {
 }
 
 // effectivePolicyJSON is the post-merge view returned alongside the
-// stored row on GET. It is the actual policy the enforcer will apply —
-// numeric ceilings are in min(global, org) form, binding flags are
-// post-resolution, and slice fields are the merged result.
+// stored row on GET: numeric ceilings in min(global, org) form, binding
+// flags post-resolution, slice fields merged.
+//
+// "Effective" here means "the value an enforcer would read", NOT "the
+// value being enforced" — the enforcement block is what answers that.
 type effectivePolicyJSON struct {
 	MaxSessionDurationSecs int64    `json:"max_session_duration_secs"`
 	IdleTimeoutSecs        int64    `json:"idle_timeout_secs"`
@@ -67,10 +76,61 @@ type effectivePolicyJSON struct {
 	BindUserAgent          bool     `json:"bind_user_agent"`
 }
 
-// getOrgPolicyResponse carries both shapes on GET.
+// policyEnforcementJSON tells the caller which of the fields it just read
+// or wrote yauth actually applies.
+//
+// This block exists because the honest answer is "none of them, unless you
+// wired it yourself", and an API that silently accepts security
+// configuration it ignores is worse than one that has no such setting: the
+// operator who sets ip_allowlist stops looking for a real IP control. The
+// `effective` block above describes the merged POLICY; this block describes
+// the ENFORCEMENT of it, and the two are not the same thing.
+type policyEnforcementJSON struct {
+	// Enforced lists policy fields yauth applies with no work from the
+	// host. Currently empty — see docs/org-policy-enforcement.md.
+	Enforced []string `json:"enforced"`
+	// RequiresHostWiring lists fields that have an enforcer which the host
+	// must install itself (middleware.OrgPolicyEnforcer, wrapped around
+	// its authenticated routes).
+	RequiresHostWiring []string `json:"requires_host_wiring"`
+	// NotEnforced lists fields yauth stores and returns but which no code
+	// path in yauth applies, however the host is wired.
+	NotEnforced []string `json:"not_enforced"`
+	// Note is a one-line human summary for admin UIs to surface verbatim.
+	Note string `json:"note"`
+}
+
+// policyEnforcementStatus is the single source of truth for the block
+// above. Change it in the same commit that changes what yauth enforces —
+// a stale value here is the booby trap this block exists to remove.
+func policyEnforcementStatus() policyEnforcementJSON {
+	return policyEnforcementJSON{
+		Enforced: []string{},
+		RequiresHostWiring: []string{
+			"ip_allowlist",
+			"idle_timeout_secs",
+		},
+		NotEnforced: []string{
+			"max_session_duration_secs",
+			"max_concurrent_sessions",
+			"allowed_auth_methods",
+			"mfa_required",
+			"mfa_grace_period_days",
+			"session_binding",
+		},
+		Note: "yauth stores this policy but does not enforce it on its own. " +
+			"ip_allowlist and idle_timeout_secs apply only where the host installs " +
+			"middleware.OrgPolicyEnforcer; the remaining fields have no enforcement in yauth. " +
+			"See docs/org-policy-enforcement.md.",
+	}
+}
+
+// getOrgPolicyResponse carries all three shapes on GET: what is stored,
+// what it merges to, and what is actually applied.
 type getOrgPolicyResponse struct {
-	Policy    *orgPolicyJSON      `json:"policy"`
-	Effective effectivePolicyJSON `json:"effective"`
+	Policy      *orgPolicyJSON        `json:"policy"`
+	Effective   effectivePolicyJSON   `json:"effective"`
+	Enforcement policyEnforcementJSON `json:"enforcement"`
 }
 
 // patchOrgPolicyRequest is the on-the-wire shape for PATCH. Each field
@@ -204,8 +264,9 @@ func (p *orgsPlugin) registerGetOrgPolicy(host plugin.PluginHost, api huma.API, 
 			stored = &j
 		}
 		return &getOrgPolicyOutput{Body: getOrgPolicyResponse{
-			Policy:    stored,
-			Effective: toEffectiveJSON(enf.Effective()),
+			Policy:      stored,
+			Effective:   toEffectiveJSON(enf.Effective()),
+			Enforcement: policyEnforcementStatus(),
 		}}, nil
 	})
 }
@@ -263,8 +324,9 @@ func (p *orgsPlugin) registerPatchOrgPolicy(host plugin.PluginHost, api huma.API
 		})
 		j := toOrgPolicyJSON(updated)
 		return &getOrgPolicyOutput{Body: getOrgPolicyResponse{
-			Policy:    &j,
-			Effective: toEffectiveJSON(enf.Effective()),
+			Policy:      &j,
+			Effective:   toEffectiveJSON(enf.Effective()),
+			Enforcement: policyEnforcementStatus(),
 		}}, nil
 	})
 }

@@ -154,6 +154,30 @@ type SamlConnectionConfig struct {
 	// opt in per connection.
 	IdpInitiatedSsoAllowed bool `json:"idp_initiated_sso_allowed,omitempty"`
 
+	// AllowAccountAdoption permits a first SAML login to LINK to an
+	// existing yauth account that merely shares the asserted email
+	// address, instead of refusing. OFF by default.
+	//
+	// OIDC gates this on the id_token's email_verified claim (#82).
+	// SAML has no standard equivalent — there is no attribute the
+	// protocol requires an IdP to send saying "I checked this
+	// address" — so the only two honest options are to trust every
+	// assertion's issuer or to make the operator say so. Trusting
+	// the issuer means an IdP that permits self-service registration
+	// with arbitrary addresses can bind ANY pre-existing yauth
+	// account to a subject it controls: the connection being
+	// admin-wired bounds WHICH IdP may assert, not WHICH ADDRESSES
+	// it will assert. So this is opt-in, per connection, exactly as
+	// IdpInitiatedSsoAllowed is.
+	//
+	// Turn it on when the IdP is the authoritative directory for the
+	// addresses it asserts (its users cannot choose their own email,
+	// or it verifies them) AND you are migrating users who already
+	// have password accounts. Leaving it off does NOT affect
+	// first-time provisioning of users who have no account here:
+	// JIT still creates them.
+	AllowAccountAdoption bool `json:"allow_account_adoption,omitempty"`
+
 	// AssertionSignedRequired demands that the inbound assertion
 	// itself carry a valid signature (vs. relying on the wrapping
 	// Response signature only). Default true. Disabling violates
@@ -291,6 +315,7 @@ type persistedConfig struct {
 	SpEntityID              string            `json:"sp_entity_id,omitempty"`
 	SpAcsURL                string            `json:"sp_acs_url,omitempty"`
 	IdpInitiatedSsoAllowed  bool              `json:"idp_initiated_sso_allowed,omitempty"`
+	AllowAccountAdoption    bool              `json:"allow_account_adoption,omitempty"`
 	AssertionSignedRequired bool              `json:"assertion_signed_required"`
 	ResponseSignedRequired  bool              `json:"response_signed_required"`
 	WantEncryptedAssertions bool              `json:"want_encrypted_assertions,omitempty"`
@@ -314,6 +339,7 @@ func marshalSamlConfig(key [32]byte, c SamlConnectionConfig) ([]byte, error) {
 		SpEntityID:              c.SpEntityID,
 		SpAcsURL:                c.SpAcsURL,
 		IdpInitiatedSsoAllowed:  c.IdpInitiatedSsoAllowed,
+		AllowAccountAdoption:    c.AllowAccountAdoption,
 		AssertionSignedRequired: c.AssertionSignedRequired,
 		ResponseSignedRequired:  c.ResponseSignedRequired,
 		WantEncryptedAssertions: c.WantEncryptedAssertions,
@@ -350,6 +376,7 @@ func unmarshalSamlConfig(key [32]byte, raw []byte) (SamlConnectionConfig, error)
 		SpEntityID:              p.SpEntityID,
 		SpAcsURL:                p.SpAcsURL,
 		IdpInitiatedSsoAllowed:  p.IdpInitiatedSsoAllowed,
+		AllowAccountAdoption:    p.AllowAccountAdoption,
 		AssertionSignedRequired: p.AssertionSignedRequired,
 		ResponseSignedRequired:  p.ResponseSignedRequired,
 		WantEncryptedAssertions: p.WantEncryptedAssertions,
@@ -390,6 +417,7 @@ func peekSamlConfigPublic(raw []byte) (SamlConnectionConfig, error) {
 		SpEntityID:              p.SpEntityID,
 		SpAcsURL:                p.SpAcsURL,
 		IdpInitiatedSsoAllowed:  p.IdpInitiatedSsoAllowed,
+		AllowAccountAdoption:    p.AllowAccountAdoption,
 		AssertionSignedRequired: p.AssertionSignedRequired,
 		ResponseSignedRequired:  p.ResponseSignedRequired,
 		WantEncryptedAssertions: p.WantEncryptedAssertions,

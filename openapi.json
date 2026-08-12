@@ -3357,6 +3357,9 @@
       "SamlConnectionConfig": {
         "additionalProperties": false,
         "properties": {
+          "allow_account_adoption": {
+            "type": "boolean"
+          },
           "assertion_signed_required": {
             "type": "boolean"
           },
@@ -3493,6 +3496,9 @@
       "SamlPublicConfig": {
         "additionalProperties": false,
         "properties": {
+          "allow_account_adoption": {
+            "type": "boolean"
+          },
           "assertion_signed_required": {
             "type": "boolean"
           },
@@ -3546,6 +3552,7 @@
           "sp_entity_id",
           "sp_acs_url",
           "idp_initiated_sso_allowed",
+          "allow_account_adoption",
           "assertion_signed_required",
           "response_signed_required",
           "want_encrypted_assertions",

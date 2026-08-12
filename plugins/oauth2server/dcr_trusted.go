@@ -5,10 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
+
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/lestrrat-go/jwx/v3/jwk"
 	"github.com/lestrrat-go/jwx/v3/jwt"
@@ -24,13 +28,94 @@ type trustedStatement struct {
 	ReturnURI        string // guided handshake: where the IdP redirects after approval
 }
 
+// errIssuerFetch marks every failure that came from TALKING to the issuer
+// (DNS, dial, TLS, status code, body decode) as opposed to parsing or verifying
+// the statement itself. Handlers collapse it to one fixed message: the Go error
+// text distinguishes "connection refused" from "i/o timeout" from "returned
+// 401", which is exactly the discrimination that turns a blind SSRF into a
+// host/port scanner for the caller.
+var errIssuerFetch = errors.New("could not retrieve the issuer's signing keys")
+
+// trustedIssuerClient is the HTTP client used to fetch a software_statement
+// issuer's discovery document and JWKS.
+//
+// The URL it is pointed at comes from the `iss` of an UNVERIFIED JWT — on the
+// guided-handshake path (verifyStatementSignature) there is no allow-list in
+// front of it at all, because the trust decision there is the admin's click,
+// which happens AFTER this fetch. That makes the fetch itself the SSRF
+// primitive, so it gets the same post-DNS-resolution IP filter that the
+// private_key_jwt jwks_uri fetch has had (safeDialContext, which resolves and
+// checks every A record before dialling and so is DNS-rebinding-proof).
+//
+// Redirects are capped at 3 rather than the default 10; each hop is re-dialled
+// through the same guard, so the cap is about bounding work, not about safety.
 func (p *oauth2Plugin) trustedIssuerClient() *http.Client {
 	if p.cfg.DCRTrustedIssuerHTTPClient != nil {
 		return p.cfg.DCRTrustedIssuerHTTPClient
 	}
 	// otelhttp so the W3C traceparent propagates to the peer issuer when we fetch
 	// its discovery + JWKS to verify a software_statement.
-	return &http.Client{Timeout: 15 * time.Second, Transport: otelhttp.NewTransport(http.DefaultTransport)}
+	base := http.DefaultTransport
+	if !p.cfg.AllowPrivateNetworkJWKSURI {
+		t := http.DefaultTransport.(*http.Transport).Clone()
+		t.DialContext = safeDialContext(&net.Dialer{
+			Timeout:   10 * time.Second,
+			KeepAlive: 30 * time.Second,
+		})
+		base = t
+	}
+	return &http.Client{
+		Timeout:   15 * time.Second,
+		Transport: otelhttp.NewTransport(base),
+		CheckRedirect: func(_ *http.Request, via []*http.Request) error {
+			if len(via) >= 3 {
+				return errors.New("too many redirects")
+			}
+			return nil
+		},
+	}
+}
+
+// issuerFetchAllowed rejects an issuer URL before any packet leaves the
+// process. The IP filter in safeDialContext handles where the request GOES;
+// this handles what it can be at all — an `iss` of "file:///etc/passwd" or
+// "gopher://…" never reaches a dialer, and plaintext http is refused outside
+// the development escape hatch that already exists for loopback JWKS.
+func (p *oauth2Plugin) issuerFetchAllowed(issuer string) error {
+	u, err := url.Parse(issuer)
+	if err != nil {
+		return fmt.Errorf("software_statement issuer is not a valid URL")
+	}
+	switch u.Scheme {
+	case "https":
+	case "http":
+		if !p.cfg.AllowPrivateNetworkJWKSURI {
+			return fmt.Errorf("software_statement issuer must be an https URL")
+		}
+	default:
+		return fmt.Errorf("software_statement issuer must be an https URL")
+	}
+	if u.Host == "" {
+		return fmt.Errorf("software_statement issuer must be an https URL")
+	}
+	return nil
+}
+
+// statementErrMessage renders a software_statement verification failure for the
+// wire. Parse/verify failures describe themselves — they are about the caller's
+// own JWT and help an integrator. Anything that came from reaching out to the
+// issuer collapses to errIssuerFetch's fixed text: the underlying Go error
+// distinguishes refused/timeout/404/TLS-mismatch per host and port, which is a
+// working network scanner for whoever supplies the `iss`. The detail is logged
+// for the operator instead.
+func statementErrMessage(ctx context.Context, log *slog.Logger, err error) string {
+	if errors.Is(err, errIssuerFetch) {
+		if log != nil {
+			log.WarnContext(ctx, "oauth2server: software_statement issuer fetch failed", "err", err)
+		}
+		return errIssuerFetch.Error()
+	}
+	return sanitizeErr(err)
 }
 
 // verifySoftwareStatement validates a DCR software_statement (RFC 7591): it reads
@@ -68,15 +153,27 @@ func (p *oauth2Plugin) verifyStatementSignature(ctx context.Context, jws string)
 	if iss == "" {
 		return nil, errors.New("software_statement has no issuer")
 	}
-
-	// Resolve the issuer's JWKS via its discovery document.
-	jwksURI, err := fetchIssuerJWKSURI(ctx, p.trustedIssuerClient(), iss)
-	if err != nil {
+	if err := p.issuerFetchAllowed(iss); err != nil {
 		return nil, err
 	}
-	set, err := jwk.Fetch(ctx, jwksURI, jwk.WithHTTPClient(p.trustedIssuerClient()))
+
+	// Resolve the issuer's JWKS via its discovery document. Every failure from
+	// here to the end of the JWKS fetch is wrapped in errIssuerFetch so callers
+	// cannot read the peer's dial/status detail back off the response — see
+	// errIssuerFetch.
+	hc := p.trustedIssuerClient()
+	jwksURI, err := fetchIssuerJWKSURI(ctx, hc, iss)
 	if err != nil {
-		return nil, fmt.Errorf("fetch trusted issuer JWKS: %w", err)
+		return nil, fmt.Errorf("%w: %w", errIssuerFetch, err)
+	}
+	// jwks_uri is the issuer's own claim about where its keys live and is
+	// fetched next, so it is a second SSRF hop and gets the same pre-flight.
+	if err := p.issuerFetchAllowed(jwksURI); err != nil {
+		return nil, fmt.Errorf("%w: %w", errIssuerFetch, err)
+	}
+	set, err := jwk.Fetch(ctx, jwksURI, jwk.WithHTTPClient(hc))
+	if err != nil {
+		return nil, fmt.Errorf("%w: fetch trusted issuer JWKS: %w", errIssuerFetch, err)
 	}
 
 	// 3. Verify signature + standard claims (exp, iss) against that key set.

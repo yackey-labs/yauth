@@ -1,11 +1,16 @@
-package oauth
+package auth_test
 
-import "testing"
+import (
+	"testing"
 
-// TestSafeRedirect verifies the open-redirect mitigation: the plugin
-// honors only redirect_url values on the AllowedRedirectURLs list (or
-// host-relative paths). Closes the gap surfaced by
-// pentest_test.go::TestPentest_OAuthOpenRedirect_NotEnforced.
+	"github.com/yackey-labs/yauth/auth"
+)
+
+// TestSafeRedirect is the consolidated table that plugins/oauth,
+// plugins/ssooidc and plugins/ssosaml all now share a single implementation
+// of. The backslash and control-character rows are the regression: they were
+// ALLOWED by the pre-fix `HasPrefix(in,"/") && !HasPrefix(in,"//")` check and
+// every one of them navigates a browser to another origin.
 func TestSafeRedirect(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -21,6 +26,27 @@ func TestSafeRedirect(t *testing.T) {
 		{"empty_list_rejects_javascript_uri", nil, "javascript:alert(1)", ""},
 		{"empty_input", nil, "", ""},
 		{"whitespace_only", nil, "   ", ""},
+
+		// --- the bypasses ---------------------------------------------
+		// WHATWG relative-slash state normalises \ to / — the browser
+		// resolves each of these to another origin.
+		{"rejects_backslash_escape", nil, `/\evil.com`, ""},
+		{"rejects_backslash_slash", nil, `/\/evil.com`, ""},
+		{"rejects_double_backslash", nil, `\\evil.com`, ""},
+		{"rejects_slash_backslash_path", nil, `/\evil.com/path`, ""},
+		// Browsers strip tab/LF/CR from a URL before parsing it.
+		{"rejects_tab", nil, "/\tevil.com", ""},
+		{"rejects_lf", nil, "/\n/evil.com", ""},
+		{"rejects_cr", nil, "/\r/evil.com", ""},
+		{"rejects_embedded_crlf_header_injection", nil, "/ok\r\nX-Injected: 1", ""},
+		{"rejects_null_byte", nil, "/ok\x00/evil.com", ""},
+		{"rejects_del", nil, "/ok\x7f/evil.com", ""},
+		// ...including inside an otherwise allow-listed absolute URL.
+		{"rejects_control_in_allowed_absolute", []string{"https://app.example.com"}, "https://app.example.com/\r\nX: 1", ""},
+
+		// A backslash that is not part of the leading slash run is harmless
+		// and must still work — it cannot change the origin.
+		{"allows_backslash_deeper_in_path", nil, `/files/a\b`, `/files/a\b`},
 
 		// Allow-list with one entry.
 		{"allow_exact", []string{"https://app.example.com"}, "https://app.example.com", "https://app.example.com"},
@@ -40,10 +66,9 @@ func TestSafeRedirect(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			p := &oauthPlugin{cfg: Config{AllowedRedirectURLs: tc.allowed}}
-			got := p.safeRedirect(tc.input)
+			got := auth.SafeRedirect(tc.input, tc.allowed)
 			if got != tc.want {
-				t.Errorf("safeRedirect(%q) with allow=%v: got %q want %q", tc.input, tc.allowed, got, tc.want)
+				t.Errorf("SafeRedirect(%q, %v): got %q want %q", tc.input, tc.allowed, got, tc.want)
 			}
 		})
 	}

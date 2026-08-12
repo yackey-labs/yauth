@@ -127,30 +127,10 @@ func cookieOptionsFromHost(host plugin.PluginHost, r *http.Request, maxAge int) 
 }
 
 // safeRedirect filters the incoming redirect_url against the plugin's
-// AllowedRedirectURLs allow-list. Same algorithm as the ssooidc plugin.
+// AllowedRedirectURLs allow-list. The algorithm lives in auth.SafeRedirect,
+// shared with the oauth and sso_oidc plugins.
 func (p *ssoSAMLPlugin) safeRedirect(in string) string {
-	in = strings.TrimSpace(in)
-	if in == "" {
-		return ""
-	}
-	if strings.HasPrefix(in, "/") && !strings.HasPrefix(in, "//") {
-		return in
-	}
-	for _, allowed := range p.cfg.AllowedRedirectURLs {
-		if allowed == "" {
-			continue
-		}
-		if in == allowed {
-			return in
-		}
-		if strings.HasPrefix(in, allowed) {
-			rest := in[len(allowed):]
-			if rest == "" || rest[0] == '/' || rest[0] == '?' || rest[0] == '#' {
-				return in
-			}
-		}
-	}
-	return ""
+	return auth.SafeRedirect(in, p.cfg.AllowedRedirectURLs)
 }
 
 // resolveConnection picks the target SAML SsoConnection from the query
@@ -479,13 +459,18 @@ func (p *ssoSAMLPlugin) registerSamlACS(host plugin.PluginHost, api huma.API, pr
 		}
 
 		provider := "saml:" + IssuerKeyFromEntityID(cfg.IdpEntityID)
-		userID, isNew, err := p.resolveOrJITUser(ctx, host, conn, provider, extID, email, displayName)
+		userID, isNew, err := p.resolveOrJITUser(ctx, host, conn, cfg.AllowAccountAdoption, provider, extID, email, displayName)
 		if err != nil {
 			if errors.Is(err, errJITDisabled) {
 				return writeError(http.StatusForbidden, "JIT_DISABLED", "your account is not provisioned in this organization; ask an admin to invite you"), nil
 			}
 			if errors.Is(err, errEmailRequired) {
 				return writeError(http.StatusBadRequest, "NO_EMAIL", "assertion missing email attribute"), nil
+			}
+			if errors.Is(err, errAdoptionDisallowed) {
+				// Names the connection's setting rather than confirming that
+				// an account with this address exists here.
+				return writeError(http.StatusForbidden, "ADOPTION_DISABLED", "this SSO connection is not permitted to link to a pre-existing account; ask an admin to enable allow_account_adoption on the connection, or sign in with your existing credentials and link the connection from your account"), nil
 			}
 			return writeError(http.StatusInternalServerError, "INTERNAL", err.Error()), nil
 		}
@@ -612,15 +597,19 @@ func (p *ssoSAMLPlugin) registerSamlLogout(host plugin.PluginHost, api huma.API,
 // --- helpers ----------------------------------------------------------
 
 var (
-	errJITDisabled   = errors.New("ssosaml: jit disabled")
-	errEmailRequired = errors.New("ssosaml: email attribute required")
+	errJITDisabled = errors.New("ssosaml: jit disabled")
+	// errAdoptionDisallowed is returned when the asserted email matches an
+	// EXISTING yauth account and the connection has not opted in to adopting
+	// it. See SamlConnectionConfig.AllowAccountAdoption.
+	errAdoptionDisallowed = errors.New("ssosaml: account adoption not enabled for this connection")
+	errEmailRequired      = errors.New("ssosaml: email attribute required")
 )
 
 // resolveOrJITUser is the SAML-flavored mirror of the OIDC plugin's
 // helper of the same name. The behavior is identical: look up the
 // (provider, ext_id) link, JIT-provision if missing and allowed,
 // reject if JIT is off.
-func (p *ssoSAMLPlugin) resolveOrJITUser(ctx context.Context, host plugin.PluginHost, conn *domain.SsoConnection, provider, extID, email string, displayName *string) (string, bool, error) {
+func (p *ssoSAMLPlugin) resolveOrJITUser(ctx context.Context, host plugin.PluginHost, conn *domain.SsoConnection, allowAdoption bool, provider, extID, email string, displayName *string) (string, bool, error) {
 	if extID == "" {
 		return "", false, errors.New("ssosaml: external id is empty")
 	}
@@ -655,6 +644,20 @@ func (p *ssoSAMLPlugin) resolveOrJITUser(ctx context.Context, host plugin.Plugin
 	var userID string
 	isNew := false
 	if existing != nil {
+		// ADOPTION. This binds an account the IdP did not create to an IdP
+		// subject, on nothing but the asserted address — after which the first
+		// branch of this function signs that subject in forever without ever
+		// looking at the address again. #81 closed this in plugins/oauth and
+		// #82 in plugins/ssooidc by requiring email_verified; SAML has no such
+		// claim, so the gate is the connection's explicit opt-in instead. See
+		// SamlConnectionConfig.AllowAccountAdoption for why that, and not
+		// "trust the issuer".
+		//
+		// Creating a NEW user is deliberately untouched: it takes over
+		// nothing, so first-time SSO provisioning is unaffected.
+		if !allowAdoption {
+			return "", false, errAdoptionDisallowed
+		}
 		if existing.Banned {
 			return "", false, errors.New("ssosaml: account suspended")
 		}

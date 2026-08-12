@@ -27,6 +27,7 @@ import (
 	"github.com/yackey-labs/yauth/plugin"
 	"github.com/yackey-labs/yauth/repo"
 	"github.com/yackey-labs/yauth/telemetry"
+	"github.com/yackey-labs/yauth/yauthcfg"
 )
 
 // YAuth is a fully-built authentication stack. Construct it via the
@@ -64,6 +65,9 @@ type YAuthBuilder struct {
 	telemetryShut   func(context.Context) error
 	jwtSecret       []byte
 	logger          *slog.Logger
+	// deferredErr carries a validation failure from a With* setter, which
+	// cannot return one, through to Build().
+	deferredErr error
 }
 
 // New starts a new builder bound to the supplied repository and config.
@@ -122,7 +126,21 @@ func (b *YAuthBuilder) WithTelemetryShutdown(shutdown func(context.Context) erro
 // PluginHost.JWTSecret. The bearer plugin reads this when it lacks its
 // own secret configuration; setting it at builder time keeps wiring
 // simple in the common case.
+//
+// The secret must be at least [yauthcfg.MinJWTSecretBytes] bytes. This used to
+// accept anything, including a single byte, and every bearer access token,
+// refresh binding and machine credential in the deployment was signed with it —
+// recoverable offline from one captured token. RFC 7518 §3.2 requires a key at
+// least as long as the hash output for HS256.
+//
+// The builder cannot return an error here, so a short secret is recorded and
+// surfaced by [YAuthBuilder.Build] rather than swallowed. Generate one with
+// `yauth gen-secrets`.
 func (b *YAuthBuilder) WithJWTSecret(secret []byte) *YAuthBuilder {
+	if n := len(secret); n > 0 && n < yauthcfg.MinJWTSecretBytes {
+		b.deferredErr = fmt.Errorf("yauth: WithJWTSecret was given a %d-byte HS256 secret; at least %d bytes are required (RFC 7518 §3.2) — generate one with `yauth gen-secrets`", n, yauthcfg.MinJWTSecretBytes)
+		return b
+	}
 	b.jwtSecret = secret
 	return b
 }
@@ -142,6 +160,9 @@ func (b *YAuthBuilder) WithLogger(l *slog.Logger) *YAuthBuilder {
 // middleware, asks each plugin to register its routes onto an internal
 // ServeMux, and returns the assembled object.
 func (b *YAuthBuilder) Build() (*YAuth, error) {
+	if b.deferredErr != nil {
+		return nil, b.deferredErr
+	}
 	// Reject duplicate plugins up front with a clear error rather than letting
 	// huma panic on colliding route registrations. This is the guard for the
 	// mix-and-match footgun: the same plugin wired via both NewBuilderFromConfig

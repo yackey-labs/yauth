@@ -157,6 +157,7 @@ type samlPublicConfig struct {
 	SpEntityID              string            `json:"sp_entity_id"`
 	SpAcsURL                string            `json:"sp_acs_url"`
 	IdpInitiatedSsoAllowed  bool              `json:"idp_initiated_sso_allowed"`
+	AllowAccountAdoption    bool              `json:"allow_account_adoption"`
 	AssertionSignedRequired bool              `json:"assertion_signed_required"`
 	ResponseSignedRequired  bool              `json:"response_signed_required"`
 	WantEncryptedAssertions bool              `json:"want_encrypted_assertions"`
@@ -190,6 +191,7 @@ func toConnectionJSON(c domain.SsoConnection, baseURL string) samlConnectionJSON
 				SpEntityID:              pub.EntityIDForConnection(baseURL, c.ID),
 				SpAcsURL:                pub.ACSURLForConnection(baseURL),
 				IdpInitiatedSsoAllowed:  pub.IdpInitiatedSsoAllowed,
+				AllowAccountAdoption:    pub.AllowAccountAdoption,
 				AssertionSignedRequired: pub.AssertionSignedRequired,
 				ResponseSignedRequired:  pub.ResponseSignedRequired,
 				WantEncryptedAssertions: pub.WantEncryptedAssertions,
@@ -493,6 +495,7 @@ func (p *ssoSAMLPlugin) registerUpdateConnection(host plugin.PluginHost, api hum
 			// false; not great UX but the security-critical default
 			// is intentional.
 			merged.IdpInitiatedSsoAllowed = req.SAML.IdpInitiatedSsoAllowed
+			merged.AllowAccountAdoption = req.SAML.AllowAccountAdoption
 			merged.AssertionSignedRequired = req.SAML.AssertionSignedRequired
 			merged.ResponseSignedRequired = req.SAML.ResponseSignedRequired
 			merged.WantEncryptedAssertions = req.SAML.WantEncryptedAssertions

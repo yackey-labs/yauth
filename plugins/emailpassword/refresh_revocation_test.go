@@ -106,7 +106,7 @@ func registerUser(t *testing.T, srv *httptest.Server, email, password string) {
 		"email": email, "password": password,
 	})
 	res.Body.Close()
-	if res.StatusCode != http.StatusCreated {
+	if res.StatusCode != http.StatusOK && res.StatusCode != http.StatusCreated {
 		t.Fatalf("register: %d", res.StatusCode)
 	}
 }

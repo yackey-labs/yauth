@@ -43,7 +43,7 @@ func TestOAuthCallback_RefusesUnverifiedEmailAdoption(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 	rres.Body.Close()
-	if rres.StatusCode != http.StatusCreated {
+	if rres.StatusCode != http.StatusOK {
 		t.Fatalf("register: %d", rres.StatusCode)
 	}
 	logoutReq, _ := http.NewRequest(http.MethodPost, s.srv.URL+"/api/auth/logout", nil)

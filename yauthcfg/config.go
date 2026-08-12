@@ -248,6 +248,12 @@ type EmailPasswordPluginConfig struct {
 	RequireEmailVerification bool          `yaml:"require_email_verification" toml:"require_email_verification"`
 	RememberMeTTL            time.Duration `yaml:"remember_me_ttl" toml:"remember_me_ttl"`
 
+	// RevealRegistrationOutcome opts OUT of enumeration-neutral /register:
+	// true restores the 201 + user + session cookie for a fresh account, which
+	// tells an anonymous caller whether the address already has one. See
+	// emailpassword.Config.RevealRegistrationOutcome. Default false.
+	RevealRegistrationOutcome bool `yaml:"reveal_registration_outcome" toml:"reveal_registration_outcome"`
+
 	// HIBPCheck is a tri-state pointer: nil = default (true), &true =
 	// enabled, &false = explicitly disabled. The pointer shape lets
 	// operators turn the check off in air-gapped or test environments

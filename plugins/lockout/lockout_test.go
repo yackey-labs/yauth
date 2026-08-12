@@ -100,8 +100,21 @@ func register(t *testing.T, srv *httptest.Server, c *http.Client, email, pw stri
 		"email":    email,
 		"password": pw,
 	})
-	if res.StatusCode != http.StatusCreated {
+	if res.StatusCode != http.StatusOK && res.StatusCode != http.StatusCreated {
 		t.Fatalf("register: %d (%s)", res.StatusCode, drain(res))
+	}
+	res.Body.Close()
+
+	// /register is enumeration-neutral: it answers 200 with the same body
+	// whether or not the address was free and issues NO session (see
+	// emailpassword.Config.RevealRegistrationOutcome), so sign in afterwards —
+	// which is what a client does now.
+	res = postJSON(t, c, srv.URL+"/api/auth/login", map[string]string{
+		"email":    email,
+		"password": pw,
+	})
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("login after register: %d (%s)", res.StatusCode, drain(res))
 	}
 	res.Body.Close()
 }

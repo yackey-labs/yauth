@@ -114,38 +114,17 @@ const (
 // safeRedirect filters the incoming redirect_url against the plugin's
 // AllowedRedirectURLs allow-list. Returns the empty string for any URL
 // that isn't on the list — the callback then falls back to its default
-// landing page rather than honoring an attacker-controlled URL. Relative
-// paths (starting with "/") are always allowed since they cannot escape
-// the host.
+// landing page rather than honoring an attacker-controlled URL.
+//
+// The algorithm lives in auth.SafeRedirect, shared verbatim with the
+// sso_oidc and sso_saml plugins: this file, ssooidc/handlers_login.go and
+// ssosaml/handlers_login.go each carried a byte-identical copy, and a
+// backslash bypass in the copy here was equally open in the other two.
 //
 // This closes the open-redirect surface flagged by
 // TestPentest_OAuthOpenRedirect_NotEnforced.
 func (p *oauthPlugin) safeRedirect(in string) string {
-	in = strings.TrimSpace(in)
-	if in == "" {
-		return ""
-	}
-	if strings.HasPrefix(in, "/") && !strings.HasPrefix(in, "//") {
-		return in
-	}
-	for _, allowed := range p.cfg.AllowedRedirectURLs {
-		if allowed == "" {
-			continue
-		}
-		if in == allowed {
-			return in
-		}
-		// Strict prefix: the byte after the prefix must be a path
-		// terminator so "https://app.example.com" cannot match
-		// "https://app.example.com.evil.com/...".
-		if strings.HasPrefix(in, allowed) {
-			rest := in[len(allowed):]
-			if rest == "" || rest[0] == '/' || rest[0] == '?' || rest[0] == '#' {
-				return in
-			}
-		}
-	}
-	return ""
+	return auth.SafeRedirect(in, p.cfg.AllowedRedirectURLs)
 }
 
 // stateMetadata serialises into the OAuthState.RedirectURL field as

@@ -78,6 +78,12 @@ func TestTelemetry_RegisterInstrumentation(t *testing.T) {
 			HIBPCheck:         true,
 			HIBPCheckSet:      true,
 			HIBPEndpoint:      hibp.URL + "/range/",
+			// This test asserts on the register flow's spans, which include
+			// yauth.session.create — a span that only exists when /register
+			// issues a session. Enumeration-neutral mode (the default) does
+			// not, so opt this harness into the legacy behaviour rather than
+			// narrow what the test covers.
+			RevealRegistrationOutcome: true,
 		})).
 		Build()
 	if err != nil {
@@ -223,13 +229,17 @@ func TestTelemetry_SessionResolveStampsUserID(t *testing.T) {
 	srv := httptest.NewServer(otelhttp.NewHandler(mux, "auth"))
 	defer srv.Close()
 
-	// Register to obtain a session cookie.
-	r1 := postJSON(t, srv.URL+"/api/auth/register",
+	// Register, then sign in to obtain a session cookie — /register is
+	// enumeration-neutral and issues none of its own.
+	r0 := postJSON(t, srv.URL+"/api/auth/register",
+		map[string]any{"email": "resolve@example.com", "password": "correct horse battery staple"})
+	r0.Body.Close()
+	r1 := postJSON(t, srv.URL+"/api/auth/login",
 		map[string]any{"email": "resolve@example.com", "password": "correct horse battery staple"})
 	cookie := findCookie(r1, "yauth_session")
 	r1.Body.Close()
 	if cookie == nil {
-		t.Fatalf("no session cookie from register")
+		t.Fatalf("no session cookie from login")
 	}
 
 	const traceID = "33333333333333333333333333333333"
@@ -297,7 +307,7 @@ func TestTelemetry_LoginStampsUserID(t *testing.T) {
 	// Register first (records spans for the register flow; we focus on login).
 	r1 := postJSON(t, srv.URL+"/api/auth/register", map[string]any{"email": email, "password": password})
 	r1.Body.Close()
-	if r1.StatusCode != http.StatusCreated {
+	if r1.StatusCode != http.StatusOK {
 		t.Fatalf("register: %d", r1.StatusCode)
 	}
 

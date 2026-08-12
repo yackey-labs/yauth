@@ -308,6 +308,19 @@ func (p *passkeyPlugin) handleLoginBegin(host plugin.PluginHost) func(context.Co
 		if err != nil {
 			return nil, huma.Error500InternalServerError("unable to begin login")
 		}
+		// An address that resolved to no usable passkey has so far produced an
+		// EMPTY allowCredentials while a known one produced a populated list —
+		// a free, unlimited, unauthenticated account-existence oracle on a
+		// route that is not even rate-limited. Fill the empty case with decoys
+		// derived deterministically from the address so the two answers have
+		// the same shape. See decoy.go for what this does and does not buy.
+		//
+		// Only the email-addressed flow gets decoys: a request with no email at
+		// all is the discoverable ("usernameless") ceremony, which asserts
+		// nothing about any address and is correct to leave empty.
+		if email != "" && options != nil && len(options.Response.AllowedCredentials) == 0 {
+			options.Response.AllowedCredentials = decoyCredentials(host.JWTSecret(), email)
+		}
 
 		sessJSON, err := json.Marshal(sess)
 		if err != nil {

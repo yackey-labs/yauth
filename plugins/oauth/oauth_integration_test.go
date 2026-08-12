@@ -361,12 +361,13 @@ func TestOAuthFlow_LinksToExistingUserByEmail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	if res.StatusCode != http.StatusCreated {
+	if res.StatusCode != http.StatusOK {
 		t.Fatalf("register: %d (%s)", res.StatusCode, drainBody(res))
 	}
 	res.Body.Close()
 
-	// Logout so the OAuth flow runs as anonymous.
+	// Logout so the OAuth flow runs as anonymous. /register no longer issues a
+	// session at all, so this is belt-and-braces.
 	logoutReq, _ := http.NewRequest(http.MethodPost, s.srv.URL+"/api/auth/logout", nil)
 	res2, _ := s.client.Do(logoutReq)
 	res2.Body.Close()
@@ -413,16 +414,32 @@ func TestOAuthFlow_LinksToExistingUserByEmail(t *testing.T) {
 // retains the session so subsequent requests on s.client are authenticated.
 func registerAndLogin(t *testing.T, s *stack, email string) {
 	t.Helper()
-	body := strings.NewReader(`{"email":"` + email + `","password":"correct horse battery staple"}`)
+	const password = "correct horse battery staple"
+	body := strings.NewReader(`{"email":"` + email + `","password":"` + password + `"}`)
 	req, _ := http.NewRequest(http.MethodPost, s.srv.URL+"/api/auth/register", body)
 	req.Header.Set("Content-Type", "application/json")
 	res, err := s.client.Do(req)
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	defer res.Body.Close()
-	if res.StatusCode != http.StatusCreated {
+	if res.StatusCode != http.StatusOK && res.StatusCode != http.StatusCreated {
 		t.Fatalf("register: %d (%s)", res.StatusCode, drainBody(res))
+	}
+	res.Body.Close()
+
+	// /register is enumeration-neutral: it answers 200 with the same body
+	// whether or not the address was free and issues NO session (see
+	// emailpassword.Config.RevealRegistrationOutcome), so sign in afterwards.
+	loginBody := strings.NewReader(`{"email":"` + email + `","password":"` + password + `"}`)
+	loginReq, _ := http.NewRequest(http.MethodPost, s.srv.URL+"/api/auth/login", loginBody)
+	loginReq.Header.Set("Content-Type", "application/json")
+	lres, err := s.client.Do(loginReq)
+	if err != nil {
+		t.Fatalf("login after register: %v", err)
+	}
+	defer lres.Body.Close()
+	if lres.StatusCode != http.StatusOK {
+		t.Fatalf("login after register: %d (%s)", lres.StatusCode, drainBody(lres))
 	}
 }
 

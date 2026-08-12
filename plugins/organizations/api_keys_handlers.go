@@ -283,7 +283,7 @@ func (p *orgsPlugin) registerCreateOrgAPIKey(host plugin.PluginHost, api huma.AP
 		if orgID == "" {
 			return nil, huma.Error400BadRequest("org id is required")
 		}
-		caller, err := requireOrgAdmin(ctx, host, orgID, au.User.ID)
+		caller, err := requireOrgAdmin(ctx, host, orgID, au)
 		if err != nil {
 			return nil, err
 		}
@@ -378,7 +378,7 @@ func (p *orgsPlugin) registerListOrgAPIKeys(host plugin.PluginHost, api huma.API
 		if orgID == "" {
 			return nil, huma.Error400BadRequest("org id is required")
 		}
-		if _, err := requireOrgAdmin(ctx, host, orgID, au.User.ID); err != nil {
+		if _, err := requireOrgAdmin(ctx, host, orgID, au); err != nil {
 			return nil, err
 		}
 		rows, err := host.Repo().ListAPIKeysByOrgID(ctx, orgID)
@@ -420,7 +420,7 @@ func (p *orgsPlugin) registerDeleteOrgAPIKey(host plugin.PluginHost, api huma.AP
 		if orgID == "" || keyID == "" {
 			return nil, huma.Error400BadRequest("org id and key id are required")
 		}
-		if _, err := requireOrgAdmin(ctx, host, orgID, au.User.ID); err != nil {
+		if _, err := requireOrgAdmin(ctx, host, orgID, au); err != nil {
 			return nil, err
 		}
 		if _, err := host.Repo().GetAPIKeyByIDAndOrg(ctx, keyID, orgID); err != nil {
@@ -467,7 +467,7 @@ func (p *orgsPlugin) registerRotateOrgAPIKey(host plugin.PluginHost, api huma.AP
 		if orgID == "" || keyID == "" {
 			return nil, huma.Error400BadRequest("org id and key id are required")
 		}
-		if _, err := requireOrgAdmin(ctx, host, orgID, au.User.ID); err != nil {
+		if _, err := requireOrgAdmin(ctx, host, orgID, au); err != nil {
 			return nil, err
 		}
 		old, err := host.Repo().GetAPIKeyByIDAndOrg(ctx, keyID, orgID)
@@ -549,7 +549,7 @@ func (p *orgsPlugin) registerOrgAPIKeyUsage(host plugin.PluginHost, api huma.API
 		if orgID == "" || keyID == "" {
 			return nil, huma.Error400BadRequest("org id and key id are required")
 		}
-		if _, err := requireOrgAdmin(ctx, host, orgID, au.User.ID); err != nil {
+		if _, err := requireOrgAdmin(ctx, host, orgID, au); err != nil {
 			return nil, err
 		}
 		k, err := host.Repo().GetAPIKeyByIDAndOrg(ctx, keyID, orgID)

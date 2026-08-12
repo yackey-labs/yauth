@@ -33,6 +33,16 @@ func HydrateActiveOrg(ctx context.Context, lookup auth.MembershipsLookup, au *do
 	if au == nil || lookup == nil {
 		return
 	}
+	// A service account's org context comes from its key row — the org it
+	// is bound to and the role stamped on it — and is already set by the
+	// resolver. Hydration resolves from au.User.ID, which for a service
+	// account is the human who MINTED the key: re-resolving here would
+	// replace the key's role with the creator's role in that org, and
+	// could even move ActiveOrgID to the creator's default org. Leave the
+	// credential's own scope alone.
+	if au.Principal.IsServiceAccount() {
+		return
+	}
 	// Cookie path: prefer the session's persisted active_org_id.
 	// Bearer path: ActiveOrgID was injected via the JWT claim (see
 	// bearer resolver). Either way we resolve role + membership list.

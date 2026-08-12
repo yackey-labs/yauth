@@ -70,26 +70,31 @@ func jsonFlow(status int, v any) *flowOutput {
 	}
 }
 
-// authUserID returns the authenticated user's ID injected by RequireAuthHuma,
-// or a 401 error if somehow missing (cannot happen on a gated route).
-func authUserID(ctx context.Context) (string, error) {
+// requireOrgAdmin returns the gating membership row or a huma error
+// (401/403/500).
+//
+// It reads the AuthUser from ctx rather than taking a user id, because the
+// answer differs by principal kind: a service account (org-scoped API key)
+// holds the authority of its KEY — the org it is bound to and the role
+// stamped on it — not the membership of the human who minted it, whose row
+// AuthUser.User carries for audit. middleware.EffectiveOrgMembership is the
+// single implementation of that rule; passing a bare user id is what let an
+// org-scoped key administer every org its creator belonged to.
+func requireOrgAdmin(ctx context.Context, host plugin.PluginHost, orgID string) (*domain.Membership, error) {
 	au, ok := middleware.AuthUserFromContext(ctx)
 	if !ok || au == nil {
-		return "", huma.Error401Unauthorized("not authenticated")
+		return nil, huma.Error401Unauthorized("not authenticated")
 	}
-	return au.User.ID, nil
-}
-
-// requireOrgAdmin returns the gating membership row or a huma error (403/500).
-// Mirrors plugins/ssooidc/handlers_admin.go's helper — duplicated here so
-// ssosaml/ does not depend on the organizations package.
-func requireOrgAdmin(ctx context.Context, host plugin.PluginHost, orgID, userID string) (*domain.Membership, error) {
-	m, err := host.Repo().GetMembershipByOrgUser(ctx, orgID, userID)
+	m, err := middleware.EffectiveOrgMembership(ctx, host.Repo(), au, orgID)
 	if err != nil {
-		return nil, huma.Error500InternalServerError("membership lookup failed")
-	}
-	if m == nil {
-		return nil, huma.Error403Forbidden("not a member of this organization")
+		switch {
+		case errors.Is(err, yautherr.ErrUnauthorized):
+			return nil, huma.Error401Unauthorized("not authenticated")
+		case errors.Is(err, yautherr.ErrForbidden):
+			return nil, huma.Error403Forbidden("not a member of this organization")
+		default:
+			return nil, huma.Error500InternalServerError("membership lookup failed")
+		}
 	}
 	if !auth.RoleAtLeast(m.Role, auth.RoleAdmin) {
 		return nil, huma.Error403Forbidden("organization admin role required")
@@ -265,12 +270,8 @@ func (p *ssoSAMLPlugin) registerCreateConnection(host plugin.PluginHost, api hum
 		DefaultStatus: http.StatusCreated,
 		Middlewares:   crudGuards(api, mw),
 	}, func(ctx context.Context, in *samlCreateConnectionInput) (*samlConnectionOutput, error) {
-		uid, err := authUserID(ctx)
-		if err != nil {
-			return nil, err
-		}
 		orgID := in.ID
-		if _, err := requireOrgAdmin(ctx, host, orgID, uid); err != nil {
+		if _, err := requireOrgAdmin(ctx, host, orgID); err != nil {
 			return nil, err
 		}
 		req := in.Body
@@ -347,12 +348,8 @@ func (p *ssoSAMLPlugin) registerListConnections(host plugin.PluginHost, api huma
 		Security:    []map[string][]string{{"sessionCookie": {}}},
 		Middlewares: crudGuards(api, mw),
 	}, func(ctx context.Context, in *samlOrgInput) (*output, error) {
-		uid, err := authUserID(ctx)
-		if err != nil {
-			return nil, err
-		}
 		orgID := in.ID
-		if _, err := requireOrgAdmin(ctx, host, orgID, uid); err != nil {
+		if _, err := requireOrgAdmin(ctx, host, orgID); err != nil {
 			return nil, err
 		}
 		rows, err := host.Repo().ListSsoConnectionsByOrg(ctx, orgID)
@@ -382,13 +379,9 @@ func (p *ssoSAMLPlugin) registerGetConnection(host plugin.PluginHost, api huma.A
 		Security:    []map[string][]string{{"sessionCookie": {}}},
 		Middlewares: crudGuards(api, mw),
 	}, func(ctx context.Context, in *samlConnInput) (*samlConnectionOutput, error) {
-		uid, err := authUserID(ctx)
-		if err != nil {
-			return nil, err
-		}
 		orgID := in.ID
 		cid := in.CID
-		if _, err := requireOrgAdmin(ctx, host, orgID, uid); err != nil {
+		if _, err := requireOrgAdmin(ctx, host, orgID); err != nil {
 			return nil, err
 		}
 		c, err := host.Repo().GetSsoConnectionByID(ctx, cid)
@@ -417,13 +410,9 @@ func (p *ssoSAMLPlugin) registerUpdateConnection(host plugin.PluginHost, api hum
 		Security:    []map[string][]string{{"sessionCookie": {}}},
 		Middlewares: crudGuards(api, mw),
 	}, func(ctx context.Context, in *samlUpdateConnectionInput) (*samlConnectionOutput, error) {
-		uid, err := authUserID(ctx)
-		if err != nil {
-			return nil, err
-		}
 		orgID := in.ID
 		cid := in.CID
-		if _, err := requireOrgAdmin(ctx, host, orgID, uid); err != nil {
+		if _, err := requireOrgAdmin(ctx, host, orgID); err != nil {
 			return nil, err
 		}
 		current, err := host.Repo().GetSsoConnectionByID(ctx, cid)
@@ -545,13 +534,9 @@ func (p *ssoSAMLPlugin) registerDeleteConnection(host plugin.PluginHost, api hum
 		DefaultStatus: http.StatusNoContent,
 		Middlewares:   crudGuards(api, mw),
 	}, func(ctx context.Context, in *samlConnInput) (*emptyOutput, error) {
-		uid, err := authUserID(ctx)
-		if err != nil {
-			return nil, err
-		}
 		orgID := in.ID
 		cid := in.CID
-		if _, err := requireOrgAdmin(ctx, host, orgID, uid); err != nil {
+		if _, err := requireOrgAdmin(ctx, host, orgID); err != nil {
 			return nil, err
 		}
 		current, err := host.Repo().GetSsoConnectionByID(ctx, cid)

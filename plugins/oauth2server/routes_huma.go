@@ -150,6 +150,11 @@ func authGuards(api huma.API, mw *middleware.Middleware) huma.Middlewares {
 	return huma.Middlewares{
 		middleware.StashHTTPHuma(api),
 		middleware.RequireAuthHuma(api, mw),
+		// Consent is a human act. A service account resolves to the human
+		// who minted its key, so without this an org-scoped API key could
+		// drive /authorize and mint an authorization code — and from it an
+		// id_token — in that person's name.
+		middleware.RequireUserPrincipalHuma(api),
 	}
 }
 
@@ -183,6 +188,8 @@ func adminGuardsNative(api huma.API, mw *middleware.Middleware) huma.Middlewares
 func authGuardsNative(api huma.API, mw *middleware.Middleware) huma.Middlewares {
 	return huma.Middlewares{
 		middleware.RequireAuthHuma(api, mw),
+		// Consent is a human act — see authGuards.
+		middleware.RequireUserPrincipalHuma(api),
 	}
 }
 

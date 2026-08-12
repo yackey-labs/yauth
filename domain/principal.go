@@ -62,6 +62,16 @@ type Principal struct {
 	// — `KeyID + CreatedBy` retains the human breadcrumb on every
 	// service-account call.
 	CreatedBy *string
+
+	// Role is the org role recorded on the service-account key row (nil
+	// when the key carries no role, and always nil for user principals).
+	// It is the AUTHORITATIVE role for a service account: AuthUser.OrgRole
+	// is a hydrated field that active-org resolution can overwrite from
+	// the CREATOR's memberships, whereas this is copied straight off the
+	// credential. Org authorization for a machine principal must read this
+	// and the bound OrgID, never the creator's membership row — see
+	// middleware.EffectiveOrgMembership.
+	Role *string
 }
 
 // IsUser reports whether p is a human user principal.

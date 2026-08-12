@@ -44,6 +44,10 @@ func authedGuards(api huma.API, mw *middleware.Middleware) huma.Middlewares {
 	return huma.Middlewares{
 		middleware.StashHTTPHuma(api),
 		middleware.RequireAuthHuma(api, mw),
+		// Linking/unlinking a social identity acts on the caller's own
+		// account; a service account resolves to the human who minted its
+		// key and must not rewrite that person's sign-in methods.
+		middleware.RequireUserPrincipalHuma(api),
 	}
 }
 

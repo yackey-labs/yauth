@@ -101,7 +101,7 @@ func (p *orgsPlugin) registerChangeMemberRole(host plugin.PluginHost, api huma.A
 			return nil, huma.Error400BadRequest("org id and user id are required")
 		}
 		// Caller must be admin-or-higher in the org.
-		if _, err := requireOrgAdmin(ctx, host, orgID, au.User.ID); err != nil {
+		if _, err := requireOrgAdmin(ctx, host, orgID, au); err != nil {
 			return nil, err
 		}
 		req := in.Body
@@ -176,13 +176,14 @@ func (p *orgsPlugin) registerTransferOwnership(host plugin.PluginHost, api huma.
 		if orgID == "" {
 			return nil, huma.Error400BadRequest("org id is required")
 		}
-		// Caller must be the current owner.
-		caller, err := host.Repo().GetMembershipByOrgUser(ctx, orgID, au.User.ID)
+		// Caller must be the current owner. requireOrgMember resolves the
+		// SERVICE ACCOUNT's own binding for a machine principal instead of
+		// its creator's membership — a key can never hold the owner role
+		// (validateServiceAccountRole refuses to mint one), so this gate is
+		// now closed to machine credentials as well.
+		caller, err := requireOrgMember(ctx, host, orgID, au)
 		if err != nil {
-			return nil, huma.Error500InternalServerError("membership lookup failed")
-		}
-		if caller == nil {
-			return nil, huma.Error403Forbidden("not a member of this organization")
+			return nil, err
 		}
 		if caller.Role != auth.RoleOwner {
 			return nil, huma.Error403Forbidden("only the current owner can transfer ownership")
@@ -261,7 +262,7 @@ func (p *orgsPlugin) registerListPermissions(host plugin.PluginHost, api huma.AP
 		if orgID == "" {
 			return nil, huma.Error400BadRequest("org id is required")
 		}
-		m, err := requireOrgMember(ctx, host, orgID, au.User.ID)
+		m, err := requireOrgMember(ctx, host, orgID, au)
 		if err != nil {
 			return nil, err
 		}
@@ -305,7 +306,7 @@ func (p *orgsPlugin) registerRemoveMember(host plugin.PluginHost, api huma.API, 
 		if orgID == "" || targetUserID == "" {
 			return nil, huma.Error400BadRequest("org id and user id are required")
 		}
-		if _, err := requireOrgAdmin(ctx, host, orgID, au.User.ID); err != nil {
+		if _, err := requireOrgAdmin(ctx, host, orgID, au); err != nil {
 			return nil, err
 		}
 		target, err := host.Repo().GetMembershipByOrgUser(ctx, orgID, targetUserID)

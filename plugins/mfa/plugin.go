@@ -103,6 +103,11 @@ func (p *mfaPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.A
 
 	authMw := huma.Middlewares{
 		middleware.RequireAuthHuma(api, mw),
+		// MFA enrolment/reset acts on the caller's own account. A service
+		// account resolves to the human who minted its key, so it must not
+		// reach these routes — it could otherwise strip that person's TOTP
+		// and burn their backup codes.
+		middleware.RequireUserPrincipalHuma(api),
 	}
 	sec := []map[string][]string{
 		{"sessionCookie": {}},

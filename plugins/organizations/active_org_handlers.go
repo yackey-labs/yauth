@@ -79,6 +79,13 @@ func (p *orgsPlugin) registerGetActiveOrg(host plugin.PluginHost, api huma.API, 
 		if err != nil {
 			return nil, err
 		}
+		// "the caller's" active org is a personal, session-scoped notion.
+		// A service account's org is fixed by its key; resolving here
+		// would report (or switch) the org context of the human who
+		// minted it. See requireUserPrincipal.
+		if err := requireUserPrincipal(au); err != nil {
+			return nil, err
+		}
 		// Prefer the live session row (cookie path) over whatever
 		// the resolver injected. Bearer callers have an empty
 		// session — fall back to the JWT-derived AuthUser fields.
@@ -126,6 +133,13 @@ func (p *orgsPlugin) registerSetActiveOrg(host plugin.PluginHost, api huma.API, 
 	}, func(ctx context.Context, in *setActiveOrgInput) (*output, error) {
 		au, err := authUser(ctx)
 		if err != nil {
+			return nil, err
+		}
+		// "the caller's" active org is a personal, session-scoped notion.
+		// A service account's org is fixed by its key; resolving here
+		// would report (or switch) the org context of the human who
+		// minted it. See requireUserPrincipal.
+		if err := requireUserPrincipal(au); err != nil {
 			return nil, err
 		}
 		req := in.Body
@@ -190,6 +204,13 @@ func (p *orgsPlugin) registerClearActiveOrg(host plugin.PluginHost, api huma.API
 	}, func(ctx context.Context, _ *struct{}) (*output, error) {
 		au, err := authUser(ctx)
 		if err != nil {
+			return nil, err
+		}
+		// "the caller's" active org is a personal, session-scoped notion.
+		// A service account's org is fixed by its key; resolving here
+		// would report (or switch) the org context of the human who
+		// minted it. See requireUserPrincipal.
+		if err := requireUserPrincipal(au); err != nil {
 			return nil, err
 		}
 		if au.Session.ID != "" {

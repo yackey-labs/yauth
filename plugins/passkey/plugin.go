@@ -142,12 +142,19 @@ func (p *passkeyPlugin) Name() string { return "passkey" }
 func (p *passkeyPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.API, prefix string) {
 	mw := host.Middleware()
 
+	// RequireUserPrincipalHuma on both authed chains: registering, listing and
+	// deleting passkeys all act on the caller's own account, and an org-scoped
+	// API key resolves to the human who MINTED it. Without the gate a service
+	// account could enrol its own authenticator on that person's account —
+	// a permanent credential, i.e. account takeover.
 	authStashMw := huma.Middlewares{
 		middleware.StashHTTPHuma(api),
 		middleware.RequireAuthHuma(api, mw),
+		middleware.RequireUserPrincipalHuma(api),
 	}
 	authMw := huma.Middlewares{
 		middleware.RequireAuthHuma(api, mw),
+		middleware.RequireUserPrincipalHuma(api),
 	}
 	publicStashMw := huma.Middlewares{
 		middleware.StashHTTPHuma(api),

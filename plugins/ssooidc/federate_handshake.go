@@ -233,7 +233,7 @@ func (p *ssoOIDCPlugin) requireFlowAdmin(ctx context.Context, host plugin.Plugin
 		}
 		return nil
 	}
-	if _, err := requireOrgAdmin(ctx, host, orgID, au.User.ID); err != nil {
+	if _, err := requireOrgAdmin(ctx, host, orgID); err != nil {
 		return err
 	}
 	return nil

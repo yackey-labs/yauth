@@ -162,16 +162,95 @@ func (e *testEnv) setupAndConfirmMFA(t *testing.T) (secret string, backupCodes [
 		t.Fatalf("setup: expected 10 backup codes, got %d", len(setup.BackupCodes))
 	}
 
-	code, err := totp.GenerateCode(setup.Secret, time.Now())
-	if err != nil {
-		t.Fatalf("generate totp code: %v", err)
-	}
-	res = e.post(t, "/api/auth/mfa/totp/confirm", map[string]string{"code": code})
+	res = e.post(t, "/api/auth/mfa/totp/confirm", map[string]string{
+		"code": priorStepCode(t, setup.Secret),
+	})
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("confirm: %d (%s)", res.StatusCode, drain(res))
 	}
 	res.Body.Close()
 	return setup.Secret, setup.BackupCodes
+}
+
+// totpStep is one RFC 6238 time step.
+const totpStep = 30 * time.Second
+
+// priorStepCode returns a code for the step BEFORE now — still inside the
+// server's ±1-step acceptance window, so it confirms an enrolment normally.
+//
+// Tests use it so that a code minted at time.Now() straight afterwards belongs
+// to a LATER step and is accepted. Confirming with the current step's code
+// would spend that step (codes are single-use — see
+// domain.TOTPSecret.LastUsedStep), and every follow-up call in the same
+// 30-second window would then be refused as a replay. That is correct
+// behaviour, not a test workaround: it is exactly what stops a confirming code
+// from being turned around and replayed as a login.
+func priorStepCode(t *testing.T, secret string) string {
+	t.Helper()
+	code, err := totp.GenerateCode(secret, time.Now().Add(-totpStep))
+	if err != nil {
+		t.Fatalf("generate totp code: %v", err)
+	}
+	return code
+}
+
+// nextStepCode returns a code for the step AFTER now — also inside the
+// server's +/-1-step acceptance window, so it authenticates normally. Tests
+// that have already spent the current step reach for this: steps N-1, N and
+// N+1 are the whole supply a test has, since it cannot advance the clock.
+func nextStepCode(t *testing.T, secret string) string {
+	t.Helper()
+	code, err := totp.GenerateCode(secret, time.Now().Add(totpStep))
+	if err != nil {
+		t.Fatalf("generate totp code: %v", err)
+	}
+	return code
+}
+
+// currentStepCode returns a code for the current step, for use as the
+// X-MFA-Code step-up factor on the management routes.
+func currentStepCode(t *testing.T, secret string) string {
+	t.Helper()
+	code, err := totp.GenerateCode(secret, time.Now())
+	if err != nil {
+		t.Fatalf("generate totp code: %v", err)
+	}
+	return code
+}
+
+// postStepUp / deleteStepUp are post/delete carrying the X-MFA-Code header the
+// MFA management routes require once a factor is enrolled.
+func (e *testEnv) postStepUp(t *testing.T, path string, body any, code string) *http.Response {
+	t.Helper()
+	return e.doWithStepUp(t, http.MethodPost, path, body, code)
+}
+
+func (e *testEnv) deleteStepUp(t *testing.T, path, code string) *http.Response {
+	t.Helper()
+	return e.doWithStepUp(t, http.MethodDelete, path, nil, code)
+}
+
+func (e *testEnv) doWithStepUp(t *testing.T, method, path string, body any, code string) *http.Response {
+	t.Helper()
+	var buf bytes.Buffer
+	if body != nil {
+		if err := json.NewEncoder(&buf).Encode(body); err != nil {
+			t.Fatalf("encode: %v", err)
+		}
+	}
+	req, err := http.NewRequest(method, e.srv.URL+path, &buf)
+	if err != nil {
+		t.Fatalf("new req: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if code != "" {
+		req.Header.Set(mfa.StepUpHeader, code)
+	}
+	res, err := e.cl.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	return res
 }
 
 func (e *testEnv) logout(t *testing.T) {
@@ -346,12 +425,13 @@ func TestMFA_DeleteRemovesTOTPAndBackupCodes(t *testing.T) {
 	defer stop()
 
 	env.register(t)
-	_, codes := env.setupAndConfirmMFA(t)
+	secret, codes := env.setupAndConfirmMFA(t)
 	if len(codes) != 10 {
 		t.Fatalf("expected 10 codes, got %d", len(codes))
 	}
 
-	res := env.delete(t, "/api/auth/mfa/totp")
+	// Removing the factor requires presenting it.
+	res := env.deleteStepUp(t, "/api/auth/mfa/totp", currentStepCode(t, secret))
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("delete: %d (%s)", res.StatusCode, drain(res))
 	}
@@ -400,9 +480,10 @@ func TestMFA_RegenerateBackupCodes_RotatesAndInvalidatesOld(t *testing.T) {
 	defer stop()
 
 	env.register(t)
-	_, oldCodes := env.setupAndConfirmMFA(t)
+	secret, oldCodes := env.setupAndConfirmMFA(t)
 
-	res := env.post(t, "/api/auth/mfa/backup-codes/regenerate", nil)
+	// Reissuing recovery codes requires the current factor.
+	res := env.postStepUp(t, "/api/auth/mfa/backup-codes/regenerate", nil, currentStepCode(t, secret))
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("regenerate: %d (%s)", res.StatusCode, drain(res))
 	}

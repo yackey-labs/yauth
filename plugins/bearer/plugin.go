@@ -53,6 +53,37 @@ type Config struct {
 	// Audience, when non-empty, is set as the JWT "aud" claim and
 	// enforced on verification.
 	Audience string
+
+	// ResourceIdentifiers lists the `aud` values that identify THIS
+	// deployment's own API. It decides whether an OAuth2 access token —
+	// one carrying `token_use: "access"`, minted by the oauth2-server
+	// plugin — is the user acting in their own right or a relying party
+	// acting on their behalf.
+	//
+	// An OAuth2 access token whose `aud` matches an entry here is
+	// FIRST-PARTY: it keeps the full authority a session has. Every other
+	// OAuth2 access token is DELEGATED — it still authenticates the user,
+	// so /userinfo and ordinary application routes work exactly as before,
+	// but it is refused on the routes that mint a lasting credential or
+	// change an authentication factor: personal API keys, MFA
+	// enrolment/reset, passkey enrolment, password and email changes,
+	// OAuth2 consent.
+	//
+	// EMPTY (the default) means the deployment has declared no audience of
+	// its own, so no OAuth2 access token is first-party. That is
+	// deliberate: it closes the escalation without configuration, and it
+	// rejects nothing that used to work — first-party credentials
+	// (cookies, the token pair from POST /token, API keys) carry no
+	// `token_use` claim and are untouched.
+	//
+	// Set it when this deployment genuinely issues access tokens FOR
+	// itself — e.g. its own SPA is a registered OAuth client whose tokens
+	// should behave like a session:
+	//
+	//	bearer.Config{ResourceIdentifiers: []string{"my-first-party-spa"}}
+	//
+	// Entries are compared for exact equality against each `aud` value.
+	ResourceIdentifiers []string
 }
 
 // bearerPlugin is the unexported plugin.Plugin implementation.

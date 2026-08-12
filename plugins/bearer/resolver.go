@@ -62,17 +62,21 @@ func (b *bearerResolver) Resolve(r *http.Request) (*domain.AuthUser, bool, error
 		if err != nil {
 			// The bearer plugin issues HS256 tokens, but an IdP that also runs the
 			// oauth2-server plugin mints RS256/ES256 access tokens signed with the
-			// shared asymmetric key. Those are equally first-party Bearer
-			// credentials, so when an asymmetric host signer is registered, fall
-			// back to verifying against it (gated on token_use=access) before
-			// rejecting. Without this, OIDC clients can't call /userinfo (and other
-			// RequireAuth routes) with the access token from the token endpoint.
+			// shared asymmetric key. Those are valid Bearer credentials too, so
+			// when an asymmetric host signer is registered, fall back to verifying
+			// against it (gated on token_use=access) before rejecting. Without
+			// this, OIDC clients can't call /userinfo (and other RequireAuth
+			// routes) with the access token from the token endpoint.
+			//
+			// They are NOT first-party, though: their `aud` is a relying party.
+			// verifyAsymAccessToken marks them delegated unless the audience is
+			// one this deployment claims as its own — see Config.ResourceIdentifiers.
 			signer := b.host.JWTSigner()
 			if signer == nil {
 				telemetry.SetAttribute(ctx, "yauth.token.valid", false)
 				return nil
 			}
-			p, err = verifyAsymAccessToken(signer, raw)
+			p, err = verifyAsymAccessToken(signer, raw, b.cfg)
 			if err != nil {
 				telemetry.SetAttribute(ctx, "yauth.token.valid", false)
 				return nil
@@ -108,6 +112,18 @@ func (b *bearerResolver) Resolve(r *http.Request) (*domain.AuthUser, bool, error
 		return nil, true, yautherr.ErrUnauthorized
 	}
 	au := &domain.AuthUser{User: *user, Method: domain.AuthMethodBearer}
+	// Record HOW MUCH authority the credential carries, not just whose it is.
+	// A token from this plugin's /token endpoint is the user's own and
+	// resolves to a plain user principal. An OAuth2 access token issued to a
+	// relying party resolves to the same user but is marked delegated, with
+	// the granted scope and the audience it was minted for; the gates on the
+	// personal-account routes read that flag.
+	if parsed.Delegated {
+		au.Principal = domain.NewDelegatedUserPrincipal(user.ID, parsed.Audience, parsed.Scope)
+		telemetry.SetAttribute(r.Context(), "yauth.token.delegated", true)
+	} else {
+		au.Principal = domain.NewUserPrincipal(user.ID)
+	}
 	if parsed.Org != "" {
 		org := parsed.Org
 		au.ActiveOrgID = &org

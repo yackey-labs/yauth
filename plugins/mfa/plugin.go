@@ -6,12 +6,23 @@
 //
 // Routes registered by Plugin.Routes (relative to the prefix passed in):
 //
-//	POST   {prefix}/mfa/totp/setup              create unverified secret  (RequireAuth)
-//	POST   {prefix}/mfa/totp/confirm            verify + activate secret  (RequireAuth)
-//	DELETE {prefix}/mfa/totp                    remove secret + codes     (RequireAuth)
+//	POST   {prefix}/mfa/totp/setup              issue candidate secret    (RequireAuth + step-up)
+//	POST   {prefix}/mfa/totp/confirm            promote candidate secret  (RequireAuth)
+//	DELETE {prefix}/mfa/totp                    remove secret + codes     (RequireAuth + step-up)
 //	GET    {prefix}/mfa/backup-codes            unused-count              (RequireAuth)
-//	POST   {prefix}/mfa/backup-codes/regenerate replace codes             (RequireAuth)
+//	POST   {prefix}/mfa/backup-codes/regenerate replace codes             (RequireAuth + step-up)
 //	POST   {prefix}/mfa/verify                  consume pending session
+//
+// The three routes marked "step-up" change HOW THE ACCOUNT AUTHENTICATES, so
+// authentication alone does not open them: a user who already has a verified
+// factor must present a current TOTP or backup code in the X-MFA-Code header.
+// Without that, a stolen session could disable the control that exists to
+// survive a stolen session. Setup is also non-destructive — the candidate
+// secret and codes live in a pending enrolment until /mfa/totp/confirm
+// promotes them, so an abandoned setup no longer drops the account out of MFA.
+//
+// TOTP codes are single-use (RFC 6238 §5.2): the time step of an accepted code
+// is recorded, and that step and every earlier one are refused thereafter.
 //
 // The plugin also registers an events.Handler that intercepts
 // login.succeeded events: when the authenticating user has a verified
@@ -103,10 +114,17 @@ func (p *mfaPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.A
 
 	authMw := huma.Middlewares{
 		middleware.RequireAuthHuma(api, mw),
-		// MFA enrolment/reset acts on the caller's own account. A service
-		// account resolves to the human who minted its key, so it must not
-		// reach these routes — it could otherwise strip that person's TOTP
-		// and burn their backup codes.
+		// MFA enrolment/reset acts on the caller's own account, so only the
+		// account owner acting in their own right may reach these routes. A
+		// service account resolves to the human who minted its key, and a
+		// delegated OAuth access token resolves to the user who consented to
+		// a scope — neither of them is that person, and either could
+		// otherwise strip their TOTP and burn their backup codes.
+		//
+		// This is authorization, not step-up: it decides WHO may ask. The
+		// handlers additionally require the current factor to be presented
+		// (see mfaPlugin.requireStepUp), which decides whether the asker can
+		// prove they still hold the credential they are changing.
 		middleware.RequireUserPrincipalHuma(api),
 	}
 	sec := []map[string][]string{
@@ -120,7 +138,10 @@ func (p *mfaPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.A
 		Method:      http.MethodPost,
 		Path:        prefix + "/mfa/totp/setup",
 		Summary:     "Begin TOTP enrollment",
-		Description: "Create (or reset) an unverified TOTP secret and a fresh set of backup codes.",
+		Description: "Issue a candidate TOTP secret and a fresh set of backup codes. Neither replaces " +
+			"the account's current second factor until POST /mfa/totp/confirm accepts a code for the " +
+			"new secret, so an abandoned enrollment leaves existing MFA intact. When the account " +
+			"already has a verified factor, a current code must be supplied in the " + StepUpHeader + " header.",
 		Tags:        []string{"mfa"},
 		Security:    sec,
 		Middlewares: authMw,
@@ -131,7 +152,9 @@ func (p *mfaPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.A
 		Method:      http.MethodPost,
 		Path:        prefix + "/mfa/totp/confirm",
 		Summary:     "Confirm + activate TOTP",
-		Description: "Validate a TOTP code against the pending secret and mark it verified.",
+		Description: "Validate a code against the pending secret and promote it to the account's second " +
+			"factor, replacing any previous secret and backup codes. The confirming code is recorded as " +
+			"spent and cannot be reused to sign in.",
 		Tags:        []string{"mfa"},
 		Security:    sec,
 		Middlewares: authMw,
@@ -142,7 +165,8 @@ func (p *mfaPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.A
 		Method:      http.MethodDelete,
 		Path:        prefix + "/mfa/totp",
 		Summary:     "Disable TOTP",
-		Description: "Remove the user's TOTP secret and all backup codes.",
+		Description: "Remove the user's TOTP secret and all backup codes. Requires the current code in " +
+			"the " + StepUpHeader + " header — the factor being removed must be presented to remove it.",
 		Tags:        []string{"mfa"},
 		Security:    sec,
 		Middlewares: authMw,
@@ -163,7 +187,9 @@ func (p *mfaPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.A
 		Method:      http.MethodPost,
 		Path:        prefix + "/mfa/backup-codes/regenerate",
 		Summary:     "Regenerate backup codes",
-		Description: "Replace all backup codes with a fresh set.",
+		Description: "Replace all backup codes with a fresh set, invalidating the ones already issued. " +
+			"When the account has a verified factor, a current code must be supplied in the " +
+			StepUpHeader + " header.",
 		Tags:        []string{"mfa"},
 		Security:    sec,
 		Middlewares: authMw,

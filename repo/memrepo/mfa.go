@@ -115,13 +115,38 @@ func (r *Repo) CreateTOTP(ctx context.Context, input domain.NewTOTPSecret) error
 	if created.IsZero() {
 		created = time.Now().UTC()
 	}
-	r.totp[input.ID] = &domain.TOTPSecret{
+	t := &domain.TOTPSecret{
 		ID:              input.ID,
 		UserID:          input.UserID,
 		EncryptedSecret: input.EncryptedSecret,
 		Verified:        input.Verified,
 		CreatedAt:       created.UTC(),
 	}
+	if input.LastUsedStep != nil {
+		step := *input.LastUsedStep
+		t.LastUsedStep = &step
+	}
+	r.totp[input.ID] = t
+	return nil
+}
+
+// MarkTOTPUsed advances the replay counter, never rewinds it: a concurrent
+// verification of an OLDER code must not re-open the newer step to replay.
+// A missing row and an already-advanced counter are both no-op successes —
+// see the contract on repo.TOTPRepository.
+func (r *Repo) MarkTOTPUsed(ctx context.Context, id string, step int64) error {
+	_ = ensureCtx(ctx)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	t, ok := r.totp[id]
+	if !ok {
+		return nil
+	}
+	if t.LastUsedStep != nil && *t.LastUsedStep >= step {
+		return nil
+	}
+	s := step
+	t.LastUsedStep = &s
 	return nil
 }
 

@@ -22,6 +22,12 @@ const unlinkingOAuth = ref<string | null>(null);
 const mfaUri = ref("");
 const mfaSecret = ref("");
 const mfaCode = ref("");
+// The step-up factor for the MANAGEMENT actions (re-enroll, disable), as
+// distinct from mfaCode, which confirms a new secret. Changing how the account
+// authenticates must be proved with the factor being changed, so an account
+// that already has 2FA supplies a current code here. Left empty for a first
+// enrollment, where there is nothing to prove and nothing to lose.
+const mfaStepUpCode = ref("");
 const mfaBackupCodes = ref<string[]>([]);
 const mfaStep = ref<"idle" | "setup" | "confirm" | "done">("idle");
 const mfaError = ref<string | null>(null);
@@ -109,7 +115,7 @@ const handleMfaBegin = async () => {
 	mfaLoading.value = true;
 
 	try {
-		const result = await client.mfa.setup();
+		const result = await client.mfa.setup(mfaStepUpCode.value || undefined);
 		mfaUri.value = result.otpauth_url;
 		mfaSecret.value = result.secret;
 		mfaBackupCodes.value = result.backup_codes ?? [];
@@ -145,11 +151,12 @@ const handleMfaDisable = async () => {
 	mfaLoading.value = true;
 
 	try {
-		await client.mfa.disable();
+		await client.mfa.disable(mfaStepUpCode.value || undefined);
 		mfaStep.value = "idle";
 		mfaUri.value = "";
 		mfaSecret.value = "";
 		mfaCode.value = "";
+		mfaStepUpCode.value = "";
 		mfaBackupCodes.value = [];
 	} catch (err) {
 		const e = err instanceof Error ? err : new Error(String(err));
@@ -338,7 +345,24 @@ const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 					{{ mfaError }}
 				</div>
 
-				<div v-if="mfaStep === 'idle'" class="flex gap-2">
+				<div v-if="mfaStep === 'idle'" class="space-y-2">
+					<label class="block space-y-1">
+						<span class="text-sm text-muted-foreground">
+							Current 2FA code — required if 2FA is already enabled, so that
+							changing it is proved with the factor being changed. Leave
+							blank when setting 2FA up for the first time.
+						</span>
+						<input
+							v-model="mfaStepUpCode"
+							class="h-9 w-40 rounded-md border border-input bg-background px-3 py-1 font-mono text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+							type="text"
+							inputmode="numeric"
+							autocomplete="one-time-code"
+							placeholder="123456"
+						/>
+					</label>
+
+					<div class="flex gap-2">
 					<button
 						class="inline-flex h-9 cursor-pointer items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
 						type="button"
@@ -356,6 +380,7 @@ const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 					>
 						{{ mfaLoading ? "Disabling..." : "Disable 2FA" }}
 					</button>
+					</div>
 				</div>
 
 				<div v-if="mfaStep === 'confirm'" class="space-y-4">

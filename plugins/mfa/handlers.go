@@ -115,23 +115,34 @@ func renderQRDataURL(otpauthURL string, logger *slog.Logger) string {
 	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
 }
 
-func (p *mfaPlugin) handleSetup(host plugin.PluginHost) func(context.Context, *struct{}) (*mfaSetupOutput, error) {
-	return func(ctx context.Context, _ *struct{}) (*mfaSetupOutput, error) {
+// handleSetup issues a CANDIDATE second factor. It changes nothing about the
+// account's current one.
+//
+// Two rules make that true, and both are load-bearing:
+//
+//   - Step-up. A user who already has a verified factor must present it. The
+//     route re-enrols the credential that protects the account, so it is a
+//     change to how the account authenticates and must be proved with the
+//     factor being changed.
+//   - Nothing is destroyed. The new secret and backup codes are held in a
+//     short-lived pending enrolment; the live secret and the live recovery
+//     codes stay exactly where they are until handleConfirm sees a code for
+//     the new one. Previously this handler deleted both up front, so a single
+//     call — needing no second factor at all — dropped the account out of MFA
+//     whether or not the enrolment was ever finished.
+//
+// The response is unchanged: the secret, its QR, and the new backup codes are
+// returned here as before. They simply are not yet the account's.
+func (p *mfaPlugin) handleSetup(host plugin.PluginHost) func(context.Context, *stepUpInput) (*mfaSetupOutput, error) {
+	return func(ctx context.Context, in *stepUpInput) (*mfaSetupOutput, error) {
 		au, ok := middleware.AuthUserFromContext(ctx)
 		if !ok || au == nil {
 			return nil, huma.Error401Unauthorized("not authenticated")
 		}
+		if err := p.requireStepUp(ctx, host, au.User.ID, strings.TrimSpace(in.Code)); err != nil {
+			return nil, err
+		}
 		repoRef := host.Repo()
-
-		// If the user already has a TOTP record, wipe it (and any
-		// backup codes) before issuing a new one. Setup is the
-		// "start over" entry-point.
-		if _, err := repoRef.DeleteTOTPForUser(ctx, au.User.ID, nil); err != nil {
-			return nil, huma.Error500InternalServerError("unable to reset prior totp")
-		}
-		if _, err := repoRef.DeleteAllBackupCodesForUser(ctx, au.User.ID); err != nil {
-			return nil, huma.Error500InternalServerError("unable to reset prior backup codes")
-		}
 
 		key, err := totp.Generate(totp.GenerateOpts{
 			Issuer:      p.cfg.Issuer,
@@ -146,31 +157,16 @@ func (p *mfaPlugin) handleSetup(host plugin.PluginHost) func(context.Context, *s
 			return nil, huma.Error500InternalServerError("unable to encrypt totp secret")
 		}
 
-		now := time.Now().UTC()
-		if err := repoRef.CreateTOTP(ctx, domain.NewTOTPSecret{
-			ID:              uuid.NewString(),
-			UserID:          au.User.ID,
-			EncryptedSecret: enc,
-			Verified:        false,
-			CreatedAt:       now,
-		}); err != nil {
-			return nil, huma.Error500InternalServerError("unable to persist totp")
-		}
-
 		plain, hashes, err := generateBackupCodes(backupCodeCount)
 		if err != nil {
 			return nil, huma.Error500InternalServerError("unable to generate backup codes")
 		}
-		for _, h := range hashes {
-			if err := repoRef.CreateBackupCode(ctx, domain.NewBackupCode{
-				ID:        uuid.NewString(),
-				UserID:    au.User.ID,
-				CodeHash:  h,
-				Used:      false,
-				CreatedAt: now,
-			}); err != nil {
-				return nil, huma.Error500InternalServerError("unable to persist backup codes")
-			}
+
+		if err := stashEnrollment(ctx, repoRef, au.User.ID, pendingEnrollment{
+			EncryptedSecret: enc,
+			BackupHashes:    hashes,
+		}); err != nil {
+			return nil, huma.Error500InternalServerError("unable to persist totp")
 		}
 
 		return &mfaSetupOutput{Body: mfaSetupResponse{
@@ -206,6 +202,14 @@ type messageOutput struct {
 	Body mfaMessageResponse
 }
 
+// handleConfirm PROMOTES the pending enrolment to be the account's second
+// factor. This is the only place the live secret and the live backup codes are
+// replaced, and it happens only once a code has proved the user really holds
+// the new secret — so an enrolment abandoned after setup, or one whose codes
+// never matched, leaves the account's existing factor untouched.
+//
+// Every check runs before any write: validate first, then delete the old
+// factor and install the new one.
 func (p *mfaPlugin) handleConfirm(host plugin.PluginHost) func(context.Context, *mfaConfirmInput) (*messageOutput, error) {
 	return func(ctx context.Context, in *mfaConfirmInput) (*messageOutput, error) {
 		au, ok := middleware.AuthUserFromContext(ctx)
@@ -216,24 +220,64 @@ func (p *mfaPlugin) handleConfirm(host plugin.PluginHost) func(context.Context, 
 
 		repoRef := host.Repo()
 
-		unverified := false
-		row, err := repoRef.GetTOTPByUserID(ctx, au.User.ID, &unverified)
+		pending, found, err := loadEnrollment(ctx, repoRef, au.User.ID)
 		if err != nil {
-			if errors.Is(err, yautherr.ErrNotFound) {
-				return nil, huma.Error400BadRequest("no unverified totp setup exists for this user")
-			}
 			return nil, huma.Error500InternalServerError("unable to load totp")
 		}
+		if !found {
+			return nil, huma.Error400BadRequest("no unverified totp setup exists for this user")
+		}
 
-		secret, err := decryptSecret(p.cfg.EncryptionKey, row.EncryptedSecret)
+		secret, err := decryptSecret(p.cfg.EncryptionKey, pending.EncryptedSecret)
 		if err != nil {
 			return nil, huma.Error500InternalServerError("unable to decrypt totp secret")
 		}
-		if !totp.Validate(code, secret) {
+		step, valid := validateTOTPStep(code, secret, time.Now().UTC())
+		if !valid {
 			return nil, huma.Error401Unauthorized("invalid mfa code")
 		}
-		if err := repoRef.MarkTOTPVerified(ctx, row.ID); err != nil {
-			return nil, huma.Error500InternalServerError("unable to mark totp verified")
+
+		// From here on we mutate. Clear whatever factor the account had —
+		// including any unverified row left behind by a pre-enrolment-stash
+		// release, which the UNIQUE(user_id) constraint would otherwise
+		// collide with — then install the confirmed one.
+		now := time.Now().UTC()
+		if _, err := repoRef.DeleteTOTPForUser(ctx, au.User.ID, nil); err != nil {
+			return nil, huma.Error500InternalServerError("unable to reset prior totp")
+		}
+		if _, err := repoRef.DeleteAllBackupCodesForUser(ctx, au.User.ID); err != nil {
+			return nil, huma.Error500InternalServerError("unable to reset prior backup codes")
+		}
+		// Seed the replay counter with the step of the confirming code: the
+		// code that proved possession is spent, and cannot be turned around
+		// and replayed as a login within its own window.
+		usedStep := step
+		if err := repoRef.CreateTOTP(ctx, domain.NewTOTPSecret{
+			ID:              uuid.NewString(),
+			UserID:          au.User.ID,
+			EncryptedSecret: pending.EncryptedSecret,
+			Verified:        true,
+			CreatedAt:       now,
+			LastUsedStep:    &usedStep,
+		}); err != nil {
+			return nil, huma.Error500InternalServerError("unable to persist totp")
+		}
+		for _, h := range pending.BackupHashes {
+			if err := repoRef.CreateBackupCode(ctx, domain.NewBackupCode{
+				ID:        uuid.NewString(),
+				UserID:    au.User.ID,
+				CodeHash:  h,
+				Used:      false,
+				CreatedAt: now,
+			}); err != nil {
+				return nil, huma.Error500InternalServerError("unable to persist backup codes")
+			}
+		}
+		if err := repoRef.DeleteChallenge(ctx, enrollmentKeyPrefix+au.User.ID); err != nil &&
+			!errors.Is(err, yautherr.ErrNotFound) {
+			// The factor is already installed and correct; a stale pending
+			// row only expires slightly later than it should.
+			host.Logger().Warn("mfa: clear pending enrollment", "err", err)
 		}
 		return &messageOutput{Body: mfaMessageResponse{Message: "TOTP activated."}}, nil
 	}
@@ -241,11 +285,18 @@ func (p *mfaPlugin) handleConfirm(host plugin.PluginHost) func(context.Context, 
 
 // --- DELETE /totp --------------------------------------------------------
 
-func (p *mfaPlugin) handleDelete(host plugin.PluginHost) func(context.Context, *struct{}) (*messageOutput, error) {
-	return func(ctx context.Context, _ *struct{}) (*messageOutput, error) {
+// handleDelete removes the account's second factor — which is exactly the
+// operation an attacker holding a stolen session wants, so it demands the
+// factor being removed. Authentication alone used to be enough, making MFA
+// removable by anything that could ride a session.
+func (p *mfaPlugin) handleDelete(host plugin.PluginHost) func(context.Context, *stepUpInput) (*messageOutput, error) {
+	return func(ctx context.Context, in *stepUpInput) (*messageOutput, error) {
 		au, ok := middleware.AuthUserFromContext(ctx)
 		if !ok || au == nil {
 			return nil, huma.Error401Unauthorized("not authenticated")
+		}
+		if err := p.requireStepUp(ctx, host, au.User.ID, strings.TrimSpace(in.Code)); err != nil {
+			return nil, err
 		}
 		repoRef := host.Repo()
 		if _, err := repoRef.DeleteTOTPForUser(ctx, au.User.ID, nil); err != nil {
@@ -253,6 +304,12 @@ func (p *mfaPlugin) handleDelete(host plugin.PluginHost) func(context.Context, *
 		}
 		if _, err := repoRef.DeleteAllBackupCodesForUser(ctx, au.User.ID); err != nil {
 			return nil, huma.Error500InternalServerError("unable to delete backup codes")
+		}
+		// Drop any candidate enrolment too, so "disable MFA" leaves nothing
+		// half-armed behind it.
+		if err := repoRef.DeleteChallenge(ctx, enrollmentKeyPrefix+au.User.ID); err != nil &&
+			!errors.Is(err, yautherr.ErrNotFound) {
+			host.Logger().Warn("mfa: clear pending enrollment", "err", err)
 		}
 		return &messageOutput{Body: mfaMessageResponse{Message: "TOTP removed."}}, nil
 	}
@@ -294,11 +351,19 @@ type regenerateOutput struct {
 	Body mfaRegenerateResponse
 }
 
-func (p *mfaPlugin) handleRegenerateBackupCodes(host plugin.PluginHost) func(context.Context, *struct{}) (*regenerateOutput, error) {
-	return func(ctx context.Context, _ *struct{}) (*regenerateOutput, error) {
+// handleRegenerateBackupCodes replaces the account's recovery codes, so it
+// both HANDS OUT a set of standing MFA bypasses and INVALIDATES the set the
+// user already holds. Either half is enough to require the current factor:
+// the first is a persistent bypass for whoever calls it, the second locks the
+// legitimate owner out of their own recovery path.
+func (p *mfaPlugin) handleRegenerateBackupCodes(host plugin.PluginHost) func(context.Context, *stepUpInput) (*regenerateOutput, error) {
+	return func(ctx context.Context, in *stepUpInput) (*regenerateOutput, error) {
 		au, ok := middleware.AuthUserFromContext(ctx)
 		if !ok || au == nil {
 			return nil, huma.Error401Unauthorized("not authenticated")
+		}
+		if err := p.requireStepUp(ctx, host, au.User.ID, strings.TrimSpace(in.Code)); err != nil {
+			return nil, err
 		}
 		repoRef := host.Repo()
 
@@ -458,6 +523,19 @@ func (p *mfaPlugin) consumePendingSession(ctx context.Context, repoRef repo.Repo
 // verifyCode tries TOTP first, then backup-code consumption. Returns
 // (true, nil) on success, (false, nil) on a credential mismatch, and
 // (false, err) on a backend failure.
+//
+// A TOTP code is accepted AT MOST ONCE (RFC 6238 §5.2). The step the code
+// belongs to is recorded on the secret, and any code from that step or an
+// earlier one is refused thereafter — so a code observed in flight (phished,
+// shoulder-surfed, replayed off a proxied login page) is dead the moment the
+// real user's login lands, instead of staying good for the rest of its window
+// and the skew either side of it. Ordinary use is unaffected: the next window
+// produces a higher step.
+//
+// The counter is advanced BEFORE returning success. A failure to record it is
+// returned as an error rather than swallowed — reporting success without
+// spending the code would leave it replayable, which is the whole thing this
+// prevents.
 func (p *mfaPlugin) verifyCode(ctx context.Context, repoRef repo.Repository, userID, code string) (bool, error) {
 	verified := true
 	row, err := repoRef.GetTOTPByUserID(ctx, userID, &verified)
@@ -469,7 +547,17 @@ func (p *mfaPlugin) verifyCode(ctx context.Context, repoRef repo.Repository, use
 		if derr != nil {
 			return false, derr
 		}
-		if totp.Validate(code, secret) {
+		if step, valid := validateTOTPStep(code, secret, time.Now().UTC()); valid {
+			if row.LastUsedStep != nil && step <= *row.LastUsedStep {
+				// Correct code, already spent. Refused, and refused
+				// INDISTINGUISHABLY from a wrong code — telling the two apart
+				// would confirm to a replaying attacker that they had a real
+				// code and only missed the window.
+				return false, nil
+			}
+			if err := repoRef.MarkTOTPUsed(ctx, row.ID, step); err != nil {
+				return false, err
+			}
 			return true, nil
 		}
 	}

@@ -403,6 +403,13 @@ func cloneTOTP(t *domain.TOTPSecret) *domain.TOTPSecret {
 		return nil
 	}
 	c := *t
+	// Deep-copy the replay counter: a shallow copy hands callers a pointer
+	// INTO the stored row, and a caller writing through it could rewind the
+	// counter that stops code replay.
+	if t.LastUsedStep != nil {
+		step := *t.LastUsedStep
+		c.LastUsedStep = &step
+	}
 	return &c
 }
 

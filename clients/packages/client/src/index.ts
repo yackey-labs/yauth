@@ -155,6 +155,25 @@ import { configureClient, type YAuthClientOptions } from "./mutator";
 const auditExportUpdateDestination = auditExportPatchDestination;
 
 /**
+ * Build the fetch options carrying the MFA step-up factor.
+ *
+ * The MFA management routes (enroll, disable, regenerate backup codes) change
+ * HOW THE ACCOUNT AUTHENTICATES, so an account that already has a verified
+ * factor must present a current TOTP or backup code in `X-MFA-Code`. It is a
+ * header rather than a body field so it works uniformly on DELETE, where
+ * request bodies are widely dropped by proxies and client libraries — which is
+ * also why it arrives here as fetch options rather than a generated parameter.
+ *
+ * Passing nothing is valid and is the FIRST-enrollment case: there is no factor
+ * to prove and none to lose. The server answers 403 with
+ * "current mfa code required" when a code was needed and omitted, which is the
+ * cue to prompt the user and retry.
+ */
+function stepUp(currentCode?: string): { headers: Record<string, string> } | undefined {
+  return currentCode ? { headers: { "X-MFA-Code": currentCode } } : undefined;
+}
+
+/**
  * Create and configure a yauth client with a backward-compatible API shape.
  *
  * @example
@@ -193,12 +212,30 @@ export function createYAuthClient(options: YAuthClientOptions) {
     },
 
     mfa: {
-      setup: () => mfaTotpSetup(),
+      /**
+       * Begin enrollment. Returns a CANDIDATE secret and backup codes — the
+       * account keeps its current second factor until `confirm` accepts a code
+       * for the new one, so abandoning this call changes nothing.
+       *
+       * `currentCode` is required when the account already has a verified
+       * factor; omit it for a first enrollment. See {@link stepUp}.
+       */
+      setup: (currentCode?: string) => mfaTotpSetup(stepUp(currentCode)),
       confirm: (body: MfaConfirmRequest) => mfaTotpConfirm(body),
-      disable: () => mfaTotpDelete(),
+      /**
+       * Disable MFA. `currentCode` — a current TOTP code or an unused backup
+       * code — is required: the factor being removed must be presented to
+       * remove it.
+       */
+      disable: (currentCode?: string) => mfaTotpDelete(stepUp(currentCode)),
       verify: (body: MfaVerifyRequest) => mfaVerify(body),
       getBackupCodeCount: () => mfaBackupCodesCount(),
-      regenerateBackupCodes: () => mfaBackupCodesRegenerate(),
+      /**
+       * Replace the backup codes, invalidating the ones already issued.
+       * `currentCode` is required when the account has a verified factor.
+       */
+      regenerateBackupCodes: (currentCode?: string) =>
+        mfaBackupCodesRegenerate(stepUp(currentCode)),
     },
 
     sso: {

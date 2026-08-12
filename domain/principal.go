@@ -14,6 +14,12 @@
 // PrincipalKindServiceAccount, OrgID: &org, KeyID: &kid, CreatedBy:
 // &uid}.  UserID is always nil for service accounts; the human who
 // minted the key is on CreatedBy for audit.
+//
+// A third dimension crosses both kinds: DELEGATION. An OAuth2 access token
+// issued to a relying party resolves to the resource owner (Kind=User) but
+// carries only the scope that owner consented to, so it is marked
+// Delegated with the token's Audience and Scope recorded. See the field docs
+// on Principal.Delegated.
 package domain
 
 // PrincipalKind discriminates User vs ServiceAccount callers.
@@ -85,6 +91,39 @@ type Principal struct {
 	// with permissions ["members:view"] must not hold member-lifecycle
 	// authority anywhere. Always nil for user principals.
 	Scopes []string
+	// Delegated marks a credential that was issued TO A THIRD PARTY to act
+	// on the user's behalf under a limited grant — an OAuth2 access token
+	// (`token_use: "access"`) whose `aud` is a relying party rather than
+	// this deployment's own resource identifier.
+	//
+	// It is orthogonal to Kind: a delegated credential still resolves to
+	// Kind=User with the resource owner's UserID, because it really does
+	// speak for that person — just not with their full authority. The user
+	// consented to a scope, not to the whole account.
+	//
+	// The zero value (false) means "the credential belongs to the caller":
+	// a session cookie, a first-party bearer token from POST /token, or an
+	// API key. Code that constructs a Principal by hand therefore keeps the
+	// pre-delegation behaviour.
+	//
+	// Gate on this before doing anything that MINTS A LASTING CREDENTIAL or
+	// CHANGES AN AUTHENTICATION FACTOR — see middleware.RequireUserPrincipalHuma,
+	// which refuses delegated callers on exactly those routes.
+	Delegated bool
+
+	// Audience is the credential's `aud` claim, in the order it appeared.
+	// Empty for cookies, API keys, and bearer tokens minted without an
+	// audience. Recorded so a resource server can tell WHICH audience a
+	// delegated token was issued for, and so audit trails keep the relying
+	// party's identity.
+	Audience []string
+
+	// Scope is the OAuth2 scope the credential carries, split on spaces.
+	// Empty for every non-OAuth2 credential (cookie, API key, first-party
+	// bearer token) — an empty Scope on a non-Delegated principal means
+	// "unrestricted", NOT "no permissions". Consult it only in combination
+	// with Delegated, or via HasScope.
+	Scope []string
 }
 
 // IsUser reports whether p is a human user principal.
@@ -93,9 +132,42 @@ func (p Principal) IsUser() bool { return p.Kind == PrincipalKindUser }
 // IsServiceAccount reports whether p is an org-scoped service account.
 func (p Principal) IsServiceAccount() bool { return p.Kind == PrincipalKindServiceAccount }
 
+// IsDelegated reports whether p was resolved from a credential issued to a
+// third party under a limited grant (see Principal.Delegated).
+func (p Principal) IsDelegated() bool { return p.Delegated }
+
+// HasScope reports whether the credential carries scope s.
+//
+// A NON-delegated credential (cookie, API key, first-party bearer token) is
+// unrestricted and therefore satisfies every scope — it is the user acting
+// directly, and no consent screen ever narrowed it. A delegated credential
+// satisfies s only when s is in the granted set.
+func (p Principal) HasScope(s string) bool {
+	if !p.Delegated {
+		return true
+	}
+	for _, got := range p.Scope {
+		if got == s {
+			return true
+		}
+	}
+	return false
+}
+
 // NewUserPrincipal constructs a User principal for the given user id.
 func NewUserPrincipal(userID string) Principal {
 	return Principal{Kind: PrincipalKindUser, UserID: &userID}
+}
+
+// NewDelegatedUserPrincipal constructs a User principal for a credential that
+// a third party holds on the user's behalf: audience is the token's `aud`,
+// scope the granted scope. See Principal.Delegated.
+func NewDelegatedUserPrincipal(userID string, audience, scope []string) Principal {
+	p := NewUserPrincipal(userID)
+	p.Delegated = true
+	p.Audience = audience
+	p.Scope = scope
+	return p
 }
 
 // NewServiceAccountPrincipal constructs a ServiceAccount principal.

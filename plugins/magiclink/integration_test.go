@@ -198,7 +198,12 @@ func (s *stack) enrolTOTP(t *testing.T) string {
 	}
 	res.Body.Close()
 
-	code, err := totp.GenerateCode(setup.Secret, time.Now())
+	// Confirm with the PREVIOUS step's code — still inside the server's ±1-step
+	// acceptance window, so enrolment completes normally. Confirming with the
+	// CURRENT step's code would spend that step (TOTP codes are single-use, see
+	// domain.TOTPSecret.LastUsedStep) and the login code these tests mint
+	// moments later would be refused as a replay of it.
+	code, err := totp.GenerateCode(setup.Secret, time.Now().Add(-30*time.Second))
 	if err != nil {
 		t.Fatalf("totp code: %v", err)
 	}

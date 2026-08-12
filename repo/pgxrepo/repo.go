@@ -742,6 +742,7 @@ func (r *Repo) GetTOTPByUserID(ctx context.Context, userID string, verifiedOnly 
 		EncryptedSecret: row.EncryptedSecret,
 		Verified:        row.Verified,
 		CreatedAt:       fromTS(row.CreatedAt),
+		LastUsedStep:    row.LastUsedStep,
 	}
 	return &t, nil
 }
@@ -753,7 +754,23 @@ func (r *Repo) CreateTOTP(ctx context.Context, input domain.NewTOTPSecret) error
 		EncryptedSecret: input.EncryptedSecret,
 		Verified:        input.Verified,
 		CreatedAt:       ts(input.CreatedAt),
+		LastUsedStep:    input.LastUsedStep,
 	})
+}
+
+// MarkTOTPUsed advances the replay counter. The UPDATE is guarded so it can
+// only move FORWARD, which makes "zero rows affected" ambiguous: either the
+// row is gone, or the counter already sits at/past this step because a
+// concurrent verifier won the race with an equal-or-newer code. Both leave the
+// replay defence intact, so neither is reported as an error and ErrNotFound is
+// deliberately NOT synthesised from RowsAffected here.
+func (r *Repo) MarkTOTPUsed(ctx context.Context, id string, step int64) error {
+	s := step
+	_, err := r.q.MarkTOTPUsed(ctx, pgxgen.MarkTOTPUsedParams{
+		ID:           id,
+		LastUsedStep: &s,
+	})
+	return err
 }
 
 func (r *Repo) MarkTOTPVerified(ctx context.Context, id string) error {

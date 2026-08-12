@@ -13,7 +13,7 @@ where the platform picks the credential.
 | POST   | `/passkeys/register/begin` | start registration; returns `{challenge_id, options}` (auth-gated) |
 | POST   | `/passkeys/register/finish`| verify attestation, store the credential (auth-gated)    |
 | POST   | `/passkey/login/begin`     | start an assertion; empty body = discoverable flow       |
-| POST   | `/passkey/login/finish`    | verify assertion, issue a session cookie                 |
+| POST   | `/passkey/login/finish`    | verify assertion, issue a session cookie (or a step-up challenge) |
 | GET    | `/passkeys`                | list the caller's passkeys (auth-gated)                  |
 | DELETE | `/passkeys/{id}`           | delete one of the caller's passkeys (auth-gated)         |
 
@@ -21,6 +21,35 @@ Both `begin` endpoints return `{challenge_id, options}` — the `options` member
 wraps the standard `publicKey` credential options the browser API consumes, and
 the matching `finish` call **requires** the `challenge_id` plus the browser's
 credential response. Migrations create `yauth_webauthn_credentials`.
+
+## A passkey satisfies MFA (default)
+
+When the `mfa` plugin is also wired, a TOTP-enrolled user finishing a passkey
+login is **not** asked for a code. `/passkey/login/finish` reports the login as
+already second-factor-verified and issues the session in one leg. This is a
+deliberate default:
+
+- a passkey assertion is not a single factor — it is possession of the
+  authenticator plus, with user verification, a biometric or PIN. NIST
+  SP 800-63B rates a verified WebAuthn authenticator at AAL2/AAL3, and Entra,
+  Okta and Google all accept a passkey on its own;
+- it is phishing-resistant. Chasing it with a shared-secret TOTP adds the
+  weaker factor's failure modes (relay, real-time phishing, seed theft) to a
+  flow that had none;
+- it is what this route has always done, so no existing passkey user's login
+  changes shape.
+
+**To demand a step-up anyway**, set `satisfies_mfa: false`
+(`passkey.Config.SatisfiesMFA` = pointer to `false`). `/passkey/login/finish`
+then answers `{require_mfa, pending_session_id}` with **no** `Set-Cookie`, and
+the login completes at `POST /mfa/verify` — the same second leg the cookie
+password login uses. Note this **changes behaviour for existing passkey users
+who have TOTP enrolled**: they will be prompted for a code they were never
+asked for before, so ship the client-side handling of `require_mfa` first.
+
+Independent of the flag, a `Block` decision — `lockout`, an IP-deny handler —
+is **always** honoured: `/passkey/login/finish` refuses with the handler's
+status and issues no session. A locked account cannot get in with its passkey.
 
 ## YAML (`NewFromConfig`)
 
@@ -31,9 +60,10 @@ plugins:
     rp_id: example.com               # effective domain — no scheme, no port
     rp_name: My App                  # shown in the platform prompt
     rp_origin: https://app.example.com  # EXACT browser origin (scheme://host[:port])
+    # satisfies_mfa: false           # optional; default true (see above)
 ```
 
-All three fields are required. `rp_origin` must match the origin the browser
+The three RP fields are required. `rp_origin` must match the origin the browser
 reports in `clientDataJSON` exactly — for a Vite/SPA dev setup that proxies
 `/api`, that is the **dev server's** origin (e.g. `http://localhost:5173`), not
 the backend's.

@@ -559,6 +559,28 @@ func (p *oauthPlugin) completeLogin(
 		return nil, huma.Error500InternalServerError("unable to look up oauth account")
 	}
 
+	uid := userID
+	em := email
+	method := "oauth:" + provider
+	if newUser {
+		// Informational: registration carries no decision.
+		_, _ = host.Emit(ctx, events.AuthEvent{
+			Type:      events.EventUserRegistered,
+			UserID:    &uid,
+			Email:     &em,
+			IPAddress: middleware.RequestIP(r),
+			Method:    &method,
+		})
+	}
+
+	// The login pipeline runs BEFORE the session is issued. It used to run
+	// after, with the decision discarded, so a Block (lockout, an IP deny
+	// handler) still ended in a cookie. See satisfiesMFA for how a step-up
+	// decision is handled on this redirect-shaped flow.
+	if err := plugin.RunFederatedLogin(ctx, host, p.cfg.satisfiesMFA(), uid, em, middleware.RequestIP(r), method); err != nil {
+		return nil, err
+	}
+
 	// Issue session.
 	raw, _, err := auth.IssueSession(ctx, repoRef, userID, middleware.RequestIP(r), requestUA(r), host.SessionTTL())
 	if err != nil {
@@ -568,27 +590,6 @@ func (p *oauthPlugin) completeLogin(
 		cookieOptionsFromHost(host, r, int(host.SessionTTL().Seconds())),
 		raw,
 	))
-
-	// Emit audit/webhook events. Failures are informational only.
-	uid := userID
-	em := email
-	method := "oauth:" + provider
-	if newUser {
-		_, _ = host.Emit(ctx, events.AuthEvent{
-			Type:      events.EventUserRegistered,
-			UserID:    &uid,
-			Email:     &em,
-			IPAddress: middleware.RequestIP(r),
-			Method:    &method,
-		})
-	}
-	_, _ = host.Emit(ctx, events.AuthEvent{
-		Type:      events.EventLoginSucceeded,
-		UserID:    &uid,
-		Email:     &em,
-		IPAddress: middleware.RequestIP(r),
-		Method:    &method,
-	})
 
 	if redirect != "" {
 		return &callbackOutput{Status: http.StatusFound, Location: redirect}, nil

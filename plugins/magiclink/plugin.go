@@ -40,6 +40,22 @@ type Config struct {
 	// embedded in the outgoing email. Example: "https://app.example.com
 	// /magic". The plugin appends "?token=<raw>".
 	LinkBaseURL string
+
+	// SatisfiesMFA declares that presenting a valid magic link is itself
+	// enough to count as the second factor, so a TOTP-enrolled user is NOT
+	// stepped up after clicking the link.
+	//
+	// The default (false) steps up: a magic link proves control of an
+	// inbox and nothing more, which is the same class of evidence as a
+	// password — and usually the SAME channel the password reset uses, so
+	// treating it as a second factor collapses both factors onto one
+	// mailbox. /magic-link/verify therefore answers {require_mfa,
+	// pending_session_id} and sets no cookie until POST /mfa/verify
+	// completes the login, exactly as the cookie password login does.
+	//
+	// Set true only where the mail channel is itself strongly protected
+	// and the operator has decided the link is a factor of its own.
+	SatisfiesMFA bool
 }
 
 const defaultTokenTTL = 15 * time.Minute

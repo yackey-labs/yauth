@@ -41,10 +41,12 @@ type YAuth struct {
 	traceMiddleware  bool
 	telemetryShut    func(context.Context) error
 
+	eventGates    []events.Handler
 	eventHandlers []events.Handler
 	authResolvers []plugin.AuthResolver
 	jwtSigner     plugin.JWTSigner
 	jwtSecret     []byte
+	mfaVerifier   plugin.MFAVerifier
 	logger        *slog.Logger
 
 	// humaAPI is the huma API every plugin registered its routes on. Its
@@ -271,15 +273,28 @@ func (y *YAuth) Repo() repo.Repository { return y.repo }
 // Config returns the YAuthConfig the instance was built with.
 func (y *YAuth) Config() YAuthConfig { return y.cfg }
 
-// Emit fans event through every registered events.Handler in registration
-// order. The first non-Continue decision short-circuits the chain and is
-// returned to the caller. If every handler returns Continue (or no
-// handlers are registered), Emit returns events.Continue() and a nil
-// error. Handler errors are surfaced immediately along with the decision
-// returned by that handler.
+// Emit fans event through the auth-event pipeline: first every gate
+// registered with RegisterEventGate, then every handler registered with
+// RegisterEventHandler, each stage in its own registration order. The
+// first non-Continue decision short-circuits the chain and is returned to
+// the caller. If every handler returns Continue (or none are registered),
+// Emit returns events.Continue() and a nil error. Handler errors are
+// surfaced immediately along with the decision returned by that handler.
+//
+// The two stages exist so a gate's veto (mfa's RequireMfa) always lands
+// before observers act on the event; see PluginHost.RegisterEventGate.
 func (y *YAuth) Emit(ctx context.Context, event events.AuthEvent) (events.Decision, error) {
 	if event.Timestamp.IsZero() {
 		event.Timestamp = time.Now().UTC()
+	}
+	for _, h := range y.eventGates {
+		dec, err := h.Handle(ctx, event)
+		if err != nil {
+			return dec, err
+		}
+		if dec.Kind != events.DecisionKindContinue {
+			return dec, nil
+		}
 	}
 	for _, h := range y.eventHandlers {
 		dec, err := h.Handle(ctx, event)
@@ -346,6 +361,12 @@ func (y *YAuth) RegisterEventHandler(h events.Handler) {
 	y.eventHandlers = append(y.eventHandlers, h)
 }
 
+// RegisterEventGate implements plugin.PluginHost. Gates run before every
+// RegisterEventHandler handler, independent of plugin registration order.
+func (y *YAuth) RegisterEventGate(h events.Handler) {
+	y.eventGates = append(y.eventGates, h)
+}
+
 // RegisterAuthResolver implements plugin.PluginHost.
 func (y *YAuth) RegisterAuthResolver(r plugin.AuthResolver) {
 	y.authResolvers = append(y.authResolvers, r)
@@ -366,6 +387,20 @@ func (y *YAuth) JWTSigner() plugin.JWTSigner { return y.jwtSigner }
 
 // JWTSecret implements plugin.PluginHost.
 func (y *YAuth) JWTSecret() []byte { return y.jwtSecret }
+
+// MFAVerifier implements plugin.PluginHost. Returns nil when no MFA
+// plugin registered a verifier.
+func (y *YAuth) MFAVerifier() plugin.MFAVerifier { return y.mfaVerifier }
+
+// RegisterMFAVerifier implements plugin.PluginHost. It is invoked by the
+// mfa plugin from its Routes hook to publish its challenge verifier to
+// plugins that complete a login without a cookie session (bearer). First
+// verifier wins, matching SetJWTSigner.
+func (y *YAuth) RegisterMFAVerifier(v plugin.MFAVerifier) {
+	if y.mfaVerifier == nil {
+		y.mfaVerifier = v
+	}
+}
 
 // SetJWTSigner is invoked by the asymmetric-jwt plugin from its Routes
 // hook to publish its signer to the rest of the host. Plugins should not

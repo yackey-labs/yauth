@@ -202,8 +202,20 @@ type magicVerifyInput struct {
 // verifyResponse wraps the verified user under `user`. The session
 // cookie is set in the response headers; the body just identifies who
 // just logged in.
+//
+// When a handler answers the login with events.RequireMfa the login is NOT
+// finished: `user` is omitted, no session is created, NO Set-Cookie is
+// written, and the body carries {require_mfa, pending_session_id} — the
+// same field names the cookie password login and bearer /token use. The
+// caller finishes at POST /mfa/verify.
 type verifyResponse struct {
-	User verifyUser `json:"user"`
+	User *verifyUser `json:"user,omitempty"`
+	// RequireMfa reports that a second factor is outstanding. Present
+	// only on the challenge response.
+	RequireMfa bool `json:"require_mfa,omitempty"`
+	// PendingSessionID identifies the challenge to complete at
+	// POST /mfa/verify. Present only on the challenge response.
+	PendingSessionID string `json:"pending_session_id,omitempty"`
 }
 
 type verifyUser struct {
@@ -216,7 +228,7 @@ type verifyUser struct {
 
 func toVerifyResponse(u domain.User) verifyResponse {
 	return verifyResponse{
-		User: verifyUser{
+		User: &verifyUser{
 			ID:            u.ID,
 			Email:         u.Email,
 			DisplayName:   u.DisplayName,
@@ -224,6 +236,23 @@ func toVerifyResponse(u domain.User) verifyResponse {
 			Role:          u.Role,
 		},
 	}
+}
+
+// decBlockStatus / decBlockMessage map a Block decision onto an HTTP
+// response the same way the email-password, bearer and mfa login paths do,
+// so a lockout 429 reads identically wherever a login is finished.
+func decBlockStatus(d events.Decision) int {
+	if d.BlockStatus == 0 {
+		return http.StatusForbidden
+	}
+	return d.BlockStatus
+}
+
+func decBlockMessage(d events.Decision) string {
+	if d.BlockMessage == "" {
+		return "request blocked"
+	}
+	return d.BlockMessage
 }
 
 // verifyOutput wraps verifyResponse so huma marshals exactly the legacy 200
@@ -238,12 +267,20 @@ type verifyOutput struct {
 // http.ResponseWriter stashed by StashHTTPHuma (huma writes the 200 + body after
 // the handler returns, so the cookie header lands first) — the same pattern as
 // admin's impersonate route.
+//
+// It runs the same auth-event pipeline the cookie /login runs: login.attempt
+// before the session is issued (so a locked account is refused here too) and
+// login.succeeded once the token verifies, HONOURING both decisions. Before
+// this the login.succeeded decision was discarded and the cookie was set
+// unconditionally, so an MFA-enrolled user was never stepped up and a Block
+// (lockout, IP deny, a consumer's own handler) issued a session anyway.
 func (p *magicLinkPlugin) registerVerify(host plugin.PluginHost, api huma.API, prefix string) {
 	huma.Register(api, huma.Operation{
 		OperationID: "magicLinkVerify",
 		Method:      http.MethodPost,
 		Path:        prefix + "/magic-link/verify",
 		Summary:     "Exchange a magic-link token for a session",
+		Description: "Returns {require_mfa, pending_session_id} and sets no cookie when the account has a second factor outstanding; complete it at /mfa/verify.",
 		Tags:        []string{"magic-link"},
 		Security:    []map[string][]string{}, // explicitly public
 		Middlewares: huma.Middlewares{middleware.StashHTTPHuma(api)},
@@ -309,21 +346,63 @@ func (p *magicLinkPlugin) registerVerify(host plugin.PluginHost, api huma.API, p
 			return nil, huma.Error403Forbidden("account suspended")
 		}
 
-		raw2, _, err := auth.IssueSession(ctx, repo, user.ID, ip, requestUA(r), host.SessionTTL())
-		if err != nil {
-			return nil, huma.Error500InternalServerError("unable to issue session")
-		}
-
 		uid := user.ID
 		emailCopy := user.Email
 		methodCopy := method
-		_, _ = host.Emit(ctx, events.AuthEvent{
+
+		// login.attempt is what lockout answers with Block — its
+		// onSucceeded only ever clears state, so honouring the
+		// login.succeeded decision alone would NOT keep a locked account
+		// out of this route. Emitted after the token is consumed because
+		// the link is what names the account; the token is single-use
+		// either way, so a blocked attempt burns it rather than leaving a
+		// live link for the attacker to retry once the lock lapses.
+		if dec, _ := host.Emit(ctx, events.AuthEvent{
+			Type:      events.EventLoginAttempt,
+			UserID:    &uid,
+			Email:     &emailCopy,
+			IPAddress: ip,
+			Method:    &methodCopy,
+		}); dec.Kind == events.DecisionKindBlock {
+			return nil, huma.NewError(decBlockStatus(dec), decBlockMessage(dec))
+		}
+
+		// The link checked out. Give handlers a chance to interpose:
+		// Block (account locked, etc.) or RequireMfa (TOTP step-up). The
+		// session is issued only AFTER this returns Continue — the
+		// decision used to be discarded here, which both waved MFA
+		// through and stamped a cookie on a blocked login.
+		ev := events.AuthEvent{
 			Type:      events.EventLoginSucceeded,
 			UserID:    &uid,
 			Email:     &emailCopy,
 			IPAddress: ip,
 			Method:    &methodCopy,
-		})
+		}
+		if p.cfg.SatisfiesMFA {
+			// The operator has declared the link itself a second factor.
+			// Say so in the event rather than ignoring the step-up
+			// decision: the marker stands mfa's gate down (no orphan
+			// challenge row) and lets observers such as lockout see a
+			// COMPLETED login, which is what clears the failure counter.
+			ev.Metadata = events.MFACompleted()
+		}
+		dec, _ := host.Emit(ctx, ev)
+		switch dec.Kind {
+		case events.DecisionKindBlock:
+			return nil, huma.NewError(decBlockStatus(dec), decBlockMessage(dec))
+		case events.DecisionKindRequireMfa:
+			// No session, no cookie — the login finishes at /mfa/verify.
+			return &verifyOutput{Body: verifyResponse{
+				RequireMfa:       true,
+				PendingSessionID: dec.PendingSessionID,
+			}}, nil
+		}
+
+		raw2, _, err := auth.IssueSession(ctx, repo, user.ID, ip, requestUA(r), host.SessionTTL())
+		if err != nil {
+			return nil, huma.Error500InternalServerError("unable to issue session")
+		}
 
 		http.SetCookie(w, auth.SessionCookie(
 			cookieOptionsFromHost(host, r, int(host.SessionTTL().Seconds())),

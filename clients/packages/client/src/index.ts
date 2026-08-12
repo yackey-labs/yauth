@@ -13,6 +13,7 @@ import type {
   AuditUpdateDestinationRequest,
   BearerRefreshRequest,
   BearerRevokeRequest,
+  BearerTokenMFARequest,
   BearerTokenRequest,
   ChangePasswordRequest,
   ChangeRoleRequest,
@@ -68,6 +69,7 @@ import {
   auditExportPatchDestination,
   auditExportReplay,
   bearerIssueToken,
+  bearerIssueTokenMfa,
   bearerRefresh,
   bearerRevoke,
   emailPasswordChangePassword,
@@ -242,7 +244,10 @@ export function createYAuthClient(options: YAuthClientOptions) {
     },
 
     bearer: {
+      // getToken answers {require_mfa, pending_session_id} instead of a token
+      // pair when the account has a second factor; finish with verifyMfa.
       getToken: (body: BearerTokenRequest) => bearerIssueToken(body),
+      verifyMfa: (body: BearerTokenMFARequest) => bearerIssueTokenMfa(body),
       refresh: (body: BearerRefreshRequest) => bearerRefresh(body),
       revoke: (body: BearerRevokeRequest) => bearerRevoke(body),
     },

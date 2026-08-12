@@ -128,6 +128,31 @@ type Config struct {
 	// per-call. Reserved for future metadata-URL import support; the
 	// current MVP requires admins to paste IdpX509Cert directly.
 	HTTPClient *http.Client
+
+	// SatisfiesMFA declares whether the upstream IdP's own authentication
+	// counts as the second factor. nil (the default) means TRUE, which is
+	// both what /sso/saml/acs has always done and the usual enterprise
+	// arrangement: an org buys SSO precisely so the IdP owns
+	// authentication policy, MFA included. The difference is that it is
+	// now asserted in the login event instead of being the side effect of
+	// a discarded step-up decision, so mfa's gate stands down and lockout
+	// sees a completed login.
+	//
+	// Set a pointer to false where local TOTP must be enforced regardless
+	// of the IdP. The ACS reply is a bodyless 302 and cannot carry a
+	// {require_mfa, pending_session_id} challenge, so a step-up decision
+	// then FAILS CLOSED with 403 and no session. See
+	// plugin.RunFederatedLogin.
+	SatisfiesMFA *bool
+}
+
+// satisfiesMFA reports the effective SatisfiesMFA value, defaulting to
+// true when the caller left the pointer nil.
+func (c *Config) satisfiesMFA() bool {
+	if c.SatisfiesMFA == nil {
+		return true
+	}
+	return *c.SatisfiesMFA
 }
 
 const (

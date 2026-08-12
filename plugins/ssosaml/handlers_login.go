@@ -501,6 +501,24 @@ func (p *ssoSAMLPlugin) registerSamlACS(host plugin.PluginHost, api huma.API, pr
 			return writeError(http.StatusInternalServerError, "INTERNAL", "membership upsert failed"), nil
 		}
 
+		uid := userID
+		em := email
+		method := "ssosaml:" + IssuerKeyFromEntityID(cfg.IdpEntityID)
+		if isNew {
+			// Informational: registration carries no decision.
+			_, _ = host.Emit(ctx, events.AuthEvent{
+				Type: events.EventUserRegistered, UserID: &uid, Email: &em,
+				IPAddress: middleware.RequestIP(r), Method: &method,
+			})
+		}
+
+		// The login pipeline runs BEFORE the session is issued. It used to
+		// run after, with the decision discarded, so a Block (lockout, an
+		// IP deny handler) still ended in a cookie.
+		if err := plugin.RunFederatedLogin(ctx, host, p.cfg.satisfiesMFA(), uid, em, middleware.RequestIP(r), method); err != nil {
+			return nil, err
+		}
+
 		raw, sess, err := auth.IssueSession(ctx, host.Repo(), userID, middleware.RequestIP(r), requestUA(r), host.SessionTTL())
 		if err != nil {
 			return writeError(http.StatusInternalServerError, "INTERNAL", "issue session failed"), nil
@@ -513,20 +531,6 @@ func (p *ssoSAMLPlugin) registerSamlACS(host plugin.PluginHost, api huma.API, pr
 			cookieOptionsFromHost(host, r, int(host.SessionTTL().Seconds())),
 			raw,
 		))
-
-		uid := userID
-		em := email
-		method := "ssosaml:" + IssuerKeyFromEntityID(cfg.IdpEntityID)
-		if isNew {
-			_, _ = host.Emit(ctx, events.AuthEvent{
-				Type: events.EventUserRegistered, UserID: &uid, Email: &em,
-				IPAddress: middleware.RequestIP(r), Method: &method,
-			})
-		}
-		_, _ = host.Emit(ctx, events.AuthEvent{
-			Type: events.EventLoginSucceeded, UserID: &uid, Email: &em,
-			IPAddress: middleware.RequestIP(r), Method: &method,
-		})
 
 		// Redirect honors the per-state RedirectURL when present
 		// (SP-initiated). IdP-initiated falls back to "/". The success

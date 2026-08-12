@@ -4,8 +4,17 @@
 // Routes registered by Plugin.Routes (relative to the prefix passed in):
 //
 //	POST {prefix}/token          email+password → access_token + refresh_token
+//	POST {prefix}/token/mfa      pending_session_id + code → token pair
 //	POST {prefix}/token/refresh  rotate refresh; family-revokes on reuse
 //	POST {prefix}/token/revoke   (auth) revoke a refresh token
+//
+// /token runs the same auth-event pipeline as the cookie /login
+// (login.attempt / login.failed / login.succeeded), so account lockout,
+// audit export and webhooks see native logins too. When a handler answers
+// login.succeeded with a RequireMfa decision, /token returns
+// {require_mfa, pending_session_id} and issues nothing; the caller finishes
+// at /token/mfa, which completes the challenge through the host's
+// plugin.MFAVerifier and returns the ordinary token pair.
 //
 // In addition to its routes, Routes registers an AuthResolver with the
 // host so that requests carrying an "Authorization: Bearer <jwt>" header
@@ -95,6 +104,7 @@ func (p *bearerPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api hum
 
 	mw := host.Middleware()
 	p.registerToken(host, api, prefix)
+	p.registerTokenMFA(host, api, prefix)
 	p.registerRefresh(host, api, prefix)
 	p.registerRevoke(host, api, mw, prefix)
 }

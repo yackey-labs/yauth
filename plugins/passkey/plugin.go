@@ -39,6 +39,46 @@ type Config struct {
 	// RPName is the human-readable display name shown in the platform UI.
 	// Defaults to "yauth".
 	RPName string
+
+	// SatisfiesMFA declares whether a passkey assertion is itself enough
+	// to count as the second factor. nil (the default) means TRUE.
+	//
+	// Defaulting to "a passkey satisfies MFA" means /passkey/login/finish
+	// reports the login as already second-factor-verified and issues the
+	// session in one leg. That is a deliberate product decision, not an
+	// oversight —
+	//
+	//   - a passkey assertion is not a single factor. It is possession of
+	//     the authenticator plus, when user verification is performed, a
+	//     biometric or PIN; NIST SP 800-63B rates a verified WebAuthn
+	//     authenticator at AAL2/AAL3 and the major IdPs (Entra, Okta,
+	//     Google) accept a passkey on its own;
+	//   - it is phishing-resistant, which TOTP is not. Chasing a passkey
+	//     with a shared-secret code adds the weaker factor's failure modes
+	//     (relay, real-time phishing, seed theft) to a flow that had none;
+	//   - it matches what this route already did, so no existing passkey
+	//     user's login changes shape.
+	//
+	// An operator who disagrees sets SatisfiesMFA to a pointer to false
+	// (yauth.yaml: plugins.passkey.satisfies_mfa: false). A TOTP-enrolled
+	// user then gets {require_mfa, pending_session_id} with NO Set-Cookie
+	// from /passkey/login/finish and completes at POST /mfa/verify. Note
+	// that this CHANGES BEHAVIOUR for existing passkey users who have TOTP
+	// enrolled: they will be prompted for a code they were never asked for
+	// before, so ship the client-side handling of require_mfa first.
+	//
+	// Independent of this flag, a Block decision (account lockout, an IP
+	// deny handler) is ALWAYS honoured and no session is issued.
+	SatisfiesMFA *bool
+}
+
+// satisfiesMFA reports the effective SatisfiesMFA value, defaulting to
+// true when the caller left the pointer nil.
+func (c *Config) satisfiesMFA() bool {
+	if c.SatisfiesMFA == nil {
+		return true
+	}
+	return *c.SatisfiesMFA
 }
 
 // passkeyPlugin is an unexported implementation of plugin.Plugin.
@@ -152,6 +192,7 @@ func (p *passkeyPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api hu
 		Method:      http.MethodPost,
 		Path:        prefix + "/passkey/login/finish",
 		Summary:     "Verify assertion and issue a session",
+		Description: "A passkey satisfies MFA by default. With Config.SatisfiesMFA=false it returns {require_mfa, pending_session_id} and sets no cookie when the account has a second factor; complete it at /mfa/verify.",
 		Tags:        []string{"passkey"},
 		Security:    []map[string][]string{},
 		Middlewares: publicStashMw,

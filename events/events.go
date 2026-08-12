@@ -25,6 +25,24 @@ const (
 	EventUserUnsuspended EventType = "user.unsuspended"
 )
 
+// MetaMFAVerified is the AuthEvent.Metadata key marking a login.succeeded
+// emitted AFTER a second factor was verified — i.e. a login that is
+// COMPLETE, not merely password-verified.
+//
+// EventLoginSucceeded means "the primary credential checked out". For an
+// MFA-enrolled user the login only completes later, when the challenge is
+// answered (mfa's /mfa/verify, bearer's /token/mfa). Those completion
+// points emit a second login.succeeded carrying this marker so that:
+//
+//   - handlers that clear per-login state — lockout's failure counter —
+//     see the login that actually completed, and
+//   - the MFA gate recognises its own completion and steps aside instead
+//     of opening a fresh challenge, which would loop forever.
+//
+// Metadata is built in Go by the emitting plugin; no request field is ever
+// unmarshalled into an AuthEvent, so a caller cannot set the marker.
+const MetaMFAVerified = "mfa_verified"
+
 // AuthEvent is an authentication lifecycle event handed to plugins/handlers.
 type AuthEvent struct {
 	Type      EventType
@@ -36,6 +54,21 @@ type AuthEvent struct {
 	Reason    *string
 	Metadata  map[string]any
 	Timestamp time.Time
+}
+
+// MFAVerified reports whether e carries the MetaMFAVerified marker — i.e.
+// whether it is the completion of a stepped-up login rather than the
+// password-verified event that opened the challenge.
+func (e AuthEvent) MFAVerified() bool {
+	v, ok := e.Metadata[MetaMFAVerified].(bool)
+	return ok && v
+}
+
+// MFACompleted returns the Metadata map that marks a login.succeeded as the
+// completion of a second-factor challenge. Emitters use it so the key is
+// never spelled out by hand.
+func MFACompleted() map[string]any {
+	return map[string]any{MetaMFAVerified: true}
 }
 
 // DecisionKind tags the variant of a Decision.

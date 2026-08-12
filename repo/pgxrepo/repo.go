@@ -2005,6 +2005,11 @@ func (r *Repo) ListOrganizations(ctx context.Context, search string, limit, offs
 // ─── Membership ──────────────────────────────────────────────────────────────
 
 func (r *Repo) CreateMembership(ctx context.Context, input domain.NewMembership) (domain.Membership, error) {
+	// Owner ceiling — see "the owner ceiling" on domain.UpdateMembership. Only
+	// an explicitly authorized write may mint an owner.
+	if input.OwnerRoleRefused() {
+		return domain.Membership{}, yautherr.ErrOwnerProtected
+	}
 	row, err := r.q.CreateMembership(ctx, pgxgen.CreateMembershipParams{
 		ID:             input.ID,
 		OrganizationID: input.OrganizationID,
@@ -2052,6 +2057,12 @@ func (r *Repo) GetMembershipByOrgUser(ctx context.Context, orgID, userID string)
 const pgxOwnerRole = "owner"
 
 func (r *Repo) UpdateMembership(ctx context.Context, id string, changes domain.UpdateMembership) (domain.Membership, error) {
+	// Owner ceiling — see "the owner ceiling" on domain.UpdateMembership. Only
+	// an explicitly authorized write may promote to owner. Checked before the
+	// transaction opens: it depends on nothing in the database.
+	if changes.OwnerRoleRefused() {
+		return domain.Membership{}, yautherr.ErrOwnerProtected
+	}
 	var out domain.Membership
 	err := r.withTx(ctx, func(tx pgx.Tx) error {
 		q := pgxgen.New(tx)

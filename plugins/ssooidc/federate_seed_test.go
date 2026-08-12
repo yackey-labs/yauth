@@ -47,11 +47,13 @@ func TestSeedConnectionRoundTrip(t *testing.T) {
 		JitProvisioningEnabled: true,
 		DefaultRoleOnJit:       "viewer",
 		OIDC: OidcConnectionConfig{
-			DiscoveryURL:  "https://idp/.well-known/openid-configuration",
-			ClientID:      "cid",
-			ClientSecret:  "supersecret",
-			Scopes:        []string{"openid", "groups"},
-			ClaimMappings: ClaimMappings{Email: "email", Groups: "groups", GroupToRole: map[string]string{"admins": "owner"}},
+			DiscoveryURL: "https://idp/.well-known/openid-configuration",
+			ClientID:     "cid",
+			ClientSecret: "supersecret",
+			Scopes:       []string{"openid", "groups"},
+			// "owner" would be refused by the config validator (the owner ceiling);
+			// this test is about the codec round-tripping the map at all.
+			ClaimMappings: ClaimMappings{Email: "email", Groups: "groups", GroupToRole: map[string]string{"admins": "admin"}},
 		},
 	})
 	if err != nil {
@@ -74,7 +76,7 @@ func TestSeedConnectionRoundTrip(t *testing.T) {
 	if got.ClientID != "cid" {
 		t.Fatalf("client_id: got %q", got.ClientID)
 	}
-	if got.ClaimMappings.GroupToRole["admins"] != "owner" {
+	if got.ClaimMappings.GroupToRole["admins"] != "admin" {
 		t.Fatalf("group→role lost: %+v", got.ClaimMappings)
 	}
 }
@@ -101,7 +103,9 @@ func TestUpsertMembershipNeverDemotesOwner(t *testing.T) {
 	now := time.Now().UTC()
 	org, _ := r.CreateOrganization(ctx, domain.NewOrganization{ID: uuid.NewString(), Name: "o", Slug: "o", CreatedAt: now, UpdatedAt: now})
 	u, _ := r.CreateUser(ctx, domain.NewUser{ID: uuid.NewString(), Email: "a@b.test", Role: "admin", EmailVerified: true, CreatedAt: now, UpdatedAt: now})
-	if _, err := r.CreateMembership(ctx, domain.NewMembership{ID: uuid.NewString(), OrganizationID: org.ID, UserID: u.ID, Role: auth.RoleOwner, Status: domain.MembershipActive, JoinedAt: &now, CreatedAt: now, UpdatedAt: now}); err != nil {
+	if _, err := r.CreateMembership(ctx, domain.NewMembership{ID: uuid.NewString(), OrganizationID: org.ID, UserID: u.ID, Role: auth.RoleOwner, Status: domain.MembershipActive, JoinedAt: &now, CreatedAt: now, UpdatedAt: now,
+		OwnerRoleAuthorized: true, // test fixture: seeds state directly, bypassing the handler layer
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := p.upsertMembership(ctx, host, org.ID, u.ID, "viewer"); err != nil {

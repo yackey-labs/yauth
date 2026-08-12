@@ -362,6 +362,10 @@ func (p *orgsPlugin) registerCreate(host plugin.PluginHost, api huma.API, mw *mi
 			JoinedAt:       &now,
 			CreatedAt:      now,
 			UpdatedAt:      now,
+			// One of the two writes in yauth permitted to mint an owner: the
+			// founder of a brand-new org. See "the owner ceiling" on
+			// domain.UpdateMembership.
+			OwnerRoleAuthorized: true,
 		}); err != nil {
 			// Best-effort rollback of the org create on membership
 			// failure. Worst case the org stays orphaned and the
@@ -712,6 +716,13 @@ func (p *orgsPlugin) registerCreateInvitation(host plugin.PluginHost, api huma.A
 		role := p.cfg.DefaultInviteRole
 		if req.Role != nil && *req.Role != "" {
 			role = *req.Role
+		}
+		// The invitation's role is written straight onto the membership when
+		// it is accepted, so it needs the same ceiling add-member and set-role
+		// already apply — otherwise an org admin mints an owner by inviting a
+		// colluding address as one.
+		if err := auth.ValidateAssignableRole(role); err != nil {
+			return nil, huma.Error400BadRequest("use POST /organizations/{id}/transfer-ownership to set an owner")
 		}
 		token, tokenHash, err := generateInvitationToken()
 		if err != nil {

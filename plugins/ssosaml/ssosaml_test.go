@@ -375,7 +375,8 @@ func seedAdmin(t *testing.T, r repo.Repository) (domain.User, domain.Organizatio
 		t.Fatal(err)
 	}
 	_, err = r.CreateMembership(ctx, domain.NewMembership{
-		ID: uuid.NewString(), OrganizationID: org.ID, UserID: u.ID,
+		OwnerRoleAuthorized: true, // test fixture: seeds state directly, bypassing the handler layer
+		ID:                  uuid.NewString(), OrganizationID: org.ID, UserID: u.ID,
 		Role: auth.RoleOwner, Status: domain.MembershipActive,
 		CreatedAt: now, UpdatedAt: now,
 	})

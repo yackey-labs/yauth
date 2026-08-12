@@ -210,6 +210,11 @@ func (p *orgsPlugin) registerTransferOwnership(host plugin.PluginHost, api huma.
 		ownerRole := auth.RoleOwner
 		if _, err := host.Repo().UpdateMembership(ctx, target.ID, domain.UpdateMembership{
 			Role: &ownerRole,
+			// The other of the two writes permitted to promote an owner (org
+			// create is the first). Reaching here means the caller IS the
+			// current owner. See "the owner ceiling" on
+			// domain.UpdateMembership.
+			OwnerRoleAuthorized: true,
 		}); err != nil {
 			return nil, huma.Error500InternalServerError("promote new owner failed")
 		}
@@ -222,8 +227,16 @@ func (p *orgsPlugin) registerTransferOwnership(host plugin.PluginHost, api huma.
 			// Best-effort rollback so we don't leave the org
 			// with two owners. The promote of the new owner is
 			// idempotent, so re-running transfer will succeed.
-			priorRole := caller.Role
-			_, _ = host.Repo().UpdateMembership(ctx, target.ID, domain.UpdateMembership{Role: &priorRole})
+			//
+			// This restores the TARGET's own prior role. It used to restore
+			// caller.Role, which on this path is "owner" — i.e. the rollback
+			// re-wrote owner over owner and left the two-owner state it exists
+			// to undo.
+			priorRole := target.Role
+			_, _ = host.Repo().UpdateMembership(ctx, target.ID, domain.UpdateMembership{
+				Role:                &priorRole,
+				OwnerRoleAuthorized: true,
+			})
 			return nil, huma.Error500InternalServerError("demote prior owner failed")
 		}
 

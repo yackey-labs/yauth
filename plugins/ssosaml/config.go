@@ -11,6 +11,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/yackey-labs/yauth/auth"
 )
 
 // SAML attribute names matching the common Microsoft / WS-* claim type
@@ -254,6 +256,15 @@ func (c *SamlConnectionConfig) validate() error {
 		if c.SpPrivateKey == nil || strings.TrimSpace(*c.SpPrivateKey) == "" {
 			return errors.New("ssosaml: sp_private_key required when want_encrypted_assertions is true")
 		}
+	}
+	// group_to_role is applied verbatim to the membership on every JIT login —
+	// including for users who are ALREADY members, so it promotes as well as
+	// provisions. Mapping an IdP group to "owner" would hand the org admin who
+	// writes this config the owner slot, via anyone in a group they control at
+	// the IdP. validate() is the single chokepoint every config write passes
+	// through. Mirrors the ssooidc check of the same name.
+	if err := auth.ValidateAssignableRoles(c.AttributeMappings.GroupToRole); err != nil {
+		return errors.New("ssosaml: group_to_role cannot map to owner; use transfer-ownership")
 	}
 	return nil
 }

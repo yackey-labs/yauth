@@ -103,7 +103,8 @@ func TestCreateOrgAPIKey_RoleBoundedByCaller(t *testing.T) {
 		t.Fatalf("seed org: %v", err)
 	}
 	if _, err := r.CreateMembership(context.Background(), domain.NewMembership{
-		ID: uuid.NewString(), OrganizationID: orgID, UserID: user.ID,
+		OwnerRoleAuthorized: true, // test fixture: seeds state directly, bypassing the handler layer
+		ID:                  uuid.NewString(), OrganizationID: orgID, UserID: user.ID,
 		Role: auth.RoleBillingAdmin, Status: domain.MembershipActive,
 		CreatedAt: now, UpdatedAt: now,
 	}); err != nil {
@@ -133,7 +134,8 @@ func TestCreateOrgAPIKey_RequiresAdmin(t *testing.T) {
 		t.Fatalf("seed org: %v", err)
 	}
 	if _, err := r.CreateMembership(context.Background(), domain.NewMembership{
-		ID: uuid.NewString(), OrganizationID: orgID, UserID: user.ID,
+		OwnerRoleAuthorized: true, // test fixture: seeds state directly, bypassing the handler layer
+		ID:                  uuid.NewString(), OrganizationID: orgID, UserID: user.ID,
 		Role: auth.RoleMember, Status: domain.MembershipActive,
 		CreatedAt: now, UpdatedAt: now,
 	}); err != nil {

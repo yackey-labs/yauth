@@ -97,6 +97,7 @@ var groups = []group{
 	{name: "webhooks", cases: webhookCases},
 	{name: "webhook_deliveries", cases: webhookDeliveryCases},
 	{name: "webhook_retries", cases: webhookRetryCases},
+	{name: "memberships", cases: membershipCases},
 }
 
 // ----- helpers -----
@@ -1765,6 +1766,108 @@ var webhookRetryCases = []testCase{
 		// callers may invoke this opportunistically.
 		if err := r.DeleteScheduledRetry(ctx(), "missing"); err != nil {
 			t.Fatalf("expected no error for missing id; got %v", err)
+		}
+	}},
+}
+
+// ----- memberships -----
+//
+// The owner ceiling (see "the owner ceiling" on domain.UpdateMembership):
+// CreateMembership and UpdateMembership must refuse role == "owner" unless the
+// payload explicitly sets OwnerRoleAuthorized. Each backend carries its own
+// copy of the check, so the invariant is asserted here rather than against one
+// of them.
+
+var membershipCases = []testCase{
+	{"create_refuses_unauthorized_owner", func(t *testing.T, r repo.Repository) {
+		now := nowUTC()
+		mustCreateUser(t, r, "u1", "alice@example.com")
+		if _, err := r.CreateOrganization(ctx(), domain.NewOrganization{
+			ID: "o1", Name: "Acme", Slug: "acme", CreatedAt: now, UpdatedAt: now,
+		}); err != nil {
+			t.Fatalf("CreateOrganization: %v", err)
+		}
+		_, err := r.CreateMembership(ctx(), domain.NewMembership{
+			ID: "m1", OrganizationID: "o1", UserID: "u1",
+			Role: "owner", Status: domain.MembershipActive, CreatedAt: now, UpdatedAt: now,
+		})
+		if !errors.Is(err, yautherr.ErrOwnerProtected) {
+			t.Fatalf("CreateMembership(owner): got %v want ErrOwnerProtected", err)
+		}
+		got, err := r.GetMembershipByOrgUser(ctx(), "o1", "u1")
+		if err != nil {
+			t.Fatalf("GetMembershipByOrgUser: %v", err)
+		}
+		if got != nil {
+			t.Fatalf("refused create still wrote a row: %+v", got)
+		}
+	}},
+	{"create_allows_authorized_owner", func(t *testing.T, r repo.Repository) {
+		now := nowUTC()
+		mustCreateUser(t, r, "u1", "alice@example.com")
+		if _, err := r.CreateOrganization(ctx(), domain.NewOrganization{
+			ID: "o1", Name: "Acme", Slug: "acme", CreatedAt: now, UpdatedAt: now,
+		}); err != nil {
+			t.Fatalf("CreateOrganization: %v", err)
+		}
+		m, err := r.CreateMembership(ctx(), domain.NewMembership{
+			ID: "m1", OrganizationID: "o1", UserID: "u1",
+			Role: "owner", Status: domain.MembershipActive, CreatedAt: now, UpdatedAt: now,
+			OwnerRoleAuthorized: true,
+		})
+		if err != nil {
+			t.Fatalf("authorized owner create refused: %v", err)
+		}
+		if m.Role != "owner" {
+			t.Fatalf("role: got %q want owner", m.Role)
+		}
+	}},
+	{"update_refuses_unauthorized_promotion", func(t *testing.T, r repo.Repository) {
+		now := nowUTC()
+		mustCreateUser(t, r, "u1", "alice@example.com")
+		if _, err := r.CreateOrganization(ctx(), domain.NewOrganization{
+			ID: "o1", Name: "Acme", Slug: "acme", CreatedAt: now, UpdatedAt: now,
+		}); err != nil {
+			t.Fatalf("CreateOrganization: %v", err)
+		}
+		if _, err := r.CreateMembership(ctx(), domain.NewMembership{
+			ID: "m1", OrganizationID: "o1", UserID: "u1",
+			Role: "member", Status: domain.MembershipActive, CreatedAt: now, UpdatedAt: now,
+		}); err != nil {
+			t.Fatalf("CreateMembership: %v", err)
+		}
+		if _, err := r.UpdateMembership(ctx(), "m1", domain.UpdateMembership{
+			Role: ptr("owner"),
+		}); !errors.Is(err, yautherr.ErrOwnerProtected) {
+			t.Fatalf("UpdateMembership(->owner): got %v want ErrOwnerProtected", err)
+		}
+		got, _ := r.GetMembershipByOrgUser(ctx(), "o1", "u1")
+		if got == nil || got.Role != "member" {
+			t.Fatalf("role changed despite the refusal: %+v", got)
+		}
+	}},
+	{"update_allows_authorized_promotion", func(t *testing.T, r repo.Repository) {
+		now := nowUTC()
+		mustCreateUser(t, r, "u1", "alice@example.com")
+		if _, err := r.CreateOrganization(ctx(), domain.NewOrganization{
+			ID: "o1", Name: "Acme", Slug: "acme", CreatedAt: now, UpdatedAt: now,
+		}); err != nil {
+			t.Fatalf("CreateOrganization: %v", err)
+		}
+		if _, err := r.CreateMembership(ctx(), domain.NewMembership{
+			ID: "m1", OrganizationID: "o1", UserID: "u1",
+			Role: "member", Status: domain.MembershipActive, CreatedAt: now, UpdatedAt: now,
+		}); err != nil {
+			t.Fatalf("CreateMembership: %v", err)
+		}
+		if _, err := r.UpdateMembership(ctx(), "m1", domain.UpdateMembership{
+			Role: ptr("owner"), OwnerRoleAuthorized: true,
+		}); err != nil {
+			t.Fatalf("authorized promotion refused: %v", err)
+		}
+		got, _ := r.GetMembershipByOrgUser(ctx(), "o1", "u1")
+		if got == nil || got.Role != "owner" {
+			t.Fatalf("promotion did not take effect: %+v", got)
 		}
 	}},
 }

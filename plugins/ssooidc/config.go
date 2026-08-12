@@ -11,6 +11,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/yackey-labs/yauth/auth"
 )
 
 // ClaimMappings selects which claim names yauth pulls from the IdP's
@@ -160,6 +162,15 @@ func (c *OidcConnectionConfig) validate() error {
 	}
 	if strings.TrimSpace(c.ClientSecret) == "" {
 		return errors.New("ssooidc: client_secret is required")
+	}
+	// group_to_role is applied verbatim to the membership on every JIT login —
+	// including for users who are ALREADY members, so it promotes as well as
+	// provisions. Mapping an IdP group to "owner" would hand the org admin who
+	// writes this config the owner slot, via anyone in a group they control at
+	// the IdP. validate() is the single chokepoint every config write passes
+	// through: create, PATCH, guided-federation seeding, global connections.
+	if err := auth.ValidateAssignableRoles(c.ClaimMappings.GroupToRole); err != nil {
+		return errors.New("ssooidc: group_to_role cannot map to owner; use transfer-ownership")
 	}
 	return nil
 }

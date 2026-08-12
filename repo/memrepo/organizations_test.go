@@ -132,13 +132,14 @@ func TestOrganizationDeleteCascade(t *testing.T) {
 		t.Fatalf("create org: %v", err)
 	}
 	if _, err := r.CreateMembership(ctx, domain.NewMembership{
-		ID:             "m1",
-		OrganizationID: "o",
-		UserID:         "u1",
-		Role:           "admin",
-		Status:         domain.MembershipActive,
-		CreatedAt:      now,
-		UpdatedAt:      now,
+		OwnerRoleAuthorized: true, // test fixture: seeds state directly, bypassing the handler layer
+		ID:                  "m1",
+		OrganizationID:      "o",
+		UserID:              "u1",
+		Role:                "admin",
+		Status:              domain.MembershipActive,
+		CreatedAt:           now,
+		UpdatedAt:           now,
 	}); err != nil {
 		t.Fatalf("create membership: %v", err)
 	}
@@ -185,13 +186,15 @@ func TestMembershipUniquePerOrgUser(t *testing.T) {
 		t.Fatalf("create org: %v", err)
 	}
 	if _, err := r.CreateMembership(ctx, domain.NewMembership{
-		ID: "m1", OrganizationID: "o", UserID: "u", Role: "admin",
+		OwnerRoleAuthorized: true, // test fixture: seeds state directly, bypassing the handler layer
+		ID:                  "m1", OrganizationID: "o", UserID: "u", Role: "admin",
 		Status: domain.MembershipActive, CreatedAt: now, UpdatedAt: now,
 	}); err != nil {
 		t.Fatalf("first: %v", err)
 	}
 	_, err := r.CreateMembership(ctx, domain.NewMembership{
-		ID: "m2", OrganizationID: "o", UserID: "u", Role: "member",
+		OwnerRoleAuthorized: true, // test fixture: seeds state directly, bypassing the handler layer
+		ID:                  "m2", OrganizationID: "o", UserID: "u", Role: "member",
 		Status: domain.MembershipActive, CreatedAt: now, UpdatedAt: now,
 	})
 	if !errors.Is(err, yautherr.ErrConflict) {
@@ -224,7 +227,8 @@ func TestMembershipListByOrgAndUser(t *testing.T) {
 	mk := func(id, org, user string) {
 		t.Helper()
 		_, err := r.CreateMembership(ctx, domain.NewMembership{
-			ID: id, OrganizationID: org, UserID: user, Role: "member",
+			OwnerRoleAuthorized: true, // test fixture: seeds state directly, bypassing the handler layer
+			ID:                  id, OrganizationID: org, UserID: user, Role: "member",
 			Status: domain.MembershipActive, CreatedAt: now, UpdatedAt: now,
 		})
 		if err != nil {

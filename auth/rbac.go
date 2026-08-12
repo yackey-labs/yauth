@@ -16,6 +16,11 @@
 // layer, not here.
 package auth
 
+import (
+	"errors"
+	"strings"
+)
+
 // Built-in role constants. Mirrors the yauth Rust feat/88 spec.
 //
 // The values are the same lowercase strings the Rust crate persists, so
@@ -36,6 +41,48 @@ var BuiltinRoles = []string{
 	RoleBillingAdmin,
 	RoleMember,
 	RoleViewer,
+}
+
+// ErrOwnerRoleNotAssignable is returned by ValidateAssignableRole for the
+// owner role. Handlers map it to 400 with their own wording.
+var ErrOwnerRoleNotAssignable = errors.New("yauth: owner can only be set by creating an organization or via transfer-ownership")
+
+// ValidateAssignableRole rejects a role that a request may not choose freely.
+//
+// Today that is exactly one value: owner. Ownership is a slot, not a grade —
+// an org has one owner, only they can transfer it, and only they are refused
+// removal. So every surface that takes a role from the wire (invitations,
+// verified-domain auto-join defaults, SSO JIT defaults and group→role maps)
+// funnels through here rather than growing its own copy of the check. That
+// divergence is exactly what happened: add-member, set-role and org API keys
+// each refused owner while invitations, domain auto-join and SSO JIT shipped
+// without it.
+//
+// Custom (non-built-in) role strings pass: yauth's catalogue grants them
+// nothing, and refusing them would break applications that layer their own.
+// The comparison is exact after trimming surrounding whitespace.
+//
+// The repository enforces the same ceiling as a backstop — see "the owner
+// ceiling" on domain.UpdateMembership. This function is the layer that hands
+// the caller a clean 400 instead of a 500.
+func ValidateAssignableRole(role string) error {
+	if strings.TrimSpace(role) == RoleOwner {
+		return ErrOwnerRoleNotAssignable
+	}
+	return nil
+}
+
+// ValidateAssignableRoles applies ValidateAssignableRole to every value of a
+// role-mapping table — an IdP group→role map, say — and returns the first
+// error found. Iteration order is unspecified, which is harmless: any single
+// offending entry refuses the whole write.
+func ValidateAssignableRoles(m map[string]string) error {
+	for _, role := range m {
+		if err := ValidateAssignableRole(role); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // IsBuiltinRole reports whether r is one of the built-in role constants.

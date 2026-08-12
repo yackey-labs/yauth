@@ -19,13 +19,14 @@ func seedMember(t *testing.T, r repo.Repository, orgID, userID, role string) {
 	t.Helper()
 	now := time.Now().UTC()
 	if _, err := r.CreateMembership(context.Background(), domain.NewMembership{
-		ID:             uuid.NewString(),
-		OrganizationID: orgID,
-		UserID:         userID,
-		Role:           role,
-		Status:         domain.MembershipActive,
-		CreatedAt:      now,
-		UpdatedAt:      now,
+		OwnerRoleAuthorized: true, // test fixture: seeds state directly, bypassing the handler layer
+		ID:                  uuid.NewString(),
+		OrganizationID:      orgID,
+		UserID:              userID,
+		Role:                role,
+		Status:              domain.MembershipActive,
+		CreatedAt:           now,
+		UpdatedAt:           now,
 	}); err != nil {
 		t.Fatalf("seed membership (%s, %s, %s): %v", orgID, userID, role, err)
 	}

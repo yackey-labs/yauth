@@ -2,6 +2,7 @@ package domain
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 )
 
@@ -116,14 +117,65 @@ type NewMembership struct {
 	JoinedAt       *time.Time
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
+	// OwnerRoleAuthorized opts this write into setting Role to
+	// RoleOwnerName. See "the owner ceiling" on UpdateMembership.
+	OwnerRoleAuthorized bool
 }
 
 // UpdateMembership is a partial update payload.
+//
+// # The owner ceiling
+//
+// Only two paths in yauth may put a user in the owner slot: creating an
+// organization (whose creator becomes its owner) and the transfer-ownership
+// endpoint. Every other path that writes a membership role — invitation
+// accept, verified-domain auto-join, SSO JIT provisioning — takes that role
+// from request input or from stored connection config an org admin wrote. An
+// org admin could therefore mint an owner, or promote one, just by choosing
+// where to type "owner": invite a colluding address as owner, set a domain's
+// default_role_on_auto_join, or map an IdP group to it.
+//
+// The two legitimate paths set OwnerRoleAuthorized; repositories MUST refuse
+// the owner role on every write that does not, returning
+// yautherr.ErrOwnerProtected. The default is therefore the safe one — a new
+// call site cannot silently forget the check, only the opt-in, and that fails
+// loudly.
+//
+// This is the mint/promote ceiling. It composes with the pre-existing
+// last-owner protection, which refuses to demote or remove the final owner.
 type UpdateMembership struct {
 	Role      *string
 	Status    *MembershipStatus
 	JoinedAt  **time.Time
 	UpdatedAt *time.Time
+	// OwnerRoleAuthorized opts this write into setting Role to RoleOwnerName.
+	OwnerRoleAuthorized bool
+}
+
+// RoleOwnerName is the membership role that owns an organization. It is
+// duplicated from auth.RoleOwner because domain sits below auth in the import
+// graph; the two MUST stay identical (auth has a test asserting it).
+const RoleOwnerName = "owner"
+
+// IsOwnerRole reports whether role names the organization owner role.
+// Surrounding whitespace is ignored, so " owner" cannot slip past a caller
+// that trims before persisting.
+func IsOwnerRole(role string) bool {
+	return strings.TrimSpace(role) == RoleOwnerName
+}
+
+// OwnerRoleRefused reports whether this create tries to mint an owner without
+// the explicit authorization flag. Repository implementations MUST consult it
+// and return yautherr.ErrOwnerProtected when it is true.
+func (n NewMembership) OwnerRoleRefused() bool {
+	return !n.OwnerRoleAuthorized && IsOwnerRole(n.Role)
+}
+
+// OwnerRoleRefused reports whether this update tries to promote to owner
+// without the explicit authorization flag. Repository implementations MUST
+// consult it and return yautherr.ErrOwnerProtected when it is true.
+func (u UpdateMembership) OwnerRoleRefused() bool {
+	return !u.OwnerRoleAuthorized && u.Role != nil && IsOwnerRole(*u.Role)
 }
 
 // Invitation is a pending invite to join an organization.

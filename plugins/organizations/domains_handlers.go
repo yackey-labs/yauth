@@ -197,6 +197,12 @@ func (p *orgsPlugin) registerCreateOrgDomain(host plugin.PluginHost, api huma.AP
 		if req.DefaultRoleOnAutoJoin != nil && strings.TrimSpace(*req.DefaultRoleOnAutoJoin) != "" {
 			role = *req.DefaultRoleOnAutoJoin
 		}
+		// auth.ValidateAssignableRole: this role is handed to CreateMembership
+		// by auth/domain_autojoin.go for anyone who signs up under the domain,
+		// so "owner" here is an org admin minting owners by email address.
+		if err := auth.ValidateAssignableRole(role); err != nil {
+			return nil, huma.Error400BadRequest("default_role_on_auto_join cannot be owner; use transfer-ownership")
+		}
 		requireVerified := true
 		if req.RequireEmailVerified != nil {
 			requireVerified = *req.RequireEmailVerified
@@ -405,6 +411,12 @@ func (p *orgsPlugin) registerPatchOrgDomain(host plugin.PluginHost, api huma.API
 			return nil, err
 		}
 		req := in.Body
+		// Same ceiling as create — PATCH is the other way in.
+		if req.DefaultRoleOnAutoJoin != nil {
+			if err := auth.ValidateAssignableRole(*req.DefaultRoleOnAutoJoin); err != nil {
+				return nil, huma.Error400BadRequest("default_role_on_auto_join cannot be owner; use transfer-ownership")
+			}
+		}
 		changes := domain.UpdateOrganizationDomain{
 			AutoJoinOnSignup:      req.AutoJoinOnSignup,
 			DefaultRoleOnAutoJoin: req.DefaultRoleOnAutoJoin,

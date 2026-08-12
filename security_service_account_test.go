@@ -62,12 +62,13 @@ func newSecOrgFixture(t *testing.T) *secOrgFixture {
 			t.Fatalf("create org %s: %v", o.id, err)
 		}
 		if _, err := h.repo.CreateMembership(ctx, domain.NewMembership{
-			ID:             "m-" + o.id,
-			OrganizationID: o.id,
-			UserID:         alice,
-			Role:           auth.RoleOwner,
-			Status:         domain.MembershipActive,
-			CreatedAt:      now, UpdatedAt: now,
+			OwnerRoleAuthorized: true, // test fixture: seeds state directly, bypassing the handler layer
+			ID:                  "m-" + o.id,
+			OrganizationID:      o.id,
+			UserID:              alice,
+			Role:                auth.RoleOwner,
+			Status:              domain.MembershipActive,
+			CreatedAt:           now, UpdatedAt: now,
 		}); err != nil {
 			t.Fatalf("create membership %s: %v", o.id, err)
 		}

@@ -237,7 +237,8 @@ func TestUpdateOrgRequiresAdmin(t *testing.T) {
 	// the repo enforces owner-protection on the last owner.
 	now := time.Now().UTC()
 	if _, err := r.CreateMembership(context.Background(), domain.NewMembership{
-		ID: "co-owner-mem", OrganizationID: org.ID, UserID: "co-owner",
+		OwnerRoleAuthorized: true, // test fixture: seeds state directly, bypassing the handler layer
+		ID:                  "co-owner-mem", OrganizationID: org.ID, UserID: "co-owner",
 		Role: RoleOwner, Status: domain.MembershipActive, CreatedAt: now, UpdatedAt: now,
 	}); err != nil {
 		t.Fatalf("seed co-owner: %v", err)
@@ -264,7 +265,8 @@ func TestDeleteOrgCascades(t *testing.T) {
 	// Add a second member directly.
 	now := time.Now().UTC()
 	if _, err := r.CreateMembership(context.Background(), domain.NewMembership{
-		ID: "m2", OrganizationID: org.ID, UserID: "other-user", Role: "member",
+		OwnerRoleAuthorized: true, // test fixture: seeds state directly, bypassing the handler layer
+		ID:                  "m2", OrganizationID: org.ID, UserID: "other-user", Role: "member",
 		Status: domain.MembershipActive, CreatedAt: now, UpdatedAt: now,
 	}); err != nil {
 		t.Fatalf("seed second member: %v", err)

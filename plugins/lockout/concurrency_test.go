@@ -56,6 +56,26 @@ func newConcurrencyServer(t *testing.T, cfg lockout.Config) (*httptest.Server, r
 
 // attempt fires one wrong-password login, presenting clientIP as the caller
 // so the per-IP rate limiter never masks what lockout does.
+// concurrentClient is used by attempt instead of http.DefaultClient.
+//
+// These tests fire up to maxAttempts*3 requests at one httptest server
+// simultaneously, and the default transport allows only 2 idle connections per
+// host — so the rest are dialled and torn down on every round. On a loaded CI
+// runner that is where this test was observed to fail: not on an assertion, but
+// on a transport error surfaced through attempt's t.Fatalf, which reads as a
+// lockout bug and is not one. A pool sized to the fan-out removes the churn,
+// and an explicit timeout turns a hung request into a legible failure rather
+// than a package-level 10-minute panic.
+var concurrentClient = &http.Client{
+	Timeout: 30 * time.Second,
+	Transport: &http.Transport{
+		MaxIdleConns:        64,
+		MaxIdleConnsPerHost: 64,
+		MaxConnsPerHost:     64,
+		IdleConnTimeout:     30 * time.Second,
+	},
+}
+
 func attempt(t *testing.T, srv *httptest.Server, email, password, clientIP string) int {
 	t.Helper()
 	buf, _ := json.Marshal(map[string]string{"email": email, "password": password})
@@ -65,9 +85,12 @@ func attempt(t *testing.T, srv *httptest.Server, email, password, clientIP strin
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Forwarded-For", clientIP)
-	res, err := http.DefaultClient.Do(req)
+	res, err := concurrentClient.Do(req)
 	if err != nil {
-		t.Fatalf("do: %v", err)
+		// Distinguish "the server refused us" from "we never reached it" — the
+		// two used to be indistinguishable in the failure output.
+		t.Fatalf("login attempt from %s did not complete (transport error, not a "+
+			"lockout decision): %v", clientIP, err)
 	}
 	res.Body.Close()
 	return res.StatusCode

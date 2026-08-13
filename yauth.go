@@ -261,7 +261,8 @@ func (b *YAuthBuilder) Build() (*YAuth, error) {
 // repo root, generated from this document.
 func (y *YAuth) OpenAPI() *huma.OpenAPI { return y.humaAPI.OpenAPI() }
 
-// Router returns the configured ServeMux, optionally wrapped with the
+// Router returns the configured ServeMux, wrapped with the security-header
+// middleware (unless SecurityHeaders.Disabled), optionally wrapped with the
 // OpenTelemetry trace middleware when WithTelemetry was called on the
 // builder (unless suppressed via WithTraceMiddleware(false)), and with the
 // CORS middleware when CORS.AllowedOrigins is non-empty. Mount it under any
@@ -287,6 +288,16 @@ func (y *YAuth) Router() http.Handler {
 	// session/audit row and what the rate limiter buckets on are the same
 	// value the session-binding check will later compare against.
 	h = middleware.TrustedProxiesMiddleware(y.trusted)(h)
+	// Outermost of all: until this existed every response yauth emitted —
+	// JSON, problem+json and the text/html end_session page alike — went
+	// out with no CSP, no X-Frame-Options, no nosniff and no
+	// Referrer-Policy, so a browser-facing state-changing route like
+	// /oauth/end_session was framable. It wraps LAST so that responses from
+	// middleware that short-circuits also carry the headers — in particular
+	// the bare 204 middleware.CORS answers a preflight with, which never
+	// reaches the mux. It only fills in headers that are still unset, so an
+	// embedding application that wraps this router with its own policy wins.
+	h = middleware.SecurityHeaders(y.cfg.SecurityHeaders)(h)
 	return h
 }
 

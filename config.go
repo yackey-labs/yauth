@@ -3,6 +3,7 @@ package yauth
 import (
 	"time"
 
+	"github.com/yackey-labs/yauth/middleware"
 	"github.com/yackey-labs/yauth/plugin"
 )
 
@@ -31,6 +32,17 @@ type YAuthConfig struct {
 	// CORS holds cross-origin policy. When AllowedOrigins is empty the
 	// CORS middleware is not installed.
 	CORS CORSConfig
+
+	// SecurityHeaders controls the response-header floor the mounted
+	// Router applies (nosniff, Referrer-Policy, X-Frame-Options, CSP).
+	//
+	// The zero value ENABLES it, which is the whole point: New() stores
+	// the config it is handed verbatim with no defaulting pass, so an
+	// `Enabled bool` here would be false for every embedder that builds
+	// its config in Go and the middleware would ship doing nothing. The
+	// switch is therefore SecurityHeadersConfig.Disabled — opt out, never
+	// opt in. Strict-Transport-Security stays off until HSTS is set.
+	SecurityHeaders middleware.SecurityHeadersConfig
 
 	// SessionBinding controls IP and User-Agent hijack detection on
 	// cookie-resolved sessions. Disabled by default.

@@ -99,6 +99,11 @@ type ServerConfig struct {
 	// AllowedOrigins is empty the CORS middleware is not installed.
 	CORS CORSConfig `yaml:"cors" toml:"cors"`
 
+	// SecurityHeaders controls the response-header floor the mounted
+	// Router applies to every response. ON by default; see
+	// SecurityHeadersConfig for why turning it off is a decision.
+	SecurityHeaders SecurityHeadersConfig `yaml:"security_headers" toml:"security_headers"`
+
 	// TrustedProxies lists the peers whose X-Forwarded-For / X-Real-IP
 	// yauth believes when it decides a request's client IP — the address
 	// stored on a session, written to every audit row, carried on every
@@ -136,6 +141,38 @@ type CORSConfig struct {
 	AllowCredentials bool `yaml:"allow_credentials" toml:"allow_credentials"`
 	// MaxAge sets Access-Control-Max-Age on preflight responses.
 	MaxAge time.Duration `yaml:"max_age" toml:"max_age"`
+}
+
+// SecurityHeadersConfig configures the response-header floor applied to every
+// response the mounted Router emits: X-Content-Type-Options, Referrer-Policy,
+// X-Frame-Options and Content-Security-Policy. Before it existed every yauth
+// response went out bare, which left the browser-facing, state-changing
+// /oauth/end_session page framable and clickjackable.
+//
+// The middleware only fills in headers that are still unset, so an embedding
+// application that already writes its own policy always wins over these.
+type SecurityHeadersConfig struct {
+	// Enabled is a tri-state pointer: nil = default (true), &true and
+	// &false explicit. Default ON deliberately — a security default that
+	// has to be opted into is the misconfiguration this setting exists to
+	// prevent. Set it false only when a reverse proxy in front of yauth
+	// already sets an equivalent set.
+	Enabled *bool `yaml:"enabled,omitempty" toml:"enabled,omitempty" doc:"Emit X-Content-Type-Options, Referrer-Policy, X-Frame-Options and Content-Security-Policy on every response. Omitted means true. Headers an embedding application already set are never overwritten."`
+
+	// HSTS is the Strict-Transport-Security value, e.g.
+	// "max-age=31536000; includeSubDomains". EMPTY (the default) means the
+	// header is NEVER sent, and even when set it is only sent on requests
+	// that arrived over TLS. Both guards matter: an unconditional HSTS
+	// header breaks plain-HTTP local development and can strand a domain
+	// in browsers for the whole max-age.
+	HSTS string `yaml:"hsts,omitempty" toml:"hsts,omitempty" doc:"Strict-Transport-Security value, e.g. \"max-age=31536000; includeSubDomains\". Empty (default) never emits the header; when set it is emitted only on requests that arrived over TLS."`
+
+	// Override replaces the default value of individual headers, keyed by
+	// canonical header name — e.g. {"X-Frame-Options": "SAMEORIGIN"} for
+	// a console that genuinely frames itself, or a Content-Security-Policy
+	// that has to allow a subresource. Names outside the four defaults are
+	// ignored. An override is still only applied when the header is unset.
+	Override map[string]string `yaml:"override,omitempty" toml:"override,omitempty" doc:"Per-header replacements for the defaults, keyed by header name (X-Content-Type-Options, Referrer-Policy, X-Frame-Options, Content-Security-Policy). Other names are ignored."`
 }
 
 // MailerConfig selects an outbound mailer for the host. Provider "logging"

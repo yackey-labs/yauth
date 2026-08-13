@@ -93,6 +93,36 @@ func (b *bearerResolver) Resolve(r *http.Request) (*domain.AuthUser, bool, error
 		return nil, true, yautherr.ErrInvalidToken
 	}
 
+	// Honour RFC 7009 revocation on the CREDENTIAL path, which is the only
+	// place it can actually bite. oauth2server.handleRevoke writes a
+	// revocation row keyed by the access token's jti, but until now the sole
+	// reader of Repo().IsTokenRevoked was oauth2server/introspect.go — so a
+	// relying party could complete revocation, watch introspection report the
+	// token inactive, and the very same JWT kept authenticating on every
+	// RequireAuth / RequireAdmin route for the remainder of the access TTL.
+	// A stateless signature check cannot un-issue a token; this lookup is what
+	// makes "revoked" mean anything to the resolver.
+	//
+	// Two deliberate narrownesses:
+	//
+	//   - Skip entirely when the token carries no jti. There is nothing to look
+	//     up, and an unkeyed token has never been revocable.
+	//   - FAIL OPEN on a repository error (`err == nil && revoked`, never a
+	//     bare `revoked`). pgxrepo returns (false, err) on a real backend
+	//     error; treating that as "revoked" would turn a transient DB blip into
+	//     an instant logout for every Bearer caller at once. This is the same
+	//     stance oauth2server.userActiveForIntrospect already takes. Only a
+	//     definite, persisted true rejects.
+	//
+	// Cost is one primary-key point lookup per Bearer-authenticated request
+	// (yauth_revocations is keyed on the jti); redisrepo serves it read-through
+	// with a negative cache that RevokeToken invalidates on write.
+	if parsed.JTI != "" {
+		if revoked, err := b.host.Repo().IsTokenRevoked(r.Context(), parsed.JTI); err == nil && revoked {
+			return nil, true, yautherr.ErrInvalidToken
+		}
+	}
+
 	user, err := b.host.Repo().GetUserByID(r.Context(), parsed.UserID)
 	if err != nil {
 		if errors.Is(err, yautherr.ErrNotFound) {

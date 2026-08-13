@@ -45,7 +45,8 @@ func (p *oauth2Plugin) handleIntrospect(host plugin.PluginHost) http.HandlerFunc
 		// Resource servers introspect against confidential auth only.
 		// authenticateClient with allowConfidentialOnly=true rejects
 		// public clients.
-		if _, e := p.authenticateClient(r.Context(), host, f, true); e != nil {
+		caller, e := p.authenticateClient(r.Context(), host, f, true)
+		if e != nil {
 			writeOAuthError(w, e.code, e.desc)
 			return
 		}
@@ -65,6 +66,34 @@ func (p *oauth2Plugin) handleIntrospect(host plugin.PluginHost) http.HandlerFunc
 		// type we keep server-side state for, so a fast lookup answers
 		// "active or not" definitively.
 		if rt, err := host.Repo().GetRefreshTokenByHash(r.Context(), auth.HashToken(token)); err == nil {
+			// A refresh token is only introspectable by the client it was
+			// issued to. This branch previously answered active=true plus the
+			// resource owner's user id for ANY refresh token a registered
+			// confidential client presented — so capturing or guessing one
+			// disclosed both its liveness and WHOSE it was, across a client
+			// boundary. The authenticated caller was literally discarded.
+			//
+			// This check must come FIRST, ahead of the revoked/expiry and
+			// user-lifecycle gates below: those distinguish "someone else's
+			// live token" from "someone else's dead token", which is itself
+			// information about a token the caller has no relationship to. A
+			// foreign token must be indistinguishable from a nonexistent one.
+			//
+			// A nil ClientID means a first-party bearer refresh family rather
+			// than an OAuth grant. Reporting those inactive here is deliberate:
+			// such a token is never handed to an OAuth client, so no client can
+			// have a legitimate reason to introspect one.
+			//
+			// The ACCESS-JWT branch below is deliberately NOT bound this way.
+			// RFC 7662 §2.1 lets any credentialed protected resource
+			// introspect, and a resource server registered as its own
+			// confidential client legitimately introspects tokens audienced at
+			// other clients — that is the deployment shape the endpoint exists
+			// to serve.
+			if rt.ClientID == nil || *rt.ClientID != caller.ClientID {
+				writeJSON(w, http.StatusOK, inactive)
+				return
+			}
 			if rt.Revoked || !rt.ExpiresAt.After(time.Now().UTC()) {
 				writeJSON(w, http.StatusOK, inactive)
 				return

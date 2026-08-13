@@ -89,8 +89,15 @@ func signAccessToken(secret []byte, userID, jti string, cfg Config, now time.Tim
 // `token_use: "access"` and an `aud` naming that client, and is marked
 // Delegated unless its audience is one the deployment declared as its own
 // (Config.ResourceIdentifiers).
+//
+// JTI is the token's own identity ("jti"). Both signAccessToken here and
+// oauth2server.signAccessToken have always stamped one so "revocation lists
+// can target individual tokens" — but nothing on this path ever read it, so
+// the revocation rows oauth2server.handleRevoke writes were invisible to the
+// credential check. Resolve now carries it through for exactly that lookup.
 type parsedToken struct {
 	UserID    string
+	JTI       string
 	Org       string
 	Role      string
 	Orgs      []string
@@ -128,6 +135,7 @@ func verifyAccessToken(secret []byte, raw string, cfg Config) (parsedToken, erro
 	}
 	pt := parsedToken{
 		UserID:   claims.Subject,
+		JTI:      claims.ID,
 		Org:      claims.Org,
 		Role:     claims.Role,
 		Orgs:     claims.Orgs,
@@ -263,6 +271,9 @@ func verifyAsymAccessToken(signer plugin.JWTSigner, raw string, cfg Config) (par
 		return parsedToken{}, errors.New("bearer: missing sub claim")
 	}
 	pt := parsedToken{UserID: sub}
+	if v, ok := claims["jti"].(string); ok {
+		pt.JTI = v
+	}
 	if v, ok := claims["org"].(string); ok {
 		pt.Org = v
 	}

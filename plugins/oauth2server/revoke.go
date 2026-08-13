@@ -65,6 +65,29 @@ func (p *oauth2Plugin) handleRevoke(host plugin.PluginHost) http.HandlerFunc {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
+		// Same RFC 7009 §2.1 ownership rule the refresh branch above enforces,
+		// which this branch was missing: verify the token was issued to the
+		// client making the request. signAccessToken stamps `aud` with the
+		// client the token was minted for — token.go passes client.ClientID as
+		// the audience on BOTH call sites (authorization_code/refresh and
+		// client_credentials/device), so the audience is an exact, complete
+		// record of ownership for every grant type.
+		//
+		// Without it, any registered client could revoke any other client's
+		// access token — including a PUBLIC one, since authenticateClient runs
+		// here with allowConfidentialOnly=false and a public client
+		// authenticates on client_id alone. That was merely noisy while
+		// revocation was cosmetic; now that bearerResolver.Resolve reads the
+		// revocation list it would be a live cross-client kill switch, which is
+		// why this ships in the same change.
+		//
+		// A token the caller does not own is treated as unknown: still 200, per
+		// the idempotency rule that keeps this endpoint from being a token
+		// oracle, but nothing is revoked.
+		if !audienceNamesClient(claims["aud"], client.ClientID) {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 		jti, _ := claims["jti"].(string)
 		if jti == "" {
 			w.WriteHeader(http.StatusOK)
@@ -77,6 +100,39 @@ func (p *oauth2Plugin) handleRevoke(host plugin.PluginHost) http.HandlerFunc {
 		_ = host.Repo().RevokeToken(r.Context(), jti, ttl)
 		w.WriteHeader(http.StatusOK)
 	}
+}
+
+// audienceNamesClient reports whether a JWT `aud` claim names clientID.
+// RFC 7519 §4.1.3 allows `aud` to be either a single string or an array of
+// strings, and which of the two arrives here depends on the signer (asymjwt
+// round-trips the claim map through JSON, so an array comes back as []any),
+// so all three shapes are handled.
+//
+// There is deliberately NO fallback to a `client_id` claim: signAccessToken
+// never emits one, so such a fallback would be dead code that only widened
+// the set of tokens this endpoint accepts as "mine". An absent or empty `aud`
+// therefore matches nothing and revokes nothing.
+func audienceNamesClient(aud any, clientID string) bool {
+	if clientID == "" {
+		return false
+	}
+	switch v := aud.(type) {
+	case string:
+		return v == clientID
+	case []any:
+		for _, a := range v {
+			if s, ok := a.(string); ok && s == clientID {
+				return true
+			}
+		}
+	case []string:
+		for _, s := range v {
+			if s == clientID {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // timeFromExp pulls "exp" out of claims as a time.Time, or returns the

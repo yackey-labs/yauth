@@ -252,6 +252,13 @@ type createOutput struct {
 // RequireAuthHuma. The request body is a native huma typed Body, so huma
 // parses + validates it and the OpenAPI request schema auto-derives;
 // additionalProperties:false rejects unknown fields (422).
+//
+// It is also guarded by RejectMachineCredentialHuma: an API key that can mint
+// another API key is a persistence primitive, not a convenience. A key leaked
+// from a build log used to answer 201 with a fresh secret, as many times as
+// MaxKeysPerUser allowed, so revoking the leaked key left every replacement
+// live. Minting a lasting credential is a decision a human makes from a
+// session (or a first-party /token pair); the key itself does not get a vote.
 func (p *apiKeyPlugin) registerCreate(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
 	huma.Register(api, huma.Operation{
 		OperationID:   "apikey-create",
@@ -261,7 +268,10 @@ func (p *apiKeyPlugin) registerCreate(host plugin.PluginHost, api huma.API, mw *
 		Tags:          []string{"api-key"},
 		Security:      apiKeySecurity(),
 		DefaultStatus: http.StatusCreated,
-		Middlewares:   huma.Middlewares{middleware.RequireAuthHuma(api, mw)},
+		Middlewares: huma.Middlewares{
+			middleware.RequireAuthHuma(api, mw),
+			middleware.RejectMachineCredentialHuma(api),
+		},
 	}, func(ctx context.Context, in *createInput) (*createOutput, error) {
 		au, ok := middleware.AuthUserFromContext(ctx)
 		if !ok || au == nil {
@@ -369,6 +379,12 @@ type emptyOutput struct{}
 // registerDelete wires DELETE /api-keys/{id} as a huma-native operation guarded
 // by RequireAuthHuma. It takes a native path param (no StashHTTPHuma needed —
 // no body, no custom query parsing) and returns 204 via DefaultStatus.
+//
+// RejectMachineCredentialHuma guards it for the mirror-image reason it guards
+// create: whoever holds a leaked key must not be able to take the OWNER's
+// credentials away — including the key the owner would use to notice. GET
+// /api-keys is deliberately left open; reading its own list is what a key is
+// for, and it reveals no secret.
 func (p *apiKeyPlugin) registerDelete(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
 	huma.Register(api, huma.Operation{
 		OperationID:   "apikey-delete",
@@ -378,7 +394,10 @@ func (p *apiKeyPlugin) registerDelete(host plugin.PluginHost, api huma.API, mw *
 		Tags:          []string{"api-key"},
 		Security:      apiKeySecurity(),
 		DefaultStatus: http.StatusNoContent,
-		Middlewares:   huma.Middlewares{middleware.RequireAuthHuma(api, mw)},
+		Middlewares: huma.Middlewares{
+			middleware.RequireAuthHuma(api, mw),
+			middleware.RejectMachineCredentialHuma(api),
+		},
 	}, func(ctx context.Context, in *deleteInput) (*emptyOutput, error) {
 		au, ok := middleware.AuthUserFromContext(ctx)
 		if !ok || au == nil {

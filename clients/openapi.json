@@ -10710,6 +10710,17 @@
     "/passkeys/register/begin": {
       "post": {
         "operationId": "passkey-register-begin",
+        "parameters": [
+          {
+            "description": "Current TOTP code or an unused backup code. Required when the account already has a verified second factor: adding an authenticator is a change to how the account authenticates, so it must be proved with the factor being added to.",
+            "in": "header",
+            "name": "X-MFA-Code",
+            "schema": {
+              "description": "Current TOTP code or an unused backup code. Required when the account already has a verified second factor: adding an authenticator is a change to how the account authenticates, so it must be proved with the factor being added to.",
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {

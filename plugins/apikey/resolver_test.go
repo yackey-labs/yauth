@@ -155,14 +155,19 @@ func TestResolver_ExpiredKey_RecognizedExpired(t *testing.T) {
 	r, h, user, _, _ := seededFixture(t)
 
 	// Plant an expired key for this user. The fake's GetAPIKeyByPrefix
-	// already filters expired keys to ErrNotFound — that's the realistic
-	// production behavior for the SQL repo too — so the resolver returns
-	// ErrUnauthorized rather than ErrTokenExpired in that path. To exercise
-	// the explicit expiry branch, override GetAPIKeyByPrefix by inserting
-	// a key whose ExpiresAt is in the future, then advance to the past via
-	// a clock-independent approach: we cannot reach the explicit branch
-	// without a time injection, so skip — the equivalent assertion is that
-	// expired keys do NOT authenticate.
+	// filters expired keys to ErrNotFound, so the resolver returns
+	// ErrUnauthorized rather than ErrTokenExpired in that path.
+	//
+	// CORRECTION: that filtering is the FAKE's behaviour, not production's.
+	// repo/pgxrepo's GetAPIKeyByPrefix is
+	// `SELECT * FROM yauth_api_keys WHERE key_prefix = $1 LIMIT 1` with no
+	// expiry predicate, so on Postgres the resolver's own expiry branch runs
+	// on every request presenting an expired key. That branch — and the fact
+	// that it now sits AFTER the secret comparison, so a prefix alone cannot
+	// distinguish an expired key from an unknown one — is covered in
+	// resolver_expiry_order_test.go against a repo wrapper with the
+	// production semantics. What this test still asserts is the useful
+	// baseline: an expired key does NOT authenticate through either repo.
 	expiredAt := time.Now().UTC().Add(-time.Minute)
 	gen2 := mustGenerateKey(t)
 	r.putKey(domain.APIKey{

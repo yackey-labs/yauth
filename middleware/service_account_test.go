@@ -97,18 +97,33 @@ func TestRequireAdmin_ServiceAccountRefusedByDefault(t *testing.T) {
 	}
 }
 
-// The opt-in still works: AllowAdminMachineCallers=true admits the org key,
-// exactly as it admits bearer and api-key callers.
-func TestResolveAdmin_ServiceAccountAllowedWhenOptedIn(t *testing.T) {
+// INVERTED (was TestResolveAdmin_ServiceAccountAllowedWhenOptedIn, asserting
+// 200). That test pinned a privilege escalation: the opt-in exists so an
+// operator can trust machine credentials that carry the human's GLOBAL role —
+// a bearer token, a user-scoped key — and an org-scoped key is not one. Its
+// AuthUser.User is the creator, carried for audit, while the authority the
+// operator granted (the key's own role and permission list) lives on the
+// Principal that ResolveAdmin never consulted. Turning the flag on therefore
+// gave every org key an admin had minted the full /admin/* surface.
+//
+// The refusal is now unconditional; the flag keeps its meaning for the
+// credentials it was actually about — see
+// TestUserScopedKey_AdminAndMustChangeUnchanged in the apikey package's
+// orgkey_admin_gate_test.go.
+func TestResolveAdmin_ServiceAccountRefusedEvenWhenOptedIn(t *testing.T) {
 	r := newFakeRepo()
 	au := serviceAccountAU(t, r, "admin", false)
 	mw := serviceAccountMW(t, r, au, true)
 
-	if _, err := mw.ResolveAdmin(newAPIKeyRequest()); err != nil {
-		t.Fatalf("AllowAdminMachineCallers=true: expected the org key through, got %v", err)
+	got, err := mw.ResolveAdmin(newAPIKeyRequest())
+	if err == nil {
+		t.Fatalf("AllowAdminMachineCallers=true admitted a service account: %+v", got)
 	}
-	if rec := doCookie(mw.RequireAdmin(okHandler()), ""); rec.Code != http.StatusOK {
-		t.Fatalf("AllowAdminMachineCallers=true: expected 200, got %d (body=%q)", rec.Code, rec.Body.String())
+	if !errors.Is(err, yautherr.ErrForbidden) {
+		t.Fatalf("want ErrForbidden, got %v", err)
+	}
+	if rec := doCookie(mw.RequireAdmin(okHandler()), ""); rec.Code != http.StatusForbidden {
+		t.Fatalf("AllowAdminMachineCallers=true: expected 403, got %d (body=%q)", rec.Code, rec.Body.String())
 	}
 }
 
@@ -155,16 +170,30 @@ func TestRequireAuth_ServiceAccountNotGatedByCreatorMustChange(t *testing.T) {
 	}
 }
 
-// And on the admin path with the opt-in on: the machine carve-out from the
-// must-change gate applies to org keys the same way it applies to bearer.
-func TestRequireAdmin_ServiceAccountNotGatedByCreatorMustChange(t *testing.T) {
+// RETARGETED. This used to drive a SERVICE ACCOUNT through RequireAdmin with
+// the opt-in on, which is now refused unconditionally (see
+// TestResolveAdmin_ServiceAccountRefusedEvenWhenOptedIn) — so that vehicle no
+// longer reaches the gate under test. The carve-out it asserts is still
+// correct and still worth pinning: must_change_password is a PASSWORD concept
+// and no machine credential should be gated on a human's password state.
+//
+// The vehicle is now a user-scoped API key, which the opt-in does still admit.
+// The same carve-out is covered for service accounts on the paths still open
+// to them by TestRequireAuth_ServiceAccountNotGatedByCreatorMustChange and
+// TestMustRotatePassword_ServiceAccountNotGated above.
+func TestRequireAdmin_MachineCallerNotGatedByOwnerMustChange(t *testing.T) {
 	r := newFakeRepo()
 	au := serviceAccountAU(t, r, "admin", true)
+	// Same admin-owned credential, but user-scoped: Method api-key, plain user
+	// principal — the shape plugins/apikey builds for a personal key.
+	au.Method = domain.AuthMethodAPIKey
+	au.ActiveOrgID, au.OrgRole = nil, nil
+	au.Principal = domain.NewUserPrincipal(au.User.ID)
 	mw := serviceAccountMW(t, r, au, true)
 
 	rec := doCookie(mw.RequireAdmin(okHandler()), "")
 	if rec.Code != http.StatusOK {
-		t.Fatalf("service-account admin key (opt-in) with a must-change creator: expected 200, got %d (body=%q)",
+		t.Fatalf("user-scoped admin key (opt-in) with a must-change owner: expected 200, got %d (body=%q)",
 			rec.Code, rec.Body.String())
 	}
 }

@@ -264,3 +264,66 @@ func RejectDelegatedHuma(api huma.API) func(huma.Context, func(huma.Context)) {
 		next(ctx)
 	}
 }
+
+// MachineCredentialDetail is the `detail` returned (with HTTP 403) when an
+// API key is refused on a route that changes how the account authenticates.
+// Clients match on this exact string to tell "do this from a signed-in
+// session" apart from an ordinary authorization failure.
+const MachineCredentialDetail = "an api key cannot change how this account authenticates"
+
+// RejectMachineCredentialHuma refuses a caller presenting an X-Api-Key —
+// user-scoped or org-scoped — on the small set of routes that run the
+// account's CREDENTIAL LIFECYCLE. Chain it after RequireAuthHuma.
+//
+// A user-scoped API key genuinely belongs to the person it resolves to, which
+// is why RequireUserPrincipalHuma (correctly) lets it through: it is that
+// person's own first-party credential and it should keep serving the API it
+// was minted for. What it must NOT do is change the set of credentials that
+// can BE that person. Left open, a key leaked from a build log was a full
+// account takeover in three requests:
+//
+//   - POST /api-keys mints more user-scoped keys, so revoking the leaked one
+//     leaves every replacement live, and DELETE /api-keys/{id} takes the
+//     owner's real keys away;
+//   - POST /passkeys/register/begin+finish plants the attacker's own
+//     authenticator. Since passkey.Config.SatisfiesMFA defaults true, that
+//     passkey then logs in past the victim's second factor and yields a
+//     COOKIE session whose Method is "" — the machine-caller restriction
+//     laundered into a human one;
+//   - POST /mfa/totp/setup+confirm hands the attacker the second factor,
+//     which survives the victim's password reset.
+//
+// The predicate is the auth METHOD, not the principal kind, because that is
+// precisely the distinction being drawn: a machine credential may act for the
+// user, but only a human at the keyboard may change what "the user" means.
+//
+// Deliberately NOT refused:
+//
+//   - AuthMethodBearer. A first-party /token pair is how a native client
+//     manages its own account; refusing it would break mobile enrolment,
+//     which is the main reason passkey registration exists. Delegated bearer
+//     tokens are already refused upstream by RequireUserPrincipalHuma.
+//   - Session cookies, obviously.
+//
+// And it is deliberately NOT folded into RequireUserPrincipalHuma, which also
+// guards PATCH /me, /change-password, /logout, the OAuth2 consent routes and
+// the personal-key LIST route, where a first-party user key is legitimate
+// today and would start 403ing.
+func RejectMachineCredentialHuma(api huma.API) func(huma.Context, func(huma.Context)) {
+	return func(ctx huma.Context, next func(huma.Context)) {
+		au, ok := AuthUserFromContext(ctx.Context())
+		if ok && au != nil {
+			// AuthMethodServiceAccount is redundant next to
+			// RequireUserPrincipalHuma on every route this currently guards,
+			// but the predicate is "is this a machine credential?" and an
+			// org-scoped key is one; leaving it out would make the guard
+			// silently depend on what happens to be chained before it.
+			switch au.Method {
+			case domain.AuthMethodAPIKey, domain.AuthMethodServiceAccount:
+				_ = huma.WriteErr(api, ctx, http.StatusForbidden, MachineCredentialDetail)
+				return
+			}
+		}
+		next(ctx)
+	}
+}

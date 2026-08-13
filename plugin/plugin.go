@@ -220,6 +220,31 @@ type MFAVerifier interface {
 	VerifyPendingChallenge(ctx context.Context, pendingSessionID, code string) (userID string, ok bool, err error)
 }
 
+// UserFactorVerifier is the OPTIONAL extension an MFAVerifier implements to
+// check a second-factor code for an ALREADY-AUTHENTICATED user — step-up,
+// rather than the completion of a login challenge. It is kept off
+// [MFAVerifier] deliberately: that is a public interface a deployment may
+// implement itself, and adding a method to it would break every external
+// implementer at compile time. Consumers type-assert for it, the same way
+// [RateLimitFor] does for [RateLimitConfigurer], and MUST fail CLOSED when
+// the assertion does not hold — a verifier that cannot answer the question
+// is not permission to skip it.
+//
+// The passkey plugin consumes this: enrolling an authenticator on an account
+// that already has a verified factor has to present that factor, and passkey
+// must not import the mfa plugin to ask.
+type UserFactorVerifier interface {
+	// VerifyUserCode reports whether code is a currently valid second
+	// factor for userID — a TOTP code (single-use: an accepted code's time
+	// step is spent) or an unused backup code (which it burns).
+	//
+	// ok=false is a wrong code and nothing else; a non-nil error is a
+	// backend failure (500). Implementations report the failed guess to the
+	// event pipeline themselves, so an account lock counts brute force here
+	// exactly as it does on the login path and no caller can forget to.
+	VerifyUserCode(ctx context.Context, userID, code string) (ok bool, err error)
+}
+
 // RunFederatedLogin runs the login half of the auth-event pipeline for a
 // login completed by an EXTERNAL identity provider — the oauth client, the
 // SSO OIDC relying party and the SSO SAML service provider — and reports

@@ -85,7 +85,10 @@ gated). The admin supplies the IdP's `discovery_url` (+ optional `app_name`,
 `initiate_login_uri` from the org slug, federates, and returns the connection.
 Back it with a button that POSTs to it. When the OP doesn't trust the issuer,
 pass `admin_api_key` instead (needs OP `DCRAllowConfidentialClients` +
-`AllowAdminMachineCallers`).
+`AllowAdminMachineCallers`). That key must be **user-scoped** and owned by an
+admin — an org-scoped key never passes `RequireAdmin`, whatever
+`AllowAdminMachineCallers` says, because its authority is the org and role
+stamped on the key rather than its creator's global role.
 
 ### Guided approval handshake (any IdP, human-approved, no pre-trust)
 

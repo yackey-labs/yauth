@@ -12,8 +12,9 @@ const (
 	// org-scoped API key (yauth #91 / yauth-go #19). The credential
 	// format is identical to AuthMethodAPIKey but the resolved
 	// principal is a ServiceAccount; the distinct method string lets
-	// admin/permission gates reject org-key callers explicitly when
-	// allow_machine_callers is false.
+	// admin/permission gates reject org-key callers explicitly. Note
+	// that middleware.ResolveAdmin refuses a ServiceAccount principal
+	// unconditionally — allow_machine_callers does not reach it.
 	AuthMethodServiceAccount = "service-account"
 )
 

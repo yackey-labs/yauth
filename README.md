@@ -813,7 +813,7 @@ Notable fields beyond cookie/session settings:
 | `AllowSignups` | `true` | Set `false` to disable new user registration (`SIGNUPS_DISABLED` 403) |
 | `AutoAdminFirstUser` | `false` | Promote the first registered user to role `admin`. **Legacy** — prefer `plugins.email_password.bootstrap_admin` (`yauth docs admin-bootstrap`), which deterministically provisions the admin at startup with a forced password change instead of letting whoever registers first become admin. |
 | `CORS.AllowedOrigins` | `[]` (off) | CORS middleware; empty slice disables it entirely |
-| `AllowAdminMachineCallers` | `false` | Allow machine callers — bearer, user-scoped API key, or org-scoped API key (service account) — to pass `RequireAdmin` (default: cookie-only) |
+| `AllowAdminMachineCallers` | `false` | Allow machine callers that carry the human's own global role — bearer or **user-scoped** API key — to pass `RequireAdmin` (default: cookie-only). An **org-scoped** API key (service account) never passes `RequireAdmin`, opt-in or not: its authority is the org and role on the key. |
 | `RateLimit.*` | various | Per-operation max+window pairs, enforced on the routes of that operation. `Max` is a `*int`: unset keeps yauth's default, `RateLimitMax(0)` (yaml `max: 0`) means no limit |
 | `SessionBinding.BindIP/UA` | `false` | Reject sessions on IP or User-Agent mismatch |
 | `TrustedProxies` | `["private"]` | Whose `X-Forwarded-For` / `X-Real-IP` is believed when resolving the client IP. IPs, CIDRs, or `private` / `all` / `none` |

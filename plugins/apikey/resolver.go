@@ -82,13 +82,31 @@ func (r *apiKeyResolver) Resolve(req *http.Request) (*domain.AuthUser, bool, err
 		return nil, true, err
 	}
 
-	if rec.ExpiresAt != nil && !rec.ExpiresAt.UTC().After(time.Now().UTC()) {
-		return nil, true, yautherr.ErrTokenExpired
-	}
-
+	// Prove the caller HOLDS the credential before reporting anything about
+	// the row behind it. The 8-hex prefix is deliberately non-secret — GET
+	// /api-keys returns it and it shows up in logs and dashboards — so
+	// answering "expired" ahead of the hash comparison let anyone who had
+	// merely seen a prefix distinguish "a real key that has lapsed" from "no
+	// such key", which is exactly the fact the secret check exists to gate.
+	// yauth re-exports both sentinels (ErrTokenExpired, ErrUnauthorized) and
+	// an embedder that drives middleware.ResolveAuth branches on them, so
+	// this belongs at the resolver contract and not at the HTTP rendering,
+	// where yauth's own router happens to flatten both to a bare 401.
 	incoming := hashSecret(secret)
 	if subtle.ConstantTimeCompare([]byte(incoming), []byte(rec.KeyHash)) != 1 {
 		return nil, true, yautherr.ErrUnauthorized
+	}
+
+	// Expiry is still enforced, and still reported as ErrTokenExpired — the
+	// holder of a correct secret is entitled to be told why their key stopped
+	// working. Only the ORDER changed.
+	//
+	// This branch is live on Postgres: GetAPIKeyByPrefix is
+	// `SELECT * FROM yauth_api_keys WHERE key_prefix = $1 LIMIT 1` with no
+	// expiry predicate. (repo/memrepo filters expired rows away itself, which
+	// is why the ordering went unnoticed.)
+	if rec.ExpiresAt != nil && !rec.ExpiresAt.UTC().After(time.Now().UTC()) {
+		return nil, true, yautherr.ErrTokenExpired
 	}
 
 	// Org-scoped (service account) key path: yauth #91 / yauth-go #19.

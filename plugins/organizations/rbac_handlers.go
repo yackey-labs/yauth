@@ -341,6 +341,33 @@ func (p *orgsPlugin) registerRemoveMember(host plugin.PluginHost, api huma.API, 
 			}
 			return nil, huma.Error500InternalServerError("delete membership failed")
 		}
+		// Group membership ⊆ org membership — the invariant
+		// registerAddGroupMember enforces on the way in has to hold on the
+		// way out too. Nothing else was doing it: yauth_group_members has no
+		// FK to cascade from, and the reads that decide access
+		// (UserInAssignedGroup for a client's enforce_group_assignment gate,
+		// ListGroupNamesForUser for the groups claim) never join memberships.
+		// Without this, the person we just offboarded still passed the app
+		// gate and still carried the org's groups in their id_token.
+		//
+		// Deliberately narrow: this strips group rows in THIS org only, and
+		// touches no sessions and no refresh tokens. Those are account-global
+		// (the same user may be a member of other orgs, and a refresh token
+		// carries a ClientID that may belong to another org's client), so
+		// killing them here would let any org admin sign a user out of every
+		// other tenant. It is not needed either — requireOrgAdmin,
+		// middleware.EffectiveOrgMembership and auth.ResolveActiveOrg all
+		// re-derive org authority from the membership row on every request,
+		// so the removal bites on the ex-member's very next call.
+		//
+		// Best-effort: the membership delete above is the load-bearing part,
+		// and it has already committed. A repo failure here is logged, not
+		// turned into a 500 that would make the caller retry a removal that
+		// already happened.
+		if err := auth.RevokeOrgGroupMemberships(ctx, host.Repo(), orgID, targetUserID); err != nil {
+			host.Logger().Error("failed to revoke group memberships on org member removal",
+				"org_id", orgID, "user_id", targetUserID, "error", err)
+		}
 		return &orgEmptyOutput{}, nil
 	})
 }

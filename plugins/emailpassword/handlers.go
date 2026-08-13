@@ -630,6 +630,21 @@ func (p *emailPasswordPlugin) registerLogin(host plugin.PluginHost, api huma.API
 // emitLoginFailed fires a login.failed event without honoring the
 // returned decision — used in branches where the response is already
 // fixed (e.g., user-not-found returning 401 to avoid enumeration).
+//
+// Every caller is a refusal where NO CREDENTIAL WAS COMPARED: the address is
+// unknown, or the account is banned / suspended / staged / has no password
+// row / has an unverified email. Each of those events is therefore stamped
+// with events.AdministrativeRefusal(), which tells lockout not to move its
+// failure counter. Without the marker /login was a remote off switch for any
+// named account: an SSO-provisioned user has no password to fail, yet five
+// unauthenticated guesses locked them out of the federated and passkey logins
+// they do have, and a suspended account was locked by its own suspension so
+// that reinstating it gave nothing back. The observers that only RECORD a
+// refusal — audit rows, webhooks — still receive the event unchanged.
+//
+// A genuine credential failure must NOT use this helper: the bad-password
+// branch above emits its own login.failed inline, without the marker and
+// honouring the Block decision, so real guessing still locks the account.
 func (p *emailPasswordPlugin) emitLoginFailed(ctx context.Context, host plugin.PluginHost, userID, email, ip *string, reason string) {
 	method := "email-password"
 	r := reason
@@ -640,6 +655,7 @@ func (p *emailPasswordPlugin) emitLoginFailed(ctx context.Context, host plugin.P
 		IPAddress: ip,
 		Method:    &method,
 		Reason:    &r,
+		Metadata:  events.AdministrativeRefusal(),
 	})
 }
 

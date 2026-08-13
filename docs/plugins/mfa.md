@@ -30,9 +30,18 @@ X-MFA-Code: 123456
 ```
 
 Without it the server answers `403` with `detail: "current mfa code required"`;
-a wrong code answers `403 invalid mfa code` and is counted as a failed login,
-so lockout throttles brute force here as it does at `/mfa/verify`. A **first**
-enrolment needs no header: there is no factor to prove and none to lose.
+a wrong code answers `403 invalid mfa code` and is counted as a failed login.
+A **first** enrolment needs no header: there is no factor to prove and none to
+lose.
+
+Guessing the header is throttled twice over. The three step-up routes share the
+`rate_limit.mfa_verify` bucket with `/mfa/verify` and `/token/mfa` — one per-IP
+budget across all five, so alternating between them does not buy extra guesses
+— and once the accumulated failures have locked the account, the next wrong
+code is answered with lockout's `429 Account locked` instead of the `403`. The
+lock is consulted only after a code has failed, so a user who can still produce
+a correct code may disable or rotate their factor even while a lock (someone
+else's password spray, say) stands against them.
 
 A header rather than a body field, so it works uniformly on `DELETE`, where
 request bodies are widely dropped by proxies and client libraries.

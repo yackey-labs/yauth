@@ -6,12 +6,12 @@
 //
 // Routes registered by Plugin.Routes (relative to the prefix passed in):
 //
-//	POST   {prefix}/mfa/totp/setup              issue candidate secret    (RequireAuth + step-up)
+//	POST   {prefix}/mfa/totp/setup              issue candidate secret    (RequireAuth + step-up, rate-limited)
 //	POST   {prefix}/mfa/totp/confirm            promote candidate secret  (RequireAuth)
-//	DELETE {prefix}/mfa/totp                    remove secret + codes     (RequireAuth + step-up)
+//	DELETE {prefix}/mfa/totp                    remove secret + codes     (RequireAuth + step-up, rate-limited)
 //	GET    {prefix}/mfa/backup-codes            unused-count              (RequireAuth)
-//	POST   {prefix}/mfa/backup-codes/regenerate replace codes             (RequireAuth + step-up)
-//	POST   {prefix}/mfa/verify                  consume pending session
+//	POST   {prefix}/mfa/backup-codes/regenerate replace codes             (RequireAuth + step-up, rate-limited)
+//	POST   {prefix}/mfa/verify                  consume pending session   (rate-limited)
 //
 // The three routes marked "step-up" change HOW THE ACCOUNT AUTHENTICATES, so
 // authentication alone does not open them: a user who already has a verified
@@ -20,6 +20,14 @@
 // survive a stolen session. Setup is also non-destructive — the candidate
 // secret and codes live in a pending enrolment until /mfa/totp/confirm
 // promotes them, so an abandoned setup no longer drops the account out of MFA.
+//
+// Those same three routes share the rate_limit.mfa_verify bucket with
+// /mfa/verify and bearer's /token/mfa (one per-IP budget across all of them),
+// and they honour an account lock on the failure path: a wrong X-MFA-Code is
+// still the ordinary 403, but once the failures have locked the account the
+// next one is answered with lockout's 429. Before that, holding a session was
+// enough to guess a six-digit secret without limit and without ever tripping
+// the lock the guessing itself had caused.
 //
 // TOTP codes are single-use (RFC 6238 §5.2): the time step of an accepted code
 // is recorded, and that step and every earlier one are refused thereafter.
@@ -115,7 +123,12 @@ func (p *mfaPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.A
 
 	// POST /mfa/verify had no limiter, despite rate_limit.mfa_verify
 	// being advertised in the schema and its defaults. Shared bucket with
-	// the bearer /token/mfa route, which completes the same challenge.
+	// the bearer /token/mfa route, which completes the same challenge —
+	// and, since the step-up routes below check the same six-digit secret,
+	// with those too. middleware.RateLimit keys its bucket on the op NAME
+	// plus the client IP, so one value used on several routes (or several
+	// values built from the same op) is one budget per IP: alternating
+	// between routes cannot double an attacker's guesses.
 	verifyRL := plugin.RateLimitFor(host, plugin.RateLimitMFAVerify, 10, 60*time.Second)
 
 	authMw := huma.Middlewares{
@@ -133,6 +146,23 @@ func (p *mfaPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.A
 		// prove they still hold the credential they are changing.
 		middleware.RequireUserPrincipalHuma(api),
 	}
+
+	// The three routes that DEMAND a current second factor (setup, delete,
+	// backup-code regenerate) were an unmetered oracle: requireStepUp
+	// answers a wrong X-MFA-Code with a flat 403 and nothing in the stack
+	// meters an authenticated route, so anyone riding a session — a stolen
+	// cookie, an XSS payload — could walk 000000..999999 against a
+	// six-digit secret at full speed, and validateTOTPStep accepts three of
+	// those million per window. They share the mfa_verify bucket because
+	// they are guessing the same secret /mfa/verify guesses.
+	//
+	// Deliberately NOT applied to mfa-backup-codes-count (a read a settings
+	// page performs, with nothing to guess) or mfa-totp-confirm (it
+	// validates a code against a CANDIDATE secret the caller was just shown
+	// in full). Metering those would spend the same per-IP budget that MFA
+	// LOGIN needs, which behind a NAT is one office sharing 10/min.
+	stepUpMw := append(huma.Middlewares{middleware.RateLimitHuma(verifyRL)}, authMw...)
+
 	sec := []map[string][]string{
 		{"sessionCookie": {}},
 		{"bearer": {}},
@@ -150,7 +180,7 @@ func (p *mfaPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.A
 			"already has a verified factor, a current code must be supplied in the " + StepUpHeader + " header.",
 		Tags:        []string{"mfa"},
 		Security:    sec,
-		Middlewares: authMw,
+		Middlewares: stepUpMw,
 	}, p.handleSetup(host))
 
 	huma.Register(api, huma.Operation{
@@ -175,7 +205,7 @@ func (p *mfaPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.A
 			"the " + StepUpHeader + " header — the factor being removed must be presented to remove it.",
 		Tags:        []string{"mfa"},
 		Security:    sec,
-		Middlewares: authMw,
+		Middlewares: stepUpMw,
 	}, p.handleDelete(host))
 
 	huma.Register(api, huma.Operation{
@@ -198,7 +228,7 @@ func (p *mfaPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.A
 			StepUpHeader + " header.",
 		Tags:        []string{"mfa"},
 		Security:    sec,
-		Middlewares: authMw,
+		Middlewares: stepUpMw,
 	}, p.handleRegenerateBackupCodes(host))
 
 	huma.Register(api, huma.Operation{

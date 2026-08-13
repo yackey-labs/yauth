@@ -11,6 +11,7 @@ import (
 	"github.com/pquerna/otp"
 	"github.com/pquerna/otp/totp"
 
+	"github.com/yackey-labs/yauth/events"
 	"github.com/yackey-labs/yauth/plugin"
 	"github.com/yackey-labs/yauth/repo"
 	"github.com/yackey-labs/yauth/yautherr"
@@ -163,8 +164,21 @@ type stepUpInput struct {
 // unused backup code.
 //
 // A wrong code emits login.failed exactly as /mfa/verify does, so lockout
-// counts brute force here too; the plugin has no limiter of its own, and this
-// route would otherwise be an unthrottled oracle for anyone holding a session.
+// counts brute force here too, and it then ASKS login.attempt whether the
+// account is still allowed to authenticate — which is what finally stops the
+// loop. Before that the counter moved but nothing ever read it: lockout only
+// refuses on login.attempt, no MFA path emitted one, and the flat 403 here
+// meant a stolen session could keep guessing for as long as it liked while
+// the owner's own /login was answering 429 with the lock the guessing had
+// caused. The route is also metered now (see Routes).
+//
+// The lock is consulted only AFTER p.verifyCode has said no, never before.
+// Blocking ahead of verification would refuse more than the defect requires:
+// the "current mfa code required" prompt would become a 429, and an owner who
+// CAN produce a real code could not rotate or disable their factor while a
+// lock — which someone else's password spray may well have caused — stands.
+// On the failure path the guessing loop still dies: the guess that crosses
+// the threshold gets the ordinary 403, and every one after it gets the 429.
 func (p *mfaPlugin) requireStepUp(ctx context.Context, host plugin.PluginHost, userID, code string) error {
 	repoRef := host.Repo()
 	verified := true
@@ -186,7 +200,26 @@ func (p *mfaPlugin) requireStepUp(ctx context.Context, host plugin.PluginHost, u
 		return huma.Error500InternalServerError("unable to verify mfa code")
 	}
 	if !ok {
+		// Count this guess first — emitMFAFailed stays fire-and-forget, so
+		// a Block reached through IT can never leak back into the opaque
+		// 401 that /mfa/verify and the bearer exchange are contractually
+		// fixed at (see plugin.MFAVerifier).
 		emitMFAFailed(ctx, host, userID)
+
+		// Then ask the question every login path asks before it lets an
+		// account authenticate: is this account locked? Emitting the
+		// attempt AFTER the failure means the guess that crosses the
+		// threshold is answered 403 and the next one 429 — the loop stops
+		// either way, and only a caller who has just failed pays for it.
+		uid := userID
+		method := loginMethod
+		if dec, _ := host.Emit(ctx, events.AuthEvent{
+			Type:   events.EventLoginAttempt,
+			UserID: &uid,
+			Method: &method,
+		}); dec.Kind == events.DecisionKindBlock {
+			return huma.NewError(decBlockStatus(dec), decBlockMessage(dec))
+		}
 		return huma.Error403Forbidden("invalid mfa code")
 	}
 	return nil

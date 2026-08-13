@@ -84,6 +84,24 @@ func (h *loginEventHandler) onAttempt(ctx context.Context, e events.AuthEvent) (
 // onFailed increments the failed counter and triggers a lock when the
 // threshold is reached.
 func (h *loginEventHandler) onFailed(ctx context.Context, e events.AuthEvent) (events.Decision, error) {
+	// A refusal where no credential was ever compared is not evidence of
+	// guessing, and counting it made the lock a weapon rather than a
+	// defence: an unauthenticated attacker could POST /login (or /token)
+	// with a junk password against a NAMED address that has no password row
+	// — every SCIM / SSO / passkey / magic-link user — and the ErrNotFound
+	// branch would count each one until the account was locked out of the
+	// login paths it actually uses, with no password to reset its way back.
+	// The same primitive existed via banned / suspended / staged /
+	// email-unverified, where the refusal came from an administrative state
+	// the caller had no part in.
+	//
+	// Only the COUNTING is skipped. onAttempt still blocks a locked account,
+	// onSucceeded still clears the lock, and the bad-password branches emit
+	// an unmarked login.failed of their own, so a real credential brute
+	// force locks exactly as before.
+	if e.AdministrativeRefusal() {
+		return events.Continue(), nil
+	}
 	uid, ok := h.resolveUserID(ctx, e)
 	if !ok {
 		return events.Continue(), nil

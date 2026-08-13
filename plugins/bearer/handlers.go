@@ -316,6 +316,31 @@ func (p *bearerPlugin) registerTokenMFA(host plugin.PluginHost, api huma.API, pr
 			return nil, huma.Error401Unauthorized("invalid mfa code or pending session")
 		}
 
+		// This exchange is the SECOND LEG OF A LOGIN, so the account lock
+		// applies here as it does at /token — including for a CORRECT code.
+		// /token hands back {require_mfa, pending_session_id} without the
+		// counter ever moving (the password was right, and the MFA gate
+		// short-circuits login.succeeded), so an attacker who knows the
+		// password could bank challenges at no cost, let the account get
+		// locked, and cash one in here: nothing on this path asked
+		// login.attempt, so a full access+refresh pair was minted for an
+		// account /token itself was refusing with 429. Worse, the marked
+		// login.succeeded below reached lockout's onSucceeded, which reset
+		// the counter and auto-unlocked — the bypass was also the unlock
+		// button. Blocking here, before the gates and well before issueFor,
+		// means no tokens are minted and no completion event is emitted.
+		//
+		// The pending challenge was already consumed by VerifyPendingChallenge
+		// above, so a blocked exchange buys the caller no extra guesses.
+		if dec, _ := host.Emit(ctx, events.AuthEvent{
+			Type:      events.EventLoginAttempt,
+			UserID:    &userID,
+			IPAddress: callerIP(ctx),
+			Method:    strPtr(loginMethod),
+		}); dec.Kind == events.DecisionKindBlock {
+			return nil, huma.NewError(decBlockStatus(dec), decBlockMessage(dec))
+		}
+
 		// Re-run the account gates: the challenge is valid for minutes, and
 		// the state that passed at /token time may not hold any more.
 		user, err := host.Repo().GetUserByID(ctx, userID)
@@ -420,6 +445,18 @@ func callerIP(ctx context.Context) *string {
 // where the response is already fixed (user-not-found returns the opaque
 // 401 regardless, so a Block must not be allowed to change it and leak
 // which accounts exist).
+//
+// Every caller is a refusal where NO CREDENTIAL WAS COMPARED: unknown
+// address, banned account, or no password row at all. Those are stamped with
+// events.AdministrativeRefusal() so lockout leaves its failure counter alone.
+// /token is public and takes the same {email, password} body as /login, so
+// without this it carried the identical primitive: an SSO-provisioned user
+// has no password to fail, yet a handful of junk POSTs here would lock them
+// out of every login path they actually use.
+//
+// A genuine credential failure must NOT use this helper — the bad-password
+// branch above emits its own unmarked login.failed inline and honours the
+// Block, so real guessing still locks the account.
 func emitLoginFailed(ctx context.Context, host plugin.PluginHost, userID, email, ip *string, reason string) {
 	method := loginMethod
 	r := reason
@@ -430,6 +467,7 @@ func emitLoginFailed(ctx context.Context, host plugin.PluginHost, userID, email,
 		IPAddress: ip,
 		Method:    &method,
 		Reason:    &r,
+		Metadata:  events.AdministrativeRefusal(),
 	})
 }
 

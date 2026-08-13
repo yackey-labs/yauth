@@ -451,6 +451,33 @@ func (p *mfaPlugin) handleVerify(host plugin.PluginHost) func(context.Context, *
 
 		ip := middleware.RequestIP(r)
 
+		// This request is the SECOND LEG OF A LOGIN, so the account lock has
+		// to be honoured here exactly as it is at /login — including for a
+		// CORRECT code. /login hands out {require_mfa, pending_session_id}
+		// without the counter ever moving (the MFA gate short-circuits
+		// login.succeeded, and nothing failed — the password was right), so
+		// an attacker holding the password could bank challenges for free,
+		// let the account get locked, and then spend a banked challenge
+		// here. Nothing on this path asked login.attempt, so the session was
+		// issued anyway — and the marked login.succeeded below then ran
+		// lockout's onSucceeded, which CLEARED the lock. Blocking here, ahead
+		// of verification and of the completion event, means no session row,
+		// no cookie, and no reset of the counter.
+		//
+		// The pending session has already been consumed by the read above,
+		// so a blocked attempt costs the caller its challenge — it buys no
+		// extra guesses.
+		uid := userID
+		attemptMethod := loginMethod
+		if dec, _ := host.Emit(ctx, events.AuthEvent{
+			Type:      events.EventLoginAttempt,
+			UserID:    &uid,
+			IPAddress: ip,
+			Method:    &attemptMethod,
+		}); dec.Kind == events.DecisionKindBlock {
+			return nil, huma.NewError(decBlockStatus(dec), decBlockMessage(dec))
+		}
+
 		ok, err := p.verifyCode(ctx, repoRef, userID, code)
 		if err != nil {
 			return nil, huma.Error500InternalServerError("unable to verify mfa code")

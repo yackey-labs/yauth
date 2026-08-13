@@ -163,6 +163,18 @@ by default, a magic link does not, and the federated flows (`oauth`,
 `sso_oidc`, `ssosaml`) do. All configurable; see
 [docs/plugins/mfa.md](docs/plugins/mfa.md).
 
+Both legs of a stepped-up login ask `login.attempt` before they finish, so an
+account locked *between* the password check and the second factor cannot be
+let in by a challenge banked earlier. And a `login.failed` where **no
+credential was compared** — unknown address, banned, suspended, staged, no
+password row at all, unverified email — carries the
+`events.MetaAdministrativeRefusal` marker (`events.AdministrativeRefusal()`).
+Observers that merely record the refusal still see it; handlers that count
+failures must ignore it, as lockout does. Otherwise an unauthenticated caller
+could lock out any named account that has no password to fail — every user
+provisioned by SCIM, SSO, passkey or magic link — simply by POSTing junk at
+`/login`.
+
 **Tri-mode auth middleware** (`middleware.Middleware`) tries credentials
 in order: session cookie, then `Authorization: Bearer <jwt>`, then
 `X-Api-Key`. The first plugin that registers an `AuthResolver` for a
@@ -804,7 +816,7 @@ attacker's budget:
 | `forgot_password` | 5 / 60s | `POST /forgot-password` |
 | `magic_link_send` | 5 / 60s | `POST /magic-link/send` |
 | `unlock_request` | 10 / 60s | `POST /account/request-unlock` |
-| `mfa_verify` | 10 / 60s | `POST /mfa/verify`, `POST /token/mfa` |
+| `mfa_verify` | 10 / 60s | `POST /mfa/verify`, `POST /token/mfa`, `POST /mfa/totp/setup`, `DELETE /mfa/totp`, `POST /mfa/backup-codes/regenerate` |
 
 ```yaml
 rate_limit:

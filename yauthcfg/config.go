@@ -206,7 +206,16 @@ type SessionConfig struct {
 //	forgot_password  POST /forgot-password
 //	magic_link_send  POST /magic-link/send
 //	unlock_request   POST /account/request-unlock
-//	mfa_verify       POST /mfa/verify, POST /token/mfa
+//	mfa_verify       POST /mfa/verify, POST /token/mfa,
+//	                 POST /mfa/totp/setup, DELETE /mfa/totp,
+//	                 POST /mfa/backup-codes/regenerate
+//
+// The three MFA management routes join mfa_verify because they check the same
+// six-digit secret via the X-MFA-Code step-up header; sharing the bucket stops
+// an attacker with a session guessing there at full speed. GET
+// /mfa/backup-codes and POST /mfa/totp/confirm are deliberately NOT metered —
+// the first is a read with nothing to guess, the second validates against a
+// candidate secret the caller was just shown in full.
 type RateLimitConfig struct {
 	Login          RateLimitRule `yaml:"login" toml:"login"`
 	Register       RateLimitRule `yaml:"register" toml:"register"`

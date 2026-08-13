@@ -345,8 +345,23 @@ func (p *magicLinkPlugin) registerVerify(host plugin.PluginHost, api huma.API, p
 			})
 		}
 
+		// The full lifecycle gate, not just Banned. domain.User.CanAuthenticate
+		// is the library-wide invariant (#81) and every other credential path
+		// applies it; this one checked a third of it. Nothing retires an
+		// outstanding magic link when an account is suspended — the only
+		// caller of DeleteUnusedMagicLinksForEmail is emailpassword, on
+		// password change and reset — so a link mailed before an offboarding
+		// stayed redeemable. Distinct messages mirror /login so a client can
+		// tell the states apart; all three refuse before any session is minted.
+		now := time.Now().UTC()
 		if user.Banned {
 			return nil, huma.Error403Forbidden("account suspended")
+		}
+		if user.SuspendedAt != nil {
+			return nil, huma.Error403Forbidden("account is deactivated")
+		}
+		if user.Staged(now) {
+			return nil, huma.Error403Forbidden("account is not active yet")
 		}
 
 		uid := user.ID

@@ -462,15 +462,44 @@ func (p *mfaPlugin) handleVerify(host plugin.PluginHost) func(context.Context, *
 			return nil, huma.Error401Unauthorized("invalid mfa code")
 		}
 
-		resp := mfaVerifyResponse{User: mfaVerifyUser{ID: userID}}
-		var email string
-		if u, err := repoRef.GetUserByID(ctx, userID); err == nil && u != nil {
-			resp.User.Email = u.Email
-			resp.User.DisplayName = u.DisplayName
-			resp.User.EmailVerified = u.EmailVerified
-			resp.User.Role = u.Role
-			email = u.Email
+		// Re-run the account gates before completing the login. The challenge
+		// is valid for minutes, and the state that passed when the password
+		// was checked may not hold any more — an offboarding can land in
+		// between. bearer's /token/mfa leg has done this since it was written;
+		// this leg loaded the user only to populate the response body and
+		// SWALLOWED the error, then issued a session unconditionally.
+		u, err := repoRef.GetUserByID(ctx, userID)
+		if err != nil {
+			if errors.Is(err, yautherr.ErrNotFound) {
+				return nil, huma.Error401Unauthorized("invalid mfa code or pending session")
+			}
+			return nil, huma.Error500InternalServerError("unable to look up user")
 		}
+		if u == nil {
+			return nil, huma.Error401Unauthorized("invalid mfa code or pending session")
+		}
+		now := time.Now().UTC()
+		if u.Banned {
+			return nil, huma.Error403Forbidden("account suspended")
+		}
+		if u.SuspendedAt != nil {
+			return nil, huma.Error403Forbidden("account is deactivated")
+		}
+		if u.Staged(now) {
+			return nil, huma.Error403Forbidden("account is not active yet")
+		}
+		if u.MustChangePassword {
+			return nil, huma.Error403Forbidden(middleware.MustChangePasswordDetail)
+		}
+
+		resp := mfaVerifyResponse{User: mfaVerifyUser{
+			ID:            userID,
+			Email:         u.Email,
+			DisplayName:   u.DisplayName,
+			EmailVerified: u.EmailVerified,
+			Role:          u.Role,
+		}}
+		email := u.Email
 
 		// The login COMPLETES here, not when the password was checked —
 		// this is the event lockout clears its failure counter on, and

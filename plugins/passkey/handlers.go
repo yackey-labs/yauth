@@ -479,7 +479,10 @@ func (p *passkeyPlugin) handleLoginFinish(host plugin.PluginHost) func(context.C
 		if err != nil || verified == nil || matchedUser == nil {
 			return nil, huma.Error401Unauthorized("passkey verification failed")
 		}
-		if matchedUser.Banned {
+		// Refuse before persistVerifiedCredential so a deprovisioned account's
+		// credential row is not written to either. completeLogin re-checks at
+		// the choke point; this is the early-out, not the guarantee.
+		if !matchedUser.CanAuthenticate(time.Now().UTC()) {
 			return nil, huma.Error403Forbidden("account suspended")
 		}
 
@@ -524,6 +527,27 @@ func (p *passkeyPlugin) completeLogin(
 	r *http.Request,
 	user *domain.User,
 ) (*passkeyLoginFinishOutput, error) {
+	// The lifecycle gate lives here, at the single choke point through which
+	// every passkey session is minted, rather than at one call site. It runs
+	// BEFORE the event pipeline on purpose: lockout's onSucceeded clears the
+	// failure counter on login.succeeded, so emitting that for a deprovisioned
+	// account would hand an attacker a counter reset.
+	//
+	// domain.User.CanAuthenticate is the library-wide invariant (#81); this
+	// path previously checked only Banned, so a suspended (offboarded) or
+	// staged account still received a 200, a Set-Cookie, a session row and a
+	// body carrying its role. Distinct messages mirror /login.
+	now := time.Now().UTC()
+	if user.Banned {
+		return nil, huma.Error403Forbidden("account suspended")
+	}
+	if user.SuspendedAt != nil {
+		return nil, huma.Error403Forbidden("account is deactivated")
+	}
+	if user.Staged(now) {
+		return nil, huma.Error403Forbidden("account is not active yet")
+	}
+
 	ip := middleware.RequestIP(r)
 	method := loginMethod
 	uid := user.ID

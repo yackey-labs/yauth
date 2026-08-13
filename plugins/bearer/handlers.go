@@ -328,6 +328,15 @@ func (p *bearerPlugin) registerTokenMFA(host plugin.PluginHost, api huma.API, pr
 		if user.Banned {
 			return nil, huma.Error403Forbidden("account suspended")
 		}
+		// Suspended and staged were missing here, so an offboarding that
+		// landed between /token and /token/mfa was not honoured on the second
+		// leg. domain.User.CanAuthenticate is the library-wide invariant.
+		if user.SuspendedAt != nil {
+			return nil, huma.Error403Forbidden("account is deactivated")
+		}
+		if user.Staged(time.Now().UTC()) {
+			return nil, huma.Error403Forbidden("account is not active yet")
+		}
 		if user.MustChangePassword {
 			return nil, huma.Error403Forbidden(middleware.MustChangePasswordDetail)
 		}

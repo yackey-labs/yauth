@@ -46,9 +46,22 @@ func (h *eventHandler) Handle(ctx context.Context, event events.AuthEvent) (even
 			eventType: string(event.Type),
 			payload:   buildPayload(event),
 		}
-		// Best-effort enqueue; a closed dispatcher means we're shutting
-		// down and dropping the event is intentional.
-		_ = h.dispatcher.Enqueue(job)
+		// Best-effort enqueue. Handle runs INLINE on the HTTP request
+		// goroutine (YAuth.Emit → dispatchEvent), so Enqueue must never
+		// park us — it returns ErrQueueFull instead of blocking when a
+		// slow receiver has backed the worker pool up, and the shutdown
+		// error when we're closing. Both are drops, and a dropped
+		// delivery is only an acceptable price for keeping login alive
+		// if it is VISIBLE: hand it to the dispatcher's throttled
+		// saturation warning rather than swallowing it with `_ =`. The
+		// logging is throttled precisely because we are on the auth
+		// path — a per-drop WARN would be its own latency source.
+		//
+		// Whatever happens, this handler still returns Continue: the
+		// webhook plugin observes authentication, it never gates it.
+		if err := h.dispatcher.Enqueue(job); err != nil {
+			h.dispatcher.noteDroppedEnqueue(w.ID, string(event.Type), err)
+		}
 	}
 	return events.Continue(), nil
 }

@@ -744,6 +744,21 @@ _ = ya.Shutdown(ctx)
 See [`examples/webhooks/main.go`](examples/webhooks/main.go) for a
 SIGTERM-aware setup with an in-process receiver.
 
+#### Delivery is best-effort at the enqueue boundary
+
+Event handlers run inline on the HTTP request goroutine, so the webhooks
+plugin never lets a receiver hold a login open. Deliveries are handed to
+a buffered queue sized to `WorkerCount * 8`; if that queue is full —
+which happens when receivers are slower than the event rate, or one has
+stopped answering entirely — the delivery is **dropped** and a throttled
+warning is logged. Authentication keeps serving.
+
+Delivery *failures* are still durable: a receiver that answers with an
+error or times out is retried from the `yauth_webhook_retries` table up
+to `MaxAttempts`, then dead-lettered. Enqueue *drops* are not retried.
+Raise `WorkerCount` if your event volume needs more headroom, and alert
+on the `DROPPED delivery` log line.
+
 #### Webhook secrets require an encryption key
 
 Each webhook's HMAC signing secret is encrypted at rest (AES-256-GCM). The

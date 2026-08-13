@@ -387,8 +387,20 @@ func (p *orgsPlugin) registerAddGroupMember(host plugin.PluginHost, api huma.API
 		if err != nil {
 			return nil, huma.Error500InternalServerError("membership lookup failed")
 		}
-		if m == nil {
-			return nil, huma.Error409Conflict("user is not a member of this organization")
+		// ...and the membership must be ACTIVE. The check used to be `m ==
+		// nil` alone, so a SUSPENDED membership (plugins/scim sets exactly
+		// that on `active:false`) or a merely INVITED one could be dropped
+		// into a group — and that group grants OAuth2 app access through
+		// UserInAssignedGroup, which never looks at membership status. That
+		// handed a suspended user real access everywhere else in the library
+		// refuses them: middleware.EffectiveOrgMembership rejects every
+		// non-active status.
+		//
+		// Both cases answer the same 409 with the same message on purpose:
+		// distinguishing "not a member" from "suspended member" would turn
+		// this route into a membership oracle for an org admin's peers.
+		if m == nil || m.Status != domain.MembershipActive {
+			return nil, huma.Error409Conflict("user is not an active member of this organization")
 		}
 		if err := host.Repo().AddGroupMember(ctx, g.ID, req.UserID, time.Now().UTC()); err != nil {
 			return nil, huma.Error500InternalServerError("unable to add member")

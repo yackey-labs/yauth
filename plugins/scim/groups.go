@@ -81,14 +81,28 @@ func loadOrgGroup(ctx context.Context, host plugin.PluginHost, orgID, groupID st
 	return g, nil
 }
 
-// addMemberIfOrgMember adds userID to the group only when the user belongs to
-// the org (group membership ⊆ org membership). Non-members are skipped.
+// addMemberIfOrgMember adds userID to the group only when the user is an
+// ACTIVE member of the org (group membership ⊆ org membership). Everyone else
+// is skipped.
+//
+// The status check is the fix for a real gap: the test used to be `m == nil`
+// alone, so a SUSPENDED membership — the exact state handleUpdateUser /
+// handlePatchUser write on `active:false` — was still good enough to be
+// written into a group, and a group grants OAuth2 app access via
+// UserInAssignedGroup, which never joins memberships. A deactivated user then
+// held app access the rest of the library refuses them.
+//
+// It stays a SILENT skip that returns nothing, on purpose. This is called
+// per-member from POST, PUT and PATCH /Groups; turning a skipped member into
+// an error would fail the whole payload and make an IdP's group push abort on
+// one stale entry. The consequence an operator must know is that after
+// re-activating a user the IdP has to re-push their group membership.
 func addMemberIfOrgMember(ctx context.Context, host plugin.PluginHost, orgID, groupID, userID string, now time.Time) {
 	if strings.TrimSpace(userID) == "" {
 		return
 	}
 	m, err := host.Repo().GetMembershipByOrgUser(ctx, orgID, userID)
-	if err != nil || m == nil {
+	if err != nil || m == nil || m.Status != domain.MembershipActive {
 		return
 	}
 	_ = host.Repo().AddGroupMember(ctx, groupID, userID, now)

@@ -1156,6 +1156,25 @@ func (p *scimPlugin) handleDeleteUser(host plugin.PluginHost) http.HandlerFunc {
 		if ext, _ := findExternalIDForUser(ctx, host, orgID, userID); ext != nil {
 			_ = repo.DeleteExternalIdentity(ctx, ext.ID)
 		}
+		// Group membership ⊆ org membership — the invariant this plugin
+		// asserts in addMemberIfOrgMember, now held on the way out too. Group
+		// rows have no FK to cascade from and the reads that grant access
+		// (UserInAssignedGroup, ListGroupNamesForUser) never join
+		// memberships, so before this the deprovisioned user kept their
+		// enforce_group_assignment app access and their groups claim. That is
+		// live authority, not a stale projection: DELETE deliberately does
+		// NOT set suspended_at (see below), so the account can still
+		// authenticate.
+		//
+		// Org-scoped by construction — RevokeOrgGroupMemberships enumerates
+		// via the org-filtered ListGroupsForUser, so a user's groups in other
+		// orgs survive. Best-effort like the rest of this handler past the
+		// membership delete; a cleanup failure must not become a 5xx that
+		// makes the IdP retry a delete that already happened.
+		if err := auth.RevokeOrgGroupMemberships(ctx, repo, orgID, userID); err != nil {
+			host.Logger().Error("scim: failed to revoke group memberships on deprovision",
+				"org_id", orgID, "user_id", userID, "error", err)
+		}
 		// Deprovision is a removal: trip the kill switch so any live access is
 		// revoked immediately. We don't set suspended_at here (unlike
 		// active:false) so a later re-POST provisions a clean, usable account.

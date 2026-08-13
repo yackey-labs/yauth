@@ -136,7 +136,31 @@ func (p *oauth2Plugin) handleIntrospect(host plugin.PluginHost) http.HandlerFunc
 
 // verifyAccessJWT verifies token against the host's signer (asymjwt if
 // loaded, HS256 otherwise) and returns the claims.
+//
+// A valid signature is NOT sufficient to call something an access token. The
+// same key signs id_tokens (signIDToken), DCR registration-access tokens
+// (signRegistrationAccessToken) and back-channel logout tokens
+// (signLogoutToken), and each is deliberately handed to a party that is not
+// the resource owner. Callers here — introspection and revocation — treat what
+// they get back as an access token, so the type gate belongs in this one
+// place. It mirrors the gate bearer.verifyAsymAccessToken has carried since
+// #85, and RFC 9068 §2.1 exists to make the same distinction via a `typ`
+// header.
 func verifyAccessJWT(host plugin.PluginHost, token string) (jwt.MapClaims, error) {
+	claims, err := parseAccessJWT(host, token)
+	if err != nil {
+		return nil, err
+	}
+	if use, _ := claims["token_use"].(string); use != "access" {
+		return nil, errors.New("not an access token")
+	}
+	return claims, nil
+}
+
+// parseAccessJWT performs signature and standard-claim validation only. It is
+// split out so the type gate in verifyAccessJWT cannot be bypassed by a future
+// caller reaching for the parse alone.
+func parseAccessJWT(host plugin.PluginHost, token string) (jwt.MapClaims, error) {
 	if signer := host.JWTSigner(); signer != nil {
 		raw, err := signer.Verify(token)
 		if err != nil {

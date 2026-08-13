@@ -61,6 +61,11 @@ func signAccessToken(secret []byte, userID, jti string, cfg Config, now time.Tim
 		Org:  active.Org,
 		Role: active.Role,
 		Orgs: active.Orgs,
+		// Stamp what kind of JWT this is. The deployment's HS256 secret also
+		// signs id_tokens, DCR registration-access tokens and back-channel
+		// logout tokens, none of which are API credentials; a positive marker
+		// is what lets verifyAccessToken tell them apart. See the switch there.
+		TokenUse: firstPartyTokenUse,
 	}
 	if cfg.Audience != "" {
 		c.Audience = jwt.ClaimStrings{cfg.Audience}
@@ -128,15 +133,44 @@ func verifyAccessToken(secret []byte, raw string, cfg Config) (parsedToken, erro
 		Orgs:     claims.Orgs,
 		Audience: []string(claims.Audience),
 	}
-	// An HS256 token carrying token_use=access was NOT minted by this
-	// plugin — signAccessToken never sets that claim. It came from
-	// oauth2server's HS256 fallback, which signs with host.JWTSecret(), i.e.
-	// the very secret validated above. Classify it as the delegated OAuth2
-	// credential it is; without this the HS256 deployment keeps the same
-	// full-authority hole the asymmetric one had.
-	if claims.TokenUse == accessTokenUse {
+	// Decide what KIND of JWT this is, positively, before treating it as a
+	// credential. Everything reaching this point was signed with
+	// host.JWTSecret() — and on a deployment running oauth2server without
+	// asymjwt (the supported HS256 fallback) that same secret also signs
+	// id_tokens, DCR registration-access tokens and back-channel logout
+	// tokens. None of those is an API credential, and each is deliberately
+	// handed to a party that is not the user: the id_token to the relying
+	// party and through it the browser, the registration token to whoever
+	// called DCR, the logout token to every RP's back-channel endpoint.
+	//
+	// verifyAsymAccessToken has required a positive `token_use` since #85 for
+	// exactly this reason. This is the same gate on the symmetric path.
+	switch claims.TokenUse {
+	case firstPartyTokenUse:
+		// This plugin's own /token credential: the user acting in their own
+		// right, full authority, no scope restriction.
+	case accessTokenUse:
+		// oauth2server's access token. Classify it as the delegated OAuth2
+		// credential it is.
 		pt.Scope = splitScope(claims.Scope)
 		pt.Delegated = !audienceIsSelf(pt.Audience, cfg.ResourceIdentifiers)
+	case "":
+		// Minted before this plugin stamped a marker. Accepting it keeps the
+		// upgrade from logging every active user out, but only where it cannot
+		// be one of the foreign kinds: signAccessToken emits `aud` ONLY when
+		// Config.Audience is set — and when it is, the parser above already
+		// enforced that audience. Every foreign kind, by contrast, always
+		// carries a client_id in `aud`. So a marker-less token bearing an
+		// audience is a JWT of another kind and is refused.
+		//
+		// This branch is a migration window, not a permanent allowance: once
+		// one AccessTTL has elapsed past the upgrade, no legitimate token
+		// reaches it.
+		if len(pt.Audience) > 0 {
+			return parsedToken{}, errors.New("bearer: not an access token")
+		}
+	default:
+		return parsedToken{}, errors.New("bearer: not an access token")
 	}
 	return pt, nil
 }
@@ -144,6 +178,12 @@ func verifyAccessToken(secret []byte, raw string, cfg Config) (parsedToken, erro
 // accessTokenUse is the `token_use` value oauth2server stamps on an OAuth2
 // access token (oauth2server.signAccessToken).
 const accessTokenUse = "access"
+
+// firstPartyTokenUse is the `token_use` value THIS plugin stamps on the
+// credential it mints at /token. It is deliberately distinct from
+// accessTokenUse: the two carry different authority, and a token that claims
+// neither marker is not a credential this resolver will honour.
+const firstPartyTokenUse = "yauth_access"
 
 // splitScope splits an RFC 6749 §3.3 space-delimited scope string. Returns
 // nil for an empty/whitespace-only value so "no scope claim" and "empty

@@ -50,6 +50,19 @@ func Unauthorized(detail string) *ScimResponseError {
 	return newScimErr(http.StatusUnauthorized, "invalidCredentials", detail)
 }
 
+// InvalidValue returns a 400 invalidValue SCIM error — RFC 7644 §3.5.2:
+// "A required value was missing, or the value specified was not
+// compatible with the operation or attribute type." It is deliberately
+// distinct from BadRequest ("invalidSyntax", the body did not parse):
+// an IdP that sends `active` as the string "yes", or a userName that is
+// not an address, produced syntactically valid JSON carrying a value we
+// must not guess at. Guessing wrong on `active` either suspends an
+// account globally and kills every session, or silently drops a
+// deprovision the IdP has already recorded as complete.
+func InvalidValue(detail string) *ScimResponseError {
+	return newScimErr(http.StatusBadRequest, "invalidValue", detail)
+}
+
 // Forbidden returns a 403 invalidValue SCIM error.
 func Forbidden(detail string) *ScimResponseError {
 	return newScimErr(http.StatusForbidden, "invalidValue", detail)
@@ -82,6 +95,14 @@ func repoToScim(err error) *ScimResponseError {
 	case errors.Is(err, yautherr.ErrNotFound):
 		return NotFound("resource not found")
 	case errors.Is(err, yautherr.ErrConflict):
+		return Conflict(err.Error())
+	case errors.Is(err, yautherr.ErrUserExists):
+		// CreateUser/UpdateUser return this on the yauth_users.email unique
+		// index. It was unmapped and collapsed to a 500, which told the IdP
+		// "retry me" for a condition no retry can fix. Now that SCIM
+		// lower-cases userName, a deployment carrying legacy mixed-case rows
+		// will genuinely hit it — the honest answer is 409 uniqueness, the
+		// same one the explicit collision checks give.
 		return Conflict(err.Error())
 	}
 	return InternalError()

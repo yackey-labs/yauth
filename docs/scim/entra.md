@@ -38,6 +38,24 @@ Expand **Mappings → Provision Microsoft Entra ID Users**. The defaults are clo
 - `mail` → `emails[type eq "work"].value`
 - `Switch([IsSoftDeleted], , "False", "True", "True", "False")` → `active`
 
+> **`active` accepts the `Switch(...)` expression above.** It emits the JSON
+> *strings* `"True"`/`"False"`, not JSON booleans. yauth accepts a real boolean
+> or the strings `"true"`/`"false"` in any case, and deprovisions on either.
+> Any other value (`"0"`, `"1"`, `"yes"`, a number, an object) is refused with
+> **400 `invalidValue`** — it is not a boolean in any SCIM dialect, and
+> guessing would either suspend an account globally or drop a deprovision
+> Entra had already recorded as complete. Earlier yauth versions silently
+> ignored a non-boolean `active` and answered 200, so a tenant using this
+> expression could show "deprovisioned" in Entra while the account, its
+> sessions and its refresh tokens stayed live. If you see new sync errors on
+> `active` after upgrading, the mapping was never working.
+
+> **`userName` is the global login identity.** yauth lower-cases it, and it
+> will only let this org repoint an existing user's `userName` into a domain
+> the org has *verified* (409 `uniqueness` otherwise). A genuine rename logs
+> that user out everywhere. See the Security section of
+> [README.md](./README.md).
+
 **Delete or set to "Do not export"**:
 - `addresses`, `phoneNumbers`, `title`, `department`, `manager`, etc. — yauth tolerates these on input (they're parsed) but does NOT persist them. Removing them from the map reduces noise in your IdP-side sync logs.
 
@@ -62,3 +80,5 @@ If you've enabled group provisioning, configure the yauth-side `SsoConnection.gr
 | Provisioning logs show 400 `invalidFilter`         | Entra's `?filter=userName eq "..."` reached yauth in a form the parser rejected — confirm no Entra-side attribute mapping injected unexpected characters |
 | Lots of 501s in the provisioning log               | Your SQL backend hasn't shipped per-backend org repo impls yet — use the memory backend or wait for the relevant follow-up issue |
 | Deactivated user still has access                  | Entra sent `active: false` but the membership update RTT'd; check yauth audit log for `scim_user_patched` events on that user |
+| Provisioning logs show 400 `invalidValue` on `active` | The mapping emits something other than a boolean or `"true"`/`"false"` — e.g. `"0"`/`"1"`. Fix the `Switch(...)` expression; earlier yauth versions accepted these with a 200 and silently deprovisioned nobody |
+| Provisioning logs show 409 `uniqueness` after a user is renamed | The new `userPrincipalName` is under a domain this org has not verified. `userName` is the global login identity, so yauth will not repoint it into a namespace you cannot prove you control — add and verify the domain in the org settings first |

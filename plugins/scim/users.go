@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
 
@@ -158,6 +159,125 @@ func requireAdoptable(ctx context.Context, host plugin.PluginHost, orgID, email,
 	return Conflict("a user with this userName already exists outside this organization")
 }
 
+// normalizeSCIMEmail folds a SCIM userName/emails[] value into the form the
+// rest of yauth stores and looks up by.
+//
+// yauth_users.email is UNIQUE over plain TEXT and GetUserByEmail is
+// `WHERE email = $1`, and every other credential path (register, login,
+// forgot-password, magic link) lower-cases before it touches that column.
+// SCIM was the sole exception, and the consequences were not cosmetic: a
+// mixed-case variant of an existing address MISSED GetUserByEmail entirely,
+// so requireAdoptable — the #83 cross-tenant guard — never ran, the PUT/PATCH
+// collision check never fired, and POST minted a SECOND global account
+// (EmailVerified:true) for an address another tenant already owned.
+//
+// The validity bar is deliberately the same minimal one plugins/emailpassword
+// uses (validEmail: an "@" with something on each side), NOT net/mail's
+// ParseAddress: ParseAddress accepts `"Name" <a@b>` display-name forms whose
+// raw string would then be written into the login-email column. We also reject
+// embedded whitespace, which ParseAddress-style syntax would smuggle through.
+//
+// ok=false means "the caller supplied something that is not an address" — the
+// caller must refuse the request, never write it.
+func normalizeSCIMEmail(raw string) (string, bool) {
+	s := strings.ToLower(strings.TrimSpace(raw))
+	if s == "" {
+		return "", false
+	}
+	if strings.ContainsFunc(s, unicode.IsSpace) {
+		return "", false
+	}
+	at := strings.Index(s, "@")
+	if at <= 0 || at >= len(s)-1 {
+		return "", false
+	}
+	return s, true
+}
+
+// requireVerifiedNamespace is the VERIFIED-DOMAIN arm of requireAdoptable,
+// lifted out so the PUT/PATCH rename paths can use it on its own.
+//
+// requireAdoptable itself is unusable here: its first branch returns nil the
+// moment a membership row exists, and on PUT/PATCH requireUserInOrg has
+// ALREADY proven that. Calling it would be a guaranteed no-op.
+//
+// The hole it plugs: handlePutUser/handlePatchUser gate only on
+// requireUserInOrg — membership in the calling org — and then write
+// yauth_users.email, which is the GLOBAL login identity. The only other check
+// was "is this address taken by someone else", so an address NOBODY holds
+// sailed straight through. An org-A admin with a SCIM key could therefore
+// repoint any org-A member's login at an address they control, POST
+// /auth/forgot-password (plugins/emailpassword looks a user up by email with
+// no email_verified requirement), redeem the link, and inherit that member's
+// GLOBAL role plus every other organization and group they belong to.
+//
+// So: an org may only move a member's login into a namespace it has PROVEN it
+// controls — the same bar #83 already set on the create path. It returns
+// Conflict (409 uniqueness), never Forbidden, because that is the answer
+// docs/scim/README.md promises an IdP for "you may not have this userName"
+// and TestPentest02_EmailCollisionOnPatch_Returns409 pins it.
+func requireVerifiedNamespace(ctx context.Context, host plugin.PluginHost, orgID, email string) *ScimResponseError {
+	at := strings.LastIndex(email, "@")
+	if at >= 0 && at < len(email)-1 {
+		// GetOrganizationDomainByDomain is case-insensitive and globally
+		// unique on the domain, so this both finds the claim and tells us
+		// which org holds it.
+		d, err := host.Repo().GetOrganizationDomainByDomain(ctx, email[at+1:])
+		if err != nil && !errors.Is(err, yautherr.ErrNotFound) {
+			return repoToScim(err)
+		}
+		if d != nil && d.OrganizationID == orgID && d.Status == domain.DomainVerified {
+			return nil
+		}
+	}
+	return Conflict("userName may only be changed to an address under a domain this organization has verified")
+}
+
+// parseSCIMBool reads a SCIM `active` value.
+//
+// The old code did `if err := json.Unmarshal(op.Value, &b); err == nil` and
+// THREW THE ERROR AWAY: a non-bool left newActive nil, the whole lifecycle
+// block was skipped, and the handler still answered 200. Entra ID sends
+// active as the JSON STRING "False" (docs/scim/entra.md ships the
+// `Switch([IsSoftDeleted], , "False", "True", "True", "False")` expression
+// that produces it), so entire tenants were recording completed deprovisions
+// while the account, its sessions and its refresh tokens lived on.
+//
+// We therefore accept the two shapes that are unambiguous — a real JSON bool
+// and the alpha strings "true"/"false" in any case — and refuse everything
+// else. "0", "1", "yes", numbers and objects are guesses, and guessing wrong
+// on this attribute either suspends an account globally or drops a
+// deprovision on the floor. ok=false must become a 400 invalidValue, so the
+// IdP surfaces a sync error instead of a silent lie.
+func parseSCIMBool(raw json.RawMessage) (bool, bool) {
+	var b bool
+	if err := json.Unmarshal(raw, &b); err == nil {
+		return b, true
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		switch {
+		case strings.EqualFold(strings.TrimSpace(s), "true"):
+			return true, true
+		case strings.EqualFold(strings.TrimSpace(s), "false"):
+			return false, true
+		}
+	}
+	return false, false
+}
+
+// burnCredentials trips the kill switch after a login identity has been
+// repointed. A rename means the account is now reachable (via
+// forgot-password) from a different mailbox, so anything minted under the old
+// one must stop working immediately — otherwise a rewritten identity keeps
+// riding the old cookie. Best-effort, exactly like handleDeleteUser: a SCIM
+// write must not fail because cleanup did.
+func burnCredentials(ctx context.Context, host plugin.PluginHost, userID string) {
+	repo := host.Repo()
+	_, _ = repo.DeleteUserSessions(ctx, userID)
+	_, _ = repo.RevokeAllUserRefreshTokens(ctx, userID)
+}
+
 // projectUser projects a domain.User + optional ExternalIdentity +
 // membership status into a ScimUser response shape.
 func projectUser(baseURL, orgID string, u *domain.User, ext *domain.ExternalIdentity, status domain.MembershipStatus) ScimUser {
@@ -233,9 +353,17 @@ func (p *scimPlugin) handleCreateUser(host plugin.PluginHost) http.HandlerFunc {
 			writeScimError(w, &ScimResponseError{Status: http.StatusBadRequest, Body: *eb})
 			return
 		}
-		email := strings.TrimSpace(payload.CanonicalEmail())
-		if email == "" {
+		// Normalise BEFORE the GetUserByEmail below, or the whole
+		// uniqueness/adoption chain runs against a string the database index
+		// cannot match: "Victim@CorpB.example" misses "victim@corpb.example",
+		// requireAdoptable never runs, and we mint a second global account.
+		if strings.TrimSpace(payload.CanonicalEmail()) == "" {
 			writeScimError(w, BadRequest("user must have userName or emails[]"))
+			return
+		}
+		email, ok := normalizeSCIMEmail(payload.CanonicalEmail())
+		if !ok {
+			writeScimError(w, InvalidValue("userName must be an email address"))
 			return
 		}
 		displayName := payload.PickDisplayName()
@@ -384,8 +512,16 @@ func (p *scimPlugin) handleCreateUser(host plugin.PluginHost) http.HandlerFunc {
 		}
 		if existingMembership != nil {
 			updatedAt := now
+			// Role: nil — never OVERWRITE a role on a membership that already
+			// exists. This used to write auth.RoleMember unconditionally, so a
+			// routine IdP re-sync (an IdP re-POSTs its whole roster) silently
+			// demoted every org admin, and every owner but the last one that
+			// pgxrepo's owner-ceiling protects. Roles are set through the
+			// organizations API, which refuses precisely this write; SCIM
+			// provisions people, it does not administer the org. New
+			// memberships still default to member in the branch below.
 			if _, err := repo.UpdateMembership(ctx, existingMembership.ID, domain.UpdateMembership{
-				Role:      &role,
+				Role:      nil,
 				Status:    &desiredStatus,
 				UpdatedAt: &updatedAt,
 			}); err != nil {
@@ -625,20 +761,48 @@ func (p *scimPlugin) handlePutUser(host plugin.PluginHost) http.HandlerFunc {
 		ctx := r.Context()
 		now := time.Now().UTC()
 
-		// Email change → check collision against any other yauth user.
-		newEmail := strings.TrimSpace(payload.CanonicalEmail())
+		// Email change → this writes yauth_users.email, the GLOBAL login
+		// identity, on the authority of one org-scoped SCIM key. Normalise,
+		// then two gates, in this order.
 		var emailPtr *string
-		if newEmail != "" && !strings.EqualFold(newEmail, user.Email) {
-			other, err := repo.GetUserByEmail(ctx, newEmail)
-			if err != nil && !errors.Is(err, yautherr.ErrNotFound) {
-				writeScimError(w, repoToScim(err))
+		if raw := strings.TrimSpace(payload.CanonicalEmail()); raw != "" {
+			// An ABSENT or empty userName stays "no change": IdPs legitimately
+			// PUT displayName+active only, and 400-ing there would take out
+			// every such sync. A PRESENT but malformed value is refused.
+			newEmail, ok := normalizeSCIMEmail(raw)
+			if !ok {
+				writeScimError(w, InvalidValue("userName must be an email address"))
 				return
 			}
-			if other != nil && other.ID != user.ID {
-				writeScimError(w, Conflict("email already in use by another user"))
-				return
+			// EqualFold, not !=: a legacy row stored as "Bob@x.com" must not
+			// look like a rename on every single sync (which would burn the
+			// user's credentials every time).
+			if !strings.EqualFold(newEmail, user.Email) {
+				// Gate 1, unchanged: is the address already someone else's?
+				// This runs FIRST so the documented 409 "uniqueness" answer
+				// for a collision is preserved verbatim.
+				other, err := repo.GetUserByEmail(ctx, newEmail)
+				if err != nil && !errors.Is(err, yautherr.ErrNotFound) {
+					writeScimError(w, repoToScim(err))
+					return
+				}
+				if other != nil && other.ID != user.ID {
+					writeScimError(w, Conflict("email already in use by another user"))
+					return
+				}
+				// Gate 2, new: an address nobody holds used to sail straight
+				// through, which is the takeover — repoint the login at a
+				// mailbox you control, then redeem a forgot-password. An org
+				// may only move a login into a namespace it has VERIFIED.
+				// requireAdoptable cannot be used here: requireUserInOrg has
+				// already proven membership, so its first branch would return
+				// nil unconditionally.
+				if scimErr := requireVerifiedNamespace(ctx, host, orgID, newEmail); scimErr != nil {
+					writeScimError(w, scimErr)
+					return
+				}
+				emailPtr = &newEmail
 			}
-			emailPtr = &newEmail
 		}
 
 		// Empty PUT.displayName → leave unchanged. The Rust side does
@@ -661,6 +825,11 @@ func (p *scimPlugin) handlePutUser(host plugin.PluginHost) http.HandlerFunc {
 		}); err != nil {
 			writeScimError(w, repoToScim(err))
 			return
+		}
+		if emailPtr != nil {
+			// Only on a GENUINE rename — a routine profile sync re-sends the
+			// same userName and must not log the whole workforce out.
+			burnCredentials(ctx, host, user.ID)
 		}
 
 		desiredStatus := domain.MembershipActive
@@ -754,24 +923,36 @@ func (p *scimPlugin) handlePatchUser(host plugin.PluginHost) http.HandlerFunc {
 			opLC := strings.ToLower(op.Op)
 			pathLC := strings.ToLower(strings.TrimSpace(op.Path))
 			switch {
-			case (opLC == "replace" || opLC == "add") && pathLC == "active":
-				// `value` is a JSON bool.
-				var b bool
-				if err := json.Unmarshal(op.Value, &b); err == nil {
-					nb := b
-					newActive = &nb
+			// Match the fully-qualified attribute URN as well as the short
+			// name. It is legal SCIM and Entra sends it; it used to fall into
+			// the "unknown path — quietly tolerate" default below, so the
+			// deprovision was dropped on the floor with a 200 while the IdP
+			// recorded it as complete. pathLC is already lower-cased.
+			case (opLC == "replace" || opLC == "add") &&
+				(pathLC == "active" || pathLC == "urn:ietf:params:scim:schemas:core:2.0:user:active"):
+				b, ok := parseSCIMBool(op.Value)
+				if !ok {
+					// Fail CLOSED and abort the whole PATCH. The old code
+					// discarded the unmarshal error and answered 200 having
+					// done nothing at all.
+					writeScimError(w, InvalidValue("active must be a boolean"))
+					return
 				}
+				nb := b
+				newActive = &nb
 			case (opLC == "replace" || opLC == "add") && pathLC == "":
 				// No-path replace: value is an object with a subset of
 				// attributes.
 				var obj map[string]json.RawMessage
 				if err := json.Unmarshal(op.Value, &obj); err == nil {
 					if v, ok := obj["active"]; ok {
-						var b bool
-						if err := json.Unmarshal(v, &b); err == nil {
-							nb := b
-							newActive = &nb
+						b, parsed := parseSCIMBool(v)
+						if !parsed {
+							writeScimError(w, InvalidValue("active must be a boolean"))
+							return
 						}
+						nb := b
+						newActive = &nb
 					}
 					if v, ok := obj["displayName"]; ok {
 						var s string
@@ -781,11 +962,24 @@ func (p *scimPlugin) handlePatchUser(host plugin.PluginHost) http.HandlerFunc {
 						}
 					}
 					if v, ok := obj["userName"]; ok {
+						// An op that EXPLICITLY supplies userName and gets it
+						// wrong is a corrupt payload, not a rename. The old
+						// code let `""` through: EqualFold("", email) is
+						// false, GetUserByEmail("") missed, and UpdateUser
+						// blanked the GLOBAL login email — permanent lockout,
+						// and the next such PATCH violated the unique index
+						// and 500'd.
 						var s string
-						if err := json.Unmarshal(v, &s); err == nil {
-							ns := s
-							newEmail = &ns
+						if err := json.Unmarshal(v, &s); err != nil {
+							writeScimError(w, InvalidValue("userName must be a string"))
+							return
 						}
+						ns, valid := normalizeSCIMEmail(s)
+						if !valid {
+							writeScimError(w, InvalidValue("userName must be an email address"))
+							return
+						}
+						newEmail = &ns
 					}
 				}
 			case (opLC == "replace" || opLC == "add") && pathLC == "displayname":
@@ -796,10 +990,20 @@ func (p *scimPlugin) handlePatchUser(host plugin.PluginHost) http.HandlerFunc {
 				}
 			case (opLC == "replace" || opLC == "add") && (pathLC == "username" || pathLC == "emails[primary eq true].value"):
 				var s string
-				if err := json.Unmarshal(op.Value, &s); err == nil {
-					ns := s
-					newEmail = &ns
+				if err := json.Unmarshal(op.Value, &s); err != nil {
+					writeScimError(w, InvalidValue("userName must be a string"))
+					return
 				}
+				// Same refusal as the no-path branch above: an explicitly
+				// supplied userName that is empty or not an address aborts the
+				// PATCH before any write, rather than blanking the account's
+				// only means of being reached.
+				ns, valid := normalizeSCIMEmail(s)
+				if !valid {
+					writeScimError(w, InvalidValue("userName must be an email address"))
+					return
+				}
+				newEmail = &ns
 			case opLC == "remove" && pathLC == "displayname":
 				clearDisplayName = true
 			case opLC == "remove":
@@ -814,7 +1018,13 @@ func (p *scimPlugin) handlePatchUser(host plugin.PluginHost) http.HandlerFunc {
 			}
 		}
 
+		// renamed distinguishes a real change of login identity from a
+		// case-only normalisation of a legacy row, which must not burn
+		// credentials.
+		renamed := false
 		if newEmail != nil && !strings.EqualFold(*newEmail, user.Email) {
+			// Collision check first, so the documented 409 "uniqueness"
+			// answer survives (TestPentest02_EmailCollisionOnPatch_Returns409).
 			other, err := repo.GetUserByEmail(ctx, *newEmail)
 			if err != nil && !errors.Is(err, yautherr.ErrNotFound) {
 				writeScimError(w, repoToScim(err))
@@ -824,6 +1034,15 @@ func (p *scimPlugin) handlePatchUser(host plugin.PluginHost) http.HandlerFunc {
 				writeScimError(w, Conflict("email already in use by another user"))
 				return
 			}
+			// Then the same namespace gate as PUT: yauth_users.email is the
+			// GLOBAL login identity and an org-scoped key may only move it
+			// into a domain this org has verified. Without this, PATCH was
+			// the identical takeover primitive to PUT.
+			if scimErr := requireVerifiedNamespace(ctx, host, orgID, *newEmail); scimErr != nil {
+				writeScimError(w, scimErr)
+				return
+			}
+			renamed = true
 		}
 
 		// Map the local tracking vars to UpdateUser's pointer shape.
@@ -845,6 +1064,9 @@ func (p *scimPlugin) handlePatchUser(host plugin.PluginHost) http.HandlerFunc {
 			}); err != nil {
 				writeScimError(w, repoToScim(err))
 				return
+			}
+			if renamed {
+				burnCredentials(ctx, host, user.ID)
 			}
 		}
 

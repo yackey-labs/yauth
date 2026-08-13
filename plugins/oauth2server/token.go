@@ -147,6 +147,14 @@ func (p *oauth2Plugin) grantAuthCode(host plugin.PluginHost, w http.ResponseWrit
 		writeOAuthError(w, err.code, err.desc)
 		return
 	}
+	// Registration is a ceiling on which grants may be used, checked after
+	// authentication (so an unknown or banned client still looks like
+	// invalid_client) and before any state is read or consumed — a refusal
+	// must not burn the authorization code.
+	if !clientGrantAllowed(client, grantTypeAuthorizationCode) {
+		writeOAuthError(w, "unauthorized_client", "client is not registered for the authorization_code grant")
+		return
+	}
 
 	repo := host.Repo()
 	stored, err2 := repo.ConsumeAuthorizationCode(r.Context(), auth.HashToken(f.Code))
@@ -215,6 +223,15 @@ func (p *oauth2Plugin) grantRefreshToken(host plugin.PluginHost, w http.Response
 	client, err := p.authenticateClient(r.Context(), host, f, false)
 	if err != nil {
 		writeOAuthError(w, err.code, err.desc)
+		return
+	}
+	// Checked before the row is looked up, so a client not registered for
+	// refresh never touches reuse detection. clientGrantAllowed treats a
+	// registration naming authorization_code or device_code as implying
+	// refresh_token, which is what keeps DCR-registered clients (registered
+	// for authorization_code alone) able to rotate.
+	if !clientGrantAllowed(client, grantTypeRefreshToken) {
+		writeOAuthError(w, "unauthorized_client", "client is not registered for the refresh_token grant")
 		return
 	}
 
@@ -334,14 +351,33 @@ func (p *oauth2Plugin) grantClientCredentials(host plugin.PluginHost, w http.Res
 		writeOAuthError(w, "unauthorized_client", "public clients cannot use client_credentials")
 		return
 	}
+	// A client registered for authorization_code only used to be able to mint
+	// itself a machine token here, with its own client_id as the sub and no
+	// resource owner anywhere in the loop.
+	if !clientGrantAllowed(client, grantTypeClientCredentials) {
+		writeOAuthError(w, "unauthorized_client", "client is not registered for the client_credentials grant")
+		return
+	}
 
 	scopes := splitScopes(f.Scope)
 	if len(scopes) == 0 {
 		scopes = decodeScopes(client.Scopes)
-	} else if !clientScopesAllowed(client, scopes) {
+	} else if !consentCovers(decodeScopes(client.Scopes), scopes) {
 		// There is no resource owner on this grant, so registration IS the
 		// grant — a client registered for "read" must not mint itself an
 		// "admin" token by asking (RFC 6749 §3.3).
+		//
+		// consentCovers, NOT clientScopesAllowed: the shared helper treats an
+		// empty registration as unconstrained, which is right where a human
+		// still sits in the loop (/authorize, /device/code) but is a void
+		// ceiling here. An empty registration is the common case — the admin
+		// create endpoint's Scopes field is omitempty and rawJSON(nil) stores
+		// "null" — and such a client could ask for scope=admin and receive an
+		// access token whose "scope" claim, the claim every downstream
+		// resource server authorizes on, said exactly that. Here empty means a
+		// real zero ceiling: the branch above still lets an unscoped client
+		// request nothing and get its (unscoped) token, it just cannot name a
+		// scope it never registered.
 		writeOAuthError(w, "invalid_scope", "requested scope exceeds the scopes registered for this client")
 		return
 	}

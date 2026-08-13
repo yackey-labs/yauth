@@ -57,6 +57,16 @@ func (p *oauth2Plugin) handleDeviceAuth(host plugin.PluginHost) http.HandlerFunc
 			writeOAuthError(w, "invalid_client", "client is banned")
 			return
 		}
+		// This endpoint takes no client authentication at all, so the
+		// registration is the only thing that says a device flow is even
+		// meant to exist for this client: without the check, any registered
+		// client_id — a browser app, a federation client — could be used to
+		// open a device authorization that a signed-in user is then asked to
+		// approve.
+		if !clientGrantAllowed(client, grantTypeDeviceCode) {
+			writeOAuthError(w, "unauthorized_client", "client is not registered for the device_code grant")
+			return
+		}
 
 		scopes := splitScopes(r.PostForm.Get("scope"))
 		// Same self-asserted scope as /authorize had, and worse here: the
@@ -143,12 +153,79 @@ func (p *oauth2Plugin) handleDeviceVerify(host plugin.PluginHost) http.HandlerFu
 			writeOAuthError(w, "invalid_request", "user_code expired")
 			return
 		}
+
+		// The approval leg never loaded the client at all: it went user_code →
+		// expiry → approved. Everything the client row says about who may use
+		// it was therefore enforced on /authorize and nowhere else, and the
+		// device flow was a documented side door round it. A user refused at
+		// /oauth/authorize with access_denied could take the same client_id
+		// through /oauth/device/code (no client authentication required) and
+		// this endpoint, and walk away with an access_token plus an id_token
+		// carrying the groups claim for an application they are explicitly not
+		// assigned to. The predicates below are byte-identical to
+		// handleAuthorize's, because "which humans may use this client" must
+		// not depend on which leg of which flow they came in on.
+		client, cerr := host.Repo().GetOAuth2ClientByClientID(r.Context(), dc.ClientID)
+		if cerr != nil {
+			if errors.Is(cerr, yautherr.ErrNotFound) {
+				// Leave the row pending: a client deleted mid-flow is a bad
+				// request, not a server fault, and nothing should be approved.
+				writeOAuthError(w, "invalid_request", "client not found")
+				return
+			}
+			writeOAuthError(w, "server_error", cerr.Error())
+			return
+		}
+		if client.BannedAt != nil {
+			writeOAuthError(w, "access_denied", "client is banned")
+			return
+		}
+		// Application group assignment gate (Okta-style), matching
+		// handleAuthorize. Note this is only reached for clients that opt in;
+		// a client without EnforceGroupAssignment is completely unaffected.
+		if client.EnforceGroupAssignment {
+			allowed, aerr := host.Repo().UserInAssignedGroup(r.Context(), dc.ClientID, au.User.ID)
+			if aerr != nil {
+				writeOAuthError(w, "server_error", "group assignment check failed")
+				return
+			}
+			if !allowed {
+				writeOAuthError(w, "access_denied", "user is not assigned to this application")
+				return
+			}
+		}
+
 		uid := au.User.ID
 		if err := host.Repo().UpdateDeviceCodeStatus(r.Context(), dc.ID, "approved", &uid); err != nil {
 			writeOAuthError(w, "server_error", err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "approved"})
+		// Record the grant. The device path wrote no Consent row, and
+		// backchannel_logout.go finds the clients to notify by fanning out
+		// over ListConsentsByUserID — so a device session was structurally
+		// invisible to the ban/suspend logout fan-out and survived it. Best
+		// effort: the device has already been approved above, and failing the
+		// approval because the bookkeeping write failed would strand the user
+		// with a code that can never be approved again.
+		scopes := decodeScopes(dc.Scopes)
+		if perr := persistConsent(r.Context(), host, uid, dc.ClientID, scopes); perr != nil {
+			host.Logger().Warn("device approval: consent not recorded",
+				"client_id", dc.ClientID, "error", perr)
+		}
+
+		// client_name and scopes are additive: RFC 8628 §5.4 wants the user to
+		// see what they are approving, and the response was previously bare
+		// enough that a UI could not show it. Existing callers read only
+		// "status", which is unchanged.
+		clientName := client.ClientID
+		if client.ClientName != nil && *client.ClientName != "" {
+			clientName = *client.ClientName
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":      "approved",
+			"client_name": clientName,
+			"scopes":      scopes,
+		})
 	}
 }
 
@@ -163,6 +240,13 @@ func (p *oauth2Plugin) grantDeviceCode(host plugin.PluginHost, w http.ResponseWr
 	client, err := p.authenticateClient(r.Context(), host, f, false)
 	if err != nil {
 		writeOAuthError(w, err.code, err.desc)
+		return
+	}
+	// Registration ceiling, checked before the device-code row is read so a
+	// client that is not registered for this grant cannot use the endpoint to
+	// probe device_code values.
+	if !clientGrantAllowed(client, grantTypeDeviceCode) {
+		writeOAuthError(w, "unauthorized_client", "client is not registered for the device_code grant")
 		return
 	}
 

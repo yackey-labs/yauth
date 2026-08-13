@@ -127,9 +127,15 @@ func TestSsoCallback_RefusesUnverifiedEmailAdoption(t *testing.T) {
 // and not a broken adoption path.
 func TestSsoCallback_AdoptsOnVerifiedEmail(t *testing.T) {
 	const email = "verified@corp.example"
-	_, srv, r, _, idp := setupForLogin(t)
+	_, srv, r, conn, idp := setupForLogin(t)
 
 	existing := seedExistingUser(t, r, email)
+	// RE-SCOPED: email_verified alone no longer authorises binding a
+	// pre-existing account — the account must also have a tie to the
+	// connection's organization, because email_verified is written by whoever
+	// runs the IdP the connection points at. The membership is what makes this
+	// adoption legitimate rather than a takeover.
+	joinOrg(t, r, conn.OrganizationID, existing.ID)
 
 	idp.emailUnverified = false
 	idp.overrideEmail = email

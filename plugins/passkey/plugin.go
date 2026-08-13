@@ -9,6 +9,15 @@
 //	GET  {prefix}/passkeys                  (auth)  - list caller's credentials
 //	DELETE {prefix}/passkeys/{id}           (auth)  - delete one of caller's credentials
 //
+// The three routes that ADD or REMOVE an authenticator (register/begin,
+// register/finish, delete) refuse an X-Api-Key caller outright — a machine
+// credential the account holds must not redefine how the account
+// authenticates — and register/begin additionally requires the account's
+// CURRENT second factor in the X-MFA-Code header when one is enrolled, since
+// a passkey satisfies MFA by default and would otherwise be a permanent way
+// around it. Sessions, first-party bearer tokens and the read routes are
+// unaffected.
+//
 // End-to-end exercise of these routes requires a real authenticator (browser
 // + platform/security key). The upstream go-webauthn library does not ship a
 // virtual authenticator, so the test suite here covers only the bits that do
@@ -21,6 +30,7 @@ import (
 
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/go-webauthn/webauthn/webauthn"
 
@@ -125,10 +135,11 @@ func (p *passkeyPlugin) Name() string { return "passkey" }
 // where a route sets a cookie (login/finish) or does custom query parsing
 // (list):
 //
-//   - register/begin — RequireAuthHuma only: no request body; its WebAuthn
-//     options response is a native typed Output (huma's unescaped JSON is
-//     semantically identical for the client).
-//   - register/finish — RequireAuthHuma only: native Body request (malformed /
+//   - register/begin — no request body, but a typed input carrying the
+//     optional X-MFA-Code step-up header; its WebAuthn options response is a
+//     native typed Output (huma's unescaped JSON is semantically identical
+//     for the client). Guarded by humanOnlyMw and metered (see below).
+//   - register/finish — humanOnlyMw: native Body request (malformed /
 //     unknown body → 422; missing required fields still reach the business-400),
 //     native 201 Output.
 //   - login/begin — public, no middleware: native *pointer* Body (optional, nil
@@ -152,10 +163,36 @@ func (p *passkeyPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api hu
 		middleware.RequireAuthHuma(api, mw),
 		middleware.RequireUserPrincipalHuma(api),
 	}
-	authMw := huma.Middlewares{
+	// Enrolling and removing an authenticator additionally refuses ANY API
+	// key, user-scoped included. RequireUserPrincipalHuma above only stops
+	// org keys and delegated tokens; a user-scoped key resolves to a plain
+	// user principal, so a key leaked from a build log could register the
+	// attacker's OWN authenticator on the victim's account. That is a
+	// permanent credential, and because Config.SatisfiesMFA defaults true it
+	// also logs in past the victim's second factor and yields a cookie
+	// session whose Method is "" — laundering the machine credential into a
+	// human one that the admin machine-caller gate cannot see. A session (or
+	// a native client's first-party /token pair, deliberately still allowed,
+	// since mobile enrolment is the main reason this route exists) is what
+	// may add or drop an authenticator.
+	//
+	// A SEPARATE slice, listed explicitly rather than appended onto the list
+	// route's chain: GET /passkeys must stay open to a key, and append() on
+	// a shared slice is how that would silently stop being true.
+	humanOnlyMw := huma.Middlewares{
 		middleware.RequireAuthHuma(api, mw),
 		middleware.RequireUserPrincipalHuma(api),
+		middleware.RejectMachineCredentialHuma(api),
 	}
+	// register/begin is additionally metered on the shared mfa_verify bucket
+	// — see handleRegisterBegin, which now accepts an X-MFA-Code and answers
+	// 403 on a wrong one. An unmetered route that grades a six-digit code is
+	// exactly the oracle the mfa plugin closed on its own step-up routes, and
+	// this one guesses the SAME secret, so it shares the same per-IP budget
+	// rather than handing an attacker a second one.
+	stepUpBeginMw := append(huma.Middlewares{
+		middleware.RateLimitHuma(plugin.RateLimitFor(host, plugin.RateLimitMFAVerify, 10, 60*time.Second)),
+	}, humanOnlyMw...)
 	publicStashMw := huma.Middlewares{
 		middleware.StashHTTPHuma(api),
 	}
@@ -172,7 +209,7 @@ func (p *passkeyPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api hu
 		Summary:     "Start passkey registration; return CredentialCreation options",
 		Tags:        []string{"passkey"},
 		Security:    sec,
-		Middlewares: authMw,
+		Middlewares: stepUpBeginMw,
 	}, p.handleRegisterBegin(host))
 
 	huma.Register(api, huma.Operation{
@@ -182,7 +219,7 @@ func (p *passkeyPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api hu
 		Summary:     "Finalize attestation and store the credential",
 		Tags:        []string{"passkey"},
 		Security:    sec,
-		Middlewares: authMw,
+		Middlewares: humanOnlyMw,
 	}, p.handleRegisterFinish(host))
 
 	huma.Register(api, huma.Operation{
@@ -223,6 +260,6 @@ func (p *passkeyPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api hu
 		Tags:          []string{"passkey"},
 		Security:      sec,
 		DefaultStatus: http.StatusNoContent,
-		Middlewares:   authMw,
+		Middlewares:   humanOnlyMw,
 	}, p.handleDelete(host))
 }

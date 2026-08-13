@@ -21,6 +21,12 @@
 // secret and codes live in a pending enrolment until /mfa/totp/confirm
 // promotes them, so an abandoned setup no longer drops the account out of MFA.
 //
+// Every route that changes the factor — setup, confirm, delete, backup-code
+// regenerate — additionally refuses an X-Api-Key caller with 403: a machine
+// credential the account holds must not be able to redefine how the account
+// authenticates. Sessions and first-party bearer tokens are unaffected, and
+// GET /mfa/backup-codes (a read) stays open to a key.
+//
 // Those same three routes share the rate_limit.mfa_verify bucket with
 // /mfa/verify and bearer's /token/mfa (one per-IP budget across all of them),
 // and they honour an account lock on the failure path: a wrong X-MFA-Code is
@@ -161,7 +167,39 @@ func (p *mfaPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.A
 	// validates a code against a CANDIDATE secret the caller was just shown
 	// in full). Metering those would spend the same per-IP budget that MFA
 	// LOGIN needs, which behind a NAT is one office sharing 10/min.
-	stepUpMw := append(huma.Middlewares{middleware.RateLimitHuma(verifyRL)}, authMw...)
+	//
+	// Those same three routes ALSO refuse a machine credential outright.
+	// RequireUserPrincipalHuma (in authMw) stops an org key and a delegated
+	// token, but a USER-scoped X-Api-Key resolves to a plain user principal
+	// and sailed straight through: a key leaked from a build log could enrol
+	// the attacker's own TOTP secret on an account that had no factor yet
+	// (requireStepUp is a no-op then, deliberately — first enrolment has
+	// nothing to prove), and so survive the victim's password reset, or burn
+	// the owner's backup codes. A key is a credential the account HAS; it
+	// must not decide what the account IS. That is done from a session, or
+	// from a native client's first-party /token pair — bearer is
+	// deliberately still allowed here, or mobile enrolment would break.
+	//
+	// Built by explicit listing rather than by appending to authMw:
+	// mfa-backup-codes-count (a read every settings page performs) shares
+	// authMw and must stay open to a key, and append() on a shared slice is
+	// exactly how that would silently stop being true.
+	factorChangeMw := huma.Middlewares{
+		middleware.RateLimitHuma(verifyRL),
+		middleware.RequireAuthHuma(api, mw),
+		middleware.RequireUserPrincipalHuma(api),
+		middleware.RejectMachineCredentialHuma(api),
+	}
+
+	// /mfa/totp/confirm is NOT metered, for the reason above — it checks a
+	// code against a candidate secret the caller was just shown in full, so
+	// there is nothing to guess — but it IS the request that promotes the
+	// new factor, so a machine credential has no business making it either.
+	confirmMw := huma.Middlewares{
+		middleware.RequireAuthHuma(api, mw),
+		middleware.RequireUserPrincipalHuma(api),
+		middleware.RejectMachineCredentialHuma(api),
+	}
 
 	sec := []map[string][]string{
 		{"sessionCookie": {}},
@@ -180,7 +218,7 @@ func (p *mfaPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.A
 			"already has a verified factor, a current code must be supplied in the " + StepUpHeader + " header.",
 		Tags:        []string{"mfa"},
 		Security:    sec,
-		Middlewares: stepUpMw,
+		Middlewares: factorChangeMw,
 	}, p.handleSetup(host))
 
 	huma.Register(api, huma.Operation{
@@ -193,7 +231,7 @@ func (p *mfaPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.A
 			"spent and cannot be reused to sign in.",
 		Tags:        []string{"mfa"},
 		Security:    sec,
-		Middlewares: authMw,
+		Middlewares: confirmMw,
 	}, p.handleConfirm(host))
 
 	huma.Register(api, huma.Operation{
@@ -205,7 +243,7 @@ func (p *mfaPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.A
 			"the " + StepUpHeader + " header — the factor being removed must be presented to remove it.",
 		Tags:        []string{"mfa"},
 		Security:    sec,
-		Middlewares: stepUpMw,
+		Middlewares: factorChangeMw,
 	}, p.handleDelete(host))
 
 	huma.Register(api, huma.Operation{
@@ -228,7 +266,7 @@ func (p *mfaPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.A
 			StepUpHeader + " header.",
 		Tags:        []string{"mfa"},
 		Security:    sec,
-		Middlewares: stepUpMw,
+		Middlewares: factorChangeMw,
 	}, p.handleRegenerateBackupCodes(host))
 
 	huma.Register(api, huma.Operation{

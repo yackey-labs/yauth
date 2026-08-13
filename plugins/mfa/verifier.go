@@ -48,4 +48,31 @@ func (v *challengeVerifier) VerifyPendingChallenge(ctx context.Context, pendingS
 	return userID, true, nil
 }
 
-var _ plugin.MFAVerifier = (*challengeVerifier)(nil)
+// VerifyUserCode implements plugin.UserFactorVerifier: the step-up half of
+// the same check, for a caller who is ALREADY authenticated and is about to
+// change how the account authenticates. It exists so the passkey plugin can
+// demand the current factor before enrolling another authenticator without
+// importing this package or holding the TOTP encryption key.
+//
+// Like requireStepUp, it emits login.failed on a wrong code, so a guessing
+// loop run against a sibling plugin's route is counted by lockout too — the
+// alternative being a fresh, unmonitored oracle against the same six-digit
+// secret every time a plugin grows a step-up.
+func (v *challengeVerifier) VerifyUserCode(ctx context.Context, userID, code string) (bool, error) {
+	if userID == "" || code == "" {
+		return false, nil
+	}
+	ok, err := v.p.verifyCode(ctx, v.repo, userID, code)
+	if err != nil {
+		return false, err
+	}
+	if !ok {
+		emitMFAFailed(ctx, v.host, userID)
+	}
+	return ok, nil
+}
+
+var (
+	_ plugin.MFAVerifier        = (*challengeVerifier)(nil)
+	_ plugin.UserFactorVerifier = (*challengeVerifier)(nil)
+)

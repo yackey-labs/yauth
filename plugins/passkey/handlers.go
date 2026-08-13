@@ -42,9 +42,10 @@ const (
 // this so huma adds no body of its own.
 type emptyOutput struct{}
 
-// passkeyInput is the zero-field input for the no-body routes: register/begin
-// (RequireAuth, no request body) and list (a GET whose pagination is parsed
-// from the stashed *http.Request). huma never consumes a body for either.
+// passkeyInput is the zero-field input for list (a GET whose pagination is
+// parsed from the stashed *http.Request); huma never consumes a body for it.
+// register/begin has its own input struct now — it reads a step-up header
+// that has no business in the list operation's schema.
 type passkeyInput struct{}
 
 // reqRespFromCtx recovers the *http.Request and http.ResponseWriter stashed by
@@ -114,13 +115,101 @@ type passkeyRegisterBeginOutput struct {
 	Body passkeyRegisterBeginResponse
 }
 
-func (p *passkeyPlugin) handleRegisterBegin(host plugin.PluginHost) func(context.Context, *passkeyInput) (*passkeyRegisterBeginOutput, error) {
-	return func(ctx context.Context, _ *passkeyInput) (*passkeyRegisterBeginOutput, error) {
+// StepUpRequiredDetail is the `detail` returned (with HTTP 403) when passkey
+// enrolment needs the account's current second factor and none was supplied.
+//
+// The literal is deliberately byte-identical to mfa.StepUpRequiredDetail:
+// clients match ONE string to know "prompt for a code and retry with
+// X-MFA-Code", and passkey must not import the mfa plugin (it is optional,
+// and the dependency would run the wrong way) to share the constant.
+const StepUpRequiredDetail = "current mfa code required"
+
+// StepUpHeader is the request header carrying that code — the same header
+// the mfa management routes read, for the same reason.
+const StepUpHeader = "X-MFA-Code"
+
+// passkeyRegisterBeginInput is register/begin's OWN input, carrying the
+// optional step-up header. It is not folded into the shared passkeyInput
+// because that struct is also the input for passkey-list, whose OpenAPI
+// schema should not grow an MFA parameter it never reads.
+//
+// Optional at the schema level: the header is only REQUIRED for an account
+// that already has a verified factor, which a schema cannot express.
+type passkeyRegisterBeginInput struct {
+	Code string `header:"X-MFA-Code" required:"false" doc:"Current TOTP code or an unused backup code. Required when the account already has a verified second factor: adding an authenticator is a change to how the account authenticates, so it must be proved with the factor being added to."`
+}
+
+// requireFactorForEnrolment demands the account's existing second factor
+// before another authenticator is added to it.
+//
+// A session cookie is not evidence that the holder still possesses the
+// account's second factor — a stolen cookie is precisely the case where they
+// do not. Because Config.SatisfiesMFA defaults true, an enrolled passkey then
+// logs in on its own and plugins/mfa's login gate stands down on
+// ev.MFAVerified() before it ever looks the victim's TOTP up: enrolling a
+// passkey was a permanent, unchallenged bypass of the very step-up that
+// /mfa/totp/delete and /mfa/backup-codes/regenerate enforce. Same guard,
+// sibling plugin.
+//
+// It is a NO-OP for an account with no verified factor: first-time enrolment
+// has nothing to prove, and demanding proof would leave a factorless account
+// unable to enrol at all.
+//
+// Gating /begin ONLY is sufficient, and gating /finish as well would break
+// the feature: /begin stores the ceremony under a single-use challenge that
+// /finish consumes (bound to the user through webauthn.SessionData.UserID),
+// so a stepped-up /begin is already a precondition of /finish — while
+// mfa.verifyCode spends the TOTP step it accepts, so a code proved at /begin
+// is dead by the time a WebAuthn ceremony seconds later reaches /finish. The
+// user would have to wait out a 30s window and be prompted twice, or burn two
+// backup codes.
+func (p *passkeyPlugin) requireFactorForEnrolment(ctx context.Context, host plugin.PluginHost, userID, code string) error {
+	verified := true
+	row, err := host.Repo().GetTOTPByUserID(ctx, userID, &verified)
+	if err != nil {
+		if errors.Is(err, yautherr.ErrNotFound) {
+			return nil
+		}
+		return huma.Error500InternalServerError("unable to load totp")
+	}
+	if row == nil {
+		return nil
+	}
+	if code == "" {
+		return huma.Error403Forbidden(StepUpRequiredDetail)
+	}
+	// FAIL CLOSED when nothing can check the code. A deployment running mfa
+	// (the account has a verified factor, so it is) always publishes a
+	// verifier implementing the optional interface; if that ever stops being
+	// true, the answer is "cannot prove it" and not "need not prove it".
+	v, ok := host.MFAVerifier().(plugin.UserFactorVerifier)
+	if !ok || v == nil {
+		return huma.Error403Forbidden(StepUpRequiredDetail)
+	}
+	ok, err = v.VerifyUserCode(ctx, userID, code)
+	if err != nil {
+		return huma.Error500InternalServerError("unable to verify mfa code")
+	}
+	if !ok {
+		// The verifier has already reported the failed guess to the event
+		// pipeline, so lockout counts it. The route is metered on the shared
+		// mfa_verify bucket (see Routes) so this 403 is not a free oracle.
+		return huma.Error403Forbidden("invalid mfa code")
+	}
+	return nil
+}
+
+func (p *passkeyPlugin) handleRegisterBegin(host plugin.PluginHost) func(context.Context, *passkeyRegisterBeginInput) (*passkeyRegisterBeginOutput, error) {
+	return func(ctx context.Context, in *passkeyRegisterBeginInput) (*passkeyRegisterBeginOutput, error) {
 		au, ok := middleware.AuthUserFromContext(ctx)
 		if !ok || au == nil {
 			return nil, huma.Error401Unauthorized("not authenticated")
 		}
 		repoRef := host.Repo()
+
+		if err := p.requireFactorForEnrolment(ctx, host, au.User.ID, in.Code); err != nil {
+			return nil, err
+		}
 
 		creds, _, err := loadCredentialsForUser(ctx, repoRef, au.User.ID)
 		if err != nil {

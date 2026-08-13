@@ -55,11 +55,14 @@ type Config struct {
 	// YAuthConfig.TrustedProxies.
 	TrustedProxies TrustedProxies
 
-	// AllowAdminMachineCallers controls whether bearer-JWT, X-Api-Key or
-	// org-scoped API key (service account) callers can pass RequireAdmin.
-	// The strict default (false) requires a cookie-resolved session for
-	// admin access even when the underlying user has role=admin. Set true
-	// to allow admin automation via machine credentials.
+	// AllowAdminMachineCallers controls whether bearer-JWT and USER-scoped
+	// X-Api-Key callers can pass RequireAdmin. The strict default (false)
+	// requires a cookie-resolved session for admin access even when the
+	// underlying user has role=admin. Set true to allow admin automation
+	// via machine credentials that carry the human's own global role.
+	//
+	// It does NOT cover an org-scoped API key (service account), which
+	// ResolveAdmin refuses either way — see there.
 	AllowAdminMachineCallers bool
 
 	// EnableOrgHydration toggles active-org context decoration on
@@ -558,10 +561,15 @@ func (m *Middleware) OptionalAuth(next http.Handler) http.Handler {
 //   - (au, nil): a valid admin (and, unless AllowAdminMachineCallers, a
 //     cookie-resolved session).
 //   - (nil, yautherr.ErrUnauthorized): no valid identity resolved.
-//   - (nil, yautherr.ErrForbidden): identity resolved but the caller is
-//     not an admin, or is an admin presenting machine credentials —
-//     bearer, user-scoped api-key, or an org-scoped service-account key —
-//     while AllowAdminMachineCallers is false.
+//   - (nil, yautherr.ErrForbidden): identity resolved but the caller is a
+//     service account or a delegated token (always), or is an admin
+//     presenting other machine credentials — bearer or a user-scoped
+//     api-key — while AllowAdminMachineCallers is false.
+//
+// AllowAdminMachineCallers therefore now means exactly "bearer tokens and
+// user-scoped X-Api-Keys may administer": credentials that genuinely carry
+// the human's global role. An ORG-scoped service-account key is refused
+// unconditionally, opt-in or not (see below).
 //
 // Handlers that must control their own error body — e.g. the RFC 7591
 // dynamic client registration endpoint, which returns a JSON error per
@@ -586,6 +594,30 @@ func (m *Middleware) ResolveAdmin(r *http.Request) (*domain.AuthUser, error) {
 	if au.Principal.IsDelegated() {
 		return nil, yautherr.ErrForbidden
 	}
+	// Neither does a SERVICE ACCOUNT — an org-scoped API key — whatever
+	// AllowAdminMachineCallers says. The check above reads au.User.Role, and
+	// for an org key that row is the human who MINTED it: plugins/apikey's
+	// resolver carries `User: *creator` for audit attribution, while the
+	// authority the operator actually granted (the key's own role and its
+	// explicit permission list, both capped at mint time by
+	// POST /organizations/{id}/api-keys) lives on au.Principal, which this
+	// function never reads. So a deployment that flipped the opt-in to let
+	// its own automation call /admin/* was handing every org key an admin
+	// ever minted — role "viewer", permissions [] — the full global admin
+	// surface: list, ban, impersonate, suspend and delete any user in any
+	// org. An org-scoped credential carries ORG authority only; there is no
+	// configuration under which it also carries its creator's global role,
+	// which is why this refuses ahead of the opt-in rather than inside it.
+	//
+	// Everything the org key exists to serve is untouched: the
+	// /organizations/* routes authorize through EffectiveOrgMembership /
+	// EffectiveOrgPermissions, which read the Principal, and SCIM never
+	// comes through here at all. Automation that really must administer
+	// globally uses a USER-scoped key owned by an admin, which still passes
+	// under the opt-in.
+	if au.Principal.IsServiceAccount() {
+		return nil, yautherr.ErrForbidden
+	}
 	if !m.cfg.AllowAdminMachineCallers && isMachineMethod(au.Method) {
 		return nil, yautherr.ErrForbidden
 	}
@@ -597,10 +629,11 @@ func (m *Middleware) ResolveAdmin(r *http.Request) (*domain.AuthUser, error) {
 // non-admin.
 //
 // When Config.AllowAdminMachineCallers is false (the default), bearer
-// JWT, X-Api-Key and org-scoped API key (service account) callers are
-// rejected with 403 even if the underlying user is an admin: only cookie
-// sessions count. AuthUser.Method is the signal — empty Method is treated
-// as cookie for backwards compat with hand-built principals.
+// JWT and X-Api-Key callers are rejected with 403 even if the underlying
+// user is an admin: only cookie sessions count. AuthUser.Method is the
+// signal — empty Method is treated as cookie for backwards compat with
+// hand-built principals. An org-scoped API key (service account) is
+// rejected either way — see ResolveAdmin.
 //
 // Like RequireAuth (and RequireAdminHuma) it also enforces the
 // must_change_password gate — unconditionally, since no admin route can be in

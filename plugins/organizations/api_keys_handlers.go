@@ -442,9 +442,10 @@ func (p *orgsPlugin) registerDeleteOrgAPIKey(host plugin.PluginHost, api huma.AP
 // handleRotateOrgAPIKey rotates an existing key. Admin+ only.
 //
 // Issues a brand-new row (fresh prefix+secret+hash) with the same
-// Name/Role/Permissions/Org, and stamps the old row with
-// ExpiresAt = now + rotationGracePeriod so existing clients have time
-// to swap.
+// Name/Role/Permissions/Org AND the same ExpiresAt, and stamps the old row
+// with ExpiresAt = now + rotationGracePeriod (never LATER than the expiry it
+// already had) so existing clients have time to swap. Rotating an already
+// expired key is refused rather than silently extended.
 func (p *orgsPlugin) registerRotateOrgAPIKey(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix, prefixTag string) {
 	type output struct {
 		Body rotateOrgAPIKeyResponse
@@ -477,11 +478,25 @@ func (p *orgsPlugin) registerRotateOrgAPIKey(host plugin.PluginHost, api huma.AP
 			}
 			return nil, huma.Error500InternalServerError("unable to look up api key")
 		}
+		now := time.Now().UTC()
+		// Rotation copies the old key's LIMITS forward, and an expiry is
+		// one of them. The new row used to be built from Name/Scopes/Role/
+		// OrganizationID and nothing else, so rotating a CI credential
+		// deliberately issued for 72h minted a replacement that NEVER
+		// expires — and because the response field is omitempty, the 201
+		// body gave no sign of it. Rotating a key must not be a way to
+		// launder a short-lived credential into a permanent one.
+		if old.ExpiresAt != nil && !old.ExpiresAt.UTC().After(now) {
+			// Carrying a lapsed expiry forward would mint a key that is
+			// born dead, and silently extending it would be the very
+			// escalation above. Refuse and make the operator choose.
+			return nil, huma.Error409Conflict(
+				"this api key has already expired; rotation would carry the expiry forward and produce an unusable key — create a new key instead")
+		}
 		gen, err := apikey.GenerateKey(prefixTag)
 		if err != nil {
 			return nil, huma.Error500InternalServerError("unable to generate key")
 		}
-		now := time.Now().UTC()
 		orgIDCopy := orgID
 		input := domain.NewAPIKey{
 			ID:              uuid.NewString(),
@@ -491,6 +506,7 @@ func (p *orgsPlugin) registerRotateOrgAPIKey(host plugin.PluginHost, api huma.AP
 			Name:            old.Name,
 			Scopes:          old.Scopes,
 			Role:            cloneStrPtr(old.Role),
+			ExpiresAt:       cloneTimePtr(old.ExpiresAt),
 			CreatedAt:       now,
 			CreatedByUserID: au.User.ID,
 		}
@@ -498,6 +514,12 @@ func (p *orgsPlugin) registerRotateOrgAPIKey(host plugin.PluginHost, api huma.AP
 			return nil, huma.Error500InternalServerError("unable to store new api key")
 		}
 		gracedExpiry := now.Add(rotationGracePeriod)
+		// The grace period is a ceiling on how long the OLD key lingers, not
+		// a licence to outlive its own expiry: a key due to lapse in an hour
+		// must not gain 23 more just because someone rotated it.
+		if old.ExpiresAt != nil && old.ExpiresAt.UTC().Before(gracedExpiry) {
+			gracedExpiry = old.ExpiresAt.UTC()
+		}
 		if err := host.Repo().SetAPIKeyExpiry(ctx, old.ID, &gracedExpiry); err != nil {
 			// New key is live; old key still valid. Surface a
 			// 500 so an operator notices and can manually
@@ -571,6 +593,15 @@ func (p *orgsPlugin) registerOrgAPIKeyUsage(host plugin.PluginHost, api huma.API
 // cloneStrPtr deep-copies a *string so the request struct cannot
 // share storage with the persisted row.
 func cloneStrPtr(p *string) *string {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
+}
+
+// cloneTimePtr deep-copies a *time.Time for the same reason as cloneStrPtr.
+func cloneTimePtr(p *time.Time) *time.Time {
 	if p == nil {
 		return nil
 	}

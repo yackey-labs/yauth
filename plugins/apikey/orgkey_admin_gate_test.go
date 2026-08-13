@@ -83,16 +83,30 @@ func TestOrgScopedKey_DoesNotReachAdminRoutesByDefault(t *testing.T) {
 	}
 }
 
-// The documented opt-in still admits it.
-func TestOrgScopedKey_ReachesAdminRoutesWithOptIn(t *testing.T) {
+// This test used to assert the opposite — "the documented opt-in still admits
+// it", 200 — and in doing so it PINNED a privilege escalation. The opt-in is
+// an operator's decision to trust machine credentials that carry the human's
+// GLOBAL role; an org-scoped key is not one of those. It resolves to an
+// AuthUser whose User row is the creator (carried for audit) while the
+// authority the operator actually granted — the key's own role and permission
+// list, capped at mint time — sits on the Principal that ResolveAdmin never
+// read. So flipping allow_machine_callers on handed every org key an admin
+// had ever minted, role "viewer" and permissions [] included, the whole
+// /admin/* surface: list, ban, impersonate, delete any user in any org.
+//
+// There is no configuration under which that is right, so the refusal is now
+// unconditional. See TestUserScopedKey_AdminAndMustChangeUnchanged for the
+// credential that the opt-in does still admit.
+func TestOrgScopedKey_NeverReachesAdminRoutesEvenWithOptIn(t *testing.T) {
 	r := newFakeRepo()
 	key := seedOrgKey(t, r, "admin", false)
 	mw := orgKeyMiddleware(r, true)
 
 	rec := httptest.NewRecorder()
 	mw.RequireAdmin(orgKeyOK()).ServeHTTP(rec, orgKeyRequest(key))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("AllowAdminMachineCallers=true: got %d, want 200 (body=%q)", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("AllowAdminMachineCallers=true admitted an org-scoped key: got %d, want 403 (body=%q)",
+			rec.Code, rec.Body.String())
 	}
 }
 

@@ -388,6 +388,64 @@ func clientScopesAllowed(c *domain.OAuth2Client, requested []string) bool {
 	return consentCovers(registered, requested)
 }
 
+// Grant type identifiers used by the registration check below and by the
+// /token dispatcher.
+const (
+	grantTypeAuthorizationCode = "authorization_code"
+	grantTypeRefreshToken      = "refresh_token"
+	grantTypeClientCredentials = "client_credentials"
+	grantTypeDeviceCode        = "urn:ietf:params:oauth:grant-type:device_code"
+)
+
+// clientGrantAllowed reports whether the client is registered for the grant it
+// is asking to use.
+//
+// grant_types used to be decorative: it is written by the admin create
+// endpoint, by dynamic registration and by the federation handshake, read back
+// only for display, and advertised statically in the RFC 8414 metadata
+// document — but the /token dispatcher switches on the grant the CALLER named
+// and authenticateClient takes no grant argument. So a confidential client
+// registered for authorization_code only (which is what DCR stores by default,
+// and what the guided federation handshake writes) could POST
+// grant_type=client_credentials and mint itself a token whose sub is its own
+// client_id. Combined with the void scope ceiling on that grant it was a real
+// escalation; on its own it is registration integrity. RFC 6749 §4.1.3 makes
+// unauthorized_client the response for exactly this.
+//
+// Two deliberate softenings, both about not locking out clients that predate
+// the check:
+//
+//   - An EMPTY or absent registration is unconstrained, not
+//     {authorization_code, refresh_token}. client_admin.go stores rawJSON(nil)
+//     — literal "null" — whenever the console omits grant_types, so reading
+//     empty as a default set would 400 every admin-provisioned M2M client on
+//     upgrade. This mirrors the stance clientScopesAllowed already documents
+//     for scopes, and still closes the hole for every client that DID declare
+//     a list.
+//   - A non-empty registration naming authorization_code or device_code
+//     implicitly permits refresh_token. Both of those grants unconditionally
+//     mint and persist a refresh token (mintTokensWithFamily), so holding a
+//     client to a literal reading would hand it a credential it is then
+//     refused when redeeming — which signs out every DCR-registered client at
+//     its first rotation, since dcr.go defaults grant_types to
+//     ["authorization_code"] alone.
+func clientGrantAllowed(c *domain.OAuth2Client, grant string) bool {
+	registered := decodeScopes(c.GrantTypes)
+	if len(registered) == 0 {
+		return true
+	}
+	for _, g := range registered {
+		if g == grant {
+			return true
+		}
+		if grant == grantTypeRefreshToken &&
+			(g == grantTypeAuthorizationCode || g == grantTypeDeviceCode) {
+			return true
+		}
+	}
+	return false
+}
+
 // consentCovers reports whether the previously stored scopes cover all
 // the scopes the new request asks for. Empty requested → covered.
 func consentCovers(stored, requested []string) bool {

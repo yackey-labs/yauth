@@ -235,3 +235,32 @@ func RequireUserPrincipalHuma(api huma.API) func(huma.Context, func(huma.Context
 // grant does not cover this" apart from an ordinary authorization failure, and
 // send the user to re-authenticate first-party instead.
 const DelegatedCredentialDetail = "a delegated access token cannot act on a user's personal account"
+
+// RejectDelegatedHuma refuses a DELEGATED principal while leaving service
+// accounts alone. It is the guard for surfaces that legitimately serve machine
+// callers but must not be driven by a third-party app acting for a user.
+//
+// Organization administration is the motivating case. An org-scoped API key is
+// a first-class caller there — that is what org keys are FOR, and
+// EffectiveOrgMembership resolves one to the org it is bound to — so
+// RequireUserPrincipalHuma is too strong: it would lock automation out of the
+// routes it exists to drive. A delegated OAuth2 access token is a different
+// animal. It resolves to the RESOURCE OWNER's real membership, so every
+// org-admin gate passes at full strength, and the relying party is then free
+// to transfer ownership, delete the organization, or mint an org API key whose
+// secret OUTLIVES the grant and is not revoked when the user revokes the app.
+// That is the same escalation #85 closed on the personal-key path, on a
+// surface it did not reach.
+//
+// First-party callers are unaffected: session cookies, the /token pair, and
+// user- or org-scoped API keys all pass.
+func RejectDelegatedHuma(api huma.API) func(huma.Context, func(huma.Context)) {
+	return func(ctx huma.Context, next func(huma.Context)) {
+		au, ok := AuthUserFromContext(ctx.Context())
+		if ok && au != nil && au.Principal.IsDelegated() {
+			_ = huma.WriteErr(api, ctx, http.StatusForbidden, DelegatedCredentialDetail)
+			return
+		}
+		next(ctx)
+	}
+}

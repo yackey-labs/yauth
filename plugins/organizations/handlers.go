@@ -154,6 +154,14 @@ type acceptInvitationRequest struct {
 func authGuards(api huma.API, mw *middleware.Middleware) huma.Middlewares {
 	return huma.Middlewares{
 		middleware.RequireAuthHuma(api, mw),
+		// A delegated OAuth2 access token must not drive organization
+		// administration. It resolves to the resource owner's real
+		// membership, so requireOrgAdmin passes at full strength and a
+		// relying party granted nothing more than "openid" could transfer
+		// ownership, delete the org, or mint an org API key whose secret
+		// outlives the grant. Service accounts are deliberately NOT refused
+		// here — an org-scoped key is a first-class caller on these routes.
+		middleware.RejectDelegatedHuma(api),
 	}
 }
 
@@ -221,9 +229,22 @@ func requireOrgMember(ctx context.Context, host plugin.PluginHost, orgID string,
 // key management, accepting an invitation, creating an org, reading "my"
 // orgs — would let the key act as that person. Those routes are for humans;
 // a service account's own scope is its key.
+// A delegated OAuth2 access token is refused for the same reason, and with the
+// same wording the personal-key routes use: it resolves to the resource owner
+// but is held by a relying party, so letting it accept an invitation or create
+// an organization would be that app acting as the person rather than for them.
+// authGuards refuses delegated callers across the whole plugin; this keeps the
+// check with the handlers that state the invariant, so it survives a future
+// change to the chain.
 func requireUserPrincipal(au *domain.AuthUser) error {
-	if au != nil && au.Principal.IsServiceAccount() {
+	if au == nil {
+		return nil
+	}
+	if au.Principal.IsServiceAccount() {
 		return huma.Error403Forbidden("service accounts cannot act on a user's personal account")
+	}
+	if au.Principal.IsDelegated() {
+		return huma.Error403Forbidden(middleware.DelegatedCredentialDetail)
 	}
 	return nil
 }

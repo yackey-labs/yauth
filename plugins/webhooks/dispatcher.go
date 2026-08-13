@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -111,6 +112,10 @@ type Dispatcher struct {
 	claimerStop chan struct{}
 	claimerDone chan struct{}
 
+	// lastDropLog is the unix-nano timestamp of the last "queue full"
+	// warning, used to throttle it — see noteDroppedEnqueue.
+	lastDropLog atomic.Int64
+
 	logf func(format string, args ...any)
 }
 
@@ -184,18 +189,75 @@ func (d *Dispatcher) Start() {
 	go d.claimerLoop()
 }
 
-// Enqueue pushes a job into the channel. Returns an error if the
-// dispatcher is shutting down so the caller can drop the event rather
-// than panic on a closed channel. Callers should treat enqueue failures
-// as best-effort — the event has already happened.
+// ErrQueueFull is returned by Enqueue when the buffered job channel has
+// no free slot. It is a routine outcome, not a bug: it is how Enqueue
+// keeps its promise never to park the caller. Callers distinguish it
+// from the shutdown error — runClaim re-persists the retry row with a
+// deferred not_before, and the admin /test route reports it honestly.
+var ErrQueueFull = errors.New("webhooks: delivery queue is full")
+
+// Enqueue pushes a job into the channel. It NEVER blocks the caller:
+// the invariant is that YAuth.Emit — which runs every registered event
+// handler INLINE on the HTTP request goroutine — returns promptly no
+// matter what a webhook receiver is doing.
+//
+// It used to do a bare `d.jobs <- job`. The channel holds workers*8
+// jobs and every worker parks inside http.Client.Do for the whole
+// DeliveryTimeout, so a single registered receiver that stopped
+// answering filled the buffer and then parked the next login request
+// goroutine inside Emit — forever. Authentication went down for the
+// entire deployment because one operator-registered endpoint got slow,
+// and the parked senders held d.mu.RLock() so Shutdown's d.mu.Lock()
+// starved too. No attacker was required; DoSing one receiver was enough.
+//
+// The non-blocking send trades at-least-once webhook delivery for the
+// availability of authentication, which is the trade this function's
+// contract already claimed to make ("best-effort"). Delivery FAILURES
+// are still durable via the retry table; enqueue DROPS are not, so the
+// caller must make them observable rather than swallow them. The guard
+// is deliberately here and not a goroutine-per-event hand-off in Emit:
+// unbounded goroutines would move the outage from latency to memory.
+//
+// Returns the shutdown error when the dispatcher is closed (so we never
+// write to a closed channel) and ErrQueueFull when the buffer is full.
 func (d *Dispatcher) Enqueue(job *deliveryJob) error {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	if d.closed {
 		return errors.New("webhooks: dispatcher is shut down")
 	}
-	d.jobs <- job
-	return nil
+	select {
+	case d.jobs <- job:
+		return nil
+	default:
+		return ErrQueueFull
+	}
+}
+
+// dropLogInterval throttles the saturation warning. The drop is logged
+// from the login request goroutine, so an unthrottled per-drop WARN
+// would itself add latency to the auth path under exactly the load that
+// triggers it — one line per interval is enough to tell an operator the
+// queue is saturated.
+const dropLogInterval = time.Second
+
+// noteDroppedEnqueue records that a delivery was dropped at the enqueue
+// boundary. Silent drops are the thing that makes the availability
+// trade above unacceptable; a throttled line makes a saturated queue
+// visible without turning observability into the next latency source.
+func (d *Dispatcher) noteDroppedEnqueue(webhookID, eventType string, cause error) {
+	now := time.Now().UnixNano()
+	prev := d.lastDropLog.Load()
+	if now-prev < int64(dropLogInterval) {
+		return
+	}
+	// CAS so concurrent request goroutines emit one line between them,
+	// not one line each.
+	if !d.lastDropLog.CompareAndSwap(prev, now) {
+		return
+	}
+	d.logf("yauth-go webhooks: DROPPED delivery webhook=%s event=%s: %v "+
+		"(further drops suppressed for %s)", webhookID, eventType, cause, dropLogInterval)
 }
 
 // Shutdown closes the job channel, stops the claimer, and waits for
@@ -291,18 +353,35 @@ func (d *Dispatcher) runClaim() {
 			attempt:   row.Attempt,
 		}
 		if err := d.Enqueue(job); err != nil {
-			// Dispatcher closed mid-claim. Re-persist so the next
-			// process picks it up — losing a claimed-but-not-enqueued
-			// row would silently drop a delivery.
-			d.repersist(ctx, job, row.NotBefore)
-			return
+			// ClaimDueRetries DELETES the rows it returns, so a claimed
+			// row exists only in this loop. Re-persist it — losing a
+			// claimed-but-not-enqueued row would silently drop a
+			// delivery — and `continue` rather than `return`: bailing
+			// out abandoned every REMAINING row in the batch (up to
+			// ClaimerBatchSize-1, default 100). That only bit at
+			// shutdown before; now that ErrQueueFull is a routine
+			// return value, every saturated claim cycle would have
+			// destroyed already-persisted retries. The availability fix
+			// must not buy itself a durability bug.
+			notBefore := row.NotBefore
+			if errors.Is(err, ErrQueueFull) {
+				// Saturation is transient but not instantaneous. Keep
+				// the original (already-due) not_before and the very
+				// next tick re-claims and re-writes the same rows in a
+				// hot loop; push it out one interval instead.
+				notBefore = time.Now().UTC().Add(d.retry.ClaimerInterval)
+			}
+			d.repersist(ctx, job, notBefore)
+			continue
 		}
 	}
 }
 
-// repersist writes a retry row back to the repo with the same
-// not_before. Used when a claim succeeds but Enqueue fails because the
-// dispatcher is shutting down.
+// repersist writes a retry row back to the repo at the supplied
+// not_before. Used when a claim succeeds but Enqueue fails — because
+// the dispatcher is shutting down (not_before unchanged, the next
+// process picks it up when it was already due) or because the delivery
+// queue is saturated (not_before deferred one claimer interval).
 func (d *Dispatcher) repersist(ctx context.Context, job *deliveryJob, notBefore time.Time) {
 	body, err := json.Marshal(job.payload)
 	if err != nil {

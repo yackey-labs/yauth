@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -146,6 +145,13 @@ func (p *webhooksPlugin) registerList(host plugin.PluginHost, api huma.API, mw *
 		page, perPage := paginationFromQuery(r)
 		total := int64(len(hooks))
 		start := (page - 1) * perPage
+		// Belt and braces: paginationFromQuery already caps page at 1e6
+		// and per_page at 200 so this product cannot wrap, but the only
+		// existing guard below is an upper bound and a negative start
+		// would reach the slice expression and panic the handler.
+		if start < 0 {
+			start = 0
+		}
 		end := start + perPage
 		if start > len(hooks) {
 			start = len(hooks)
@@ -167,16 +173,30 @@ func (p *webhooksPlugin) registerList(host plugin.PluginHost, api huma.API, mw *
 	})
 }
 
+// paginationFromQuery parses ?page= and ?per_page= with sane defaults
+// (page 1, per_page 50 capped at 200). Invalid values fall back to the
+// defaults silently — the list is non-critical and we'd rather degrade
+// than 400 on a typo.
+//
+// It used to use strconv.Atoi, which happily returns 46116860184273881.
+// Both list handlers then compute start = (page-1)*perPage, which
+// overflows int to a NEGATIVE number that sails past their `if start >
+// len(...)` guards and panics in the slice expression — an admin GET
+// that kills its own connection. parsePositiveInt caps the value at
+// 1_000_000 so the product cannot overflow. It CLAMPS rather than
+// refuses: the leniency documented above (and the StashHTTPHuma bridge
+// that exists solely to preserve it) is deliberate, and the apikey,
+// oauth and passkey plugins already degrade the same way.
 func paginationFromQuery(r *http.Request) (page, perPage int) {
 	page = 1
 	perPage = 50
 	if v := r.URL.Query().Get("page"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+		if n, err := parsePositiveInt(v); err == nil && n > 0 {
 			page = n
 		}
 	}
 	if v := r.URL.Query().Get("per_page"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+		if n, err := parsePositiveInt(v); err == nil && n > 0 {
 			if n > 200 {
 				n = 200
 			}
@@ -184,6 +204,24 @@ func paginationFromQuery(r *http.Request) (page, perPage int) {
 		}
 	}
 	return page, perPage
+}
+
+// parsePositiveInt parses a decimal string, erroring on anything that
+// isn't digits or that exceeds 1_000_000. Verbatim copy of the helper
+// in plugins/apikey, plugins/oauth and plugins/passkey — the bound is
+// what keeps (page-1)*perPage from overflowing.
+func parsePositiveInt(s string) (int, error) {
+	n := 0
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return 0, errors.New("not an integer")
+		}
+		n = n*10 + int(c-'0')
+		if n > 1_000_000 {
+			return 0, errors.New("too large")
+		}
+	}
+	return n, nil
 }
 
 // --- POST /webhooks -----------------------------------------------------
@@ -514,6 +552,10 @@ func (p *webhooksPlugin) registerDeliveries(host plugin.PluginHost, api huma.API
 		}
 		total := int64(len(rows))
 		start := (page - 1) * perPage
+		// Same overflow guard as the list handler above.
+		if start < 0 {
+			start = 0
+		}
 		end := start + perPage
 		if start > len(rows) {
 			start = len(rows)
@@ -597,6 +639,14 @@ func (p *webhooksPlugin) registerTest(host plugin.PluginHost, api huma.API, mw *
 			},
 		}
 		if err := p.dispatcher.Enqueue(job); err != nil {
+			// Still 503 — the operator should retry either way — but say
+			// which it is. Enqueue can now decline because the delivery
+			// queue is saturated (a slow receiver backing the worker
+			// pool up), and reporting that as "shutting down" would send
+			// the operator hunting the wrong problem.
+			if errors.Is(err, ErrQueueFull) {
+				return nil, huma.Error503ServiceUnavailable("webhook delivery queue is full")
+			}
 			return nil, huma.Error503ServiceUnavailable("webhook dispatcher is shutting down")
 		}
 		return &webhookTestOutput{Body: webhookTestResponse{DeliveryQueued: testDeliveryID}}, nil

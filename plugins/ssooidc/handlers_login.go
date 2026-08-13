@@ -410,6 +410,24 @@ func (p *ssoOIDCPlugin) registerSsoCallback(host plugin.PluginHost, api huma.API
 		if email == "" {
 			email = claims.Email
 		}
+		// Normalise the asserted address at the boundary. yauth_users.email is
+		// byte-exact UNIQUE and GetUserByEmail is `WHERE email = $1`, while
+		// emailpassword and magiclink lowercase everything they store and look
+		// up. Passing the claim through verbatim meant an IdP asserting
+		// "Victim@corp.example" MISSED victim@corp.example, skipped the adoption
+		// gate entirely and took the CREATE branch — forking the identity into a
+		// second global account holding the same address.
+		//
+		// assertedEmail keeps the original bytes so the miss path can still find
+		// rows that OTHER plugins stored verbatim (plugins/scim and plugins/oauth
+		// both persist provider-supplied addresses unfolded). That fallback stops
+		// this change REGRESSING those installs; it does not make the system
+		// case-insensitive, and the mirror direction (local row stored mixed-case,
+		// IdP asserting lowercase) is still a miss. Folding the column itself
+		// needs a migration that can collide with ux_yauth_users_email and belongs
+		// in its own PR.
+		assertedEmail := email
+		email = strings.TrimSpace(strings.ToLower(email))
 		var displayName *string
 		if dn := pickStringClaim(claims, mapping.DisplayName); dn != "" {
 			s := dn
@@ -421,9 +439,14 @@ func (p *ssoOIDCPlugin) registerSsoCallback(host plugin.PluginHost, api huma.API
 		groups := pickStringSliceClaim(claims, mapping.Groups)
 
 		provider := "oidc:" + IssuerKeyFromDiscoveryURL(cfg.DiscoveryURL)
-		userID, isNew, err := p.resolveOrJITUser(ctx, host, conn, provider, extID, email, displayName, claims.EmailOK)
+		userID, isNew, err := p.resolveOrJITUser(ctx, host, conn, provider, extID, email, assertedEmail, displayName, claims.EmailOK)
 		if err != nil {
-			if errors.Is(err, errJITDisabled) {
+			// errNotInConnectionOrg deliberately shares errJITDisabled's wording
+			// and status: "this connection may not speak for that account" and
+			// "no account here" must be indistinguishable, or the callback
+			// becomes an account-existence oracle for any address an attacker
+			// can get their own IdP to assert.
+			if errors.Is(err, errJITDisabled) || errors.Is(err, errNotInConnectionOrg) {
 				return nil, huma.Error403Forbidden("your account is not provisioned in this organization; ask an admin to invite you")
 			}
 			if errors.Is(err, errEmailRequired) {
@@ -519,21 +542,99 @@ var (
 	// linking it would take over an EXISTING account. See resolveOrJITUser.
 	errUnverifiedEmail = errors.New("ssooidc: idp did not verify the email address")
 	errEmailRequired   = errors.New("ssooidc: email claim required")
+	// errNotInConnectionOrg is returned when a connection tries to bind an
+	// EXISTING local account that has no relationship to the connection's
+	// organization. See connectionMayBindExistingUser.
+	errNotInConnectionOrg = errors.New("ssooidc: account is not provisioned in this connection's organization")
 )
+
+// connectionMayBindExistingUser answers the question resolveOrJITUser never
+// asked: is THIS connection entitled to speak for an account that already
+// exists here?
+//
+// Both branches that bind a pre-existing user — resolving an established
+// (provider, sub) link, and adopting an account matched by email — used to
+// return the user id after nothing but a Banned check, with conn.OrganizationID
+// never read. Two things fell out of that:
+//
+//   - The link namespace is "oidc:<issuer>", derived from a discovery URL the
+//     connection's own admin typed. Any authenticated user can POST
+//     /organizations to become an OWNER and wire a connection to any issuer, so
+//     a link written through org A's connection was resolvable through org B's.
+//     The existing-link branch also runs BEFORE the `!conn.JitProvisioningEnabled`
+//     gate while the caller upserts a membership unconditionally, so an
+//     invite-only org minted memberships for outsiders.
+//   - Adoption was gated only on email_verified — a claim written by whoever
+//     operates the IdP the attacker pointed their own connection at.
+//
+// The guard is deliberately narrow: it asks only whether the account has a
+// pre-existing tie to this org, and it does not touch the CREATE branch (which
+// takes nothing over) or org-less global connections (which mint no membership
+// and have no org to check).
+func (p *ssoOIDCPlugin) connectionMayBindExistingUser(ctx context.Context, host plugin.PluginHost, conn *domain.SsoConnection, userID, localEmail string) bool {
+	// Global, install-admin-wired connections have no organization to belong
+	// to and JIT no membership. Every single-IdP "Sign in with <IdP>" install
+	// rides this path; it must stay first.
+	if conn.OrganizationID == "" {
+		return true
+	}
+	// Anchor 1: the account is already an active member. Invited and suspended
+	// memberships confer no authority anywhere else in the codebase
+	// (middleware.EffectiveOrgMembership), so they confer none here — fail
+	// closed on anything that is not exactly Active.
+	if m, err := host.Repo().GetMembershipByOrgUser(ctx, conn.OrganizationID, userID); err == nil && m != nil {
+		if m.Status == domain.MembershipActive {
+			return true
+		}
+	}
+	// Anchor 2: the org has proved, by DNS, that it owns the email domain of
+	// the LOCAL account — the same trust anchor the HRD selector in
+	// resolveConnection already demands. Note this reads the resolved local
+	// row's stored address, never the asserted claim: on the existing-link
+	// branch the claim is arbitrary attacker-supplied text and is not what
+	// identified the account, so using it would let an org that legitimately
+	// verified its own domain vouch for an account that has nothing to do with
+	// it. Gated on JIT so an org that switched self-service provisioning off
+	// does not keep self-serving through its verified domain.
+	if !conn.JitProvisioningEnabled {
+		return false
+	}
+	dom, ok := emailDomainOf(localEmail)
+	if !ok {
+		return false
+	}
+	d, err := host.Repo().GetOrganizationDomainByDomain(ctx, dom)
+	if err != nil || d == nil {
+		return false
+	}
+	return d.Status == domain.DomainVerified && d.OrganizationID == conn.OrganizationID
+}
+
+// emailDomainOf returns the lowercased domain portion of an address, mirroring
+// auth.extractEmailDomain (unexported there). Multiple '@' is rejected rather
+// than guessed at.
+func emailDomainOf(email string) (string, bool) {
+	at := strings.IndexByte(email, '@')
+	if at <= 0 || at == len(email)-1 {
+		return "", false
+	}
+	if strings.IndexByte(email[at+1:], '@') >= 0 {
+		return "", false
+	}
+	return strings.ToLower(strings.TrimSpace(email[at+1:])), true
+}
 
 // resolveOrJITUser looks up an ExternalIdentity for (provider, extID).
 // On hit, returns the joined user. On miss, JIT-provisions a fresh
 // user (if the connection allows it) and creates the link. Returns
 // errJITDisabled when JIT is off and no link exists.
-func (p *ssoOIDCPlugin) resolveOrJITUser(ctx context.Context, host plugin.PluginHost, conn *domain.SsoConnection, provider, extID, email string, displayName *string, emailVerified bool) (string, bool, error) {
+func (p *ssoOIDCPlugin) resolveOrJITUser(ctx context.Context, host plugin.PluginHost, conn *domain.SsoConnection, provider, extID, email, assertedEmail string, displayName *string, emailVerified bool) (string, bool, error) {
 	if extID == "" {
 		return "", false, errors.New("ssooidc: id_token external id claim is empty")
 	}
 
 	ident, err := host.Repo().GetExternalIdentityByProviderAndExternalID(ctx, provider, extID)
 	if err == nil && ident != nil {
-		// Existing link — refresh last_login_at and return.
-		_ = host.Repo().UpdateExternalIdentityLastLogin(ctx, ident.ID, time.Now().UTC())
 		u, getErr := host.Repo().GetUserByID(ctx, ident.UserID)
 		if getErr != nil || u == nil {
 			return "", false, fmt.Errorf("linked user missing: %w", getErr)
@@ -541,6 +642,21 @@ func (p *ssoOIDCPlugin) resolveOrJITUser(ctx context.Context, host plugin.Plugin
 		if u.Banned {
 			return "", false, errors.New("ssooidc: account suspended")
 		}
+		// The link is keyed by issuer, not by connection or org, so finding one
+		// says the IdP knows this subject — not that THIS org's connection may
+		// sign them in. Without this, a user linked through another org's
+		// connection to the same corporate IdP (or through a global one) signed
+		// into an invite-only org and was minted a membership by the caller,
+		// with jit_provisioning_enabled=false never consulted on this path.
+		//
+		// The check runs before UpdateExternalIdentityLastLogin: refreshing
+		// last_login_at first would let a refused login still write to another
+		// tenant's identity row.
+		if !p.connectionMayBindExistingUser(ctx, host, conn, u.ID, u.Email) {
+			return "", false, errNotInConnectionOrg
+		}
+		// Existing link — refresh last_login_at and return.
+		_ = host.Repo().UpdateExternalIdentityLastLogin(ctx, ident.ID, time.Now().UTC())
 		return u.ID, false, nil
 	}
 	if err != nil && !errors.Is(err, yautherr.ErrNotFound) {
@@ -564,6 +680,18 @@ func (p *ssoOIDCPlugin) resolveOrJITUser(ctx context.Context, host plugin.Plugin
 	existing, err := host.Repo().GetUserByEmail(ctx, email)
 	if err != nil && !errors.Is(err, yautherr.ErrNotFound) {
 		return "", false, err
+	}
+	if existing == nil && assertedEmail != email {
+		// The address is looked up lowercased now (see the callback). Rows that
+		// other plugins stored with the provider's original casing — plugins/scim
+		// and plugins/oauth both do — would otherwise stop matching and get
+		// forked into a duplicate account, which is the very bug the lowercasing
+		// is here to stop. Retry once with the bytes the IdP actually asserted;
+		// whichever row we land on goes through the same adoption gates below.
+		existing, err = host.Repo().GetUserByEmail(ctx, assertedEmail)
+		if err != nil && !errors.Is(err, yautherr.ErrNotFound) {
+			return "", false, err
+		}
 	}
 	now := time.Now().UTC()
 	var userID string
@@ -589,6 +717,17 @@ func (p *ssoOIDCPlugin) resolveOrJITUser(ctx context.Context, host plugin.Plugin
 		}
 		if existing.Banned {
 			return "", false, errors.New("ssooidc: account suspended")
+		}
+		// email_verified is the only other gate on adoption, and it is written
+		// by whoever runs the IdP this connection points at — which, since any
+		// authenticated user can create an org and wire a connection to an IdP
+		// they control, is potentially the attacker. Requiring that the account
+		// already belongs to this connection's organization (or that the org has
+		// DNS-verified the account's own email domain) is the piece of context
+		// that says "this IdP has no relationship to this person". Additive: the
+		// emailVerified gate above still applies.
+		if !p.connectionMayBindExistingUser(ctx, host, conn, existing.ID, existing.Email) {
+			return "", false, errNotInConnectionOrg
 		}
 		userID = existing.ID
 	} else {

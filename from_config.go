@@ -15,6 +15,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/yackey-labs/yauth/auth/passwordpolicy"
+	"github.com/yackey-labs/yauth/middleware"
 	yauthMigrate "github.com/yackey-labs/yauth/migrate"
 	"github.com/yackey-labs/yauth/plugins/admin"
 	"github.com/yackey-labs/yauth/plugins/apikey"
@@ -829,6 +830,15 @@ func configToYAuthConfig(c *yauthcfg.Config) YAuthConfig {
 		AllowedHeaders:   c.Server.CORS.AllowedHeaders,
 		AllowCredentials: c.Server.CORS.AllowCredentials,
 		MaxAge:           c.Server.CORS.MaxAge,
+	}
+	// Tri-state → opt-out. nil (the omitted key) and explicit true both mean
+	// "emit the headers"; only an explicit `enabled: false` disables them.
+	// The polarity flips here because the runtime struct has to default ON
+	// from its ZERO value — see YAuthConfig.SecurityHeaders.
+	out.SecurityHeaders = middleware.SecurityHeadersConfig{
+		Disabled: c.Server.SecurityHeaders.Enabled != nil && !*c.Server.SecurityHeaders.Enabled,
+		HSTS:     c.Server.SecurityHeaders.HSTS,
+		Override: c.Server.SecurityHeaders.Override,
 	}
 	out.SessionBinding = SessionBindingConfig{
 		BindIP:           c.Session.BindIP,

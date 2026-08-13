@@ -497,3 +497,87 @@ func TestEncodeDecode_MailerCloudflareRoundTrips(t *testing.T) {
 		t.Errorf("cloudflare block did not round-trip: %+v vs %+v", out.Mailer.Cloudflare, in.Mailer.Cloudflare)
 	}
 }
+
+// server.security_headers must survive the real file-loading path in BOTH
+// formats. It is the operator's only handle on the response-header floor that
+// closed the "every yauth response goes out with no CSP / no X-Frame-Options /
+// no nosniff" finding, and the YAML decoder runs with KnownFields(true): a typo
+// in either struct tag turns a working config file into a hard startup failure
+// and is caught nowhere else. The tri-state Enabled is asserted as an explicit
+// false because that is the value with a consequence — omitted means ON.
+func TestLoadYAML_ServerSecurityHeaders(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "yauth.yaml")
+	body := []byte(`database:
+  driver: memory
+server:
+  security_headers:
+    enabled: false
+    hsts: "max-age=31536000; includeSubDomains"
+    override:
+      X-Frame-Options: SAMEORIGIN
+`)
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Server.SecurityHeaders.Enabled == nil || *cfg.Server.SecurityHeaders.Enabled {
+		t.Errorf("enabled = %v, want explicit false", cfg.Server.SecurityHeaders.Enabled)
+	}
+	if got := cfg.Server.SecurityHeaders.HSTS; got != "max-age=31536000; includeSubDomains" {
+		t.Errorf("hsts = %q", got)
+	}
+	if got := cfg.Server.SecurityHeaders.Override["X-Frame-Options"]; got != "SAMEORIGIN" {
+		t.Errorf("override[X-Frame-Options] = %q", got)
+	}
+
+	// POSITIVE CONTROL: omitting the block leaves Enabled nil, which is how
+	// "headers ON by default" is expressed. A fix that flipped the default
+	// to opt-in would show up here.
+	plain := filepath.Join(dir, "plain.yaml")
+	if err := os.WriteFile(plain, []byte("database:\n  driver: memory\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	def, err := Load(plain)
+	if err != nil {
+		t.Fatalf("Load plain: %v", err)
+	}
+	if def.Server.SecurityHeaders.Enabled != nil {
+		t.Errorf("omitted enabled = %v, want nil (meaning true)", *def.Server.SecurityHeaders.Enabled)
+	}
+}
+
+// Same block via TOML, which uses separate struct tags.
+func TestLoadTOML_ServerSecurityHeaders(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "yauth.toml")
+	body := []byte(`[database]
+driver = "memory"
+
+[server.security_headers]
+enabled = false
+hsts = "max-age=31536000"
+
+[server.security_headers.override]
+X-Frame-Options = "SAMEORIGIN"
+`)
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Server.SecurityHeaders.Enabled == nil || *cfg.Server.SecurityHeaders.Enabled {
+		t.Errorf("enabled = %v, want explicit false", cfg.Server.SecurityHeaders.Enabled)
+	}
+	if got := cfg.Server.SecurityHeaders.HSTS; got != "max-age=31536000" {
+		t.Errorf("hsts = %q", got)
+	}
+	if got := cfg.Server.SecurityHeaders.Override["X-Frame-Options"]; got != "SAMEORIGIN" {
+		t.Errorf("override[X-Frame-Options] = %q", got)
+	}
+}

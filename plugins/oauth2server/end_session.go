@@ -116,6 +116,13 @@ func uriRegistered(registered []string, candidate string) bool {
 
 // writeLoggedOut renders a minimal HTML confirmation for a browser-facing
 // logout with no redirect target.
+//
+// This is the ONLY HTML YAuth.Router() serves, and middleware.defaultCSP is
+// written for it: the markup below is fully self-contained (no script, style,
+// link, img or form), which is what makes a `default-src 'none'` router-wide
+// CSP free. If this page ever grows a subresource, narrow defaultCSP or set a
+// Content-Security-Policy header here — the middleware only fills in headers a
+// handler left unset, so a value written here wins.
 func writeLoggedOut(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")

@@ -127,6 +127,12 @@ func TestSamlAdoption_AllowedWhenOptedIn(t *testing.T) {
 	f := newE2E(t)
 	setAdoption(t, f, true)
 	victim := seedVictim(t, f)
+	// RE-SCOPED: allow_account_adoption alone no longer authorises binding a
+	// pre-existing account — the account must also have a tie to the
+	// connection's organization, or any org owner could adopt any address by
+	// pointing a connection at an IdP they control. The membership is what makes
+	// this adoption legitimate rather than a takeover.
+	joinOrg(t, f, f.org.ID, victim.ID)
 
 	res := driveACS(t, f)
 	defer res.Body.Close() //nolint:errcheck
@@ -168,7 +174,11 @@ func TestSamlAdoption_FirstTimeProvisioningUnaffected(t *testing.T) {
 func TestSamlAdoption_EstablishedLinkStillSignsIn(t *testing.T) {
 	f := newE2E(t)
 	setAdoption(t, f, true)
-	seedVictim(t, f)
+	v := seedVictim(t, f)
+	// RE-SCOPED for the same reason as TestSamlAdoption_AllowedWhenOptedIn: the
+	// first driveACS below is itself an adoption, so without a membership it now
+	// 403s and the link this test is about is never established.
+	joinOrg(t, f, f.org.ID, v.ID)
 
 	res := driveACS(t, f) // establishes the link
 	res.Body.Close()      //nolint:errcheck

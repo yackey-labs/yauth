@@ -78,6 +78,7 @@ type fakeIDP struct {
 	overrideAssertNBF *time.Time
 	overrideAssertNOA *time.Time
 	overrideNameID    string
+	overrideEmail     string
 	emailAttr         string
 	groupsAttr        string
 	groupValues       []string
@@ -118,6 +119,11 @@ func newFakeIDP(t *testing.T) *fakeIDP {
 		}),
 		SessionProvider: sessionProviderFunc(func(_ http.ResponseWriter, _ *http.Request, _ *saml.IdpAuthnRequest) *saml.Session {
 			email := "alice@example.com"
+			if idp.overrideEmail != "" {
+				// Lets a test assert an address whose BYTES differ from the
+				// NameID / from a seeded local account (case variance).
+				email = idp.overrideEmail
+			}
 			nameID := email
 			if idp.overrideNameID != "" {
 				nameID = idp.overrideNameID

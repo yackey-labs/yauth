@@ -238,7 +238,7 @@ func (q *Queries) GetRefreshTokenByHash(ctx context.Context, tokenHash string) (
 }
 
 const revokeRefreshToken = `-- name: RevokeRefreshToken :execrows
-UPDATE yauth_refresh_tokens SET revoked = true WHERE id = $1
+UPDATE yauth_refresh_tokens SET revoked = true WHERE id = $1 AND revoked = false
 `
 
 func (q *Queries) RevokeRefreshToken(ctx context.Context, id string) (int64, error) {

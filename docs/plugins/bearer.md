@@ -71,6 +71,31 @@ Separately, the bearer resolver re-reads the user on **every** request, so a
 banned, suspended or not-yet-active account stops authenticating at once even
 while its access token is still inside its 15-minute lifetime.
 
+## What `POST /token/refresh` re-checks
+
+Rotation re-reads the user and applies the same account gates as `POST /token`:
+banned, suspended, not yet active, and `must_change_password`. Each is a `403`
+and each is a **no-op on the family** — the presented token is left unrevoked,
+so the client resumes rotating the moment the condition clears (the start date
+arrives, the suspension is lifted, the password is rotated) without a fresh
+login.
+
+> **Breaking change.** `must_change_password` is now enforced here. A
+> deployment that set the flag and never noticed it was inert on this endpoint
+> will see previously-working clients begin returning `403` once their access
+> token expires; those accounts must rotate their password through the cookie
+> `POST /change-password` flow. Setting the flag through the admin API also now
+> revokes the user's refresh tokens, so the gate applies immediately rather than
+> at the next access-token expiry.
+
+Rotation is a compare-and-swap on the presented row, so two **concurrent** uses
+of one refresh token no longer both succeed: exactly one wins and the other is
+treated as reuse, revoking the family. This is the same outcome a sequential
+double-submit has always produced, but a client that fires two refreshes in
+parallel (a mobile app waking several requests at once, say) will now be signed
+out rather than silently forking its family into two rotatable branches. Serialise
+refreshes behind a single in-flight rotation.
+
 ## Wiring (builder API)
 
 ```go

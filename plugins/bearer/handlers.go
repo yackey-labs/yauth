@@ -168,11 +168,6 @@ func (p *bearerPlugin) registerToken(host plugin.PluginHost, api huma.API, prefi
 			}
 			return nil, huma.Error500InternalServerError("unable to look up user")
 		}
-		if user.Banned {
-			emitLoginFailed(ctx, host, &user.ID, &user.Email, ip, "banned")
-			return nil, huma.Error403Forbidden("account suspended")
-		}
-
 		pw, err := repo.GetPasswordByUserID(ctx, user.ID)
 		if err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
@@ -198,6 +193,39 @@ func (p *bearerPlugin) registerToken(host plugin.PluginHost, api huma.API, prefi
 				return nil, huma.NewError(decBlockStatus(dec), decBlockMessage(dec))
 			}
 			return nil, huma.Error401Unauthorized("invalid email or password")
+		}
+
+		// Account-lifecycle gates, the full triple that makes up
+		// domain.User.CanAuthenticate. Only user.Banned was checked here, and
+		// it was checked BEFORE the password, so this leg had two problems at
+		// once:
+		//
+		//   - an offboarded (SuspendedAt) or not-yet-started (ActivatesAt in
+		//     the future) user who still knew their password got 200 with a
+		//     live access+refresh pair. resolver.go separately refuses the
+		//     access token, but the refresh FAMILY was minted and rotatable for
+		//     the whole refresh TTL, and login.succeeded was emitted for the
+		//     offboarded account — the very event lockout uses to clear a
+		//     failure counter; and
+		//   - refusing before the password check made /token the same
+		//     unauthenticated account-state oracle /login was.
+		//
+		// Placed after the bad-password branch and before the login.succeeded
+		// emit below, matching /login and /token/mfa exactly, so all three
+		// credential legs now ask the same question at the same point.
+		// emitLoginFailed stamps events.AdministrativeRefusal(), so lockout
+		// does not meter an administrative refusal as a credential failure.
+		if user.Banned {
+			emitLoginFailed(ctx, host, &user.ID, &user.Email, ip, "banned")
+			return nil, huma.Error403Forbidden("account suspended")
+		}
+		if user.SuspendedAt != nil {
+			emitLoginFailed(ctx, host, &user.ID, &user.Email, ip, "suspended")
+			return nil, huma.Error403Forbidden("account is deactivated")
+		}
+		if user.Staged(time.Now().UTC()) {
+			emitLoginFailed(ctx, host, &user.ID, &user.Email, ip, "staged")
+			return nil, huma.Error403Forbidden("account is not active yet")
 		}
 
 		// A user provisioned out-of-band (e.g. the secure admin bootstrap) with
@@ -566,13 +594,60 @@ func (p *bearerPlugin) registerRefresh(host plugin.PluginHost, api huma.API, pre
 			}
 			return nil, huma.Error500InternalServerError("unable to look up user")
 		}
+		// Rotation is the leg a long-lived native client actually runs, and it
+		// only ever asked about user.Banned. Everything else the other two legs
+		// enforce was invisible here, so a refresh family outlived the decision
+		// that granted it:
+		//
+		//   - offboarding (SuspendedAt) or a start date that has not arrived
+		//     (Staged) stopped /token but not /token/refresh, so the holder
+		//     rolled forward for the whole refresh TTL, each rotation pushing
+		//     the window out again; and
+		//   - must_change_password was never re-read at all. /token 403s on the
+		//     flag, but middleware.MustRotatePassword classifies bearer as a
+		//     machine method and returns false, so no downstream route
+		//     re-checked it either — /token/refresh was a permanent escape from
+		//     the forced-rotation gate.
+		//
+		// All four refusals must return BEFORE the RevokeRefreshToken below: a
+		// lifecycle or policy refusal has to be a NO-OP on the family, so the
+		// account works the instant the condition clears (start date arrives,
+		// suspension lifted, password rotated) without a full re-authentication.
+		// Burning the presented row here would also hand the next legitimate
+		// use of it to reuse detection and sign the family out.
 		if user.Banned {
 			return nil, huma.Error403Forbidden("account suspended")
+		}
+		if user.SuspendedAt != nil {
+			return nil, huma.Error403Forbidden("account is deactivated")
+		}
+		if user.Staged(time.Now().UTC()) {
+			return nil, huma.Error403Forbidden("account is not active yet")
+		}
+		if user.MustChangePassword {
+			return nil, huma.Error403Forbidden(middleware.MustChangePasswordDetail)
 		}
 
 		// Rotation: revoke the presented token, mint a fresh pair under
 		// the same family.
+		//
+		// RevokeRefreshToken is now a compare-and-swap (`AND revoked = false`),
+		// so ErrNotFound here means "somebody else already spent this row".
+		// Rotation is a read-check-write with no transaction: the stored.Revoked
+		// test above and this write are separate statements, so two concurrent
+		// uses of ONE refresh token both used to observe Revoked=false and both
+		// used to be told their revoke succeeded. That forked the family into
+		// two rotatable branches, neither of which ever presented an
+		// already-revoked token again — so the reuse trap the whole rotation
+		// scheme rests on could never fire, and a stolen token rode alongside
+		// the victim's invisibly. Losing the CAS is exactly the signal a
+		// sequential replay gives, so it gets the same answer: revoke the
+		// family and report reuse.
 		if err := repo.RevokeRefreshToken(ctx, stored.ID); err != nil {
+			if errors.Is(err, yautherr.ErrNotFound) {
+				_, _ = repo.RevokeRefreshTokenFamily(ctx, stored.FamilyID)
+				return nil, huma.Error401Unauthorized("refresh token reuse detected; family revoked")
+			}
 			return nil, huma.Error500InternalServerError("unable to rotate refresh token")
 		}
 		resp, err := p.mintTokens(ctx, host, user.ID, stored.FamilyID)

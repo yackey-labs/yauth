@@ -395,6 +395,22 @@ func (p *adminPlugin) registerPatchUser(host plugin.PluginHost, api huma.API, mw
 				}
 				return nil, huma.Error500InternalServerError("unable to update user")
 			}
+			// Setting the flag has to terminate the credentials that would
+			// otherwise skip the gate it opens. /token 403s on
+			// must_change_password, but a client already holding a refresh
+			// family never passes through /token again — and now that
+			// /token/refresh re-reads the flag, an unrevoked family would
+			// simply 403 on its next rotation instead of quietly renewing.
+			// Revoking here makes the flag take effect at once rather than at
+			// the next access-token expiry.
+			//
+			// Only when the flag is being SET. This branch also fires for
+			// false, and revoking there would make an admin CLEARING the flag —
+			// the routine "they rotated their password, let them back in" edit —
+			// sign the user out of every device.
+			if *req.MustChangePassword {
+				_, _ = host.Repo().RevokeAllUserRefreshTokens(ctx, in.ID)
+			}
 			u.MustChangePassword = *req.MustChangePassword
 		}
 		return &userOutput{Body: toUserJSON(u)}, nil
@@ -473,6 +489,14 @@ func (p *adminPlugin) registerBanUser(host plugin.PluginHost, api huma.API, mw *
 		// Revoke every session of the banned user so they are kicked out
 		// of any active client.
 		_, _ = host.Repo().DeleteUserSessions(ctx, id)
+		// ...and every refresh-token family, exactly as the suspend lever does.
+		// Ban is the lever an operator reaches for during a security incident,
+		// and it used to terminate cookie sessions only. Refresh tokens live for
+		// the whole refresh TTL (30 days by default) and roll forward on every
+		// use, so a banned account left every native/mobile client holding a
+		// rotatable family — and the moment the ban was lifted, a token stolen
+		// before the incident started working again.
+		_, _ = host.Repo().RevokeAllUserRefreshTokens(ctx, id)
 
 		// Audit log: admin.ban with the acting admin's id.
 		actorID := actorIDFromContext(ctx)

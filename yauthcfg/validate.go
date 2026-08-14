@@ -334,6 +334,8 @@ func validateRateLimits(c *RateLimitConfig) error {
 		{"magic_link_send", c.MagicLinkSend},
 		{"unlock_request", c.UnlockRequest},
 		{"mfa_verify", c.MFAVerify},
+		{"oauth_token", c.OAuthToken},
+		{"oauth_introspect", c.OAuthIntrospect},
 	} {
 		if r.rule.Max != nil && *r.rule.Max < 0 {
 			return fmt.Errorf("rate_limit.%s.max must be non-negative (0 means no limit)", r.name)

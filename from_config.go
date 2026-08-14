@@ -865,6 +865,8 @@ func configToYAuthConfig(c *yauthcfg.Config) YAuthConfig {
 	overrideRule(&out.RateLimit.MagicLinkSend, c.RateLimit.MagicLinkSend)
 	overrideRule(&out.RateLimit.UnlockRequest, c.RateLimit.UnlockRequest)
 	overrideRule(&out.RateLimit.MFAVerify, c.RateLimit.MFAVerify)
+	overrideRule(&out.RateLimit.OAuthToken, c.RateLimit.OAuthToken)
+	overrideRule(&out.RateLimit.OAuthIntrospect, c.RateLimit.OAuthIntrospect)
 	return out
 }
 

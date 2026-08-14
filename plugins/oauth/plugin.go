@@ -32,6 +32,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/yackey-labs/yauth/auth"
 	"github.com/yackey-labs/yauth/plugin"
 )
 
@@ -79,6 +80,17 @@ type Config struct {
 	// then FAILS CLOSED with 403 and no session. See
 	// plugin.RunFederatedLogin.
 	SatisfiesMFA *bool
+
+	// LoginStateBinding controls whether /authorize ties the login state to
+	// the browser that started the flow — see auth/login_binding.go for the
+	// attack this closes (a finished-but-undelivered callback URL was a
+	// portable credential for "become whoever authenticated at the IdP").
+	//
+	// "" / "auto" binds iff the deployment issues Secure cookies, "required"
+	// always binds, "off" never does. Validated by New. The knob is named
+	// verbatim in the 400 body so an operator reading a support ticket learns
+	// it from the response.
+	LoginStateBinding string
 }
 
 // satisfiesMFA reports the effective SatisfiesMFA value, defaulting to
@@ -108,6 +120,14 @@ func New(cfg Config) (plugin.Plugin, error) {
 	if cfg.StateTTL <= 0 {
 		cfg.StateTTL = 10 * time.Minute
 	}
+	// Reject an unknown mode rather than falling back to the default: "off"
+	// mistyped as "of" would otherwise silently become "auto" and refuse every
+	// login on a deployment that cannot carry the binding cookie.
+	mode, err := auth.NormalizeLoginStateBinding(cfg.LoginStateBinding)
+	if err != nil {
+		return nil, fmt.Errorf("oauth: %w", err)
+	}
+	cfg.LoginStateBinding = mode
 	idx := make(map[string]Provider, len(cfg.Providers))
 	for _, p := range cfg.Providers {
 		if p == nil {

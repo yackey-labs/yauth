@@ -614,6 +614,12 @@ func addAuthPlugins(builder *YAuthBuilder, cfg *yauthcfg.Config, mailer Mailer, 
 			EncryptionKey: key,
 			Providers:     provs,
 			SatisfiesMFA:  p.OAuth.SatisfiesMFA,
+			// Empty means "auto": bind the login state to the browser that
+			// started the flow on any deployment that issues Secure cookies.
+			// A fresh TLS install is protected without touching yaml; plain
+			// HTTP cannot carry a SameSite=None cookie at all and is left
+			// alone. See auth/login_binding.go.
+			LoginStateBinding: p.OAuth.LoginStateBinding,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("yauth: oauth: %w", err)
@@ -641,6 +647,9 @@ func addAuthPlugins(builder *YAuthBuilder, cfg *yauthcfg.Config, mailer Mailer, 
 			// login and on back-channel logout. In-cluster IdPs set
 			// allow_private_network_idp.
 			AllowPrivateNetworkIDP: p.SSOOIDC.AllowPrivateNetworkIDP,
+			// Same default as oauth's: "auto", i.e. on wherever the cookie can
+			// actually be delivered. See auth/login_binding.go.
+			LoginStateBinding: p.SSOOIDC.LoginStateBinding,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("yauth: sso_oidc: %w", err)

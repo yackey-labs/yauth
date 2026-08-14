@@ -90,9 +90,9 @@ func TestSend_BounceDoesNotPutTheRecipientOnTheSpan(t *testing.T) {
 	}
 	for _, ev := range span.Events() {
 		for _, kv := range ev.Attributes {
-			if strings.Contains(kv.Value.Emit(), recipient) {
+			if strings.Contains(kv.Value.String(), recipient) {
 				t.Errorf("span event %q attribute %q carries the recipient address: %q",
-					ev.Name, kv.Key, kv.Value.Emit())
+					ev.Name, kv.Key, kv.Value.String())
 			}
 		}
 	}

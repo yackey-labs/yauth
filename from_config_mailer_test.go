@@ -157,7 +157,9 @@ func TestBuildMailer_SMTPStillWorks(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected *smtp.Mailer, got %T", m)
 	}
-	if s.Host != "smtp.example.com" || s.Port != 587 || !s.TLS {
+	// s.TLS is deprecated in favour of TLSMode, but asserting the legacy bool
+	// still round-trips IS this test: it pins the backward-compatible mapping.
+	if s.Host != "smtp.example.com" || s.Port != 587 || !s.TLS { //nolint:staticcheck // SA1019: deliberate legacy-field coverage
 		t.Errorf("smtp fields not carried through: %+v", s)
 	}
 	if s.Username != "user" || s.Password != "pass" {

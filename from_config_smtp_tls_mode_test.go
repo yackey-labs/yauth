@@ -72,8 +72,10 @@ func TestBuildMailer_SMTPCarriesTLSMode(t *testing.T) {
 			if s.TLSMode != tc.want {
 				t.Errorf("TLSMode = %q, want %q — mailer.smtp.tls_mode never reaches the transport", s.TLSMode, tc.want)
 			}
-			if s.TLS != tc.wantTLS {
-				t.Errorf("TLS = %v, want %v", s.TLS, tc.wantTLS)
+			// Deliberate: the deprecated bool must keep deriving correctly from
+			// tls_mode, which is what keeps pre-existing configs byte-identical.
+			if s.TLS != tc.wantTLS { //nolint:staticcheck // SA1019: deliberate legacy-field coverage
+				t.Errorf("TLS = %v, want %v", s.TLS, tc.wantTLS) //nolint:staticcheck // SA1019
 			}
 		})
 	}

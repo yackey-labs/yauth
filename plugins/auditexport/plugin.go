@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/yackey-labs/yauth/auth/safehttp"
 	"github.com/yackey-labs/yauth/domain"
 	pluginpkg "github.com/yackey-labs/yauth/plugin"
 	"github.com/yackey-labs/yauth/repo"
@@ -40,6 +41,23 @@ type Config struct {
 	// client whose Transport routes to httptest.NewServer; production
 	// callers should leave this nil.
 	HTTPClient *http.Client
+
+	// AllowPrivateDestinations opts INTO export destinations on loopback /
+	// RFC 1918 addresses.
+	//
+	// A destination's url (webhook) or host (syslog) is chosen by an admin
+	// over the audit-export API and is then connected to by the server for
+	// every exported audit row, with the failure recorded and served back on
+	// GET /audit/destinations/{id}/outbox. Unfiltered, that aims the
+	// process's network position at anything it can reach. Default false:
+	// private destinations are refused at create/update time and at dial
+	// time.
+	//
+	// Shipping to an in-cluster collector or a syslog sidecar is a
+	// first-class deployment, and those installs should set this. It is not a
+	// full bypass — the link-local metadata range stays refused. See
+	// auth/safehttp.
+	AllowPrivateDestinations bool
 
 	// TestHooks attaches dispatch observability hooks. Production code
 	// MUST leave this nil — TestHooks is not part of the public API
@@ -92,6 +110,16 @@ func New(cfg Config) pluginpkg.Plugin {
 		workers: make(map[string]*WorkerHandle),
 	}
 	disp := NewDispatcher(cfg.HTTPTimeout, cfg.SignatureWindow)
+	// The dispatcher's own client used to be a bare &http.Client{Timeout},
+	// with no address filter and no redirect policy, pointed at whatever URL
+	// the destination row held. safehttp.Client adds both: dial-time refusal
+	// of private addresses (so a row that predates the create-time check, or a
+	// hostname that resolves privately later, is still refused) and
+	// maxRedirects=0, so a receiver cannot bounce the export — signature
+	// header and all — to a second host. An injected client is still used
+	// verbatim; operators who bring their own transport own its policy.
+	disp = disp.WithHTTPClient(safehttp.Client(cfg.AllowPrivateDestinations, cfg.HTTPTimeout, 0))
+	disp.allowPrivateDestinations = cfg.AllowPrivateDestinations
 	if cfg.HTTPClient != nil {
 		disp = disp.WithHTTPClient(cfg.HTTPClient)
 	}

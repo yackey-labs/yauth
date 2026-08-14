@@ -83,8 +83,14 @@ func waitFor(t *testing.T, timeout time.Duration, fn func() bool) bool {
 
 func newWebhooksTestServer(t *testing.T) (*httptest.Server, *yauth.YAuth) {
 	return newWebhooksTestServerWithConfig(t, webhooks.Config{
-		WorkerCount:     2,
-		DeliveryTimeout: 5 * time.Second,
+		// These receivers are httptest servers on 127.0.0.1. The delivery
+		// client refuses private destinations by default now (see
+		// auth/safehttp) — that guard is CORRECT and stays on; the test
+		// harness is simply the in-cluster deployment shape, so it opts in
+		// the same way such a deployment does.
+		AllowPrivateDestinations: true,
+		WorkerCount:              2,
+		DeliveryTimeout:          5 * time.Second,
 	})
 }
 
@@ -341,12 +347,13 @@ func TestWebhookRetry_RecoversAfterTransientFailure(t *testing.T) {
 	defer rcv.Close()
 
 	srv, ya := newWebhooksTestServerWithConfig(t, webhooks.Config{
-		WorkerCount:     2,
-		DeliveryTimeout: 2 * time.Second,
-		MaxAttempts:     5,
-		InitialBackoff:  20 * time.Millisecond,
-		MaxBackoff:      200 * time.Millisecond,
-		BackoffJitter:   -1, // disable jitter for deterministic timing
+		AllowPrivateDestinations: true, // 127.0.0.1 receiver — see the note above.
+		WorkerCount:              2,
+		DeliveryTimeout:          2 * time.Second,
+		MaxAttempts:              5,
+		InitialBackoff:           20 * time.Millisecond,
+		MaxBackoff:               200 * time.Millisecond,
+		BackoffJitter:            -1, // disable jitter for deterministic timing
 	})
 	const secret = "retry-secret"
 	whID := seedWebhook(t, ya, rcv.srv.URL, secret, []string{"user.registered"})
@@ -418,12 +425,13 @@ func TestWebhookRetry_DeadLetter(t *testing.T) {
 	defer rcv.Close()
 
 	srv, ya := newWebhooksTestServerWithConfig(t, webhooks.Config{
-		WorkerCount:     2,
-		DeliveryTimeout: 2 * time.Second,
-		MaxAttempts:     3,
-		InitialBackoff:  10 * time.Millisecond,
-		MaxBackoff:      50 * time.Millisecond,
-		BackoffJitter:   -1,
+		AllowPrivateDestinations: true, // 127.0.0.1 receiver — see the note above.
+		WorkerCount:              2,
+		DeliveryTimeout:          2 * time.Second,
+		MaxAttempts:              3,
+		InitialBackoff:           10 * time.Millisecond,
+		MaxBackoff:               50 * time.Millisecond,
+		BackoffJitter:            -1,
 	})
 	const secret = "dead-letter-secret"
 	whID := seedWebhook(t, ya, rcv.srv.URL, secret, []string{"user.registered"})
@@ -494,12 +502,13 @@ func TestWebhookRetry_4xxNoRetry(t *testing.T) {
 	defer rcv.Close()
 
 	srv, ya := newWebhooksTestServerWithConfig(t, webhooks.Config{
-		WorkerCount:     2,
-		DeliveryTimeout: 2 * time.Second,
-		MaxAttempts:     5,
-		InitialBackoff:  10 * time.Millisecond,
-		MaxBackoff:      50 * time.Millisecond,
-		BackoffJitter:   -1,
+		AllowPrivateDestinations: true, // 127.0.0.1 receiver — see the note above.
+		WorkerCount:              2,
+		DeliveryTimeout:          2 * time.Second,
+		MaxAttempts:              5,
+		InitialBackoff:           10 * time.Millisecond,
+		MaxBackoff:               50 * time.Millisecond,
+		BackoffJitter:            -1,
 	})
 	whID := seedWebhook(t, ya, rcv.srv.URL, "secret", []string{"user.registered"})
 

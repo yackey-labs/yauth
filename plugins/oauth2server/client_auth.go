@@ -17,6 +17,7 @@ import (
 	"github.com/lestrrat-go/jwx/v3/jwk"
 
 	"github.com/yackey-labs/yauth/auth"
+	"github.com/yackey-labs/yauth/auth/safehttp"
 	"github.com/yackey-labs/yauth/domain"
 	"github.com/yackey-labs/yauth/plugin"
 	"github.com/yackey-labs/yauth/yautherr"
@@ -235,62 +236,16 @@ func (p *oauth2Plugin) resolveClientKeys(ctx context.Context, client *domain.OAu
 	return keys, nil
 }
 
-// isPrivateIP reports whether addr is a loopback, link-local, or RFC 1918
-// address — used to block SSRF via jwks_uri after DNS resolution so that
-// DNS rebinding cannot bypass a pre-dial hostname check.
-func isPrivateIP(addr string) bool {
-	ip := net.ParseIP(addr)
-	if ip == nil {
-		return false
-	}
-	// Unwrap IPv4-in-IPv6 (e.g. ::ffff:127.0.0.1)
-	if v4 := ip.To4(); v4 != nil {
-		ip = v4
-	}
-	private := []net.IPNet{
-		{IP: net.IP{10, 0, 0, 0}, Mask: net.CIDRMask(8, 32)},
-		{IP: net.IP{172, 16, 0, 0}, Mask: net.CIDRMask(12, 32)},
-		{IP: net.IP{192, 168, 0, 0}, Mask: net.CIDRMask(16, 32)},
-		{IP: net.IP{169, 254, 0, 0}, Mask: net.CIDRMask(16, 32)}, // link-local
-		{IP: net.IP{0, 0, 0, 0}, Mask: net.CIDRMask(8, 32)},      // 0.0.0.0/8
-	}
-	if ip.IsLoopback() {
-		return true
-	}
-	for _, block := range private {
-		if block.Contains(ip) {
-			return true
-		}
-	}
-	return false
-}
-
-// safeDialContext returns a DialContext function that rejects connections to
-// private/loopback addresses after DNS resolution (defeating DNS rebinding).
-func safeDialContext(nd *net.Dialer) func(ctx context.Context, network, addr string) (net.Conn, error) {
-	return func(ctx context.Context, network, addr string) (net.Conn, error) {
-		host, port, err := net.SplitHostPort(addr)
-		if err != nil {
-			return nil, fmt.Errorf("jwks_uri: invalid address %q", addr)
-		}
-		resolved, err := net.DefaultResolver.LookupHost(ctx, host)
-		if err != nil {
-			return nil, fmt.Errorf("jwks_uri: resolve %q: %w", host, err)
-		}
-		for _, ip := range resolved {
-			if isPrivateIP(ip) {
-				return nil, fmt.Errorf("jwks_uri: resolved to non-public address %s", ip)
-			}
-		}
-		return nd.DialContext(ctx, network, net.JoinHostPort(resolved[0], port))
-	}
-}
-
 func fetchJWKS(ctx context.Context, uri string, allowPrivate bool) ([]any, error) {
 	client := http.DefaultClient
 	if !allowPrivate {
+		// The private-IP dialler used to live here as isPrivateIP +
+		// safeDialContext. It now lives in auth/safehttp because the webhooks
+		// and audit-export plugins hand an admin the same SSRF primitive this
+		// guard was written for, and a second copy of an egress filter is how
+		// the two drift apart. The bodies moved unchanged.
 		transport := http.DefaultTransport.(*http.Transport).Clone()
-		transport.DialContext = safeDialContext(&net.Dialer{
+		transport.DialContext = safehttp.DialContext(&net.Dialer{
 			Timeout:   10 * time.Second,
 			KeepAlive: 30 * time.Second,
 		})

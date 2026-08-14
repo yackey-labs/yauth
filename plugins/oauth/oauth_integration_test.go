@@ -17,6 +17,7 @@ import (
 	"golang.org/x/oauth2"
 
 	yauth "github.com/yackey-labs/yauth"
+	"github.com/yackey-labs/yauth/plugins/apikey"
 	"github.com/yackey-labs/yauth/plugins/emailpassword"
 	"github.com/yackey-labs/yauth/plugins/oauth"
 	"github.com/yackey-labs/yauth/repo"
@@ -102,8 +103,17 @@ func newStack(t *testing.T, info oauth.UserInfo) *stack {
 // allow-list, so tests can assert the post-callback redirect is honored.
 func newStackWithRedirects(t *testing.T, info oauth.UserInfo, allowed []string) *stack {
 	t.Helper()
+	return newStackOn(t, newProviderServer(t), info, allowed)
+}
 
-	provServer := newProviderServer(t)
+// newStackOn is newStackWithRedirects against a caller-supplied upstream
+// provider server. pkce_test.go needs an IdP that actually ENFORCES PKCE
+// (records the code_challenge at /authorize and checks the code_verifier at
+// /token) rather than the permissive canned one above; everything downstream of
+// the provider — the yauth build, the plugin config, the cookie-jarred client —
+// is identical, so it stays in this one constructor.
+func newStackOn(t *testing.T, provServer *httptest.Server, info oauth.UserInfo, allowed []string) *stack {
+	t.Helper()
 
 	// The yauth server's URL is needed for RedirectURL, which we don't
 	// know until httptest.NewServer is called. Solution: build the
@@ -146,6 +156,12 @@ func newStackWithRedirects(t *testing.T, info oauth.UserInfo, allowed []string) 
 			HIBPCheck:    false,
 			HIBPCheckSet: true,
 		})).
+		// The apikey plugin is here for one reason: the authed oauth routes
+		// have to be reachable by a MACHINE credential for a test to say
+		// anything about how they treat one (see link_principal_test.go). It
+		// adds only its own routes and an X-Api-Key resolver, so every
+		// cookie-driven test above is unaffected.
+		WithPlugin(apikey.New(apikey.Config{})).
 		WithPlugin(op).
 		Build()
 	if err != nil {

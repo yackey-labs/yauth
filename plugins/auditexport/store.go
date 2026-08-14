@@ -206,15 +206,24 @@ func (s *store) EnqueueForAudit(auditLogID string, organizationID *string) []str
 // given destination, oldest first. Each claimed row's LastAttemptAt is
 // bumped under the same lock to discourage concurrent workers from
 // double-claiming (best-effort — at-least-once delivery, see pentest 5).
+//
+// A row whose NextAttemptAt is still in the future is skipped: that is the
+// only thing standing between a failed row and an immediate re-claim on the
+// next BatchInterval tick, which is how the documented backoff schedule used
+// to get burned through in five ticks.
 func (s *store) ClaimPending(destinationID string, limit int) []*domain.AuditOutboxEntry {
 	if limit <= 0 {
 		return nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	claimAt := time.Now().UTC()
 	candidates := make([]*domain.AuditOutboxEntry, 0)
 	for _, e := range s.outbox {
 		if e.DestinationID == destinationID && e.Status == domain.OutboxStatusPending {
+			if e.NextAttemptAt != nil && e.NextAttemptAt.After(claimAt) {
+				continue
+			}
 			candidates = append(candidates, e)
 		}
 	}
@@ -249,9 +258,17 @@ func (s *store) MarkSent(id string) error {
 }
 
 // MarkFailed transitions an outbox row back to "pending" with an attempts
-// counter bump and the latest error message. The drain worker will pick
-// it up again on the next tick.
-func (s *store) MarkFailed(id string, attempts int32, errMsg string) error {
+// counter bump, the latest error message, and the earliest time a worker may
+// re-claim it. The drain worker picks it up again on the first tick at or
+// after nextAttemptAt.
+//
+// nextAttemptAt is an explicit parameter rather than something computed in
+// here on purpose: every caller has to state the spacing it wants, so a call
+// site that means "retry immediately" (a test pinning the dead-letter ladder,
+// say) has to say so instead of silently getting the old behaviour, where the
+// row came back pending with no delay and the next 5s tick spent another
+// attempt on a receiver that had been down for five seconds.
+func (s *store) MarkFailed(id string, attempts int32, errMsg string, nextAttemptAt time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	row, ok := s.outbox[id]
@@ -262,6 +279,8 @@ func (s *store) MarkFailed(id string, attempts int32, errMsg string) error {
 	row.Attempts = attempts
 	now := time.Now().UTC()
 	row.LastAttemptAt = &now
+	next := nextAttemptAt.UTC()
+	row.NextAttemptAt = &next
 	msg := errMsg
 	row.LastError = &msg
 	return nil
@@ -398,6 +417,10 @@ func cloneEntry(e *domain.AuditOutboxEntry) *domain.AuditOutboxEntry {
 	if e.LastError != nil {
 		v := *e.LastError
 		cp.LastError = &v
+	}
+	if e.NextAttemptAt != nil {
+		v := *e.NextAttemptAt
+		cp.NextAttemptAt = &v
 	}
 	return &cp
 }

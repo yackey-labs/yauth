@@ -138,5 +138,18 @@ type AuditOutboxEntry struct {
 	Attempts      int32
 	LastAttemptAt *time.Time
 	LastError     *string
+	// NextAttemptAt is the earliest time a failed row may be re-claimed by a
+	// drain worker. nil means "claimable now". It is what makes
+	// auditexport.BackoffSchedule (1s, 5s, 30s, 5m, 1h) load-bearing: before
+	// this field existed MarkFailed put the row straight back to `pending` and
+	// the very next BatchInterval tick re-claimed it, so a receiver that
+	// blipped for a few seconds burned the whole RetryMaxAttempts ladder and
+	// dead-lettered the backlog — and dead_letter is terminal.
+	//
+	// It is in-memory only: the audit-export store is a process map (see
+	// plugins/auditexport/store.go) and no SQL backend persists this column.
+	// Nothing outside the plugin reads it, and the outbox HTTP response is
+	// built field-by-field, so the wire shape is unchanged.
+	NextAttemptAt *time.Time
 	CreatedAt     time.Time
 }

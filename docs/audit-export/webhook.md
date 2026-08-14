@@ -68,6 +68,26 @@ The comparison is constant-time. Drift outside the configured window is treated 
 
 Extra static headers are taken from any `header.<name>` key in `config`. Header values are treated as secrets and stripped from list/get responses.
 
+### Updating config without losing the secret
+
+`hmac_secret` and every `header.*` value are stripped from list/get responses,
+so a client that reads a destination and writes it back cannot send them. On
+`PATCH`/`PUT` those keys are therefore **carried forward** from the stored row
+when the incoming `config` omits them. Every other key still replaces:
+omitting `url` removes it.
+
+To turn signing off — or to drop a static header — send the key with an
+**empty string**:
+
+```json
+{ "config": { "url": "https://collector.example.com/yauth", "hmac_secret": "" } }
+```
+
+The key is deleted, not stored as `""`. That distinction matters: the
+`hmac_configured` flag is computed from the stored config, and a stored empty
+secret would report `hmac_configured: true` while the dispatcher sent the
+stream unsigned.
+
 ### Destination addresses
 
 `config.url` must be `http` or `https`, and must not be a private, loopback or
@@ -87,9 +107,15 @@ on `GET /audit/destinations/{id}/outbox`.
 
 ## Status codes
 
-- `2xx` → marked `sent`.
-- `4xx`/`5xx` → marked `failed`, scheduled for retry per the global backoff schedule.
-- After 5 attempts → terminal `dead_letter`.
+- `2xx` → marked `sent`. This is the **only** path to `sent`: a row whose audit
+  entry could not be loaded is retried and then dead-lettered, never silently
+  marked delivered.
+- `4xx`/`5xx` → back to `pending` with the attempt counter bumped and the next
+  attempt held off per the global backoff schedule (1s → 5s → 30s → 5m → 1h).
+  The row is not re-claimed before that delay elapses.
+- After 5 attempts → terminal `dead_letter`. With the schedule applied that is
+  roughly 1h36m after the first failure, so `dead_letter_total` is a slow
+  signal — alert on the `lag_seconds` gauge to notice a receiver going down.
 
 ## Pentest assertions
 

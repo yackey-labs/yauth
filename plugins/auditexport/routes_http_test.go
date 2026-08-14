@@ -15,6 +15,7 @@ import (
 	yauth "github.com/yackey-labs/yauth"
 	"github.com/yackey-labs/yauth/auth"
 	"github.com/yackey-labs/yauth/domain"
+	"github.com/yackey-labs/yauth/plugin"
 	"github.com/yackey-labs/yauth/plugins/auditexport"
 	"github.com/yackey-labs/yauth/repo/memrepo"
 )
@@ -34,8 +35,9 @@ func newRouteEnv(t *testing.T) *routeEnv {
 	t.Helper()
 	r := memrepo.New()
 
+	pl := auditexport.New(auditexport.Config{})
 	ya, err := yauth.New(r, yauth.NewDefaultConfig()).
-		WithPlugin(auditexport.New(auditexport.Config{})).
+		WithPlugin(pl).
 		Build()
 	if err != nil {
 		t.Fatalf("build yauth: %v", err)
@@ -44,7 +46,27 @@ func newRouteEnv(t *testing.T) *routeEnv {
 	mux := http.NewServeMux()
 	mux.Handle("/api/auth/", http.StripPrefix("/api/auth", ya.Router()))
 	srv := httptest.NewServer(mux)
-	return &routeEnv{srv: srv, repo: r, stop: func() { srv.Close() }}
+	return &routeEnv{srv: srv, repo: r, stop: func() { shutdownPlugin(t, pl); srv.Close() }}
+}
+
+// shutdownPlugin stops the plugin's drain workers before the test server goes
+// away. It matters now that a destination created through the route gets a live
+// worker: every test in this package that POSTs a destination leaves one
+// running, and since the tests here point at siem.example.com,
+// otel-collector.observability.svc.cluster.local and syslog-sidecar:514, an
+// un-stopped worker would keep dialling those names for the remainder of the
+// test binary.
+func shutdownPlugin(t *testing.T, pl plugin.Plugin) {
+	t.Helper()
+	sa, ok := pl.(plugin.ShutdownAware)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := sa.Shutdown(ctx); err != nil {
+		t.Errorf("shutdown auditexport plugin: %v", err)
+	}
 }
 
 // seedAdmin creates an admin user + session and returns (cookie, adminID).

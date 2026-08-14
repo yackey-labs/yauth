@@ -51,12 +51,12 @@ import (
 
 // --- an IdP that enforces PKCE -------------------------------------------
 
-// pkceIdP is newProviderServer's stricter twin. /authorize mints a distinct
+// pkceIDP is newProviderServer's stricter twin. /authorize mints a distinct
 // code per request and remembers the code_challenge that came with it (empty
 // when the client sent none, which is exactly what a non-PKCE client looks
 // like on the wire); /token then requires a code_verifier whose S256 hash
 // matches, and answers invalid_grant when it does not — RFC 7636 §4.6.
-type pkceIdP struct {
+type pkceIDP struct {
 	srv *httptest.Server
 
 	mu         sync.Mutex
@@ -71,9 +71,9 @@ func s256(verifier string) string {
 	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
-func newPKCEIdP(t *testing.T) *pkceIdP {
+func newPKCEIdP(t *testing.T) *pkceIDP {
 	t.Helper()
-	idp := &pkceIdP{
+	idp := &pkceIDP{
 		challenge: map[string]string{},
 		method:    map[string]string{},
 	}
@@ -139,7 +139,7 @@ func newPKCEIdP(t *testing.T) *pkceIdP {
 
 // challengeFor reports the code_challenge (and method) the plugin presented
 // when the given code was issued.
-func (i *pkceIdP) challengeFor(code string) (string, string) {
+func (i *pkceIDP) challengeFor(code string) (string, string) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	return i.challenge[code], i.method[code]
@@ -147,7 +147,7 @@ func (i *pkceIdP) challengeFor(code string) (string, string) {
 
 // rejectionCount reports how many token requests the IdP refused for a
 // bad/missing code_verifier.
-func (i *pkceIdP) rejectionCount() int {
+func (i *pkceIDP) rejectionCount() int {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	return i.rejections
@@ -194,10 +194,10 @@ func beginAuthorize(t *testing.T, s *stack, cl *http.Client) (*url.URL, string) 
 	return loc, state
 }
 
-// driveIdP follows the provider's own redirect back to /callback and returns
+// driveIDP follows the provider's own redirect back to /callback and returns
 // that callback URL WITHOUT requesting it — this is the moment the code exists
 // in a URL and can leak.
-func driveIdP(t *testing.T, cl *http.Client, authorizeLoc *url.URL) *url.URL {
+func driveIDP(t *testing.T, cl *http.Client, authorizeLoc *url.URL) *url.URL {
 	t.Helper()
 	res, err := cl.Get(authorizeLoc.String())
 	if err != nil {
@@ -259,7 +259,7 @@ func TestOAuthAuthorize_SendsPKCEChallenge(t *testing.T) {
 
 	cl := newBrowser(t)
 	loc, _ := beginAuthorize(t, s, cl)
-	cb := driveIdP(t, cl, loc)
+	cb := driveIDP(t, cl, loc)
 
 	code := cb.Query().Get("code")
 	if code == "" {
@@ -297,7 +297,7 @@ func TestOAuthCallback_RefusesInjectedAuthorizationCode(t *testing.T) {
 	// 2. victim's real flow, up to (not including) the callback request.
 	victimBrowser := newBrowser(t)
 	vloc, _ := beginAuthorize(t, s, victimBrowser)
-	victimCallback := driveIdP(t, victimBrowser, vloc)
+	victimCallback := driveIDP(t, victimBrowser, vloc)
 	victimCode := victimCallback.Query().Get("code")
 	if victimCode == "" {
 		t.Fatalf("victim callback carried no code: %s", victimCallback)
@@ -358,7 +358,7 @@ func TestOAuthPKCE_LegitimateLoginStillCompletes(t *testing.T) {
 
 	cl := newBrowser(t)
 	loc, _ := beginAuthorize(t, s, cl)
-	cb := driveIdP(t, cl, loc)
+	cb := driveIDP(t, cl, loc)
 
 	res, err := cl.Get(cb.String())
 	if err != nil {
@@ -416,7 +416,7 @@ func TestOAuthCallback_LegacyStateRowStillRedeems(t *testing.T) {
 	cl := newBrowser(t)
 	authzURL := idp.srv.URL + "/oauth/authorize?state=legacy-state-token&redirect_uri=" +
 		url.QueryEscape(s.srv.URL+"/api/auth/oauth/fake/callback")
-	cb := driveIdP(t, cl, mustParse(t, authzURL))
+	cb := driveIDP(t, cl, mustParse(t, authzURL))
 
 	res, err := cl.Get(cb.String())
 	if err != nil {
@@ -476,7 +476,7 @@ func TestOAuthCallback_LegacyStateRowWithPipeInRedirectStaysOnOrigin(t *testing.
 	cl := newBrowser(t)
 	authzURL := idp.srv.URL + "/oauth/authorize?state=legacy-pipe-state&redirect_uri=" +
 		url.QueryEscape(s.srv.URL+"/api/auth/oauth/fake/callback")
-	cb := driveIdP(t, cl, mustParse(t, authzURL))
+	cb := driveIDP(t, cl, mustParse(t, authzURL))
 
 	res, err := cl.Get(cb.String())
 	if err != nil {

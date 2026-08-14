@@ -163,7 +163,7 @@ func (c *OidcConnectionConfig) validate() error {
 	// IdP). It does NOT refuse private addresses, because validate() is the
 	// chokepoint for EVERY config write — create, PATCH, SeedConnection,
 	// Federate — and it is a method on the config struct with no view of the
-	// plugin's AllowPrivateNetworkIdP. Refusing private addresses here would
+	// plugin's AllowPrivateNetworkIDP. Refusing private addresses here would
 	// make a literal in-cluster IdP address unconfigurable even with the knob
 	// on, and would make a scopes-only PATCH of a pre-existing row start
 	// failing. Where the destination is allowed to live is a dial-time

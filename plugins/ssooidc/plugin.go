@@ -81,7 +81,7 @@ type Config struct {
 	// transport and the caller owns its policy.
 	HTTPClient *http.Client
 
-	// AllowPrivateNetworkIdP opts this plugin's outbound IdP calls into
+	// AllowPrivateNetworkIDP opts this plugin's outbound IdP calls into
 	// loopback / RFC 1918 destinations.
 	//
 	// A connection's discovery_url is chosen by an ORG admin (org creation is
@@ -96,7 +96,7 @@ type Config struct {
 	// in-cluster Keycloak at http://keycloak.identity.svc:8080 is a
 	// first-class deployment shape. Even then 169.254.0.0/16 stays refused;
 	// see safehttp.IsAlwaysDeniedIP.
-	AllowPrivateNetworkIdP bool
+	AllowPrivateNetworkIDP bool
 
 	// SelfIssuer is this app's OWN OIDC issuer URL (e.g.
 	// "https://app/api/auth"). When set and an asymmetric signer is registered
@@ -267,7 +267,7 @@ func (p *ssoOIDCPlugin) httpClient() *http.Client {
 	if p.cfg.HTTPClient != nil {
 		return p.cfg.HTTPClient
 	}
-	return safehttp.Client(p.cfg.AllowPrivateNetworkIdP, defaultHTTPTimeout, 3)
+	return safehttp.Client(p.cfg.AllowPrivateNetworkIDP, defaultHTTPTimeout, 3)
 }
 
 // jwksCache returns the lazily-initialized process-wide JWKS cache.

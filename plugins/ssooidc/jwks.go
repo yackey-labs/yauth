@@ -146,11 +146,11 @@ func fetchJWKS(ctx context.Context, client *http.Client, url string) (jwk.Set, e
 	req.Header.Set("Accept", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
-		// errIdPUnreachable for the same reason as fetchDiscovery: the
+		// errIDPUnreachable for the same reason as fetchDiscovery: the
 		// wrapped transport error names the resolved address and
 		// distinguishes refused/timeout/TLS per host and port, so handlers
 		// collapse this class to a fixed string and log the detail.
-		return nil, fmt.Errorf("%w: %v", errIdPUnreachable, err)
+		return nil, fmt.Errorf("%w: %v", errIDPUnreachable, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {

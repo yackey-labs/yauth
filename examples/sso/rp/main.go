@@ -62,7 +62,7 @@ func main() {
 		// — a connection's discovery_url is admin-chosen, so loopback is
 		// refused unless the deployment says otherwise. Same reason
 		// AllowPrivateNetworkJWKSURI is set on oauth2server below.
-		AllowPrivateNetworkIdP: true,
+		AllowPrivateNetworkIDP: true,
 	})
 	if err != nil {
 		log.Fatalf("rp: ssooidc.New: %v", err)

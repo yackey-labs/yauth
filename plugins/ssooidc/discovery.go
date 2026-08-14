@@ -31,11 +31,11 @@ type DiscoveryDocument struct {
 	CodeChallengeAlg []string `json:"code_challenge_methods_supported,omitempty"`
 }
 
-// errIdPUnreachable marks every failure that came from actually reaching out
+// errIDPUnreachable marks every failure that came from actually reaching out
 // to the configured IdP, as opposed to a failure to understand what came back.
 // Handlers collapse it to a fixed string on the wire and log the detail; see
 // idpFetchMessage.
-var errIdPUnreachable = errors.New("could not reach the IdP")
+var errIDPUnreachable = errors.New("could not reach the IdP")
 
 // urlOrigin returns the scheme://host[:port] of raw, lowercased, with the
 // scheme's default port elided so "https://idp.example" and
@@ -87,13 +87,13 @@ func fetchDiscovery(ctx context.Context, client *http.Client, discoveryURL strin
 	req.Header.Set("Accept", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
-		// errIdPUnreachable so the admin-facing handlers can collapse this
+		// errIDPUnreachable so the admin-facing handlers can collapse this
 		// whole class to one fixed sentence. The wrapped error distinguishes
 		// refused / timeout / TLS-mismatch / "safehttp refused the dial" per
 		// host and port — which is a working network scanner for whoever
 		// supplied the URL — and net/url folds the full destination into its
 		// text, so it must be logged, never returned.
-		return nil, fmt.Errorf("%w: %v", errIdPUnreachable, err)
+		return nil, fmt.Errorf("%w: %v", errIDPUnreachable, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {

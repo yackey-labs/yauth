@@ -131,13 +131,13 @@ func createConn(t *testing.T, srv *httptest.Server, orgID, discoveryURL, status 
 	return created.ID
 }
 
-// internalIdPService stands in for anything reachable from the yauth process
+// internalIDPService stands in for anything reachable from the yauth process
 // and not from the caller: a Redis admin port, the Kubernetes API, the cloud
 // metadata service. It answers as a complete, healthy IdP so that today's
 // behaviour is unambiguous — the /test route round-trips it successfully —
 // and it counts every request that reaches it, which is the assertion that
 // matters: a refusal that still dials has already leaked.
-func internalIdPService(t *testing.T) (*httptest.Server, *atomic.Int64) {
+func internalIDPService(t *testing.T) (*httptest.Server, *atomic.Int64) {
 	t.Helper()
 	hits := &atomic.Int64{}
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -195,7 +195,7 @@ func readAll(t *testing.T, resp *http.Response) string {
 // that still dials has already leaked (the timing and the reachability of
 // the port are the primitive, whatever the handler prints afterwards).
 func TestTestConnection_RefusesLoopbackDiscoveryURL(t *testing.T) {
-	internal, hits := internalIdPService(t)
+	internal, hits := internalIDPService(t)
 
 	// nil client on purpose: this is the client every real deployment uses.
 	p := newPluginWithClient(t, nil)
@@ -221,7 +221,7 @@ func TestTestConnection_RefusesLoopbackDiscoveryURL(t *testing.T) {
 // global_connections.go is a second copy of the same handler and must not be
 // left behind.
 func TestGlobalTestConnection_RefusesLoopbackDiscoveryURL(t *testing.T) {
-	internal, hits := internalIdPService(t)
+	internal, hits := internalIDPService(t)
 
 	p := newPluginWithClient(t, nil)
 	r := memrepo.New()

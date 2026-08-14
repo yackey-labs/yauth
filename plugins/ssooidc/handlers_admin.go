@@ -604,7 +604,7 @@ func idpFetchMessage(ctx context.Context, host plugin.PluginHost, stage string, 
 	if log := host.Logger(); log != nil {
 		log.WarnContext(ctx, "ssooidc: sso connection test failed", "stage", stage, "err", err)
 	}
-	if errors.Is(err, errIdPUnreachable) {
+	if errors.Is(err, errIDPUnreachable) {
 		return "could not reach the IdP's " + stage + " endpoint; if the IdP is in-cluster or on a " +
 			"private address, set allow_private_network_idp"
 	}

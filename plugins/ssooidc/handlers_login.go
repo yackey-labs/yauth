@@ -199,7 +199,7 @@ func (p *ssoOIDCPlugin) firstActiveOIDCForOrg(ctx context.Context, host plugin.P
 	return nil, huma.Error404NotFound("no active sso connection for this organization")
 }
 
-// publicIdPFailure logs an outbound-IdP failure and returns a FIXED 502.
+// publicIDPFailure logs an outbound-IdP failure and returns a FIXED 502.
 //
 // /sso/login and /sso/callback are public: no session, no admin, anyone who can
 // reach the app. Both used to return huma.Error502BadGateway(err.Error()), and
@@ -213,7 +213,7 @@ func (p *ssoOIDCPlugin) firstActiveOIDCForOrg(ctx context.Context, host plugin.P
 // — and even without a hostile document, the transport error alone narrates
 // which internal hosts and ports are alive. An anonymous caller gets one
 // sentence; the operator gets the detail in the log.
-func publicIdPFailure(ctx context.Context, host plugin.PluginHost, stage string, err error) error {
+func publicIDPFailure(ctx context.Context, host plugin.PluginHost, stage string, err error) error {
 	if log := host.Logger(); log != nil {
 		log.WarnContext(ctx, "ssooidc: sso login leg failed", "stage", stage, "err", err)
 	}
@@ -253,7 +253,7 @@ func (p *ssoOIDCPlugin) registerSsoLogin(host plugin.PluginHost, api huma.API, p
 		}
 		disco, err := fetchDiscovery(ctx, p.httpClient(), cfg.DiscoveryURL)
 		if err != nil {
-			return nil, publicIdPFailure(ctx, host, "discovery", err)
+			return nil, publicIDPFailure(ctx, host, "discovery", err)
 		}
 
 		state, err := generateRandom(32)
@@ -392,7 +392,7 @@ func (p *ssoOIDCPlugin) registerSsoCallback(host plugin.PluginHost, api huma.API
 		}
 		disco, err := fetchDiscovery(ctx, p.httpClient(), cfg.DiscoveryURL)
 		if err != nil {
-			return nil, publicIdPFailure(ctx, host, "discovery", err)
+			return nil, publicIDPFailure(ctx, host, "discovery", err)
 		}
 
 		// Exchange the code at the IdP token endpoint. Confidential
@@ -408,7 +408,7 @@ func (p *ssoOIDCPlugin) registerSsoCallback(host plugin.PluginHost, api huma.API
 		})
 		if err != nil {
 			// This is the one that carried the upstream body verbatim.
-			return nil, publicIdPFailure(ctx, host, "token exchange", err)
+			return nil, publicIDPFailure(ctx, host, "token exchange", err)
 		}
 		if tokenResp.IDToken == "" {
 			return nil, huma.Error502BadGateway("IdP did not return id_token")

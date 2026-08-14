@@ -34,7 +34,7 @@ import (
 	"testing"
 )
 
-func TestFederateStart_RejectsNonHTTPIdPBase(t *testing.T) {
+func TestFederateStart_RejectsNonHTTPIDPBase(t *testing.T) {
 	srv, _, adminKey, _ := rpWithSigner(t)
 
 	// Each of these is a Location the browser must never be handed.
@@ -61,7 +61,7 @@ func TestFederateStart_RejectsNonHTTPIdPBase(t *testing.T) {
 
 // Positive control: the handshake this route exists for still works, and the
 // signed request still rides along.
-func TestFederateStart_HTTPSIdPBaseStillRedirects(t *testing.T) {
+func TestFederateStart_HTTPSIDPBaseStillRedirects(t *testing.T) {
 	srv, _, adminKey, _ := rpWithSigner(t)
 
 	res := getWithKey(t, srv.URL+"/api/auth/sso/federate/start?idp=https://idp.test.example&name=central", adminKey)

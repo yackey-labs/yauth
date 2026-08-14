@@ -278,7 +278,7 @@ func newPlugin(t *testing.T) *ssoOIDCPlugin {
 	// Cooldown=1ns so kid-rollover refetches don't bump against the
 	// rate limiter in the test's < millisecond timing.
 	//
-	// AllowPrivateNetworkIdP=true because every login-path fixture in this
+	// AllowPrivateNetworkIDP=true because every login-path fixture in this
 	// package points a connection at an httptest fakeIDP on 127.0.0.1 and
 	// then drives a REAL /sso/login -> /sso/callback round trip through
 	// httpClient(). That client is now safehttp-guarded and refuses loopback
@@ -290,7 +290,7 @@ func newPlugin(t *testing.T) *ssoOIDCPlugin {
 	p, err := New(Config{
 		EncryptionKey: key, StateTTL: 5 * time.Minute,
 		JWKSCacheTTL: time.Minute, JWKSRefreshCooldown: time.Nanosecond,
-		AllowPrivateNetworkIdP: true,
+		AllowPrivateNetworkIDP: true,
 	})
 	if err != nil {
 		t.Fatal(err)

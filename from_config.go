@@ -610,7 +610,7 @@ func addAuthPlugins(builder *YAuthBuilder, cfg *yauthcfg.Config, mailer Mailer, 
 			// an org admin and the server then dials it on /test, on every
 			// login and on back-channel logout. In-cluster IdPs set
 			// allow_private_network_idp.
-			AllowPrivateNetworkIdP: p.SSOOIDC.AllowPrivateNetworkIdP,
+			AllowPrivateNetworkIDP: p.SSOOIDC.AllowPrivateNetworkIDP,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("yauth: sso_oidc: %w", err)

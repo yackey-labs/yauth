@@ -49,9 +49,12 @@ type Config struct {
 	// key. Mutually exclusive with PrivateKeyPEM.
 	PrivateKeyPath string
 	// PublicKeyPath is a filesystem path to the PEM-encoded public key.
-	// Mutually exclusive with PublicKeyPEM. Loaded separately so the
-	// deployment can ship a JWKS-only public-key bundle to verifiers
-	// without exposing the private key.
+	// Mutually exclusive with PublicKeyPEM. Both halves are required:
+	// the public half is verified at construction to be the public half
+	// of the configured private key, and a mismatch is a hard error. It
+	// is a cross-check of the key material, not an independent trust
+	// anchor — the public slot is what Verify trusts and what the
+	// published JWKS advertises, so it must not be settable on its own.
 	PublicKeyPath string
 	// PrivateKeyPEM holds the raw PEM bytes of the private key.
 	// Mutually exclusive with PrivateKeyPath.

@@ -97,6 +97,7 @@ func TestSigner_RS256_RoundTrip(t *testing.T) {
 	tok, err := signer.Sign(map[string]any{
 		"sub":   "user-123",
 		"email": "alice@example.com",
+		"exp":   time.Now().Add(time.Minute).Unix(),
 	})
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
@@ -120,7 +121,7 @@ func TestSigner_ES256_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSigner: %v", err)
 	}
-	tok, err := signer.Sign(map[string]any{"sub": "u-42"})
+	tok, err := signer.Sign(map[string]any{"sub": "u-42", "exp": time.Now().Add(time.Minute).Unix()})
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
@@ -270,7 +271,7 @@ func TestSigner_InlinePEM_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSigner: %v", err)
 	}
-	tok, err := signer.Sign(map[string]any{"sub": "inline-user"})
+	tok, err := signer.Sign(map[string]any{"sub": "inline-user", "exp": time.Now().Add(time.Minute).Unix()})
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}

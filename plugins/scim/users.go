@@ -143,18 +143,18 @@ func requireAdoptable(ctx context.Context, host plugin.PluginHost, orgID, email,
 	if m != nil {
 		return nil
 	}
-	at := strings.LastIndex(email, "@")
-	if at >= 0 && at < len(email)-1 {
-		// GetOrganizationDomainByDomain is case-insensitive and globally
-		// unique on the domain, so this both finds the claim and tells us
-		// which org holds it.
-		d, err := host.Repo().GetOrganizationDomainByDomain(ctx, email[at+1:])
-		if err != nil && !errors.Is(err, yautherr.ErrNotFound) {
-			return repoToScim(err)
-		}
-		if d != nil && d.OrganizationID == orgID && d.Status == domain.DomainVerified {
-			return nil
-		}
+	// The verified-domain half of the test is now auth.VerifiedDomainCoversEmail
+	// — the SAME predicate plugins/organizations consults before it will let an
+	// org admin enrol an existing account by user id, and the same one
+	// auth.AutoJoinFromEmail keys on. It was inlined here; keeping one
+	// implementation means the DomainVerified check cannot drift between the
+	// three places that make an "this namespace is mine" decision.
+	ok, err := auth.VerifiedDomainCoversEmail(ctx, host.Repo(), orgID, email)
+	if err != nil {
+		return repoToScim(err)
+	}
+	if ok {
+		return nil
 	}
 	return Conflict("a user with this userName already exists outside this organization")
 }

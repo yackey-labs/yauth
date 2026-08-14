@@ -728,6 +728,20 @@ type OrganizationsPluginConfig struct {
 	// DefaultInviteRole is assigned to invitees when the request omits a role.
 	// Empty → plugin default ("member").
 	DefaultInviteRole string `yaml:"default_invite_role" toml:"default_invite_role"`
+	// AllowDirectMemberEnrollment restores the pre-release behaviour of
+	// POST /organizations/{id}/members: any org admin may enrol any user id
+	// as an ACTIVE member with no invitation and no verified domain, and the
+	// target is never asked. Default false, which is the safe value: without
+	// it, a non-install-admin caller may only enrol users whose email domain
+	// the org has VERIFIED; everyone else must be invited and accept.
+	//
+	// Turning it on re-opens the id_token groups-claim path — an active
+	// membership is what the group routes require, and group names reach the
+	// `groups` claim with no organization predicate — so set it only where
+	// the org-admin role is already an operator-level trust boundary, such
+	// as a realm-flat console driving the API as an org owner while holding
+	// the global role "user".
+	AllowDirectMemberEnrollment bool `yaml:"allow_direct_member_enrollment" toml:"allow_direct_member_enrollment"`
 }
 
 // SCIMPluginConfig configures the SCIM 2.0 provisioning plugin (org-scoped

@@ -52,6 +52,14 @@ func TestAddMemberDirect(t *testing.T) {
 	decode(t, res, &org)
 	target := seedUser(t, r, "new@example.com")
 
+	// The direct-enrolment CONTRACT below is unchanged (201 + active member,
+	// then an idempotent 200 that leaves the role alone); only its
+	// PRECONDITION is new. A role-"user" org owner may no longer conscript an
+	// arbitrary account, so the org first proves it owns example.com — the
+	// same verified-domain claim plugins/scim requireAdoptable and
+	// auth.AutoJoinFromEmail accept. See enrolment_consent_test.go for why.
+	seedVerifiedDomain(t, r, org.ID, "example.com", domain.DomainVerified)
+
 	// Org owner directly enrolls the user → 201, role member, active.
 	res = doJSON(t, http.MethodPost, srv.URL+"/organizations/"+org.ID+"/members", map[string]string{
 		"user_id": target.ID,

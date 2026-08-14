@@ -768,6 +768,11 @@ export interface ListGroupsResponse {
   total: number;
 }
 
+export interface ListInvitationsResponse {
+  /** @nullable */
+  invitations: InvitationJSON[] | null;
+}
+
 export interface MembershipJSON {
   created_at: string;
   id: string;
@@ -3948,6 +3953,31 @@ export const organizationsRemoveGroupMember = async (id: string,
 
 
 
+export const getOrganizationsListInvitationsUrl = (id: string,) => {
+
+
+
+
+  return `/organizations/${id}/invitations`
+}
+
+/**
+ * Returns invitations that are neither accepted nor expired. Org-admin gated. The one-time token is NOT included — it is shown exactly once, in the create response.
+ * @summary List an organization's pending invitations
+ */
+export const organizationsListInvitations = async (id: string, options?: Parameters<typeof customFetch>[1]): Promise<ListInvitationsResponse> => {
+
+  return customFetch<ListInvitationsResponse>(getOrganizationsListInvitationsUrl(id),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
 export const getOrganizationsCreateInvitationUrl = (id: string,) => {
 
 
@@ -3968,6 +3998,33 @@ export const organizationsCreateInvitation = async (id: string,
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...options?.headers },
     body: JSON.stringify(createInvitationRequest)
+  }
+);}
+
+
+
+export const getOrganizationsDeleteInvitationUrl = (id: string,
+    invitationId: string,) => {
+
+
+
+
+  return `/organizations/${id}/invitations/${invitationId}`
+}
+
+/**
+ * Deletes the invitation row, so its token stops redeeming immediately rather than at the end of the TTL. Org-admin gated; the invitation must belong to this organization.
+ * @summary Revoke a pending invitation
+ */
+export const organizationsDeleteInvitation = async (id: string,
+    invitationId: string, options?: Parameters<typeof customFetch>[1]): Promise<void> => {
+
+  return customFetch<void>(getOrganizationsDeleteInvitationUrl(id,invitationId),
+  {
+    ...options,
+    method: 'DELETE'
+
+
   }
 );}
 
@@ -4006,7 +4063,7 @@ export const getOrganizationsAddMemberUrl = (id: string,) => {
 }
 
 /**
- * Directly enrolls an existing user as a member — no invitation round-trip. Caller must be an org admin/owner or an install-wide admin. Idempotent: enrolling an existing member returns 200 with the current membership untouched (role is NOT changed; use the role endpoint).
+ * Directly enrolls an existing user as a member — no invitation round-trip. Caller must be an org admin/owner or an install-wide admin. Unless the caller is an install-wide admin, the organization must hold a VERIFIED domain covering the target's email address (or the deployment must set plugins.organizations.allow_direct_member_enrollment); otherwise 403 — use POST /organizations/{id}/invitations, which the target consents to. Idempotent: enrolling an existing member returns 200 with the current membership untouched (role is NOT changed; use the role endpoint).
  * @summary Add a user to an organization (admin, idempotent)
  */
 export const organizationsAddMember = async (id: string,

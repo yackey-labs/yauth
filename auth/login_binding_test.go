@@ -189,8 +189,12 @@ func TestLoginBindingCookieName_StableAndPerState(t *testing.T) {
 		t.Fatalf("NewBoundLoginState: %v", err)
 	}
 
-	if LoginBindingCookieName(a) != LoginBindingCookieName(a) {
-		t.Fatalf("cookie name is not stable for one state")
+	// Two separate calls, held in variables: the point is that the name is
+	// DERIVED from the state and therefore stable across calls, not that an
+	// expression equals itself.
+	firstCall, secondCall := LoginBindingCookieName(a), LoginBindingCookieName(a)
+	if firstCall != secondCall {
+		t.Fatalf("cookie name is not stable for one state: %q then %q", firstCall, secondCall)
 	}
 	if LoginBindingCookieName(a) == LoginBindingCookieName(b) {
 		t.Fatalf("two flows share a cookie name — the second /authorize would clobber the first")

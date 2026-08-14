@@ -1341,6 +1341,15 @@
               "null"
             ]
           },
+          "code_challenge_methods_supported": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "end_session_endpoint": {
             "type": "string"
           },
@@ -1408,11 +1417,9 @@
         "required": [
           "issuer",
           "userinfo_endpoint",
-          "jwks_uri",
           "response_types_supported",
           "grant_types_supported",
-          "subject_types_supported",
-          "id_token_signing_alg_values_supported"
+          "subject_types_supported"
         ],
         "type": "object"
       },
@@ -4048,8 +4055,7 @@
           }
         },
         "required": [
-          "sub",
-          "email_verified"
+          "sub"
         ],
         "type": "object"
       },

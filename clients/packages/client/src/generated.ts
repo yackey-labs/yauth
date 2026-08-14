@@ -548,13 +548,15 @@ export interface DiscoveryDoc {
   backchannel_logout_supported?: boolean;
   /** @nullable */
   claims_supported?: string[] | null;
+  /** @nullable */
+  code_challenge_methods_supported?: string[] | null;
   end_session_endpoint?: string;
   /** @nullable */
   grant_types_supported: string[] | null;
   /** @nullable */
-  id_token_signing_alg_values_supported: string[] | null;
+  id_token_signing_alg_values_supported?: string[] | null;
   issuer: string;
-  jwks_uri: string;
+  jwks_uri?: string;
   registration_endpoint?: string;
   /** @nullable */
   response_types_supported: string[] | null;
@@ -1261,7 +1263,7 @@ export interface UsageOrgAPIKeyResponse {
 
 export interface UserInfoResponse {
   email?: string;
-  email_verified: boolean;
+  email_verified?: boolean;
   /** @nullable */
   groups?: string[] | null;
   name?: string;

@@ -103,6 +103,15 @@ func requireAuthHuma(api huma.API, mw *Middleware, allowMustChange bool) func(hu
 			_ = huma.WriteErr(api, ctx, http.StatusUnauthorized, "Unauthorized")
 			return
 		}
+		// Cross-site state change on an ambient cookie (see crosssite.go).
+		// After resolution (a bad credential stays a 401) and before the
+		// must-change gate (the write must not land whichever gate would
+		// have rejected it). Enforced for the AllowMustChange variant too:
+		// logout and change-password are prime CSRF targets, not exemptions.
+		if mw.RefuseCrossSiteWrite(r, au) {
+			_ = huma.WriteErr(api, ctx, http.StatusForbidden, CrossSiteWriteDetail)
+			return
+		}
 		if !allowMustChange && MustRotatePassword(au) {
 			_ = huma.WriteErr(api, ctx, http.StatusForbidden, MustChangePasswordDetail)
 			return
@@ -212,6 +221,15 @@ func RequireAdminHuma(api huma.API, mw *Middleware) func(huma.Context, func(huma
 				return
 			}
 			_ = huma.WriteErr(api, ctx, http.StatusUnauthorized, "Unauthorized")
+			return
+		}
+		// Cross-site state change on an ambient cookie (see crosssite.go).
+		// This is the gate the admin plugin's bodyless levers sit behind —
+		// suspend / unsuspend / ban / unban / impersonate were reachable
+		// from an auto-submitting cross-site <form> while an admin merely
+		// had the attacker's page open.
+		if mw.RefuseCrossSiteWrite(r, au) {
+			_ = huma.WriteErr(api, ctx, http.StatusForbidden, CrossSiteWriteDetail)
 			return
 		}
 		// Admin routes are never in the must-change exempt set (you cannot

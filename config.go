@@ -33,6 +33,17 @@ type YAuthConfig struct {
 	// CORS middleware is not installed.
 	CORS CORSConfig
 
+	// CrossSiteWrites controls the cross-site state-change guard: a
+	// state-changing request that carries the ambient session cookie and
+	// that the BROWSER reports as cross-site is refused at the
+	// authenticated chokepoints. See middleware/crosssite.go for the exact
+	// rules and for what it deliberately does not cover.
+	//
+	// The zero value ENABLES it, for the same reason SecurityHeaders does:
+	// New() stores the config it is handed verbatim with no defaulting
+	// pass, so an opt-in switch would ship the guard dead.
+	CrossSiteWrites CrossSiteWriteConfig
+
 	// SecurityHeaders controls the response-header floor the mounted
 	// Router applies (nosniff, Referrer-Policy, X-Frame-Options, CSP).
 	//
@@ -88,6 +99,24 @@ type CORSConfig struct {
 	AllowedHeaders   []string
 	AllowCredentials bool
 	MaxAge           time.Duration
+}
+
+// CrossSiteWriteConfig is the policy for the cross-site state-change guard.
+// Both knobs are named verbatim in the refusal body
+// (middleware.CrossSiteWriteDetail) so an operator holding nothing but a
+// support ticket can find them.
+type CrossSiteWriteConfig struct {
+	// Allow turns the guard OFF entirely. False (the default) enforces it.
+	Allow bool
+
+	// Origins is the list of cross-site origins permitted to make
+	// state-changing calls with a session cookie. EMPTY inherits
+	// CORS.AllowedOrigins, which is what carries the cross-domain SPA
+	// across this change with no new config — such an app must already be
+	// listed there, since a credentialed XHR cannot read its response
+	// otherwise. Set it explicitly when CORS is terminated by a gateway in
+	// front of yauth and CORS.AllowedOrigins is therefore empty.
+	Origins []string
 }
 
 // SessionBindingConfig is the IP/UA binding policy. Action values are

@@ -131,6 +131,32 @@ ya, err := yauth.New(repo, cfg).WithPlugin(...).Build()
 `AllowCredentials: true` is essential — without it the browser refuses
 to include cookies on cross-origin requests, breaking session auth.
 
+**Cross-site writes are refused by default.** A state-changing request
+(anything but `GET`/`HEAD`/`OPTIONS`) that authenticates with the session
+cookie and that the *browser* reports as cross-site — `Sec-Fetch-Site:
+cross-site`, or an `Origin` that is neither this host nor `BaseURL` — is
+answered `403`. Without that, any page a signed-in user had open could drive
+their session (`POST /admin/users/{id}/suspend` takes no body, so a plain
+auto-submitting form reached it). The allow-list defaults to
+`CORS.AllowedOrigins`, so the SPA above needs no extra config. Two cases do:
+
+```go
+// CORS is terminated by a gateway in front of yauth, so CORS.AllowedOrigins
+// is empty and there is nothing to inherit — name the callers here.
+cfg.CrossSiteWrites = yauth.CrossSiteWriteConfig{
+    Origins: []string{"https://app.example.com"},
+}
+cfg.CrossSiteWrites.Allow = true // or: turn the check off entirely
+```
+
+Unaffected: same-origin and *same-site* callers (a console on a sibling
+subdomain), machine credentials (bearer / `X-Api-Key` — a cross-site page
+cannot make a browser attach one), reads, unauthenticated routes, and any
+client that sends neither `Origin` nor `Sec-Fetch-Site` (curl, CI, server-side
+clients). An SSR/BFF or reverse proxy that *forwards* the browser's `Origin`
+along with the cookie is matched against `BaseURL`; if it presents some other
+origin, list it.
+
 ## How It Works
 
 **Plugins** implement `plugin.Plugin` — `Name()` and
@@ -813,6 +839,8 @@ Notable fields beyond cookie/session settings:
 | `AllowSignups` | `true` | Set `false` to disable new user registration (`SIGNUPS_DISABLED` 403) |
 | `AutoAdminFirstUser` | `false` | Promote the first registered user to role `admin`. **Legacy** — prefer `plugins.email_password.bootstrap_admin` (`yauth docs admin-bootstrap`), which deterministically provisions the admin at startup with a forced password change instead of letting whoever registers first become admin. |
 | `CORS.AllowedOrigins` | `[]` (off) | CORS middleware; empty slice disables it entirely |
+| `CrossSiteWrites.Allow` | `false` (guard on) | Permit cross-site state-changing requests authenticated by the session cookie. Leaving it off is the CSRF guard described above |
+| `CrossSiteWrites.Origins` | inherits `CORS.AllowedOrigins` | Origins allowed to make cross-site state-changing calls with a session cookie. Set explicitly when CORS is terminated by a gateway, so `CORS.AllowedOrigins` is empty |
 | `AllowAdminMachineCallers` | `false` | Allow machine callers that carry the human's own global role — bearer or **user-scoped** API key — to pass `RequireAdmin` (default: cookie-only). An **org-scoped** API key (service account) never passes `RequireAdmin`, opt-in or not: its authority is the org and role on the key. |
 | `RateLimit.*` | various | Per-operation max+window pairs, enforced on the routes of that operation. `Max` is a `*int`: unset keeps yauth's default, `RateLimitMax(0)` (yaml `max: 0`) means no limit |
 | `SessionBinding.BindIP/UA` | `false` | Reject sessions on IP or User-Agent mismatch |

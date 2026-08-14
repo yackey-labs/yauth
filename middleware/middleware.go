@@ -65,6 +65,39 @@ type Config struct {
 	// ResolveAdmin refuses either way — see there.
 	AllowAdminMachineCallers bool
 
+	// AllowCrossSiteWrites turns OFF the cross-site state-change guard
+	// (see crosssite.go). The zero value keeps the guard ON — opt out,
+	// never opt in, the same polarity SecurityHeadersConfig.Disabled uses
+	// and for the same reason: yauth.New stores YAuthConfig verbatim with
+	// no defaulting pass, so an `Enabled bool` would ship the guard dead
+	// for every embedder that builds its config in Go.
+	AllowCrossSiteWrites bool
+
+	// CrossSiteWriteOrigins is the allow-list the guard consults for a
+	// cross-site request that carries an Origin. The YAuth builder sets it
+	// from YAuthConfig.CrossSiteWrites.Origins, falling back to
+	// CORS.AllowedOrigins when that is empty — which is what carries the
+	// cross-domain-SPA population across the change with no new config.
+	CrossSiteWriteOrigins []string
+
+	// CrossSiteWriteOriginsFromCORS records that CrossSiteWriteOrigins was
+	// INHERITED from the CORS policy rather than aimed at this guard. It
+	// exists for one decision: whether a literal "*" in the list counts as
+	// consent to cross-site credentialed writes. See
+	// crossSiteOriginAllowed.
+	CrossSiteWriteOriginsFromCORS bool
+
+	// CORSAllowCredentials mirrors CORS.AllowCredentials, read only when
+	// an inherited "*" has to be interpreted (see above).
+	CORSAllowCredentials bool
+
+	// SelfOrigin is the deployment's own public origin (YAuthConfig.BaseURL).
+	// The cross-site guard treats a request whose Origin matches its HOST as
+	// first-party even when it does not match r.Host — the proxy that
+	// rewrites Host to an upstream name, and the SSR/BFF that forwards the
+	// browser's Origin along with the session cookie.
+	SelfOrigin string
+
 	// EnableOrgHydration toggles active-org context decoration on
 	// successful auth resolution. Set true by the YAuth builder when
 	// the organizations plugin is registered; left false otherwise so
@@ -540,6 +573,16 @@ func (m *Middleware) requireAuth(next http.Handler, allowMustChange bool) http.H
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
+		// Cross-site state change on an ambient cookie (see crosssite.go).
+		// Checked AFTER resolution — a bad credential must still be a 401,
+		// never a 403 — and BEFORE the must-change gate, because the write
+		// must not land whichever gate would have rejected it. Applied to
+		// the allowMustChange variant TOO: logout and change-password are
+		// prime CSRF targets, not exemptions.
+		if m.RefuseCrossSiteWrite(r, au) {
+			http.Error(w, CrossSiteWriteDetail, http.StatusForbidden)
+			return
+		}
 		if !allowMustChange && MustRotatePassword(au) {
 			writeMustChangeProblem(w)
 			return
@@ -696,6 +739,14 @@ func (m *Middleware) RequireAdmin(next http.Handler) http.Handler {
 				return
 			}
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		// Same guard as requireAuth, same position. The admin levers are
+		// the sharpest CSRF targets in the library — suspend and ban are
+		// bodyless, so a plain auto-submitting cross-site form reaches
+		// them — which is why this sits here and not on individual routes.
+		if m.RefuseCrossSiteWrite(r, au) {
+			http.Error(w, CrossSiteWriteDetail, http.StatusForbidden)
 			return
 		}
 		if MustRotatePassword(au) {

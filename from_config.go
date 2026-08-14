@@ -872,6 +872,15 @@ func configToYAuthConfig(c *yauthcfg.Config) YAuthConfig {
 		AllowCredentials: c.Server.CORS.AllowCredentials,
 		MaxAge:           c.Server.CORS.MaxAge,
 	}
+	// Straight through: the guard's own polarity is already opt-out
+	// (Allow=false enforces), so unlike SecurityHeaders there is nothing to
+	// flip here. Origins left empty is meaningful — the builder inherits
+	// server.cors.allowed_origins in that case — so it is copied verbatim
+	// rather than defaulted here.
+	out.CrossSiteWrites = CrossSiteWriteConfig{
+		Allow:   c.Server.CrossSiteWrites.Allow,
+		Origins: c.Server.CrossSiteWrites.Origins,
+	}
 	// Tri-state → opt-out. nil (the omitted key) and explicit true both mean
 	// "emit the headers"; only an explicit `enabled: false` disables them.
 	// The polarity flips here because the runtime struct has to default ON

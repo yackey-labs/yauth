@@ -208,6 +208,21 @@ func (b *YAuthBuilder) Build() (*YAuth, error) {
 		return nil, fmt.Errorf("yauth: %w", err)
 	}
 
+	// The cross-site-write allow-list defaults to the CORS allow-list: a
+	// cross-domain SPA authenticating with cookies must already be listed
+	// there (a credentialed XHR cannot read its response otherwise), so the
+	// inheritance carries that whole population with ZERO new config. Which
+	// SOURCE the list came from is recorded, because it decides whether a
+	// literal "*" counts as consent to cross-site credentialed WRITES —
+	// yauthcfg rejects "*" together with allow_credentials, so a "*"
+	// inherited from CORS means the operator DECLINED credentialed
+	// cross-origin access. See middleware.crossSiteOriginAllowed.
+	xsOrigins := b.cfg.CrossSiteWrites.Origins
+	xsFromCORS := len(xsOrigins) == 0
+	if xsFromCORS {
+		xsOrigins = b.cfg.CORS.AllowedOrigins
+	}
+
 	mw := middleware.New(b.repo, middleware.Config{
 		CookieName:               b.cfg.CookieName,
 		BindIP:                   b.cfg.SessionBinding.BindIP,
@@ -218,6 +233,15 @@ func (b *YAuthBuilder) Build() (*YAuth, error) {
 		AllowAdminMachineCallers: b.cfg.AllowAdminMachineCallers,
 		EnableOrgHydration:       enableOrgHydration,
 		Logger:                   logger,
+
+		AllowCrossSiteWrites:          b.cfg.CrossSiteWrites.Allow,
+		CrossSiteWriteOrigins:         xsOrigins,
+		CrossSiteWriteOriginsFromCORS: xsFromCORS,
+		CORSAllowCredentials:          b.cfg.CORS.AllowCredentials,
+		// The deployment's own origin, so a Host-rewriting proxy or an
+		// SSR/BFF that forwards the browser's Origin verbatim is still
+		// recognised as first-party.
+		SelfOrigin: b.cfg.BaseURL,
 	})
 	mux := http.NewServeMux()
 

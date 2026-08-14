@@ -145,7 +145,17 @@ plugins:
     # state_ttl: 10m                       # /sso/login → /sso/callback window
     # allowed_redirect_urls: ["/dashboard"] # empty = redirect_url ignored
     # self_issuer: https://app/api/auth    # enables the keyless runtime federate endpoint
+    # allow_private_network_idp: true     # ONLY for an in-cluster IdP — see below
 ```
+
+**`allow_private_network_idp` (default `false`).** A connection's
+`discovery_url` is chosen by an org admin and the server then dials it — on
+`/test`, on every `/sso/login` and `/sso/callback`, and on back-channel logout
+— so by default those fetches refuse loopback and RFC 1918 destinations. If
+your IdP lives inside the perimeter (`http://keycloak.identity.svc:8080`,
+`http://127.0.0.1:8081` in the examples), set this to `true` or every SSO login
+fails with a 502. `169.254.0.0/16` (the cloud instance-metadata service) stays
+refused either way.
 
 Drive one with `GET {prefix}/sso/login?connection_id=<id>&redirect_url=/path` —
 or, when exactly ONE global connection is active (the common single-IdP shape),

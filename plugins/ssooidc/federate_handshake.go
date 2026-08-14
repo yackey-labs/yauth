@@ -12,6 +12,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/google/uuid"
 
+	"github.com/yackey-labs/yauth/auth/safehttp"
 	"github.com/yackey-labs/yauth/middleware"
 	"github.com/yackey-labs/yauth/plugin"
 )
@@ -50,6 +51,29 @@ func (p *ssoOIDCPlugin) registerFederateStart(host plugin.PluginHost, api huma.A
 		// the install-wide admin role instead of org membership.
 		if err := p.requireFlowAdmin(ctx, host, r, orgID); err != nil {
 			return nil, err
+		}
+		// idpBase is concatenated straight into the Location header at the
+		// bottom of this handler, and it arrived on the query string. Until
+		// this check the only test was "non-empty", so
+		// /sso/federate/start?idp=//evil.example 302'd the admin's browser
+		// offsite — and not empty-handed: the redirect carries the
+		// federation_request JWT this handler just signed with the
+		// deployment's own asymjwt key, which names our redirect_uris,
+		// initiate_login_uri and return_uri. Whoever receives it can run the
+		// approval half of the handshake and hand a grant of their choosing
+		// back to /sso/federate/return.
+		//
+		// Structural only, and allowPrivate=TRUE on purpose: this is a
+		// browser redirect to an approval page, not a server-side dial (the
+		// dial that follows on the return leg is guarded by httpClient()),
+		// and the documented handshake runs against localhost in examples/sso
+		// and against in-cluster OPs in practice. Requiring https here would
+		// break both. What it does refuse is everything that is not a network
+		// destination at all: javascript:, data:, file:, a hostless
+		// "http://", and the scheme-relative "//evil.example" that url.Parse
+		// reads as an empty scheme.
+		if err := safehttp.ValidateDestinationURL(idpBase, true); err != nil {
+			return nil, huma.Error400BadRequest("idp must be an http(s) URL with a host")
 		}
 		signer := host.JWTSigner()
 		if signer == nil || strings.TrimSpace(p.cfg.SelfIssuer) == "" {

@@ -366,6 +366,52 @@ func (p *ssoOIDCPlugin) registerGetConnection(host plugin.PluginHost, api huma.A
 
 // --- PATCH /organizations/{id}/sso/connections/{cid} -------------------
 
+// requireFreshSecretOnRepoint refuses a PATCH that would carry the STORED
+// client_secret onto a destination or a client identity the caller just chose.
+//
+// The secret is deliberately unreadable: it is AES-256-GCM encrypted at rest
+// and GET only ever reports client_secret_set (see peekOidcConfigPublic). PATCH
+// is the one path around that, because it merges into the DECRYPTED current
+// config with three independent presence checks — supply discovery_url, omit
+// client_secret, and the retained plaintext is re-encrypted against a URL the
+// caller owns. The next /sso/login then SPENDS it: exchangeCode does
+// SetBasicAuth(client_id, client_secret) against the token_endpoint named by
+// that new discovery document. An admin who was never trusted with the secret
+// reads it out of the server by pointing the server at themselves.
+//
+// The rule is narrow on purpose: only a PATCH that MOVES the credential is
+// refused. Renames, status flips, scope and claim-mapping edits — the everyday
+// operations — must keep working without the operator re-typing a secret they
+// may no longer have.
+//
+// discovery_url is compared by ORIGIN, not verbatim, because normalising a
+// path at the same IdP (adding or removing /.well-known/openid-configuration,
+// a shape fetchDiscovery explicitly supports) does not move the credential
+// anywhere. An unparseable URL on either side counts as a move: better to ask
+// for the secret than to guess.
+//
+// Called from BOTH registerUpdateConnection and its org-less twin in
+// global_connections.go, which are otherwise byte-identical copies of the same
+// merge — one helper so a future edit cannot fix only one of them.
+func requireFreshSecretOnRepoint(cur, merged OidcConnectionConfig, incoming *OidcConnectionConfig) error {
+	if incoming == nil || strings.TrimSpace(incoming.ClientSecret) != "" {
+		// The caller supplied a secret; whatever it now points at, they are
+		// binding a credential they hold rather than one they cannot read.
+		return nil
+	}
+	if merged.ClientID != cur.ClientID {
+		return errors.New("changing client_id requires client_secret in the same request: " +
+			"the stored secret belongs to the previous client and is never disclosed")
+	}
+	curOrigin, curErr := urlOrigin(cur.DiscoveryURL)
+	newOrigin, newErr := urlOrigin(merged.DiscoveryURL)
+	if curErr != nil || newErr != nil || curOrigin != newOrigin {
+		return errors.New("changing discovery_url to a different IdP requires client_secret in the " +
+			"same request: the stored secret belongs to the previous IdP and is never disclosed")
+	}
+	return nil
+}
+
 // updateConnectionInput wraps the native JSON body plus the org+connection path
 // params. huma parses + validates the body (unknown/malformed → 422); the
 // request schema auto-derives, so no StashHTTPHuma bridge is needed.
@@ -460,6 +506,11 @@ func (p *ssoOIDCPlugin) registerUpdateConnection(host plugin.PluginHost, api hum
 				len(req.OIDC.ClaimMappings.GroupToRole) > 0 {
 				merged.ClaimMappings = req.OIDC.ClaimMappings.merged()
 			}
+			// The merge above will happily re-encrypt the retained secret
+			// against a caller-chosen endpoint. See requireFreshSecretOnRepoint.
+			if err := requireFreshSecretOnRepoint(cur, merged, req.OIDC); err != nil {
+				return nil, huma.Error400BadRequest(err.Error())
+			}
 			raw, err := marshalOidcConfig(p.cfg.EncryptionKey, merged)
 			if err != nil {
 				return nil, huma.Error400BadRequest(err.Error())
@@ -535,6 +586,31 @@ type testConnectionResponse struct {
 	JWKSKeys         int    `json:"jwks_key_count,omitempty"`
 }
 
+// idpFetchMessage renders an outbound-IdP failure for the /test routes, which
+// are the operator's only feedback loop on a connection they just configured.
+//
+// It must stay a BOUNDED enumeration. The obvious implementation —
+// huma.Error502BadGateway(err.Error()) — is what these routes did, and it turns
+// an org admin into a network scanner: the Go transport error distinguishes
+// "connection refused" from "i/o timeout" from a TLS mismatch per host and
+// port, and net/url folds the full destination URL (and, post-guard, the
+// address it resolved to) into the text. That is the read primitive the egress
+// guard exists to remove; leaving the error verbatim hands most of it back.
+//
+// The one operator-facing hint that IS surfaced names the knob, because a
+// default-deny on private egress otherwise looks like an unexplained outage to
+// every deployment running an in-cluster IdP.
+func idpFetchMessage(ctx context.Context, host plugin.PluginHost, stage string, err error) string {
+	if log := host.Logger(); log != nil {
+		log.WarnContext(ctx, "ssooidc: sso connection test failed", "stage", stage, "err", err)
+	}
+	if errors.Is(err, errIDPUnreachable) {
+		return "could not reach the IdP's " + stage + " endpoint; if the IdP is in-cluster or on a " +
+			"private address, set allow_private_network_idp"
+	}
+	return "the IdP's " + stage + " response was not usable (see the server log)"
+}
+
 func (p *ssoOIDCPlugin) registerTestConnection(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
 	type output struct {
 		Body testConnectionResponse
@@ -574,7 +650,7 @@ func (p *ssoOIDCPlugin) registerTestConnection(host plugin.PluginHost, api huma.
 		defer cancel()
 		disco, err := fetchDiscovery(tctx, p.httpClient(), cfg.DiscoveryURL)
 		if err != nil {
-			return nil, huma.Error502BadGateway(err.Error())
+			return nil, huma.Error502BadGateway(idpFetchMessage(ctx, host, "discovery", err))
 		}
 		// Fetch JWKS to confirm the IdP publishes a usable key
 		// document. We don't validate any particular token here —
@@ -583,7 +659,7 @@ func (p *ssoOIDCPlugin) registerTestConnection(host plugin.PluginHost, api huma.
 		if disco.JWKSURL != "" {
 			set, err := fetchJWKS(tctx, p.httpClient(), disco.JWKSURL)
 			if err != nil {
-				return nil, huma.Error502BadGateway(err.Error())
+				return nil, huma.Error502BadGateway(idpFetchMessage(ctx, host, "jwks", err))
 			}
 			keyCount = set.Len()
 		}

@@ -57,6 +57,12 @@ func main() {
 	ssoPlugin, err := ssooidc.New(ssooidc.Config{
 		EncryptionKey:       shared.EncryptionKey(),
 		AllowedRedirectURLs: []string{shared.RPBase + "/", shared.RPBase + "/dashboard"},
+		// The demo OP is this same machine (http://127.0.0.1:8081), and the
+		// outbound discovery/token/JWKS fetches are egress-guarded by default
+		// — a connection's discovery_url is admin-chosen, so loopback is
+		// refused unless the deployment says otherwise. Same reason
+		// AllowPrivateNetworkJWKSURI is set on oauth2server below.
+		AllowPrivateNetworkIDP: true,
 	})
 	if err != nil {
 		log.Fatalf("rp: ssooidc.New: %v", err)

@@ -2,6 +2,7 @@ package memrepo
 
 import (
 	"context"
+	"encoding/json"
 	"sort"
 	"time"
 
@@ -74,6 +75,25 @@ func (r *Repo) UpdatePasskeyLastUsed(ctx context.Context, id string, at time.Tim
 		return yautherr.ErrNotFound
 	}
 	t := at.UTC()
+	p.LastUsedAt = &t
+	return nil
+}
+
+// UpdatePasskeyCredential replaces the stored credential blob and stamps
+// last_used_at together, so an accepted assertion's sign counter is what the
+// next one is graded against (WebAuthn L3 §7.2 step 24). The blob is copied
+// rather than aliased, matching CreatePasskey, so a caller mutating its own
+// slice afterwards cannot rewrite the stored counter.
+func (r *Repo) UpdatePasskeyCredential(ctx context.Context, id string, credential json.RawMessage, lastUsedAt time.Time) error {
+	_ = ensureCtx(ctx)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	p, ok := r.passkeys[id]
+	if !ok {
+		return yautherr.ErrNotFound
+	}
+	p.Credential = append(json.RawMessage(nil), credential...)
+	t := lastUsedAt.UTC()
 	p.LastUsedAt = &t
 	return nil
 }

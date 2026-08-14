@@ -11,6 +11,14 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8);
 -- name: UpdatePasskeyLastUsed :execrows
 UPDATE yauth_webauthn_credentials SET last_used_at = $2 WHERE id = $1;
 
+-- UpdatePasskeyCredential carries the post-assertion credential (crucially its
+-- sign counter) back to the row, so WebAuthn L3 §7.2 step 24 has something
+-- current to compare the NEXT assertion against. last_used_at moves in the same
+-- statement so the two can never drift apart. No migration: the credential
+-- column already exists.
+-- name: UpdatePasskeyCredential :execrows
+UPDATE yauth_webauthn_credentials SET credential = $2, last_used_at = $3 WHERE id = $1;
+
 -- name: DeletePasskey :execrows
 DELETE FROM yauth_webauthn_credentials WHERE id = $1;
 

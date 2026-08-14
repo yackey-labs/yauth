@@ -730,6 +730,45 @@ var passkeyCases = []testCase{
 			t.Fatalf("expected ErrNotFound; got %v", err)
 		}
 	}},
+	// UpdatePasskeyCredential is what carries an accepted assertion's SIGN
+	// COUNTER back to the row. A backend that drops the blob (or writes only
+	// last_used_at, which is what the passkey plugin itself used to do) freezes
+	// the counter at its registration value and silently disables WebAuthn L3
+	// §7.2 step 24 — cloned-authenticator detection — for that deployment. Both
+	// columns are asserted because they move in one statement and either one
+	// going missing is a real defect.
+	{"update_credential_round_trip", func(t *testing.T, r repo.Repository) {
+		mustCreateUser(t, r, "u1", "alice@example.com")
+		now := nowUTC()
+		if err := r.CreatePasskey(ctx(), domain.NewWebauthnCredential{
+			ID: "pk1", UserID: "u1", Name: "device",
+			Credential: json.RawMessage(`{"signCount":0}`), CreatedAt: now,
+		}); err != nil {
+			t.Fatalf("CreatePasskey: %v", err)
+		}
+
+		used := now.Add(time.Minute)
+		if err := r.UpdatePasskeyCredential(ctx(), "pk1", json.RawMessage(`{"signCount":7}`), used); err != nil {
+			t.Fatalf("UpdatePasskeyCredential: %v", err)
+		}
+
+		got, err := r.GetPasskeyByIDAndUser(ctx(), "pk1", "u1")
+		if err != nil || got == nil {
+			t.Fatalf("expected found; got %+v err=%v", got, err)
+		}
+		if string(got.Credential) != `{"signCount":7}` {
+			t.Fatalf("credential blob not persisted; got %q", string(got.Credential))
+		}
+		if got.LastUsedAt == nil || !got.LastUsedAt.UTC().Equal(used.UTC()) {
+			t.Fatalf("last_used_at not stamped by the same write; got %v want %v", got.LastUsedAt, used.UTC())
+		}
+	}},
+	{"update_credential_not_found", func(t *testing.T, r repo.Repository) {
+		err := r.UpdatePasskeyCredential(ctx(), "missing", json.RawMessage(`{}`), nowUTC())
+		if !errors.Is(err, yautherr.ErrNotFound) {
+			t.Fatalf("expected ErrNotFound; got %v", err)
+		}
+	}},
 }
 
 // ----- totp -----

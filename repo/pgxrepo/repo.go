@@ -700,6 +700,24 @@ func (r *Repo) CreatePasskey(ctx context.Context, input domain.NewWebauthnCreden
 	})
 }
 
+// UpdatePasskeyCredential rewrites the credential blob and last_used_at in one
+// statement, so the sign counter recorded for an accepted assertion is what the
+// NEXT assertion is graded against (WebAuthn L3 §7.2 step 24).
+func (r *Repo) UpdatePasskeyCredential(ctx context.Context, id string, credential json.RawMessage, lastUsedAt time.Time) error {
+	n, err := r.q.UpdatePasskeyCredential(ctx, pgxgen.UpdatePasskeyCredentialParams{
+		ID:         id,
+		Credential: string(credential),
+		LastUsedAt: ts(lastUsedAt),
+	})
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return yautherr.ErrNotFound
+	}
+	return nil
+}
+
 func (r *Repo) UpdatePasskeyLastUsed(ctx context.Context, id string, at time.Time) error {
 	n, err := r.q.UpdatePasskeyLastUsed(ctx, pgxgen.UpdatePasskeyLastUsedParams{
 		ID:         id,

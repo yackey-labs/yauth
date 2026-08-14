@@ -495,7 +495,7 @@ type PasskeyPluginConfig struct {
 	// completes the login in one leg. Set false to demand a TOTP step-up
 	// anyway — which prompts existing passkey users who have TOTP
 	// enrolled for a code they were never asked for before.
-	SatisfiesMFA *bool `yaml:"satisfies_mfa,omitempty" toml:"satisfies_mfa,omitempty" doc:"Treat a passkey assertion as the second factor. nil = true: a passkey is possession plus user verification and is phishing-resistant, so the login completes in one leg. false demands a TOTP step-up as well."`
+	SatisfiesMFA *bool `yaml:"satisfies_mfa,omitempty" toml:"satisfies_mfa,omitempty" doc:"Treat a USER-VERIFIED passkey assertion as the second factor. nil = true: possession plus a biometric/PIN is phishing-resistant, so the login completes in one leg. The credit is graded on the assertion's UV flag — an authenticator that answers UV=0 proved possession only, so a TOTP-enrolled user is stepped up regardless. false demands a TOTP step-up as well."`
 }
 
 // OAuthProvider configures one upstream OAuth/OIDC provider.

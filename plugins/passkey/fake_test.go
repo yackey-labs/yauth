@@ -2,6 +2,7 @@ package passkey
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -223,6 +224,19 @@ func (f *fakeRepo) UpdatePasskeyLastUsed(_ context.Context, id string, at time.T
 		return yautherr.ErrNotFound
 	}
 	t := at.UTC()
+	c.LastUsedAt = &t
+	f.passkeys[id] = c
+	return nil
+}
+func (f *fakeRepo) UpdatePasskeyCredential(_ context.Context, id string, credential json.RawMessage, lastUsedAt time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	c, ok := f.passkeys[id]
+	if !ok {
+		return yautherr.ErrNotFound
+	}
+	c.Credential = append(json.RawMessage(nil), credential...)
+	t := lastUsedAt.UTC()
 	c.LastUsedAt = &t
 	f.passkeys[id] = c
 	return nil

@@ -115,7 +115,7 @@ skipped MFA silently and ignored a `Block` from `lockout`.
 | `emailpassword` `/login` | yes                  | —                                     | `/mfa/verify`                   |
 | `bearer` `/token`        | yes                  | —                                     | `/token/mfa`                    |
 | `magiclink` `/verify`    | yes                  | `magic_link.satisfies_mfa` (def false)| `/mfa/verify`                   |
-| `passkey` login/finish   | **no**               | `passkey.satisfies_mfa` (def true)    | `/mfa/verify`, when enabled     |
+| `passkey` login/finish   | **no**, if UV        | `passkey.satisfies_mfa` (def true)    | `/mfa/verify`, when enabled     |
 | `oauth` callback         | **no**               | `oauth.satisfies_mfa` (def true)      | n/a — fails closed with 403     |
 | `sso_oidc` callback      | **no**               | `sso_oidc.satisfies_mfa` (def true)   | n/a — fails closed with 403     |
 | `ssosaml` ACS            | **no**               | `Config.SatisfiesMFA` (def true)      | n/a — fails closed with 403     |
@@ -124,8 +124,10 @@ skipped MFA silently and ignored a `Block` from `lockout`.
   — the same class of evidence as a password, and usually the same channel as
   the password reset, so treating it as a second factor collapses both factors
   onto one mailbox.
-- **a passkey does not.** It is possession plus user verification and is
-  phishing-resistant; see [passkey.md](passkey.md) for the full argument and
+- **a USER-VERIFIED passkey does not.** It is possession plus a biometric/PIN
+  and is phishing-resistant. The credit is graded on the assertion's UV flag:
+  an authenticator that answers UV=0 proved possession only, so a TOTP-enrolled
+  user **is** stepped up. See [passkey.md](passkey.md) for the full argument and
   for what changes if you set `satisfies_mfa: false`.
 - **the federated flows do not, and cannot be made to cheaply.** `oauth`,
   `sso_oidc` and `ssosaml` end in a browser redirect, which has no body to

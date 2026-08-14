@@ -5,12 +5,22 @@
 //
 // Behaviour:
 //   - Each Send* method renders a fixed subject + body template.
-//   - net/smtp is used for delivery; when TLS=true the connection is
-//     established with crypto/tls (implicit TLS, port 465) before
-//     issuing SMTP commands.
+//   - net/smtp is used for delivery; TLSMode selects how the transport is
+//     secured — implicit (handshake before the greeting, port 465),
+//     starttls (REQUIRE the upgrade, refuse to send without it),
+//     opportunistic (upgrade only when the server advertises STARTTLS) or
+//     none. See [Mailer.TLSMode]; an empty TLSMode derives the mode from
+//     the deprecated TLS bool so existing callers are unaffected.
 //   - Username/Password are passed to smtp.PlainAuth when both are
 //     non-empty; otherwise the connection is unauthenticated (suitable
 //     for a local relay / MailHog).
+//
+// Every message this package sends carries a single-use bearer token —
+// a verification, password-reset, magic-link or unlock link. That is why
+// the transport mode is a first-class knob rather than a boolean: the
+// value on the wire is an account-takeover credential, not a
+// notification, and "upgrade if the server feels like it" is not a
+// defensible posture for one.
 package smtp
 
 import (
@@ -37,14 +47,75 @@ type Mailer struct {
 	Password string
 	// From is the From: header and SMTP envelope sender.
 	From string
-	// TLS enables implicit TLS (smtps://, typically port 465). Leave it
-	// false for the STARTTLS shape (typically port 587): the connection
-	// starts in cleartext and is upgraded opportunistically when the
-	// server advertises STARTTLS. The upgrade is best-effort by design —
-	// a server that does not offer it still gets the mail — which is why
-	// smtp.PlainAuth's own refusal to send credentials over an
-	// unencrypted link is the thing protecting the password.
+	// TLS enables implicit TLS (smtps://, typically port 465).
+	//
+	// Deprecated: set TLSMode instead. This bool can only express two of
+	// the four transport postures — true means implicit TLS, false means
+	// an OPPORTUNISTIC upgrade — and neither of them is "refuse to send
+	// unless the link is encrypted". It is still honoured when TLSMode is
+	// empty (true -> ModeImplicit, false -> ModeOpportunistic) so every
+	// existing struct-literal caller keeps byte-identical behaviour.
 	TLS bool
+
+	// TLSMode selects the transport posture: ModeImplicit, ModeStartTLS,
+	// ModeOpportunistic or ModeNone. Empty derives from TLS.
+	//
+	// Prefer ModeStartTLS for any relay reached over a network. The
+	// opportunistic default is NOT a defence: an on-path attacker who
+	// deletes the `250-STARTTLS` line from the EHLO response makes
+	// c.Extension("STARTTLS") answer false, the upgrade is silently
+	// skipped, and the whole DATA body — password-reset token and all —
+	// crosses the wire in cleartext with nothing in the logs. The old
+	// argument that smtp.PlainAuth's refusal to send credentials over an
+	// unencrypted link makes this safe protects the RELAY PASSWORD only;
+	// PlainAuth has no opinion about the message body, which is where the
+	// account-takeover token lives.
+	//
+	// Comparison is case-insensitive and surrounding whitespace is
+	// trimmed; an unrecognised value is an error at send time rather than
+	// a silent downgrade to cleartext.
+	TLSMode string
+}
+
+// TLS transport modes for [Mailer.TLSMode].
+const (
+	// ModeImplicit wraps the socket in TLS before the SMTP greeting is
+	// read (smtps://, typically port 465).
+	ModeImplicit = "implicit"
+	// ModeStartTLS REQUIRES the STARTTLS upgrade: a relay that does not
+	// advertise it gets no message at all. This is the only mode that
+	// keeps a single-use token off a stripped cleartext wire while
+	// remaining usable on the submission port (587).
+	ModeStartTLS = "starttls"
+	// ModeOpportunistic upgrades when the server advertises STARTTLS and
+	// sends in cleartext when it does not. The derived default when TLS
+	// is false, and exactly what this package has always done.
+	ModeOpportunistic = "opportunistic"
+	// ModeNone never attempts the upgrade, even when it is advertised.
+	ModeNone = "none"
+)
+
+// effectiveTLSMode resolves TLSMode, falling back to the deprecated TLS
+// bool so that a Mailer built before TLSMode existed behaves identically.
+//
+// Normalisation mirrors buildMailer's handling of mailer.provider
+// (strings.ToLower + TrimSpace): rejecting `tls_mode: STARTTLS` on case
+// alone would be gratuitous. What is NOT tolerated is an unrecognised
+// value — a typo'd mode must not fall back to the weakest posture, which
+// is precisely the silent downgrade this whole field exists to remove.
+func (m *Mailer) effectiveTLSMode() (string, error) {
+	switch mode := strings.ToLower(strings.TrimSpace(m.TLSMode)); mode {
+	case ModeImplicit, ModeStartTLS, ModeOpportunistic, ModeNone:
+		return mode, nil
+	case "":
+		if m.TLS {
+			return ModeImplicit, nil
+		}
+		return ModeOpportunistic, nil
+	default:
+		return "", fmt.Errorf("smtp: unknown tls_mode %q (%s | %s | %s | %s)",
+			m.TLSMode, ModeImplicit, ModeStartTLS, ModeOpportunistic, ModeNone)
+	}
 }
 
 // New constructs a *Mailer.
@@ -169,8 +240,16 @@ func (m *Mailer) send(ctx context.Context, to, subject, body string) error {
 	return err
 }
 
-// exchange dials, optionally upgrades to TLS, and drives the SMTP conversation.
+// exchange dials, secures the connection per the effective TLS mode, and
+// drives the SMTP conversation.
 func (m *Mailer) exchange(ctx context.Context, addr, to string, msg []byte) error {
+	// Before the dial, like validateRecipient: a misconfigured mode should
+	// never reach a socket, and it must never fall through to cleartext.
+	mode, err := m.effectiveTLSMode()
+	if err != nil {
+		return err
+	}
+
 	conn, err := (&net.Dialer{Timeout: dialTimeout}).DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return fmt.Errorf("smtp: dial: %w", err)
@@ -187,7 +266,7 @@ func (m *Mailer) exchange(ctx context.Context, addr, to string, msg []byte) erro
 	defer stop()
 
 	netConn := conn
-	if m.TLS {
+	if mode == ModeImplicit {
 		// Implicit TLS (smtps://, typically port 465): the socket is TLS from
 		// the first byte, so wrap before the greeting is read.
 		tc := tls.Client(conn, &tls.Config{ServerName: m.Host, MinVersion: tls.VersionTLS12})
@@ -203,13 +282,30 @@ func (m *Mailer) exchange(ctx context.Context, addr, to string, msg []byte) erro
 	}
 	defer func() { _ = c.Quit() }()
 
-	if !m.TLS {
-		// OPPORTUNISTIC STARTTLS. net/smtp.SendMail — which this replaced —
-		// did this for us, and docs/mailer.md ships `port: 587` configs that
-		// depend on it. Dropping it while unifying the two branches would have
-		// silently downgraded those installs to cleartext, credentials and
-		// single-use tokens included, with nothing in the logs to say so.
-		if ok, _ := c.Extension("STARTTLS"); ok {
+	if mode == ModeStartTLS || mode == ModeOpportunistic {
+		// The two modes differ in EXACTLY ONE outcome — what happens when the
+		// server does not advertise the extension — so the advertised check is
+		// folded into the decision and the upgrade itself is one shared
+		// statement. Two copies of c.StartTLS would let a future edit secure
+		// one mode and not the other, and would leave the required mode with
+		// no test coverage that the upgrade it demands actually completes.
+		//
+		// ModeOpportunistic is the derived default and the behaviour every
+		// current `port: 587` install depends on (net/smtp.SendMail, which
+		// this replaced, did the same). ModeStartTLS is the posture that
+		// closes the strip attack: an on-path attacker deleting `250-STARTTLS`
+		// from the EHLO response no longer gets the reset token in cleartext,
+		// they get no message at all.
+		advertised, _ := c.Extension("STARTTLS")
+		if !advertised && mode == ModeStartTLS {
+			// The refusal message is the operator's only teacher here, so it
+			// names the knob, the value that restores the old behaviour, and
+			// the value that opts out entirely.
+			return fmt.Errorf("smtp: %s:%d does not advertise STARTTLS and mailer.smtp.tls_mode is %q; "+
+				"set mailer.smtp.tls_mode: %s to upgrade only when the server offers it, or %q to send in cleartext",
+				m.Host, m.Port, ModeStartTLS, ModeOpportunistic, ModeNone)
+		}
+		if advertised {
 			if err := c.StartTLS(&tls.Config{ServerName: m.Host, MinVersion: tls.VersionTLS12}); err != nil {
 				return fmt.Errorf("smtp: starttls: %w", err)
 			}
@@ -217,9 +313,10 @@ func (m *Mailer) exchange(ctx context.Context, addr, to string, msg []byte) erro
 	}
 
 	// PlainAuth is kept rather than hand-rolled: it refuses to send the
-	// credential over an unencrypted connection to a non-localhost server,
-	// which is the protection that makes the opportunistic upgrade above
-	// safe to leave opportunistic.
+	// credential over an unencrypted connection to a non-localhost server.
+	// That protects the RELAY PASSWORD and nothing else — the single-use
+	// token lives in the DATA body, which is why the transport posture is
+	// TLSMode's job and not PlainAuth's.
 	if m.Username != "" && m.Password != "" {
 		if err := c.Auth(smtp.PlainAuth("", m.Username, m.Password, m.Host)); err != nil {
 			return fmt.Errorf("smtp: auth: %w", err)

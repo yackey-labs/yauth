@@ -35,6 +35,9 @@ func (c *Config) Validate() error {
 	if err := c.validateSecurity(); err != nil {
 		return err
 	}
+	if err := validateMailer(&c.Mailer); err != nil {
+		return err
+	}
 	if css := c.Session.CookieSameSite; css != "" {
 		switch css {
 		case "lax", "strict", "none", "Lax", "Strict", "None":
@@ -316,6 +319,34 @@ func validateTrustedProxies(specs []string) error {
 			continue
 		}
 		return fmt.Errorf("server.trusted_proxies: %q is not an IP, a CIDR, or one of private|all|none", raw)
+	}
+	return nil
+}
+
+// validateMailer holds the two mailer rules that can be decided from the
+// config alone, and no others. Everything else about the mailer (host/port
+// required, `from` required, the *_env variables resolving) is owned by
+// buildSMTPMailer / buildCloudflareMailer in from_config.go, which have the
+// environment in hand and already carry the error text; duplicating it here
+// would mean two wordings for one mistake.
+//
+// Neither rule can break a deployed config: tls_mode did not exist before
+// this release, so nothing in the field can be carrying a value that trips
+// either one. An EMPTY tls_mode must stay valid — `yauth init` encodes zero
+// values and Load() runs Validate on the result.
+func validateMailer(m *MailerConfig) error {
+	mode := strings.ToLower(strings.TrimSpace(m.SMTP.TLSMode))
+	switch mode {
+	case "", "implicit", "starttls", "opportunistic", "none":
+	default:
+		return fmt.Errorf("mailer.smtp.tls_mode %q invalid (implicit | starttls | opportunistic | none)", m.SMTP.TLSMode)
+	}
+	// tls is the deprecated spelling of tls_mode: implicit. Any other pairing
+	// is an operator saying two different things about the same connection,
+	// and the one they get is whichever the resolution order happens to
+	// prefer — exactly the ambiguity that produced this batch.
+	if m.SMTP.TLS && mode != "" && mode != "implicit" {
+		return fmt.Errorf("mailer.smtp.tls is deprecated and conflicts with tls_mode %q — remove tls and keep tls_mode, or use tls_mode: implicit instead of tls: true", m.SMTP.TLSMode)
 	}
 	return nil
 }

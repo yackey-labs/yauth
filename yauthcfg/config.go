@@ -204,7 +204,12 @@ type SMTPConfig struct {
 	Port        int    `yaml:"port" toml:"port" doc:"SMTP server port, e.g. 587 (required when provider=smtp)."`
 	UsernameEnv string `yaml:"username_env" toml:"username_env" doc:"Name of the env var holding the SMTP username (the value is read at runtime; the var name, not the secret, lives in config)."`
 	PasswordEnv string `yaml:"password_env" toml:"password_env" doc:"Name of the env var holding the SMTP password."`
-	TLS         bool   `yaml:"tls" toml:"tls" doc:"Use TLS for the SMTP connection."`
+	TLS         bool   `yaml:"tls" toml:"tls" doc:"DEPRECATED — use tls_mode. true means implicit TLS (port 465); false means an OPPORTUNISTIC STARTTLS upgrade that an on-path attacker can strip. Honoured only when tls_mode is unset."`
+	// TLSMode replaces TLS. The bool could only say "implicit" or
+	// "upgrade if offered" — it had no way to say "refuse to send unless
+	// the link is encrypted", which is the only safe posture for a
+	// message body carrying a single-use account-takeover token.
+	TLSMode string `yaml:"tls_mode" toml:"tls_mode" enum:"implicit,starttls,opportunistic,none" doc:"SMTP transport security. 'starttls' REQUIRES the STARTTLS upgrade and refuses to send without it — prefer it for any relay reached over a network. 'implicit' handshakes before the greeting (port 465). 'opportunistic' upgrades only when the server advertises STARTTLS, so an on-path attacker can strip it and read password-reset and magic-link tokens in cleartext. 'none' never upgrades. Empty derives from the deprecated tls flag (implicit when true, opportunistic otherwise)."`
 }
 
 // SessionConfig mirrors the cookie/session knobs on yauth.YAuthConfig.

@@ -195,7 +195,15 @@ mailer:
     port: 587
     username_env: SMTP_USER
     password_env: SMTP_PASS
+    tls_mode: starttls   # require the STARTTLS upgrade; refuses to send without it
 ```
+
+`tls_mode` accepts `starttls` | `implicit` (port 465) | `opportunistic` |
+`none`. Leaving it unset means **`opportunistic`**, which upgrades only when
+the server advertises STARTTLS — an on-path attacker who strips that
+advertisement reads your password-reset and magic-link tokens in cleartext.
+Set `starttls` for any relay reached over a network; `yauth docs mailer` has
+the full table.
 
 `provider` also accepts `cloudflare` (Cloudflare Email Service over its REST
 API) — see `yauth docs mailer` for its `cloudflare:` block and prerequisites.

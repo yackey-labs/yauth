@@ -193,6 +193,27 @@ type SamlConnectionConfig struct {
 	// SAML profile best practice.
 	ResponseSignedRequired bool `json:"response_signed_required,omitempty"`
 
+	// AllowSHA1Signatures accepts RSA/DSA/ECDSA-SHA1 XML signatures and
+	// SHA-1 reference digests on this connection's inbound assertions,
+	// and RSA-SHA1 on its HTTP-Redirect SLO signatures. OFF by default.
+	//
+	// SHA-1 is collision-broken; chosen-prefix collisions are within
+	// reach of a funded attacker, and XML's tolerance for semantically
+	// irrelevant bytes (comments, whitespace, attribute order) makes
+	// constructing the colliding pair unusually easy. yauth therefore
+	// refuses it by default even though goxmldsig will happily verify it.
+	//
+	// Turn it on ONLY for a legacy IdP that genuinely cannot sign with
+	// RSA-SHA256 — ADFS 2.0 on Server 2008 R2, Shibboleth 2.x with legacy
+	// config, or a crewjam-based IdP left on its RSA-SHA1 default — and
+	// treat it as a migration deadline, not a setting.
+	//
+	// Like IdpInitiatedSsoAllowed, this is one of the unconditional bools
+	// on PATCH: a partial update that omits the key resets it to false.
+	// That direction fails SECURE (SHA-1 logins start failing loudly)
+	// rather than silently re-enabling a broken hash.
+	AllowSHA1Signatures bool `json:"allow_sha1_signatures,omitempty"`
+
 	// WantEncryptedAssertions tells the IdP (via metadata.xml) that
 	// yauth wants the assertion encrypted. Default false; rare. When
 	// true, SpPrivateKey is required.
@@ -316,6 +337,7 @@ type persistedConfig struct {
 	SpAcsURL                string            `json:"sp_acs_url,omitempty"`
 	IdpInitiatedSsoAllowed  bool              `json:"idp_initiated_sso_allowed,omitempty"`
 	AllowAccountAdoption    bool              `json:"allow_account_adoption,omitempty"`
+	AllowSHA1Signatures     bool              `json:"allow_sha1_signatures,omitempty"`
 	AssertionSignedRequired bool              `json:"assertion_signed_required"`
 	ResponseSignedRequired  bool              `json:"response_signed_required"`
 	WantEncryptedAssertions bool              `json:"want_encrypted_assertions,omitempty"`
@@ -332,14 +354,19 @@ func marshalSamlConfig(key [32]byte, c SamlConnectionConfig) ([]byte, error) {
 		return nil, err
 	}
 	p := persistedConfig{
-		IdpEntityID:             c.IdpEntityID,
-		IdpSsoURL:               c.IdpSsoURL,
-		IdpSloURL:               c.IdpSloURL,
-		IdpX509Cert:             c.IdpX509Cert,
-		SpEntityID:              c.SpEntityID,
-		SpAcsURL:                c.SpAcsURL,
-		IdpInitiatedSsoAllowed:  c.IdpInitiatedSsoAllowed,
-		AllowAccountAdoption:    c.AllowAccountAdoption,
+		IdpEntityID:            c.IdpEntityID,
+		IdpSsoURL:              c.IdpSsoURL,
+		IdpSloURL:              c.IdpSloURL,
+		IdpX509Cert:            c.IdpX509Cert,
+		SpEntityID:             c.SpEntityID,
+		SpAcsURL:               c.SpAcsURL,
+		IdpInitiatedSsoAllowed: c.IdpInitiatedSsoAllowed,
+		AllowAccountAdoption:   c.AllowAccountAdoption,
+		// Must be copied here as well as declared on persistedConfig:
+		// this codec is field-by-field, so a flag added to only one of
+		// the two structs is silently dropped on write and reads back
+		// false — an escape hatch that cannot be switched on.
+		AllowSHA1Signatures:     c.AllowSHA1Signatures,
 		AssertionSignedRequired: c.AssertionSignedRequired,
 		ResponseSignedRequired:  c.ResponseSignedRequired,
 		WantEncryptedAssertions: c.WantEncryptedAssertions,
@@ -377,6 +404,7 @@ func unmarshalSamlConfig(key [32]byte, raw []byte) (SamlConnectionConfig, error)
 		SpAcsURL:                p.SpAcsURL,
 		IdpInitiatedSsoAllowed:  p.IdpInitiatedSsoAllowed,
 		AllowAccountAdoption:    p.AllowAccountAdoption,
+		AllowSHA1Signatures:     p.AllowSHA1Signatures,
 		AssertionSignedRequired: p.AssertionSignedRequired,
 		ResponseSignedRequired:  p.ResponseSignedRequired,
 		WantEncryptedAssertions: p.WantEncryptedAssertions,
@@ -418,6 +446,7 @@ func peekSamlConfigPublic(raw []byte) (SamlConnectionConfig, error) {
 		SpAcsURL:                p.SpAcsURL,
 		IdpInitiatedSsoAllowed:  p.IdpInitiatedSsoAllowed,
 		AllowAccountAdoption:    p.AllowAccountAdoption,
+		AllowSHA1Signatures:     p.AllowSHA1Signatures,
 		AssertionSignedRequired: p.AssertionSignedRequired,
 		ResponseSignedRequired:  p.ResponseSignedRequired,
 		WantEncryptedAssertions: p.WantEncryptedAssertions,

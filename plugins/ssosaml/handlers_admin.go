@@ -158,6 +158,7 @@ type samlPublicConfig struct {
 	SpAcsURL                string            `json:"sp_acs_url"`
 	IdpInitiatedSsoAllowed  bool              `json:"idp_initiated_sso_allowed"`
 	AllowAccountAdoption    bool              `json:"allow_account_adoption"`
+	AllowSHA1Signatures     bool              `json:"allow_sha1_signatures"`
 	AssertionSignedRequired bool              `json:"assertion_signed_required"`
 	ResponseSignedRequired  bool              `json:"response_signed_required"`
 	WantEncryptedAssertions bool              `json:"want_encrypted_assertions"`
@@ -184,14 +185,18 @@ func toConnectionJSON(c domain.SsoConnection, baseURL string) samlConnectionJSON
 		pub, err := peekSamlConfigPublic(c.Config)
 		if err == nil {
 			sm := samlPublicConfig{
-				IdpEntityID:             pub.IdpEntityID,
-				IdpSsoURL:               pub.IdpSsoURL,
-				IdpSloURL:               pub.IdpSloURL,
-				IdpX509Cert:             pub.IdpX509Cert,
-				SpEntityID:              pub.EntityIDForConnection(baseURL, c.ID),
-				SpAcsURL:                pub.ACSURLForConnection(baseURL),
-				IdpInitiatedSsoAllowed:  pub.IdpInitiatedSsoAllowed,
-				AllowAccountAdoption:    pub.AllowAccountAdoption,
+				IdpEntityID:            pub.IdpEntityID,
+				IdpSsoURL:              pub.IdpSsoURL,
+				IdpSloURL:              pub.IdpSloURL,
+				IdpX509Cert:            pub.IdpX509Cert,
+				SpEntityID:             pub.EntityIDForConnection(baseURL, c.ID),
+				SpAcsURL:               pub.ACSURLForConnection(baseURL),
+				IdpInitiatedSsoAllowed: pub.IdpInitiatedSsoAllowed,
+				AllowAccountAdoption:   pub.AllowAccountAdoption,
+				// Echoed so an admin can SEE which connections are still
+				// on the SHA-1 hatch — otherwise the only way to audit
+				// the fleet is to read the database.
+				AllowSHA1Signatures:     pub.AllowSHA1Signatures,
 				AssertionSignedRequired: pub.AssertionSignedRequired,
 				ResponseSignedRequired:  pub.ResponseSignedRequired,
 				WantEncryptedAssertions: pub.WantEncryptedAssertions,
@@ -496,6 +501,10 @@ func (p *ssoSAMLPlugin) registerUpdateConnection(host plugin.PluginHost, api hum
 			// is intentional.
 			merged.IdpInitiatedSsoAllowed = req.SAML.IdpInitiatedSsoAllowed
 			merged.AllowAccountAdoption = req.SAML.AllowAccountAdoption
+			// Same reset-on-omit semantics, and here that is the safe
+			// direction: forgetting the key re-refuses SHA-1 (logins
+			// fail loudly) rather than silently re-enabling it.
+			merged.AllowSHA1Signatures = req.SAML.AllowSHA1Signatures
 			merged.AssertionSignedRequired = req.SAML.AssertionSignedRequired
 			merged.ResponseSignedRequired = req.SAML.ResponseSignedRequired
 			merged.WantEncryptedAssertions = req.SAML.WantEncryptedAssertions
@@ -613,7 +622,7 @@ func (p *ssoSAMLPlugin) registerMetadataXML(host plugin.PluginHost, api huma.API
 		if err != nil {
 			return writeError(http.StatusInternalServerError, "INTERNAL", "decode connection config failed"), nil
 		}
-		sp, err := buildServiceProvider(&cfg, host.BaseURL(), c.ID, p.cfg.ClockSkew)
+		sp, err := buildServiceProvider(&cfg, host.BaseURL(), c.ID)
 		if err != nil {
 			return writeError(http.StatusInternalServerError, "INTERNAL", "build sp failed: "+err.Error()), nil
 		}

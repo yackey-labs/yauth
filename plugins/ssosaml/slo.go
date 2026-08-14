@@ -123,7 +123,7 @@ func (p *ssoSAMLPlugin) registerSamlSLO(host plugin.PluginHost, api huma.API, pr
 		if err != nil {
 			return sloError("idp cert unreadable"), nil
 		}
-		if err := verifyRedirectSignature(rawSource, sigAlg, signature, cert); err != nil {
+		if err := verifyRedirectSignature(rawSource, sigAlg, signature, cert, cfg.AllowSHA1Signatures); err != nil {
 			return sloError("LogoutRequest signature invalid"), nil
 		}
 
@@ -156,7 +156,7 @@ func (p *ssoSAMLPlugin) registerSamlSLO(host plugin.PluginHost, api huma.API, pr
 // buildLogoutResponseRedirect builds a SAML LogoutResponse and returns the
 // HTTP-Redirect binding URL to send the user back to the IdP's SLO endpoint.
 func (p *ssoSAMLPlugin) buildLogoutResponseRedirect(host plugin.PluginHost, cfg *SamlConnectionConfig, r *http.Request, requestID, relayState string) (string, error) {
-	sp, err := buildServiceProvider(cfg, host.BaseURL(), "", p.cfg.ClockSkew)
+	sp, err := buildServiceProvider(cfg, host.BaseURL(), "")
 	if err != nil {
 		return "", err
 	}
@@ -176,7 +176,14 @@ func (p *ssoSAMLPlugin) buildLogoutResponseRedirect(host plugin.PluginHost, cfg 
 // verifyRedirectSignature verifies a SAML HTTP-Redirect binding signature
 // (SAML Bindings §3.4.4.1). The signed octet string is the raw, still-encoded
 // query parameters in the canonical order SAMLRequest [, RelayState], SigAlg.
-func verifyRedirectSignature(rawSource, sigAlg, signatureB64 string, cert *x509.Certificate) error {
+//
+// allowSHA1 is the connection's AllowSHA1Signatures flag. The rsa-sha1 arm
+// below used to be unconditional: an attacker who could produce a SHA-1
+// collision against the IdP's signing key could force-terminate any user's
+// sessions over an unauthenticated GET. Same policy and same operator-facing
+// text as the assertion path (algDenyListVerifier), so an operator who moves
+// one connection off SHA-1 does not have to discover the SLO half separately.
+func verifyRedirectSignature(rawSource, sigAlg, signatureB64 string, cert *x509.Certificate, allowSHA1 bool) error {
 	pub, ok := cert.PublicKey.(*rsa.PublicKey)
 	if !ok {
 		return errors.New("idp cert is not RSA")
@@ -206,6 +213,11 @@ func verifyRedirectSignature(rawSource, sigAlg, signatureB64 string, cert *x509.
 		s := sha256.Sum256(signed)
 		digest = s[:]
 	case "http://www.w3.org/2000/09/xmldsig#rsa-sha1":
+		// The arm and its crypto/sha1 import stay: it is still reachable
+		// for a connection that has opted in via allow_sha1_signatures.
+		if !allowSHA1 {
+			return errors.New(sha1Refused)
+		}
 		hash = crypto.SHA1
 		s := sha1.Sum(signed)
 		digest = s[:]

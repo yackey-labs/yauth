@@ -264,7 +264,7 @@ func FuzzParseResponse(f *testing.F) {
 		SpAcsURL:               "https://sp.test/acs",
 		IdpInitiatedSsoAllowed: true,
 	}
-	sp, err := buildServiceProvider(&cfg, "https://sp.test", "conn-fuzz", time.Minute)
+	sp, err := buildServiceProvider(&cfg, "https://sp.test", "conn-fuzz")
 	if err != nil {
 		f.Fatalf("buildServiceProvider: %v", err)
 	}

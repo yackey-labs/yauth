@@ -166,7 +166,7 @@ func rogueOrg(t *testing.T, f *e2eFixture, collidingEntityID string) (domain.Org
 		t.Fatalf("create rogue connection: %v", err)
 	}
 
-	sp, err := buildServiceProvider(&cfg, f.srv.URL, conn.ID, time.Minute)
+	sp, err := buildServiceProvider(&cfg, f.srv.URL, conn.ID)
 	if err != nil {
 		t.Fatalf("build rogue sp: %v", err)
 	}

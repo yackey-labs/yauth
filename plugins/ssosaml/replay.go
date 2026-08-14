@@ -63,6 +63,28 @@ func (c *replayCache) Seen(issuer, assertionID string, validUntil time.Time) boo
 		return true
 	}
 	exp := validUntil.Add(c.ttl)
+	// Clamp the entry's lifetime. validUntil is the assertion's
+	// Conditions/@NotOnOrAfter — a value the IdP writes and crewjam never
+	// bounds from above — so before this clamp an IdP that stamped
+	// NotOnOrAfter a century out pinned an entry forever in a map SHARED
+	// by every SAML connection in the process (see p.replay()), letting
+	// one tenant's IdP set every other tenant's memory ceiling and making
+	// gcLocked's O(n) sweep walk those entries on every later assertion.
+	//
+	// The ceiling scales with the configured TTL rather than being a flat
+	// hour, so a deployment that deliberately widens ReplayCacheTTL is not
+	// silently cut back below its own configured window.
+	//
+	// The tradeoff this makes is smaller than it looks: an assertion whose
+	// NotOnOrAfter is beyond the ceiling becomes replayable once the entry
+	// drops. But crewjam independently refuses any assertion whose
+	// IssueInstant is older than saml.MaxIssueDelay (90s) on arrival, so
+	// the practical replay window is ~90s + skew regardless of what the
+	// IdP claims — the clamp costs nothing real and removes an
+	// IdP-controlled unbounded map.
+	if ceiling := now.Add(max(time.Hour, 2*c.ttl)); exp.After(ceiling) {
+		exp = ceiling
+	}
 	// Defensive: never store an entry that's already expired (would
 	// be immediately gc'd, but explicit beats implicit).
 	if exp.Before(now) {

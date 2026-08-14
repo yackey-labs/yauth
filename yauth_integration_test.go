@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"sync"
 	"testing"
+	"time"
 
 	yauth "github.com/yackey-labs/yauth"
 	"github.com/yackey-labs/yauth/plugins/emailpassword"
@@ -288,6 +289,48 @@ func (m *captureMailer) lastReset() (capturedMail, bool) {
 	return m.resets[len(m.resets)-1], true
 }
 
+func (m *captureMailer) verificationCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.verifications)
+}
+
+// waitReset polls the backgrounded /forgot-password send into view.
+//
+// The send moved OFF the request goroutine: blocking the response on the SMTP
+// conversation made the response time an account-existence oracle, since an
+// unknown address returns without touching the mailer at all. The assertion is
+// unchanged in substance — a reset mail must be sent and its link must work —
+// it just no longer assumes the send finished before the response did.
+func (m *captureMailer) waitReset(t *testing.T) capturedMail {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if mail, ok := m.lastReset(); ok {
+			return mail
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("no reset email captured")
+	return capturedMail{}
+}
+
+// settleVerifications waits until the verification count stops moving, for the
+// "no FURTHER mail was sent" assertions: there is no condition to poll for,
+// only quiescence.
+func (m *captureMailer) settleVerifications() {
+	deadline := time.Now().Add(time.Second)
+	prev := -1
+	for time.Now().Before(deadline) {
+		n := m.verificationCount()
+		if n == prev {
+			return
+		}
+		prev = n
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 // newTestServerWithMailer returns a server whose email-password plugin
 // is configured with the supplied Mailer. HIBP is disabled so the
 // tests do not make outbound requests.
@@ -382,10 +425,7 @@ func TestForgotPassword_ResetPassword_RoundTrip(t *testing.T) {
 	}
 	res.Body.Close()
 
-	mail, ok := mailer.lastReset()
-	if !ok {
-		t.Fatal("no reset email captured")
-	}
+	mail := mailer.waitReset(t)
 	token := extractToken(t, mail.link)
 
 	res = cl.post(t, srv.URL+"/api/auth/reset-password", map[string]string{
@@ -466,9 +506,7 @@ func TestResendVerification_AlreadyVerified_DoesNotLeak(t *testing.T) {
 	}
 	res.Body.Close()
 
-	mailer.mu.Lock()
-	beforeCount := len(mailer.verifications)
-	mailer.mu.Unlock()
+	beforeCount := mailer.verificationCount()
 
 	res = cl.post(t, srv.URL+"/api/auth/resend-verification", map[string]string{"email": email})
 	if res.StatusCode != http.StatusOK {
@@ -476,9 +514,10 @@ func TestResendVerification_AlreadyVerified_DoesNotLeak(t *testing.T) {
 	}
 	res.Body.Close()
 
-	mailer.mu.Lock()
-	afterCount := len(mailer.verifications)
-	mailer.mu.Unlock()
+	// The send is backgrounded now, so give a mail that SHOULD NOT exist every
+	// chance to appear before concluding it did not.
+	mailer.settleVerifications()
+	afterCount := mailer.verificationCount()
 	if afterCount != beforeCount {
 		t.Fatalf("resend-verification on verified account sent mail: before=%d after=%d", beforeCount, afterCount)
 	}

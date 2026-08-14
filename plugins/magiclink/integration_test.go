@@ -237,11 +237,8 @@ func (s *stack) link(t *testing.T) string {
 		t.Fatalf("magic-link/send: %d (%s)", res.StatusCode, drain(res))
 	}
 	res.Body.Close()
-	_, link, ok := s.mailer.last()
-	if !ok {
-		t.Fatalf("no magic link was mailed")
-	}
-	return tokenFromLink(link)
+	// The send is dispatched off the request goroutine now, so wait for it.
+	return tokenFromLink(s.mailer.waitLink(t))
 }
 
 func (s *stack) verify(t *testing.T, token string) *http.Response {

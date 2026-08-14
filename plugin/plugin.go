@@ -8,9 +8,12 @@ package plugin
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -191,6 +194,56 @@ func RateLimitFor(host PluginHost, op RateLimitOp, defMax int, defWindow time.Du
 		return c.RateLimitForOp(op, defMax, defWindow)
 	}
 	return host.RateLimit(string(op), defMax, defWindow)
+}
+
+// AllowRecipient meters an operation against the RECIPIENT of the mail it is
+// about to send, and reports whether this send is still within budget.
+//
+// [RateLimitFor] and the middleware underneath it key every bucket
+// name+":"+clientIP (middleware/ratelimit.go). That is the right budget for a
+// credential-guessing route, and the wrong one for a route whose whole effect
+// lands in somebody else's inbox: the email in the request body — the thing
+// deciding who receives the mail — never enters the key, so the budget belongs
+// to the SENDER and the recipient absorbs the sum of every sender's. Five a
+// minute from each of 256 hosts in a /24 is over a thousand DKIM-signed
+// messages a minute into one mailbox, from the operator's own domain, and with
+// magic-link signup enabled the address need not even exist locally, so the
+// target can be an arbitrary third party. /forgot-password has a second-order
+// version: it retires the victim's live reset link on every request, so the
+// flood also denies the recovery it is impersonating.
+//
+// This is a SECOND bucket, layered on top of the per-IP one, not a replacement
+// — the per-IP limiter still does its own job.
+//
+// The key hashes the normalised address, so no PII lands in
+// yauth_rate_limits.key (which is exported, dumped and backed up like any
+// other table).
+//
+// Buckets are PER OP. Sharing one across /forgot-password, /resend-verification
+// and /magic-link/send would let an attacker burn a victim's forgot-password
+// budget and take their magic-link sign-in down with it.
+//
+// Fails OPEN on a repo error, exactly as middleware.RateLimit does: a
+// rate-limit backend that is down must not take password recovery with it.
+//
+// Callers MUST answer a false with their ordinary neutral 200, never a 429 —
+// a distinguishable refusal hands back the account-existence answer the
+// neutral body exists to withhold.
+func AllowRecipient(ctx context.Context, host PluginHost, op RateLimitOp, email string, max int, window time.Duration) bool {
+	if host == nil || max <= 0 || window <= 0 {
+		return true
+	}
+	r := host.Repo()
+	if r == nil {
+		return true
+	}
+	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(email))))
+	key := "recipient:" + string(op) + ":" + hex.EncodeToString(sum[:])
+	res, err := r.CheckRateLimit(ctx, key, max, window)
+	if err != nil {
+		return true
+	}
+	return res.Allowed
 }
 
 // MFAVerifier completes a second-factor challenge that an events.Handler

@@ -22,6 +22,7 @@ import (
 	"net/smtp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Mailer delivers yauth emails over SMTP.
@@ -36,10 +37,13 @@ type Mailer struct {
 	Password string
 	// From is the From: header and SMTP envelope sender.
 	From string
-	// TLS enables implicit TLS (smtps://, typically port 465). For
-	// STARTTLS upgrade pass false and let net/smtp's Dial do plain
-	// SMTP — STARTTLS support is intentionally minimal here; operators
-	// who need it can wrap their own dialer.
+	// TLS enables implicit TLS (smtps://, typically port 465). Leave it
+	// false for the STARTTLS shape (typically port 587): the connection
+	// starts in cleartext and is upgraded opportunistically when the
+	// server advertises STARTTLS. The upgrade is best-effort by design —
+	// a server that does not offer it still gets the mail — which is why
+	// smtp.PlainAuth's own refusal to send credentials over an
+	// unencrypted link is the thing protecting the password.
 	TLS bool
 }
 
@@ -84,8 +88,63 @@ func (m *Mailer) SendUnlockToken(ctx context.Context, email, link string) error 
 	return m.send(ctx, email, subject, body)
 }
 
+// dialTimeout bounds establishing the TCP connection, and connDeadline bounds
+// the whole SMTP conversation once it is up.
+//
+// Neither existed before, and their absence was not cosmetic. net/smtp.SendMail
+// calls net.Dial with no timeout and nothing in this file ever called
+// SetDeadline, so a relay that accepts the connection and then says nothing —
+// a blackholed or wedged mail server, which is precisely the failure that makes
+// requests get abandoned in the first place — parked the sending goroutine in
+// bufio.Read on the 220 greeting indefinitely. That was survivable only while
+// every send sat on a request goroutine the client would eventually give up on.
+// It is not survivable now that /forgot-password, /resend-verification and
+// /magic-link/send dispatch in the background: without these two deadlines,
+// backgrounding converts "one parked request" into one retained goroutine and
+// one leaked file descriptor per send, forever.
+const (
+	dialTimeout  = 10 * time.Second
+	connDeadline = 30 * time.Second
+)
+
+// validateRecipient refuses an address that cannot safely be handed to a mail
+// backend, and forms no other opinion about it.
+//
+// It deliberately does NOT parse the address. yauth's own registration accepts
+// anything containing "@" (validEmail is a strings.Contains check), so a
+// stricter notion of validity here — quoted local parts, SMTPUTF8, anything
+// mail.ParseAddress normalises — would silently make already-registered users
+// permanently unreachable, with the neutral 200 hiding it from them and the
+// operator both. The only thing being refused is a value that would change the
+// MEANING of the protocol exchange it is spliced into: a bare CR/LF or NUL is
+// header injection, and surrounding whitespace is the same class of surprise.
+// This mirrors what net/smtp's own validateLine checks before it will dial.
+func validateRecipient(to string) error {
+	if to == "" {
+		return errors.New("smtp: recipient is required")
+	}
+	if strings.ContainsAny(to, "\r\n\x00") {
+		return errors.New("smtp: recipient contains a line break or NUL")
+	}
+	if to != strings.TrimSpace(to) {
+		return errors.New("smtp: recipient has leading or trailing whitespace")
+	}
+	if !strings.Contains(to, "@") {
+		return errors.New("smtp: recipient is not an email address")
+	}
+	return nil
+}
+
 // send composes a minimal RFC 5322 message and submits it via SMTP.
-// Cancellation of ctx aborts the in-flight connection.
+// Cancellation of ctx aborts the in-flight connection — for real, now.
+//
+// The previous implementation handed dispatch to a goroutine and selected on
+// ctx.Done(). ctx was never passed to dispatch, so cancelling only made the
+// CALLER return: the goroutine kept running, still holding an open socket, with
+// no deadline anywhere beneath it. This version has one exchange implementation
+// for both the implicit-TLS and plain branches, dials through the context, and
+// registers a context.AfterFunc that closes the connection so a cancellation
+// tears the socket down instead of orphaning it.
 func (m *Mailer) send(ctx context.Context, to, subject, body string) error {
 	if m.Host == "" || m.Port == 0 {
 		return errors.New("smtp: host and port are required")
@@ -93,60 +152,80 @@ func (m *Mailer) send(ctx context.Context, to, subject, body string) error {
 	if m.From == "" {
 		return errors.New("smtp: From is required")
 	}
+	// Before the dial, so a malformed recipient never costs a connection.
+	if err := validateRecipient(to); err != nil {
+		return err
+	}
 
 	addr := net.JoinHostPort(m.Host, strconv.Itoa(m.Port))
 	msg := composeMessage(m.From, to, subject, body)
 
-	type result struct{ err error }
-	ch := make(chan result, 1)
-	go func() {
-		ch <- result{err: m.dispatch(addr, to, msg)}
-	}()
-	select {
-	case <-ctx.Done():
+	err := m.exchange(ctx, addr, to, msg)
+	// A cancelled send surfaces as whatever I/O error the torn-down socket
+	// produced ("use of closed network connection"); report the cause instead.
+	if err != nil && ctx.Err() != nil {
 		return ctx.Err()
-	case r := <-ch:
-		return r.err
 	}
+	return err
 }
 
-// dispatch performs the SMTP exchange. Implicit TLS is used when m.TLS
-// is set; otherwise net/smtp.SendMail is used (which does plain SMTP and
-// will negotiate STARTTLS if the server advertises it and the host
-// matches).
-func (m *Mailer) dispatch(addr, to string, msg []byte) error {
-	if m.TLS {
-		return m.dispatchTLS(addr, to, msg)
-	}
-	var auth smtp.Auth
-	if m.Username != "" && m.Password != "" {
-		auth = smtp.PlainAuth("", m.Username, m.Password, m.Host)
-	}
-	return smtp.SendMail(addr, auth, m.From, []string{to}, msg)
-}
-
-// dispatchTLS opens an implicit-TLS connection and drives the SMTP
-// exchange manually since net/smtp.SendMail only supports plain dial.
-func (m *Mailer) dispatchTLS(addr, to string, msg []byte) error {
-	tlsConfig := &tls.Config{ServerName: m.Host, MinVersion: tls.VersionTLS12}
-	conn, err := tls.Dial("tcp", addr, tlsConfig)
+// exchange dials, optionally upgrades to TLS, and drives the SMTP conversation.
+func (m *Mailer) exchange(ctx context.Context, addr, to string, msg []byte) error {
+	conn, err := (&net.Dialer{Timeout: dialTimeout}).DialContext(ctx, "tcp", addr)
 	if err != nil {
-		return fmt.Errorf("smtp: tls dial: %w", err)
+		return fmt.Errorf("smtp: dial: %w", err)
 	}
 	defer func() { _ = conn.Close() }()
+	// An absolute cap on the conversation, so a relay that accepts and then
+	// stalls mid-exchange cannot hold the connection open forever even when
+	// nobody cancels.
+	_ = conn.SetDeadline(time.Now().Add(connDeadline))
+	// ...and cancellation closes the socket out from under the read, which is
+	// the only way to interrupt net/smtp. stop() removes the hook on the
+	// normal path so no goroutine outlives this call.
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
 
-	c, err := smtp.NewClient(conn, m.Host)
+	netConn := conn
+	if m.TLS {
+		// Implicit TLS (smtps://, typically port 465): the socket is TLS from
+		// the first byte, so wrap before the greeting is read.
+		tc := tls.Client(conn, &tls.Config{ServerName: m.Host, MinVersion: tls.VersionTLS12})
+		if err := tc.HandshakeContext(ctx); err != nil {
+			return fmt.Errorf("smtp: tls handshake: %w", err)
+		}
+		netConn = tc
+	}
+
+	c, err := smtp.NewClient(netConn, m.Host)
 	if err != nil {
 		return fmt.Errorf("smtp: new client: %w", err)
 	}
 	defer func() { _ = c.Quit() }()
 
+	if !m.TLS {
+		// OPPORTUNISTIC STARTTLS. net/smtp.SendMail — which this replaced —
+		// did this for us, and docs/mailer.md ships `port: 587` configs that
+		// depend on it. Dropping it while unifying the two branches would have
+		// silently downgraded those installs to cleartext, credentials and
+		// single-use tokens included, with nothing in the logs to say so.
+		if ok, _ := c.Extension("STARTTLS"); ok {
+			if err := c.StartTLS(&tls.Config{ServerName: m.Host, MinVersion: tls.VersionTLS12}); err != nil {
+				return fmt.Errorf("smtp: starttls: %w", err)
+			}
+		}
+	}
+
+	// PlainAuth is kept rather than hand-rolled: it refuses to send the
+	// credential over an unencrypted connection to a non-localhost server,
+	// which is the protection that makes the opportunistic upgrade above
+	// safe to leave opportunistic.
 	if m.Username != "" && m.Password != "" {
-		auth := smtp.PlainAuth("", m.Username, m.Password, m.Host)
-		if err := c.Auth(auth); err != nil {
+		if err := c.Auth(smtp.PlainAuth("", m.Username, m.Password, m.Host)); err != nil {
 			return fmt.Errorf("smtp: auth: %w", err)
 		}
 	}
+	// c.Mail / c.Rcpt run net/smtp's own validateLine on the addresses.
 	if err := c.Mail(m.From); err != nil {
 		return fmt.Errorf("smtp: mail: %w", err)
 	}

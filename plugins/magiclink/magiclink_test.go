@@ -49,6 +49,50 @@ func (m *captureMailer) count() int {
 	return len(m.calls)
 }
 
+// waitForMails polls until the mailer has recorded at least n sends.
+//
+// registerSend now dispatches the mail OFF the request goroutine — a send that
+// blocks the response makes the response time an account-existence oracle — so
+// "read the mailer on the line after the response" became a race. These tests
+// pin correct behaviour (a link is mailed, and it signs in), so they are made
+// to wait for the send rather than weakened to stop looking for it.
+func (m *captureMailer) waitForMails(t *testing.T, n int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if m.count() >= n {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %d magic-link mail(s); the mailer recorded %d", n, m.count())
+}
+
+// waitLink polls for at least one send and returns the most recent link.
+func (m *captureMailer) waitLink(t *testing.T) string {
+	t.Helper()
+	m.waitForMails(t, 1)
+	_, link, _ := m.last()
+	return link
+}
+
+// settle waits until the send count stops moving, which is what an UPPER-bound
+// assertion needs: there is no condition to poll for, only quiescence. Polling
+// for a stable count beats a fixed sleep — it is both faster in the normal case
+// and does not silently under-count on a loaded machine.
+func (m *captureMailer) settle() {
+	deadline := time.Now().Add(2 * time.Second)
+	prev := -1
+	for time.Now().Before(deadline) {
+		n := m.count()
+		if n == prev {
+			return
+		}
+		prev = n
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 func newServer(t *testing.T, cfg magiclink.Config) (*httptest.Server, *captureMailer, func()) {
 	t.Helper()
 
@@ -134,6 +178,8 @@ func TestSend_NoUser_SignupEnabled_EmailsLink(t *testing.T) {
 		t.Fatalf("expected 200, got %d", res.StatusCode)
 	}
 	res.Body.Close()
+	mailer.waitForMails(t, 1)
+	mailer.settle()
 	if mailer.count() != 1 {
 		t.Fatalf("expected 1 email, got %d", mailer.count())
 	}
@@ -155,10 +201,7 @@ func TestVerify_SignupEnabled_CreatesUserAndIssuesSession(t *testing.T) {
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("send: %d", res.StatusCode)
 	}
-	_, link, ok := mailer.last()
-	if !ok {
-		t.Fatalf("mailer recorded no calls")
-	}
+	link := mailer.waitLink(t)
 	tok := tokenFromLink(link)
 	if tok == "" {
 		t.Fatalf("no token in link %q", link)
@@ -213,7 +256,7 @@ func TestVerify_TokenSingleUse(t *testing.T) {
 		"email": "bob@example.com",
 	})
 	res.Body.Close()
-	_, link, _ := mailer.last()
+	link := mailer.waitLink(t)
 	tok := tokenFromLink(link)
 
 	res = postJSON(t, c, srv.URL+"/api/auth/magic-link/verify", map[string]string{
@@ -247,7 +290,7 @@ func TestVerify_ExpiredToken_401(t *testing.T) {
 		"email": "carol@example.com",
 	})
 	res.Body.Close()
-	_, link, _ := mailer.last()
+	link := mailer.waitLink(t)
 	tok := tokenFromLink(link)
 
 	// Sleep a hair to let the TTL elapse cross-platform.

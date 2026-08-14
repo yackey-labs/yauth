@@ -88,11 +88,8 @@ func seedAndIssueLink(t *testing.T, srv *httptest.Server, mailer *captureMailer,
 	}
 	res.Body.Close()
 
-	_, link, ok := mailer.last()
-	if !ok {
-		t.Fatal("no magic link was mailed")
-	}
-	return u.ID, tokenFromLink(link)
+	// The send is dispatched off the request goroutine now, so wait for it.
+	return u.ID, tokenFromLink(mailer.waitLink(t))
 }
 
 func redeem(t *testing.T, srv *httptest.Server, token string) *http.Response {

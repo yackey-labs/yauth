@@ -101,6 +101,15 @@ func (c *Config) Validate() error {
 	if p.SSOOIDC.Enabled && p.SSOOIDC.EncryptionKeyEnv == "" {
 		return fmt.Errorf("plugins.sso_oidc.encryption_key_env is required when sso_oidc is enabled")
 	}
+	// Named here as well as in each plugin's New so the operator sees the yaml
+	// key, not a package prefix. Silently defaulting an unrecognised value
+	// would turn "off" mistyped as "of" into an enforced binding.
+	if err := validateLoginStateBinding("plugins.oauth.login_state_binding", p.OAuth.LoginStateBinding); err != nil {
+		return err
+	}
+	if err := validateLoginStateBinding("plugins.sso_oidc.login_state_binding", p.SSOOIDC.LoginStateBinding); err != nil {
+		return err
+	}
 	if p.OAuth2Server.Enabled {
 		if p.OAuth2Server.AccessTTL < 0 || p.OAuth2Server.BackchannelLogoutTimeout < 0 ||
 			p.OAuth2Server.AuthorizationCodeTTL < 0 || p.OAuth2Server.DeviceCodeTTL < 0 {
@@ -376,4 +385,16 @@ func validateRateLimits(c *RateLimitConfig) error {
 		}
 	}
 	return nil
+}
+
+// validateLoginStateBinding checks a plugins.*.login_state_binding value.
+// yauthcfg is deliberately a dependency-free leaf, so the three modes are
+// spelled out here rather than imported; auth.NormalizeLoginStateBinding is the
+// authority and re-checks the same set when the plugin is constructed.
+func validateLoginStateBinding(key, mode string) error {
+	switch mode {
+	case "", "auto", "required", "off":
+		return nil
+	}
+	return fmt.Errorf("%s %q is not supported (auto | required | off)", key, mode)
 }

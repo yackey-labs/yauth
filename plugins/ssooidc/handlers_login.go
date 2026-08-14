@@ -226,8 +226,15 @@ func publicIDPFailure(ctx context.Context, host plugin.PluginHost, stage string,
 // operation. It resolves the target connection, mints state+nonce+PKCE,
 // persists the SsoLoginState row, and 302s to the IdP authorization endpoint.
 // The 302 is expressed via flowOutput (Status + Location header, no body) so
-// huma writes the redirect cleanly — no raw http.Redirect double-write. No
-// cookie is set (state is server-side via CreateSsoLoginState).
+// huma writes the redirect cleanly — no raw http.Redirect double-write.
+//
+// It DOES set one cookie, when login-state binding is on: the browser half of
+// auth/login_binding.go. Until that existed the state was purely server-side and
+// belonged to nobody, so a finished-but-undelivered /sso/callback URL was a
+// portable credential — the attacker authenticated at the IdP as themselves and
+// mailed the callback to a victim, whose browser then received a session cookie
+// for the attacker's federated identity. The cookie carries no authority; it
+// only proves this browser started this flow.
 func (p *ssoOIDCPlugin) registerSsoLogin(host plugin.PluginHost, api huma.API, prefix string) {
 	huma.Register(api, huma.Operation{
 		OperationID: "ssooidc-login",
@@ -238,7 +245,7 @@ func (p *ssoOIDCPlugin) registerSsoLogin(host plugin.PluginHost, api huma.API, p
 		Security:    []map[string][]string{}, // explicitly public
 		Middlewares: flowGuards(api),
 	}, func(ctx context.Context, _ *struct{}) (*flowOutput, error) {
-		r, _, err := flowReqResp(ctx)
+		r, w, err := flowReqResp(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -256,7 +263,18 @@ func (p *ssoOIDCPlugin) registerSsoLogin(host plugin.PluginHost, api huma.API, p
 			return nil, publicIDPFailure(ctx, host, "discovery", err)
 		}
 
-		state, err := generateRandom(32)
+		// Bind the state to THIS browser when the deployment can carry the
+		// cookie. The decision is taken here, at mint time, and recorded in the
+		// state's own "b." prefix — the callback reads no config, so an attacker
+		// cannot downgrade by choosing the callback's method or content type.
+		// An unbound state (binding off, or a row from the previous binary) is
+		// simply never checked, which is what makes a rolling deploy safe.
+		var state, bindSecret string
+		if auth.BindLoginState(p.cfg.LoginStateBinding, host.CookieSecure()) {
+			bindSecret, state, err = auth.NewBoundLoginState()
+		} else {
+			state, err = generateRandom(32)
+		}
 		if err != nil {
 			return nil, huma.Error500InternalServerError("state gen failed")
 		}
@@ -283,6 +301,20 @@ func (p *ssoOIDCPlugin) registerSsoLogin(host plugin.PluginHost, api huma.API, p
 			return nil, huma.Error500InternalServerError("persist state failed")
 		}
 
+		// Write the browser's half onto the stashed writer. huma writes the 302
+		// status + Location after this handler returns, so this header-map
+		// mutation lands first — the same ordering the session-cookie write on
+		// the callback leg already relies on. Path/Domain/Secure come from
+		// cookieOptionsFromHost, i.e. the deployment's real cookie scope; a path
+		// derived from the handler's r.URL.Path would be wrong under the usual
+		// StripPrefix("/api/auth") mount and would never come back.
+		if bindSecret != "" {
+			// TTL is the STATE's: the cookie is worthless once the row expires.
+			if c := auth.LoginBindingCookie(cookieOptionsFromHost(host, r, 0), state, bindSecret, p.cfg.StateTTL); c != nil {
+				http.SetCookie(w, c)
+			}
+		}
+
 		callbackURL := callbackAbsoluteURL(host)
 		params := url.Values{}
 		params.Set("response_type", "code")
@@ -304,6 +336,13 @@ func (p *ssoOIDCPlugin) registerSsoLogin(host plugin.PluginHost, api huma.API, p
 		}, nil
 	})
 }
+
+// loginBindingRefused is the 400 body for a callback presented by a browser
+// that did not start the flow. It names the knob verbatim so an operator
+// reading a support ticket learns how to disable the binding from the response
+// itself.
+const loginBindingRefused = "this login was not started in this browser (the login-state cookie is missing or does not match); start the sign-in again. " +
+	`Operators: set plugins.sso_oidc.login_state_binding to "off" if your deployment cannot carry the cookie.`
 
 func callbackAbsoluteURL(host plugin.PluginHost) string {
 	base := strings.TrimRight(host.BaseURL(), "/")
@@ -369,6 +408,29 @@ func (p *ssoOIDCPlugin) registerSsoCallback(host plugin.PluginHost, api huma.API
 		}
 		if code == "" || state == "" {
 			return nil, huma.Error400BadRequest("missing code or state")
+		}
+
+		// Browser binding — the same guard as plugins/oauth's callback, and the
+		// reason auth/login_binding.go is shared rather than copied. Only states
+		// this binary minted with binding on carry the "b." prefix; a legacy row
+		// from the previous binary, or one minted with binding off, is not
+		// checked, so a rolling deploy never refuses an in-flight login.
+		//
+		// It runs BEFORE ConsumeSsoLoginState deliberately. Consuming first would
+		// let a stranger burn the single-use row belonging to the browser that
+		// actually started the flow — the refusal would become a denial of
+		// service against the victim it is meant to protect.
+		if auth.IsBoundLoginState(state) {
+			c, cerr := r.Cookie(auth.LoginBindingCookieName(state))
+			bound := cerr == nil && c != nil && auth.VerifyLoginBinding(state, c.Value)
+			// Cleared on EVERY exit, matched or not: single-use like the state
+			// row it guards, and a stale one must not linger for the whole TTL.
+			if cc := auth.ClearLoginBindingCookie(cookieOptionsFromHost(host, r, 0), state); cc != nil {
+				http.SetCookie(w, cc)
+			}
+			if !bound {
+				return nil, huma.Error400BadRequest(loginBindingRefused)
+			}
 		}
 
 		st, err := host.Repo().ConsumeSsoLoginState(ctx, state)

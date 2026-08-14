@@ -114,6 +114,33 @@ func newStackWithRedirects(t *testing.T, info oauth.UserInfo, allowed []string) 
 // is identical, so it stays in this one constructor.
 func newStackOn(t *testing.T, provServer *httptest.Server, info oauth.UserInfo, allowed []string) *stack {
 	t.Helper()
+	return newStackOnSecure(t, provServer, info, allowed, false)
+}
+
+// newStackOnSecure is newStackOn with the deployment's cookie posture as an
+// explicit parameter. secure=false is the historical fixture: a plain-HTTP
+// httptest server and YAuthConfig.CookieSecure=false.
+//
+// secure=true builds the TLS shape instead — httptest.NewTLSServer plus
+// CookieSecure=true — because login_binding_test.go cannot say anything true
+// about a browser-binding cookie without it. A cookie that has to survive an
+// IdP's cross-site form_post has to be SameSite=None, which browsers only
+// honour with Secure, and Go's own cookiejar refuses to SEND a Secure cookie
+// over http://. On the plain-HTTP fixture a correctly-bound flow would look
+// identical to an unbound one, so the exploit tests would be unfalsifiable.
+// Everything else — the provider, the plugin config, the memrepo, the
+// cookie-jarred client — is shared, so the two postures cannot drift.
+func newStackOnSecure(t *testing.T, provServer *httptest.Server, info oauth.UserInfo, allowed []string, secure bool) *stack {
+	t.Helper()
+	return newStackOnBinding(t, provServer, info, allowed, secure, "")
+}
+
+// newStackOnBinding is newStackOnSecure with plugins.oauth.login_state_binding
+// spelled out. "" is the shipped default ("auto"), which every other fixture
+// uses; login_binding_test.go passes "required" and "off" to pin what each mode
+// does on a posture that would otherwise decide it.
+func newStackOnBinding(t *testing.T, provServer *httptest.Server, info oauth.UserInfo, allowed []string, secure bool, binding string) *stack {
+	t.Helper()
 
 	// The yauth server's URL is needed for RedirectURL, which we don't
 	// know until httptest.NewServer is called. Solution: build the
@@ -146,12 +173,16 @@ func newStackOn(t *testing.T, provServer *httptest.Server, info oauth.UserInfo, 
 		Providers:           []oauth.Provider{prov},
 		StateTTL:            5 * time.Minute,
 		AllowedRedirectURLs: allowed,
+		LoginStateBinding:   binding,
 	})
 	if err != nil {
 		t.Fatalf("oauth.New: %v", err)
 	}
 
-	ya, err := yauth.New(repo, yauth.NewDefaultConfig()).
+	ycfg := yauth.NewDefaultConfig()
+	ycfg.CookieSecure = secure
+
+	ya, err := yauth.New(repo, ycfg).
 		WithPlugin(emailpassword.New(emailpassword.Config{
 			HIBPCheck:    false,
 			HIBPCheckSet: true,
@@ -170,7 +201,12 @@ func newStackOn(t *testing.T, provServer *httptest.Server, info oauth.UserInfo, 
 
 	mux := http.NewServeMux()
 	mux.Handle("/api/auth/", http.StripPrefix("/api/auth", ya.Router()))
-	srv := httptest.NewServer(mux)
+	var srv *httptest.Server
+	if secure {
+		srv = httptest.NewTLSServer(mux)
+	} else {
+		srv = httptest.NewServer(mux)
+	}
 	t.Cleanup(srv.Close)
 
 	prov.cfg.RedirectURL = srv.URL + "/api/auth/oauth/fake/callback"
@@ -180,7 +216,11 @@ func newStackOn(t *testing.T, provServer *httptest.Server, info oauth.UserInfo, 
 		t.Fatalf("cookiejar: %v", err)
 	}
 	cl := &http.Client{
-		Jar:           jar,
+		Jar: jar,
+		// srv.Client()'s transport trusts the httptest TLS cert on the
+		// secure fixture and is an ordinary transport otherwise; it talks
+		// plain http to the provider server either way.
+		Transport:     srv.Client().Transport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error { return http.ErrUseLastResponse },
 	}
 	return &stack{srv: srv, client: cl, provider: prov, repo: repo}

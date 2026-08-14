@@ -32,10 +32,12 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"errors"
+	"fmt"
 	"net/http"
 	"sync"
 	"time"
 
+	"github.com/yackey-labs/yauth/auth"
 	"github.com/yackey-labs/yauth/auth/safehttp"
 	"github.com/yackey-labs/yauth/plugin"
 )
@@ -119,6 +121,16 @@ type Config struct {
 	// then FAILS CLOSED with 403 and no session. See
 	// plugin.RunFederatedLogin.
 	SatisfiesMFA *bool
+
+	// LoginStateBinding controls whether /sso/login ties the login state to
+	// the browser that started the flow — see auth/login_binding.go for the
+	// attack this closes (a finished-but-undelivered /sso/callback URL was a
+	// portable credential for "become whoever authenticated at the IdP").
+	//
+	// "" / "auto" binds iff the deployment issues Secure cookies, "required"
+	// always binds, "off" never does. Validated by New; the knob is named
+	// verbatim in the 400 body.
+	LoginStateBinding string
 }
 
 // satisfiesMFA reports the effective SatisfiesMFA value, defaulting to
@@ -168,6 +180,14 @@ func New(cfg Config) (plugin.Plugin, error) {
 	if cfg.JWKSRefreshCooldown <= 0 {
 		cfg.JWKSRefreshCooldown = defaultJWKSRefreshCooldown
 	}
+	// Loud on an unknown mode: "off" mistyped would otherwise silently become
+	// "auto" and refuse every login on a deployment that cannot carry the
+	// binding cookie.
+	mode, err := auth.NormalizeLoginStateBinding(cfg.LoginStateBinding)
+	if err != nil {
+		return nil, fmt.Errorf("ssooidc: %w", err)
+	}
+	cfg.LoginStateBinding = mode
 	return &ssoOIDCPlugin{cfg: cfg}, nil
 }
 

@@ -249,7 +249,25 @@ func (p *oauthPlugin) registerAuthorize(host plugin.PluginHost, api huma.API, pr
 
 		redirect := p.safeRedirect(r.URL.Query().Get("redirect_url"))
 
-		state, err := generateState()
+		// Browser binding (auth/login_binding.go). Until this existed the state
+		// row was the ONLY thing standing between the callback and a session,
+		// and it belonged to nobody: an attacker could finish their own login at
+		// the IdP, stop at the ".../callback?code=…&state=…" URL and hand it to a
+		// victim, whose browser then received a session cookie for the
+		// ATTACKER's account. Binding derives the public state from a secret we
+		// put in THIS browser, so a callback presented by any other browser can
+		// be refused. Nothing extra is persisted — the state string itself is the
+		// proof obligation.
+		//
+		// The decision is taken HERE, at mint time, and recorded in the state's
+		// own "b." prefix. The callback therefore reads no config and an attacker
+		// cannot downgrade by choosing the callback's shape.
+		var state, bindSecret string
+		if auth.BindLoginState(p.cfg.LoginStateBinding, host.CookieSecure()) {
+			bindSecret, state, err = auth.NewBoundLoginState()
+		} else {
+			state, err = generateState()
+		}
 		if err != nil {
 			return nil, huma.Error500InternalServerError("unable to generate state")
 		}
@@ -286,10 +304,34 @@ func (p *oauthPlugin) registerAuthorize(host plugin.PluginHost, api huma.API, pr
 			return nil, huma.Error500InternalServerError("unable to persist state")
 		}
 
+		// Write the browser's half. It goes on the STASHED writer, not on a
+		// header field of redirectOutput: huma writes the status and Location
+		// after this handler returns, so a header-map mutation here lands first
+		// — the same ordering the session-cookie write in completeLogin relies
+		// on, and the reason oauthGuards includes StashHTTPHuma.
+		if bindSecret != "" {
+			w, err := respFromCtx(ctx)
+			if err != nil {
+				return nil, err
+			}
+			// TTL is the STATE's, not the session's: the cookie is worthless the
+			// moment the state row expires.
+			if c := auth.LoginBindingCookie(cookieOptionsFromHost(host, r, 0), state, bindSecret, p.cfg.StateTTL); c != nil {
+				http.SetCookie(w, c)
+			}
+		}
+
 		authURL := prov.Config().AuthCodeURL(state, oauth2.AccessTypeOffline, oauth2.S256ChallengeOption(verifier))
 		return &redirectOutput{Status: http.StatusFound, Location: authURL}, nil
 	})
 }
+
+// loginBindingRefused is the 400 body for a callback presented by a browser
+// that did not start the flow. It NAMES THE KNOB verbatim, so an operator
+// reading a support ticket learns how to turn the binding off without going
+// looking for it.
+const loginBindingRefused = "this login was not started in this browser (the login-state cookie is missing or does not match); start the sign-in again. " +
+	`Operators: set plugins.oauth.login_state_binding to "off" if your deployment cannot carry the cookie.`
 
 // --- /oauth/{provider}/link --------------------------------------------
 
@@ -380,6 +422,22 @@ func (p *oauthPlugin) registerLink(host plugin.PluginHost, api huma.API, mw *mid
 		}
 		redirect := p.safeRedirect(rawRedirect)
 
+		// DELIBERATELY UNBOUND, unlike /authorize. Three reasons, in order of
+		// weight:
+		//
+		//  1. There is no session to fixate. A link-mode state routes to
+		//     completeLink, which requires middleware.AuthUserFromContext and
+		//     matches expectedUserID; the mode is fixed in the state row, so an
+		//     unbound link state can only ever reach completeLink, never
+		//     completeLogin. Nothing here issues a session.
+		//  2. This operation does NOT run StashHTTPHuma — its middlewares are
+		//     exactly RequireAuthHuma + RequireUserPrincipalHuma, see the doc
+		//     comment above — so there is no writer to set a cookie on. Minting
+		//     a bound state whose cookie was never written would refuse every
+		//     link callback.
+		//  3. The response is JSON to an SPA that may sit on a different
+		//     registrable domain, where Safari ITP can drop a cookie written on
+		//     a cross-origin XHR response anyway.
 		state, err := generateState()
 		if err != nil {
 			return nil, huma.Error500InternalServerError("unable to generate state")
@@ -477,6 +535,35 @@ func (p *oauthPlugin) registerCallback(host plugin.PluginHost, api huma.API, pre
 		}
 		if code == "" || state == "" {
 			return nil, huma.Error400BadRequest("missing code or state")
+		}
+
+		// Browser binding. A state minted by THIS binary with binding on carries
+		// the "b." prefix and has a companion cookie in the browser that started
+		// the flow; anything else — a legacy row from the previous binary, or a
+		// state minted while binding was off — is not checked at all, so a
+		// rolling deploy never signs an in-flight user out.
+		//
+		// The check runs BEFORE ConsumeOAuthState on purpose. Consuming first
+		// would turn every refusal into a denial of service on the person whose
+		// flow it actually is: an attacker who guessed nothing but delivered the
+		// URL early would burn the row, and the browser that legitimately started
+		// the login could never finish it. The single-use row is the flow
+		// owner's, so a stranger must not be able to spend it.
+		//
+		// Note the failure is refused, not "retried without binding": the prefix
+		// was fixed by the server at mint time, so a caller cannot downgrade.
+		if auth.IsBoundLoginState(state) {
+			c, cerr := r.Cookie(auth.LoginBindingCookieName(state))
+			bound := cerr == nil && c != nil && auth.VerifyLoginBinding(state, c.Value)
+			// Cleared on EVERY exit, matched or not: it is single-use like the
+			// state row it guards, and a stale or mismatched one must not sit in
+			// the browser for the rest of the TTL.
+			if cc := auth.ClearLoginBindingCookie(cookieOptionsFromHost(host, r, 0), state); cc != nil {
+				http.SetCookie(w, cc)
+			}
+			if !bound {
+				return nil, huma.Error400BadRequest(loginBindingRefused)
+			}
 		}
 
 		st, err := host.Repo().ConsumeOAuthState(ctx, state)

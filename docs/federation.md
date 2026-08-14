@@ -271,6 +271,93 @@ pipe it into a DELETE.
    `Block` from `lockout` is honoured regardless: a locked account gets no
    session through SSO either.
 
+## Login-state browser binding (`login_state_binding`)
+
+A federated login is started in one browser and finished in another HTTP
+request. Historically nothing tied the two together: `/authorize` (oauth) and
+`/sso/login` (sso_oidc) minted a random `state`, wrote a **server-side** row and
+redirected to the IdP without writing anything to the browser, and the callback
+issued a session cookie to whichever browser turned up with a valid
+`(code, state)` pair.
+
+That made a finished-but-undelivered callback URL a portable credential. An
+attacker starts a login in their own browser, authenticates at the IdP **as
+themselves**, stops at `…/callback?code=…&state=…` and sends that URL to a
+victim (a link, an `<img>`, an auto-submitting form aimed at the POST twin).
+The victim's browser is then handed a session cookie for the *attacker's*
+account — login CSRF / session fixation, RFC 9700 §4.1. Because yauth is itself
+an IdP, every downstream relying party then signs the victim in as the attacker,
+and any passkey or TOTP the victim goes on to enrol is enrolled on the
+attacker's account. PKCE does not help here: the code, the state row and the
+verifier are all consistently the attacker's, so the S256 check passes as
+designed.
+
+**The fix.** `/authorize` and `/sso/login` now put a random secret in a cookie
+and derive the public state from it — `state = "b." || base64url(sha256(secret))`.
+The callback reads the cookie named for that state and refuses with `400` if it
+is missing or does not match. Nothing extra is stored: no column, no migration.
+The check runs *before* the state row is consumed, so a refused delivery does
+not burn the row belonging to the browser whose flow it is.
+
+```yaml
+plugins:
+  oauth:
+    login_state_binding: auto      # auto (default) | required | off
+  sso_oidc:
+    login_state_binding: auto
+```
+
+- **`auto`** (default) binds **iff `session.cookie_secure` is true**. Every TLS
+  deployment is protected without touching yaml.
+- **`required`** binds regardless — for a deployment that terminates TLS at a
+  proxy and still wants the binding.
+- **`off`** disables it.
+
+### Why the binding cookie is `SameSite=None; Secure`
+
+An IdP using `response_mode=form_post` returns by making the browser POST
+**cross-site** to the callback, and a `SameSite=Lax` cookie is not sent on a
+cross-site POST. The binding cookie therefore has to be `SameSite=None`, which
+browsers only honour together with `Secure`. That is the whole reason `auto`
+keys on `cookie_secure`: on plain HTTP the cookie could only be `Lax`, so
+enforcing the binding would refuse every `form_post` login instead of protecting
+anyone. **Plain HTTP is not covered under `auto`** — that is a deliberate,
+documented fallback, not an oversight.
+
+`SameSite=None` is safe *here specifically*: the cookie authorises nothing. It
+only proves the flow started in this browser, and the state it unlocks is
+single-use and server-side. It is `HttpOnly`, its name is derived from the
+state (so two tabs / two providers do not clobber each other), it expires with
+the state TTL, and it is cleared on every callback exit — success and refusal
+alike.
+
+### Flows this deliberately breaks
+
+1. **Cross-device / cross-browser continuation.** Start the login on the
+   desktop, finish the IdP leg on a phone, or paste the callback URL into a
+   different browser. Refused — and that *is* the attack, so it is intended. If
+   your users have been trained to do it, lead the release note with this.
+2. **A native / mobile client that fetches `/authorize` with its own HTTP client
+   and then opens the returned URL in an external browser.** The two jars are
+   different, so the callback lands in a browser that never received the cookie
+   and is refused. Such deployments need `login_state_binding: off`. First-party
+   webviews and `ASWebAuthenticationSession` are fine — start and finish share a
+   jar.
+3. **An SPA on a different registrable domain from yauth** is unaffected for
+   *login* (`/authorize` is a top-level navigation and the callback is a
+   top-level cross-site navigation, where `SameSite=None` cookies are still
+   delivered). Note that `POST /oauth/{provider}/link` is deliberately **not**
+   bound: link mode never issues a session, so there is no fixation to close,
+   and its state row can only ever reach the link path.
+4. **Safari older than 13** mishandles `SameSite=None` (treats it as Strict).
+   Ancient, but worth knowing if you support it.
+
+`ssosaml`'s ACS + `RelayState` has the same shape and is **not** covered yet;
+the binding is prefix-driven, so those flows are simply unaffected either way.
+
+The `400` body names the knob verbatim, so an operator reading a support ticket
+learns the escape hatch from the response itself.
+
 ## IdP launcher
 
 `oauth2server` clients with an `initiate_login_uri` (the RP's SP-initiated login

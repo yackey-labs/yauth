@@ -225,6 +225,12 @@ type fakeHost struct {
 	repo repo.Repository
 	mw   *middleware.Middleware
 	base string
+	// cookieSecure mirrors YAuthConfig.CookieSecure. It stays false for
+	// every historical fixture; login_binding_test.go flips it to model a
+	// TLS deployment, which is the only posture in which a browser-binding
+	// cookie can exist (SameSite=None needs Secure, and Go's cookiejar will
+	// not send a Secure cookie over http://).
+	cookieSecure bool
 }
 
 func newFakeHost(r repo.Repository, base string) *fakeHost {
@@ -236,7 +242,7 @@ func (h *fakeHost) Middleware() *middleware.Middleware         { return h.mw }
 func (h *fakeHost) SessionTTL() time.Duration                  { return time.Hour }
 func (h *fakeHost) CookieName() string                         { return "yauth_session" }
 func (h *fakeHost) CookieDomain() string                       { return "" }
-func (h *fakeHost) CookieSecure() bool                         { return false }
+func (h *fakeHost) CookieSecure() bool                         { return h.cookieSecure }
 func (h *fakeHost) CookiePath() string                         { return "/" }
 func (h *fakeHost) CookieSameSite() http.SameSite              { return http.SameSiteLaxMode }
 func (h *fakeHost) SessionBinding() (bool, bool)               { return false, false }
@@ -330,6 +336,13 @@ func seedAdmin(t *testing.T, r repo.Repository) (domain.User, domain.Organizatio
 
 func doJSON(t *testing.T, method, urlStr string, body any) *http.Response {
 	t.Helper()
+	return doJSONVia(t, http.DefaultClient, method, urlStr, body)
+}
+
+// doJSONVia is doJSON with a caller-supplied client, so a fixture served over
+// TLS can pass srv.Client() (which trusts the httptest certificate).
+func doJSONVia(t *testing.T, cl *http.Client, method, urlStr string, body any) *http.Response {
+	t.Helper()
 	var rdr io.Reader
 	if body != nil {
 		buf, _ := json.Marshal(body)
@@ -340,7 +353,7 @@ func doJSON(t *testing.T, method, urlStr string, body any) *http.Response {
 		t.Fatal(err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := cl.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -787,7 +800,28 @@ func TestKidRollover_RefetchesJWKS(t *testing.T) {
 
 func setupForLogin(t *testing.T) (*ssoOIDCPlugin, *httptest.Server, repo.Repository, *domain.SsoConnection, *fakeIDP) {
 	t.Helper()
+	return setupForLoginSecure(t, false)
+}
+
+// setupForLoginSecure is setupForLogin with the deployment's cookie posture as
+// an explicit parameter. secure=false is the historical fixture (plain HTTP,
+// CookieSecure=false); secure=true serves the plugin over TLS and reports
+// CookieSecure()=true, the shape every real deployment has and the only one in
+// which a browser-binding cookie is testable at all. Both share one body so the
+// two postures cannot drift apart.
+func setupForLoginSecure(t *testing.T, secure bool) (*ssoOIDCPlugin, *httptest.Server, repo.Repository, *domain.SsoConnection, *fakeIDP) {
+	t.Helper()
+	return setupForLoginModes(t, secure, "")
+}
+
+// setupForLoginModes is setupForLoginSecure with plugins.sso_oidc.login_state_binding
+// spelled out. "" is the shipped default ("auto"), which every other fixture
+// uses; login_binding_test.go passes "required" and "off" to pin what each mode
+// does on a posture that would otherwise decide it.
+func setupForLoginModes(t *testing.T, secure bool, binding string) (*ssoOIDCPlugin, *httptest.Server, repo.Repository, *domain.SsoConnection, *fakeIDP) {
+	t.Helper()
 	p := newPlugin(t)
+	p.cfg.LoginStateBinding = binding
 	r := memrepo.New()
 	now := time.Now().UTC()
 	ctx := context.Background()
@@ -798,9 +832,15 @@ func setupForLogin(t *testing.T) (*ssoOIDCPlugin, *httptest.Server, repo.Reposit
 	})
 	mux := http.NewServeMux()
 	host := newFakeHost(r, "")
+	host.cookieSecure = secure
 	host.mw.AddResolver(&stubResolver{user: &domain.AuthUser{User: admin}})
 	p.Routes(host, mux, humaapi.New(mux), "")
-	srv := httptest.NewServer(mux)
+	var srv *httptest.Server
+	if secure {
+		srv = httptest.NewTLSServer(mux)
+	} else {
+		srv = httptest.NewServer(mux)
+	}
 	t.Cleanup(srv.Close)
 	host.base = srv.URL
 
@@ -815,7 +855,7 @@ func setupForLogin(t *testing.T) (*ssoOIDCPlugin, *httptest.Server, repo.Reposit
 			"client_secret": "rp-secret",
 		},
 	}
-	resp := doJSON(t, http.MethodPost, srv.URL+"/organizations/"+org.ID+"/sso/connections", createReq)
+	resp := doJSONVia(t, srv.Client(), http.MethodPost, srv.URL+"/organizations/"+org.ID+"/sso/connections", createReq)
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("create conn: %d", resp.StatusCode)
 	}

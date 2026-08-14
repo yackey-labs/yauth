@@ -574,6 +574,14 @@ type OAuthPluginConfig struct {
 	// because the callback is a browser redirect and cannot carry a
 	// challenge, a step-up then fails closed with 403 and no session.
 	SatisfiesMFA *bool `yaml:"satisfies_mfa,omitempty" toml:"satisfies_mfa,omitempty" doc:"Treat the upstream provider's authentication as the second factor. nil = true. false fails the login closed with 403 — the callback is a browser redirect and cannot carry an MFA challenge."`
+
+	// LoginStateBinding ties a federated login to the browser that started it.
+	// See auth/login_binding.go: without it, a finished-but-undelivered
+	// .../callback?code=…&state=… URL is a portable credential — the attacker
+	// authenticates at the IdP as themselves, mails the URL to a victim, and
+	// the victim's browser is handed a session cookie for the ATTACKER's
+	// account. Empty means "auto".
+	LoginStateBinding string `yaml:"login_state_binding,omitempty" toml:"login_state_binding,omitempty" enum:"auto,required,off" doc:"Bind an OAuth login to the browser that started it, closing login CSRF / session fixation on the callback. \"auto\" (default) binds when cookie_secure is true — the binding cookie must be SameSite=None to survive an IdP's form_post, which browsers only honour with Secure, so plain HTTP is NOT covered. \"required\" always binds. \"off\" disables it, for deployments that cannot carry the cookie (a native client that fetches /authorize with its own HTTP client, or cross-device login continuation)."`
 }
 
 // SSOOIDCPluginConfig configures the sso_oidc plugin — this app acting as an
@@ -613,6 +621,11 @@ type SSOOIDCPluginConfig struct {
 	// by the server on /test, on every login and on back-channel logout, so
 	// the default is off. Turn it on for an in-cluster IdP.
 	AllowPrivateNetworkIDP bool `yaml:"allow_private_network_idp,omitempty" toml:"allow_private_network_idp,omitempty" doc:"Permit SSO connections whose IdP is on a loopback / RFC 1918 address (an in-cluster Keycloak at http://keycloak.identity.svc:8080). Omitted means false: a connection's discovery_url is chosen by an org admin and then dialled by the server, so a private destination is refused at dial time. The cloud metadata range 169.254.0.0/16 stays refused either way."`
+
+	// LoginStateBinding is the sso_oidc twin of the oauth knob of the same
+	// name — the /sso/login → /sso/callback round trip had exactly the same
+	// hole. Empty means "auto".
+	LoginStateBinding string `yaml:"login_state_binding,omitempty" toml:"login_state_binding,omitempty" enum:"auto,required,off" doc:"Bind an SSO login to the browser that started it, closing login CSRF / session fixation on /sso/callback. \"auto\" (default) binds when cookie_secure is true — the binding cookie must be SameSite=None to survive an IdP's form_post, which browsers only honour with Secure, so plain HTTP is NOT covered. \"required\" always binds. \"off\" disables it, for deployments that cannot carry the cookie."`
 }
 
 // WebhooksPluginConfig configures outbound webhook delivery. Per-webhook HMAC

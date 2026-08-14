@@ -1988,6 +1988,41 @@ func (r *Repo) UpdateOrganization(ctx context.Context, id string, changes domain
 	return orgToDomain(row), nil
 }
 
+// DeleteOrganization removes the org and every row that carried authority on
+// its behalf, in one transaction.
+//
+// migrate/postgres declares NO foreign keys — every child column is bare TEXT
+// — so nothing cascades in the database and this function IS the cascade. It
+// used to stop after invitations, memberships, verified domains and org-scoped
+// API keys, which left the org's groups and everything hanging off them alive.
+// That was not cosmetic: the OAuth2 access gate never looks at the
+// organization. plugins/oauth2server/authorize.go (and device.go, and token.go
+// on refresh) ask UserInAssignedGroup(clientID, userID), whose query joins
+// yauth_client_group_assignments to yauth_group_members and stops there — no
+// yauth_groups, no yauth_memberships, no yauth_organizations. Deleting the org
+// therefore revoked nothing: a former member kept passing the
+// enforce_group_assignment gate, kept the org's group names in the id_token
+// "groups" claim (ListGroupNamesForUser has no org predicate) and kept the
+// per-app "roles" claim through yauth_client_role_assignments.group_id — while
+// every admin route that could have cleaned it up now 404s on the missing org,
+// so the access was both live and invisible.
+//
+// The three group-child DELETEs MUST run before the yauth_groups rows go: they
+// select their targets through `group_id IN (SELECT id FROM yauth_groups WHERE
+// organization_id = $1)`, and once the group rows are gone that subselect
+// matches nothing.
+//
+// Scoping is deliberately narrow, because one OAuth2 client is routinely
+// assigned groups from several organizations:
+//   - group children are deleted only via that org-scoped subselect, never by
+//     client_id or user_id — a role assignment with a NULL group_id is a direct
+//     user grant that belongs to no org and must survive;
+//   - the API-key DELETE stays `organization_id = $1`, which already skips the
+//     global keys whose organization_id is NULL.
+//
+// Deliberately NOT cascaded: yauth_external_identities (a user re-invited to a
+// fresh org keeps the IdP link), and nothing user-scoped — sessions, refresh
+// tokens, users and consents all survive, exactly as memrepo has always done.
 func (r *Repo) DeleteOrganization(ctx context.Context, id string) error {
 	return r.withTx(ctx, func(tx pgx.Tx) error {
 		q := pgxgen.New(tx)
@@ -2001,6 +2036,29 @@ func (r *Repo) DeleteOrganization(ctx context.Context, id string) error {
 			return err
 		}
 		if _, err := tx.Exec(ctx, "DELETE FROM yauth_api_keys WHERE organization_id = $1", id); err != nil {
+			return err
+		}
+		// Group children first — see the ordering note above.
+		if _, err := tx.Exec(ctx, "DELETE FROM yauth_client_role_assignments WHERE group_id IN (SELECT id FROM yauth_groups WHERE organization_id = $1)", id); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, "DELETE FROM yauth_client_group_assignments WHERE group_id IN (SELECT id FROM yauth_groups WHERE organization_id = $1)", id); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, "DELETE FROM yauth_group_members WHERE group_id IN (SELECT id FROM yauth_groups WHERE organization_id = $1)", id); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, "DELETE FROM yauth_groups WHERE organization_id = $1", id); err != nil {
+			return err
+		}
+		// memrepo has always dropped these two; pgx never did, so the org's
+		// auth policy came back when idempotent provisioning re-created the
+		// org under the same id, and its SSO connections stayed resolvable —
+		// plugins/ssooidc only checks Status == active, never the org.
+		if _, err := tx.Exec(ctx, "DELETE FROM yauth_organization_policies WHERE organization_id = $1", id); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, "DELETE FROM yauth_sso_connections WHERE organization_id = $1", id); err != nil {
 			return err
 		}
 		return q.DeleteOrganization(ctx, id)

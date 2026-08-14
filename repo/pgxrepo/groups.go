@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/yackey-labs/yauth/domain"
 	pgxgen "github.com/yackey-labs/yauth/repo/pgxrepo/gen"
 )
@@ -114,8 +116,35 @@ func (r *Repo) UpdateGroup(ctx context.Context, id string, changes domain.Update
 	return groupToDomain(row), nil
 }
 
+// DeleteGroup removes the group and the rows that made it load-bearing.
+//
+// This was the same defect as DeleteOrganization one level down: the generated
+// query is a bare `DELETE FROM yauth_groups WHERE id = $1`, so DELETE
+// /organizations/{id}/groups/{gid} (and SCIM DELETE /Groups/{id}) removed the
+// row an admin can SEE and left the rows that actually decide access. The
+// orphan was worse than invisible: ListClientGroups JOINs yauth_groups, so the
+// stale assignment disappeared from every admin read, while
+// UserInAssignedGroup — the query the enforce_group_assignment gate runs — does
+// not join yauth_groups and kept returning true forever.
+//
+// Scoped to this one group_id, so a client's assignments to OTHER groups are
+// untouched. Role assignments with a NULL group_id are direct user grants and
+// are not selected here. Kept idempotent (deleting a missing group returns
+// nil): memrepo behaves that way and both plugins/scim and
+// plugins/organizations pre-load the group and emit their own 404.
 func (r *Repo) DeleteGroup(ctx context.Context, id string) error {
-	return r.q.DeleteGroup(ctx, id)
+	return r.withTx(ctx, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, "DELETE FROM yauth_client_role_assignments WHERE group_id = $1", id); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, "DELETE FROM yauth_client_group_assignments WHERE group_id = $1", id); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, "DELETE FROM yauth_group_members WHERE group_id = $1", id); err != nil {
+			return err
+		}
+		return pgxgen.New(tx).DeleteGroup(ctx, id)
+	})
 }
 
 func (r *Repo) AddGroupMember(ctx context.Context, groupID, userID string, now time.Time) error {

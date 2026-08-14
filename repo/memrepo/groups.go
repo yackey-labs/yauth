@@ -132,6 +132,25 @@ func (r *Repo) DeleteGroup(ctx context.Context, id string) error {
 	_ = ensureCtx(ctx)
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.deleteGroupLocked(id)
+	return nil
+}
+
+// deleteGroupLocked drops a group and everything that made it grant access.
+// The caller MUST already hold r.mu — sync.RWMutex is not reentrant, so taking
+// it here would deadlock DeleteOrganization, which cascades through this.
+//
+// Factored out so the two delete paths can never drift again: pgx's DeleteGroup
+// used to be a bare `DELETE FROM yauth_groups`, which left the group members
+// and client assignments that UserInAssignedGroup actually reads, and neither
+// backend's DeleteOrganization touched groups at all.
+//
+// Role assignments are dropped here too — memrepo did not do this before, so
+// pgx (which now does) and memrepo would have disagreed on
+// ListClientRoleAssignments. Only assignments naming THIS group go: an entry
+// with a nil GroupID is a direct user->client grant that has nothing to do with
+// the group and must survive.
+func (r *Repo) deleteGroupLocked(id string) {
 	delete(r.groups, id)
 	delete(r.groupMembers, id)
 	for cid, gs := range r.clientGroups {
@@ -140,7 +159,11 @@ func (r *Repo) DeleteGroup(ctx context.Context, id string) error {
 			delete(r.clientGroups, cid)
 		}
 	}
-	return nil
+	for aid, a := range r.clientRoles {
+		if a.GroupID != nil && *a.GroupID == id {
+			delete(r.clientRoles, aid)
+		}
+	}
 }
 
 func (r *Repo) AddGroupMember(ctx context.Context, groupID, userID string, now time.Time) error {

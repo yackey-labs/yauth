@@ -396,8 +396,24 @@ type WebhookDeliveryRepository interface {
 //   - CreateOrganization MUST reject duplicate slugs (case-insensitive)
 //     with yautherr.ErrConflict.
 //   - GetOrganizationBySlug MUST be case-insensitive.
-//   - DeleteOrganization MUST cascade to memberships and invitations
-//     (FK ON DELETE CASCADE in SQL backends; explicit in memrepo).
+//   - DeleteOrganization MUST cascade, EXPLICITLY, in every backend.
+//     migrate/postgres declares NO foreign keys — every child column is
+//     bare TEXT — so nothing cascades in the database and each backend
+//     has to spell the whole set out by hand. That set is: memberships,
+//     invitations, verified domains, org-scoped API keys, the org auth
+//     policy, SSO connections, and the org's groups together with their
+//     group members, client group assignments and the client role
+//     assignments scoped to those groups.
+//     Deliberate exception: external identities are NOT cascaded, so a
+//     user re-invited to a fresh org keeps the IdP link. Nothing
+//     user-scoped is cascaded either (users, sessions, refresh tokens,
+//     consents all survive).
+//     The group half is load-bearing, not tidiness: the OAuth2 access
+//     gate (UserInAssignedGroup) joins client group assignments to group
+//     members and never looks at the group's organization, so a group
+//     that outlives its org keeps admitting its former members to every
+//     client it was assigned to — and no admin route can reach it,
+//     because they all gate on an org that now 404s.
 type OrganizationRepository interface {
 	GetOrganizationByID(ctx context.Context, id string) (*domain.Organization, error)
 	// GetOrganizationBySlug is case-insensitive on slug.
@@ -406,8 +422,10 @@ type OrganizationRepository interface {
 	// a matching slug (case-insensitive) already exists.
 	CreateOrganization(ctx context.Context, input domain.NewOrganization) (domain.Organization, error)
 	UpdateOrganization(ctx context.Context, id string, changes domain.UpdateOrganization) (domain.Organization, error)
-	// DeleteOrganization removes the org and cascades to memberships
-	// and invitations.
+	// DeleteOrganization removes the org and cascades to the full set
+	// enumerated above (memberships, invitations, verified domains,
+	// org-scoped API keys, the org policy, SSO connections, and groups
+	// with their members and client group/role assignments).
 	DeleteOrganization(ctx context.Context, id string) error
 	// ListOrganizationsForUser returns every org the user is a member
 	// of in deterministic order (created_at ascending).
@@ -586,8 +604,14 @@ type OrganizationPolicyRepository interface {
 //   - Each row is owned by exactly one organization_id; the create path
 //     does NOT enforce uniqueness on (org_id, name) — admins may want
 //     two connections (e.g. staging + prod IdPs) per org.
-//   - Deleting an Organization MUST cascade to its SsoConnection rows
-//     (FK ON DELETE CASCADE in SQL backends; explicit in memrepo).
+//   - Deleting an Organization MUST cascade to its SsoConnection rows,
+//     explicitly, in every backend: migrate/postgres declares no foreign
+//     keys, so DeleteOrganization performs the delete itself. A surviving
+//     connection is exploitable rather than merely untidy — the login
+//     path resolves a connection by id and only checks Status == active,
+//     never the org, so a federated sign-in into a deleted organization
+//     still starts, and no admin route can disable the row because they
+//     all gate on an org that now 404s.
 //   - GetSsoConnectionByID returns (nil, yautherr.ErrNotFound) when no
 //     row matches; backends must not return (nil, nil).
 //   - ListSsoConnectionsByOrg returns rows in deterministic order
@@ -652,6 +676,15 @@ type GroupRepository interface {
 	GetGroupByOrgAndExternalID(ctx context.Context, orgID, externalID string) (*domain.Group, error)
 	ListGroupsByOrg(ctx context.Context, orgID string) ([]*domain.Group, error)
 	UpdateGroup(ctx context.Context, id string, changes domain.UpdateGroup) (domain.Group, error)
+	// DeleteGroup removes the group AND cascades to its group members,
+	// its client group assignments and the client role assignments
+	// scoped to it (role assignments with a nil GroupID are direct user
+	// grants and MUST survive). Dropping only the group row leaves the
+	// assignment rows that UserInAssignedGroup actually reads, so the
+	// group keeps granting access while being invisible to every admin
+	// read that joins the groups table. Idempotent: deleting a group
+	// that does not exist returns nil, not ErrNotFound — callers that
+	// need a 404 pre-load the group themselves.
 	DeleteGroup(ctx context.Context, id string) error
 
 	// AddGroupMember is idempotent (re-adding an existing member is a no-op).

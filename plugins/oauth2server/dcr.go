@@ -221,6 +221,23 @@ func (p *oauth2Plugin) handleDCRRegister(host plugin.PluginHost, prefix string) 
 				writeDCRError(w, http.StatusForbidden, "access_denied", middleware.MustChangePasswordDetail)
 				return
 			}
+			// For the SAME reason, and it bites harder here: running
+			// unwrapped means this handler does not inherit RequireAdmin's
+			// cross-site-write guard either. POST /oauth/register is a
+			// cookie-admin-authenticated write with a JSON body, and huma's
+			// DefaultFormats parse an untyped body as JSON — so a page an
+			// admin had open could register an OAuth client with
+			// attacker-chosen redirect_uris, which is a sharper lever than
+			// suspending a user. middleware.RefuseCrossSiteWrite is the same
+			// predicate the four middleware gates apply, so this cannot
+			// drift from them; only the rendering differs, staying in this
+			// endpoint's RFC 7591 §3.2.2 error shape while still carrying
+			// middleware.CrossSiteWriteDetail so an operator finds both
+			// escape hatches from the response.
+			if host.Middleware().RefuseCrossSiteWrite(r, au) {
+				writeDCRError(w, http.StatusForbidden, "access_denied", middleware.CrossSiteWriteDetail)
+				return
+			}
 		}
 
 		clientID, err := randomHex(16)

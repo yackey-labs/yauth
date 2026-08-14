@@ -99,6 +99,11 @@ type ServerConfig struct {
 	// AllowedOrigins is empty the CORS middleware is not installed.
 	CORS CORSConfig `yaml:"cors" toml:"cors"`
 
+	// CrossSiteWrites controls the cross-site state-change guard: a
+	// state-changing request carrying the ambient session cookie that the
+	// BROWSER reports as cross-site is refused. ON by default.
+	CrossSiteWrites CrossSiteWriteConfig `yaml:"cross_site_writes" toml:"cross_site_writes"`
+
 	// SecurityHeaders controls the response-header floor the mounted
 	// Router applies to every response. ON by default; see
 	// SecurityHeadersConfig for why turning it off is a decision.
@@ -141,6 +146,28 @@ type CORSConfig struct {
 	AllowCredentials bool `yaml:"allow_credentials" toml:"allow_credentials"`
 	// MaxAge sets Access-Control-Max-Age on preflight responses.
 	MaxAge time.Duration `yaml:"max_age" toml:"max_age"`
+}
+
+// CrossSiteWriteConfig configures the cross-site state-change guard. Before it
+// existed, every cookie-authenticated write in yauth authorized on the ambient
+// cookie alone: any page an admin had open could POST /admin/users/{id}/suspend
+// (bodyless, so a plain auto-submitting form reached it) and the write landed.
+//
+// The guard uses the browser's own Sec-Fetch-Site / Origin signals, and it is
+// deliberately narrow: same-origin and SAME-SITE requests still pass, as do
+// callers that send neither header (curl, CI, server-side clients) and every
+// machine credential (bearer, X-Api-Key), which a cross-site page cannot make
+// a browser attach in the first place.
+type CrossSiteWriteConfig struct {
+	// Allow turns the guard OFF. Omitted/false enforces it — a security
+	// default that has to be opted into is the misconfiguration this
+	// setting exists to prevent.
+	Allow bool `yaml:"allow" toml:"allow" doc:"Permit cross-site state-changing requests authenticated by the session cookie. Default false (the guard is enforced). Turning this on restores the pre-guard behaviour: any page a signed-in user has open can drive their session."`
+
+	// Origins lists the cross-site origins allowed to make state-changing
+	// calls with a session cookie. Omitted inherits
+	// server.cors.allowed_origins.
+	Origins []string `yaml:"origins,omitempty" toml:"origins,omitempty" doc:"Origins permitted to make cross-site state-changing calls with a session cookie, e.g. [\"https://app.example.com\"]. Omitted inherits server.cors.allowed_origins. Set it explicitly when CORS is terminated by a gateway in front of yauth, so server.cors.allowed_origins is empty."`
 }
 
 // SecurityHeadersConfig configures the response-header floor applied to every

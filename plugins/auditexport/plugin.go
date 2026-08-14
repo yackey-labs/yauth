@@ -183,9 +183,10 @@ func (p *plugin) Routes(host pluginpkg.PluginHost, mux pluginpkg.Router, api hum
 		reg.RegisterAuditRecorder(p.recordAudit)
 	}
 
-	// Spawn workers for already-registered destinations. New destinations
-	// created via the admin API can be wired up by calling Refresh, or
-	// the operator may run a SIGHUP cycle.
+	// Spawn workers for destinations already in the store. On a fresh process
+	// that store is empty (it is a process map — destinations do not survive a
+	// restart), so this pass usually does nothing; the CRUD handlers reconcile
+	// the worker map themselves from here on.
 	p.spawnWorkersForActive()
 }
 
@@ -211,10 +212,16 @@ func (p *plugin) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-// Refresh spawns workers for newly-active destinations and tears down
-// those whose destination has been deleted or disabled. Callers may
-// invoke this after creating a destination at runtime to start its
-// drain loop without restarting the process.
+// Refresh reconciles the worker map against the destination store: it spawns
+// workers for active destinations that have none and tears down those whose
+// destination has been deleted or disabled. It is idempotent.
+//
+// It is NOT required for ordinary operation — createDo / updateDo / deleteDo
+// reconcile on every change, which is the fix for destinations created through
+// the admin API never getting a worker at all. The comment here used to tell
+// callers to invoke this after a runtime create; nothing did, and nothing
+// documented how. It stays exported for a host that mutates the store directly
+// (tests do) and for an operator-triggered reconcile.
 func (p *plugin) Refresh() ShutdownReport {
 	report := p.spawnWorkersForActive()
 	return report

@@ -62,7 +62,10 @@ func toResponse(d *domain.AuditExportDestination) auditDestinationResponse {
 		Implemented:    isImplementedKind(d.Kind),
 		Config:         sanitizeConfig(d.Config),
 	}
-	if _, ok := d.Config["hmac_secret"]; ok {
+	// Presence AND non-emptiness: the dispatcher signs only when the secret is
+	// a non-empty string, so reporting hmac_configured on a stored "" would
+	// tell an operator the stream is signed while it goes out in the clear.
+	if v, ok := d.Config["hmac_secret"]; ok && v != "" {
 		out.HMACConfigured = true
 	}
 	return out
@@ -79,15 +82,23 @@ func isImplementedKind(k domain.AuditExportDestinationKind) bool {
 	}
 }
 
+// isSanitisedConfigKey reports whether toResponse strips this config key from
+// the config map it returns. It is the single definition of that set because
+// two places must agree on it: sanitizeConfig, which removes the key, and
+// updateDo, which has to carry it forward — a key the API never echoes is a
+// key a read-edit-write client cannot possibly send back.
+func isSanitisedConfigKey(k string) bool {
+	if _, secret := secretConfigKeys[k]; secret {
+		return true
+	}
+	// Static header values may carry Authorization bearer tokens.
+	return strings.HasPrefix(k, "header.")
+}
+
 func sanitizeConfig(cfg map[string]string) map[string]string {
 	out := make(map[string]string, len(cfg))
 	for k, v := range cfg {
-		if _, secret := secretConfigKeys[k]; secret {
-			continue
-		}
-		// Don't echo back static header values either — they may carry
-		// Authorization bearer tokens.
-		if strings.HasPrefix(k, "header.") {
+		if isSanitisedConfigKey(k) {
 			continue
 		}
 		out[k] = v
@@ -314,6 +325,15 @@ func (p *plugin) createDo(ctx context.Context, scopeOrgID *string, req auditCrea
 		"destination_id": row.ID,
 		"kind":           string(row.Kind),
 	})
+	// Start the drain worker for the destination we just created. Without this
+	// the admin API was decorative: spawnWorkersForActive ran exactly once, from
+	// Routes(), against an empty in-process store, and nothing else in the
+	// module called it. Every destination an operator created through the only
+	// supported path answered 201, reported "active", accumulated an outbox —
+	// and exported nothing, forever. Synchronous and idempotent by design (see
+	// spawnWorkersForActive), so the response is not sent until the worker is
+	// actually running.
+	p.spawnWorkersForActive()
 	return &auditDestinationOutput{Status: http.StatusCreated, Body: toResponse(row)}, nil
 }
 
@@ -473,16 +493,47 @@ func (p *plugin) updateDo(ctx context.Context, id string, req auditUpdateDestina
 		changes.Format = &f
 	}
 	if req.Config != nil {
-		// Without this the create-time check would be a formality: this
-		// handler copied req.Config straight into the change set, so a
-		// destination created against a public SIEM could simply be
-		// re-pointed at the metadata service afterwards. Only validated when
-		// config is actually present — a PATCH that only flips status or
-		// renames must stay untouched.
-		if err := p.validateDestinationConfig(existing.Kind, req.Config); err != nil {
+		// The config the API HANDS OUT is not the config it stores: toResponse
+		// runs it through sanitizeConfig, which drops hmac_secret / hec_token /
+		// api_key and every header.* entry. The store then REPLACES Config
+		// wholesale. So the ordinary console round-trip — GET the destination,
+		// change one field, PATCH the object back — deleted the HMAC secret and
+		// every static auth header the operator had configured. The export kept
+		// flowing, now unsigned and unauthenticated to the receiver, and the
+		// only signal was hmac_configured quietly flipping to false.
+		//
+		// The carry-forward is deliberately narrow: ONLY the keys the response
+		// cannot echo are inherited from the existing row. Every other key keeps
+		// replace semantics, so a client that drops `url`, `port` or `transport`
+		// by omission still means it. Sending the key with an empty string is
+		// the escape hatch for "turn signing off" — and it DELETES the key
+		// rather than storing "", because a stored "" would report
+		// hmac_configured=true on a stream the dispatcher does not sign.
+		merged := copyConfig(req.Config)
+		if merged == nil {
+			merged = map[string]string{}
+		}
+		for k, v := range existing.Config {
+			if !isSanitisedConfigKey(k) {
+				continue
+			}
+			if _, present := merged[k]; !present {
+				merged[k] = v
+			}
+		}
+		for k, v := range merged {
+			if isSanitisedConfigKey(k) && v == "" {
+				delete(merged, k)
+			}
+		}
+		// Validated on the MERGED map, never on the incoming fragment: what
+		// #108's egress guard has to see is the config that will actually be
+		// dialled. Otherwise a destination created against a public SIEM could
+		// be re-pointed at the metadata service afterwards.
+		if err := p.validateDestinationConfig(existing.Kind, merged); err != nil {
 			return nil, err
 		}
-		changes.Config = req.Config
+		changes.Config = merged
 	}
 	updated, err := p.store.UpdateDestination(id, changes)
 	if err != nil {
@@ -494,6 +545,10 @@ func (p *plugin) updateDo(ctx context.Context, id string, req auditUpdateDestina
 	p.auditEvent(ctx, &id, "audit_export.destination.updated", map[string]any{
 		"destination_id": id,
 	})
+	// Pick up a status flip: active -> disabled must stop the drain worker,
+	// disabled -> active must start one. Neither happened before, because
+	// nothing outside Routes() ever reconciled the worker map.
+	p.spawnWorkersForActive()
 	return &auditDestinationOutput{Status: http.StatusOK, Body: toResponse(updated)}, nil
 }
 
@@ -531,6 +586,13 @@ func (p *plugin) deleteDo(ctx context.Context, id string) (*auditDeleteOutput, e
 	p.auditEvent(ctx, &id, "audit_export.destination.deleted", map[string]any{
 		"destination_id": id,
 	})
+	// Tear the worker down with the row. spawnWorkersForActive shuts down every
+	// worker whose destination is gone or inactive, waiting up to 2s per worker
+	// (plugin.go), so a DELETE can block for that long and concurrent
+	// destination CRUD serialises behind it — an acceptable bound for an admin
+	// route, and the price of not leaving a goroutine dialling an endpoint the
+	// operator just removed.
+	p.spawnWorkersForActive()
 	return &auditDeleteOutput{Status: http.StatusNoContent}, nil
 }
 

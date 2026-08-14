@@ -16,7 +16,7 @@ This is the Go port of yauth Rust PR #106. See `crates/yauth/src/plugins/audit_e
 | S3 dispatcher | Wired via test hook; production object-store wiring deferred to follow-up |
 | Splunk HEC dispatcher | Stub — `ErrNotImplemented` (mirrors Rust PR scope cut) |
 | Datadog logs dispatcher | Stub — `ErrNotImplemented` (mirrors Rust PR scope cut) |
-| Drain worker (bounded inflight, backoff, dead-letter after 5 attempts, clean shutdown) | Full |
+| Drain worker (bounded inflight, backoff, dead-letter after 5 attempts, clean shutdown) | Full — one worker per active destination, started/stopped by the CRUD routes (see **Delivery lifecycle**) |
 | Admin routes (deployment-wide + per-org CRUD, outbox listing, replay) | Full |
 | OTel metrics (`events_total`, `lag_seconds`, `dead_letter_total`) | Full |
 | HMAC signing + `VerifyHMACSignature` receiver helper | Full |
@@ -121,6 +121,34 @@ than one with a documented scope.
 - No unparseable IP. `ip_address` is dropped unless it parses as an IP, so a
   forged `X-Forwarded-For` cannot put arbitrary text in the column.
 
+## Delivery lifecycle
+
+One drain worker runs per **active** destination. The CRUD routes reconcile
+that set synchronously: `POST` starts a worker, `PATCH`/`PUT` starts or stops
+one when `status` flips, and `DELETE` stops it. `DELETE` and a
+disabling `PATCH` therefore wait up to 2s for the worker to drain, and
+concurrent destination CRUD serialises behind that wait.
+
+Each pass claims up to `BatchSize` pending outbox rows, reads the recent audit
+rows **once**, and dispatches with at most `MaxInflight` concurrent requests.
+An outbox row only becomes `sent` after the dispatcher returns without error.
+A row whose audit entry cannot be found (it has fallen out of the 10 000-row
+lookup window, or the repository errored) is retried and then `dead_letter`ed
+with `last_error: "audit row not found within the drain scan window"` — it is
+never recorded as delivered.
+
+> **Upgrade note.** Before this release nothing reconciled the worker set after
+> startup, so a destination created through the admin API never got a worker
+> and exported nothing while its outbox grew. On upgrade those destinations
+> start shipping their accumulated backlog. The burst is bounded — `BatchSize`
+> (default 100) rows per destination per `BatchInterval` (default 5s) — and
+> every target is still refused at dial time by `auth/safehttp`, so a private
+> destination stays refused. A stale or mis-typed destination row, however,
+> will suddenly start connecting: review your destinations before upgrading.
+>
+> This is **not** durability. Destinations and outbox rows still live in a
+> process map and are still lost on restart; see **Durability model** below.
+
 ## Durability model
 
 Memory-backend semantics are **canonical**: a single mutex guards destination CRUD and outbox enqueue, so the "outbox transactional" invariant holds for in-process operation. Outbox entries are lost on process restart in the memory backend.
@@ -150,9 +178,20 @@ DELETE {prefix}/organizations/{org_id}/audit/destinations/{id}
 
 The plugin sanitises secrets out of every response — `hmac_secret`, `hec_token`, Datadog `api_key`, and any `header.*` static header value are stripped before clients see them. The `hmac_configured` boolean lets the UI render a "secret set" indicator without echoing the secret itself.
 
+Because those keys are never echoed, `PATCH`/`PUT` **carries them forward**: a
+`config` object that omits a sanitised key keeps the stored value. Every other
+key keeps replace semantics — omit `url`, `port` or `transport` and it is
+removed. To clear a sanitised key, send it with an empty string; the key is
+deleted rather than stored as `""`, so `hmac_configured` never claims a signed
+stream that is not signed. Without the carry-forward the ordinary console flow
+(GET, edit one field, PATCH the object back) silently deleted the HMAC secret
+and every static auth header, and the export kept flowing unsigned.
+
 ## Backoff schedule
 
-Per-attempt next-delay: **1s → 5s → 30s → 5m → 1h** (same as Rust PR #106). After the 5th attempt the outbox row transitions to `dead_letter` and the `yauth_audit_export_dead_letter_total{destination}` counter increments.
+Per-attempt next-delay: **1s → 5s → 30s → 5m → 1h** (same as Rust PR #106). A failed row records an internal next-attempt time (in-memory only, not part of the outbox response) and is not re-claimed before it. After the 5th attempt the outbox row transitions to `dead_letter` and the `yauth_audit_export_dead_letter_total{destination}` counter increments.
+
+Note the consequence for alerting: with the schedule actually applied, five attempts span roughly **1h36m**, not five poll intervals. `dead_letter_total` is therefore a slow signal — alert on the `lag_seconds` gauge to notice a receiver going down.
 
 ## Test guard
 

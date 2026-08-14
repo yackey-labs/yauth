@@ -272,10 +272,50 @@ func parseSCIMBool(raw json.RawMessage) (bool, bool) {
 // one must stop working immediately — otherwise a rewritten identity keeps
 // riding the old cookie. Best-effort, exactly like handleDeleteUser: a SCIM
 // write must not fail because cleanup did.
-func burnCredentials(ctx context.Context, host plugin.PluginHost, userID string) {
+//
+// Sessions and refresh tokens alone were NOT the whole set, and the half that
+// was missing is the half sitting in the OLD mailbox. #96 bounded which
+// address a rename may move to; it retired nothing. Everything below outlives
+// the rename that was supposed to be the remediation:
+//
+//   - a password reset (keyed by user id): the holder POSTs
+//     /api/auth/reset-password, picks the password, and the handler then wipes
+//     every session and refresh token the real user has. The remediation
+//     becomes the victim's lockout.
+//   - an email verification (keyed by user id, NOT by the address it was
+//     mailed to): consuming it writes email_verified=true against whatever the
+//     CURRENT address is, so a contractor who kept their token has
+//     staff@corp.example marked as an address someone proved control of —
+//     which auth.AutoJoinFromEmail and ssooidc adoption then trust.
+//   - a magic link (keyed by EMAIL) and an unlock token: a live sign-in and a
+//     live lockout clear.
+//
+// emailpassword already treats these four as one set whenever a password
+// rotates (invalidateRecoveryTokens). A rename of the login identity is the
+// same event with a different trigger.
+//
+// BOTH addresses get their magic links retired, not just the old one.
+// registerVerify resolves the account by ml.Email, so a link minted for a
+// not-yet-registered address that this rename then assigns to an existing user
+// would sign in AS that user — the exact mirror of the stale-old-address hole,
+// and one line to close.
+//
+// Callers must keep this behind their genuine-rename gate: a routine IdP
+// re-sync re-sends the same userName, and deleting on every SCIM write would
+// silently kill the inbox link of every user on every sync.
+func burnCredentials(ctx context.Context, host plugin.PluginHost, userID, oldEmail, newEmail string) {
 	repo := host.Repo()
 	_, _ = repo.DeleteUserSessions(ctx, userID)
 	_, _ = repo.RevokeAllUserRefreshTokens(ctx, userID)
+	_, _ = repo.DeleteUnusedPasswordResetsForUser(ctx, userID)
+	_, _ = repo.DeleteEmailVerificationsForUser(ctx, userID)
+	_, _ = repo.DeleteAllUnlockTokensForUser(ctx, userID)
+	if oldEmail != "" {
+		_, _ = repo.DeleteUnusedMagicLinksForEmail(ctx, oldEmail)
+	}
+	if newEmail != "" && !strings.EqualFold(newEmail, oldEmail) {
+		_, _ = repo.DeleteUnusedMagicLinksForEmail(ctx, newEmail)
+	}
 }
 
 // projectUser projects a domain.User + optional ExternalIdentity +
@@ -828,8 +868,11 @@ func (p *scimPlugin) handlePutUser(host plugin.PluginHost) http.HandlerFunc {
 		}
 		if emailPtr != nil {
 			// Only on a GENUINE rename — a routine profile sync re-sends the
-			// same userName and must not log the whole workforce out.
-			burnCredentials(ctx, host, user.ID)
+			// same userName and must not log the whole workforce out (nor
+			// retire the reset link the user is reading right now).
+			// `user` is the PRE-update row, so user.Email is still the old
+			// address the magic links are keyed by.
+			burnCredentials(ctx, host, user.ID, user.Email, *emailPtr)
 		}
 
 		desiredStatus := domain.MembershipActive
@@ -1066,7 +1109,10 @@ func (p *scimPlugin) handlePatchUser(host plugin.PluginHost) http.HandlerFunc {
 				return
 			}
 			if renamed {
-				burnCredentials(ctx, host, user.ID)
+				// Same gate, same pre-update row: `renamed` is only set on a
+				// real EqualFold-different userName, and user.Email is still
+				// the old address at this point.
+				burnCredentials(ctx, host, user.ID, user.Email, *newEmail)
 			}
 		}
 

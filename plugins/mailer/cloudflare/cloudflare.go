@@ -219,6 +219,17 @@ func (m *Mailer) doSend(ctx context.Context, to, subject, body string) error {
 	if m.From == "" {
 		return errors.New("cloudflare: From is required")
 	}
+	// Before json.Marshal, so a malformed recipient is never POSTed. The SMTP
+	// backend got this for free — net/smtp.SendMail runs validateLine over
+	// every recipient before it dials — and there was no equivalent here at
+	// all: `to` came straight from the plugins (magiclink /send and
+	// emailpassword /forgot-password accept anything containing "@") and went
+	// into the API payload for Cloudflare to interpret. An address carrying a
+	// bare CRLF is a header-injection payload, and holding that boundary is
+	// the mailer's own job.
+	if err := validateRecipient(to); err != nil {
+		return err
+	}
 
 	payload, err := json.Marshal(sendRequest{
 		To:      to,
@@ -287,10 +298,18 @@ func (m *Mailer) doSend(ctx context.Context, to, subject, body string) error {
 
 	// Record the disposition, not the address: "bounced" on a span is the
 	// signal an operator needs, while the recipient is PII.
+	//
+	// That applies to the ERRORS as well, which is where it used to leak: send()
+	// hands every error below to telemetry.RecordErrorOnCx, which writes it into
+	// span.AddEvent("error.message") AND the span status description. Both are
+	// exported off-host, so formatting `to` into these two strings put the
+	// recipient on the wire two lines under the comment above saying it must
+	// not be. The disposition attribute is what an operator actually needs;
+	// which mailbox bounced belongs in the mail provider's own dashboard.
 	switch {
 	case contains(parsed.Result.PermanentBounces, to):
 		telemetry.SetAttributeOnCx(ctx, "mailer.disposition", "bounced")
-		return fmt.Errorf("cloudflare: %s permanently bounced", to)
+		return errors.New("cloudflare: recipient permanently bounced")
 	case contains(parsed.Result.Delivered, to):
 		telemetry.SetAttributeOnCx(ctx, "mailer.disposition", "delivered")
 	case contains(parsed.Result.Queued, to):
@@ -305,7 +324,35 @@ func (m *Mailer) doSend(ctx context.Context, to, subject, body string) error {
 		// without explanation. Treat as failure so the caller does not
 		// assume a token is in flight.
 		telemetry.SetAttributeOnCx(ctx, "mailer.disposition", "unlisted")
-		return fmt.Errorf("cloudflare: %s was neither delivered nor queued, and no message_id was returned", to)
+		return errors.New("cloudflare: recipient was neither delivered nor queued, and no message_id was returned")
+	}
+	return nil
+}
+
+// validateRecipient refuses an address that cannot safely be handed to the
+// send API, and forms no other opinion about it.
+//
+// It deliberately does NOT parse the address. yauth's own registration accepts
+// anything containing "@", so a stricter notion of validity here — quoted
+// local parts, SMTPUTF8, anything mail.ParseAddress would normalise — would
+// silently make already-registered users permanently unreachable, with the
+// enumeration-safe 200 hiding it from them and the operator both. The only
+// thing refused is a value that would change the MEANING of the message it is
+// spliced into: a bare CR/LF or NUL is header injection. This mirrors what
+// net/smtp's validateLine already does for the SMTP backend, which is why that
+// one was never exposed.
+func validateRecipient(to string) error {
+	if to == "" {
+		return errors.New("cloudflare: recipient is required")
+	}
+	if strings.ContainsAny(to, "\r\n\x00") {
+		return errors.New("cloudflare: recipient contains a line break or NUL")
+	}
+	if to != strings.TrimSpace(to) {
+		return errors.New("cloudflare: recipient has leading or trailing whitespace")
+	}
+	if !strings.Contains(to, "@") {
+		return errors.New("cloudflare: recipient is not an email address")
 	}
 	return nil
 }

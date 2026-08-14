@@ -29,6 +29,30 @@ import (
 // of entropy.
 const magicTokenBytes = 32
 
+// The per-recipient mail budget for /magic-link/send. Same numbers and same
+// reasoning as emailpassword's — see plugin.AllowRecipient. Its own bucket:
+// an attacker who burns a victim's forgot-password allowance must not also be
+// able to deny them a sign-in link.
+const (
+	maxMailsPerRecipient    = 5
+	mailsPerRecipientWindow = time.Hour
+)
+
+// sendAsync runs a mail dispatch off the request goroutine, detached from the
+// request's cancellation but capped at 30s so a wedged relay cannot retain a
+// goroutine indefinitely. It is a deliberate copy of the emailpassword helper
+// of the same name rather than a shared one: magiclink must not import
+// emailpassword, and the piece worth sharing (the timeout discipline) is three
+// lines.
+func (p *magicLinkPlugin) sendAsync(ctx context.Context, fn func(context.Context)) {
+	detached := context.WithoutCancel(ctx)
+	go func() {
+		sendCtx, cancel := context.WithTimeout(detached, 30*time.Second)
+		defer cancel()
+		fn(sendCtx)
+	}()
+}
+
 func validEmail(s string) bool {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -162,6 +186,37 @@ func (p *magicLinkPlugin) registerSend(host plugin.PluginHost, api huma.API, pre
 			return ok, nil
 		}
 
+		// Meter the RECIPIENT, not just the caller. middleware.RateLimit keys
+		// name+":"+clientIP, so the address that decides who gets the mail is
+		// nowhere in the key and the recipient's inbox absorbs the sum of every
+		// source IP's budget — and with SignupEnabled the address need not even
+		// exist here, so the target can be an arbitrary third party receiving
+		// mail DKIM-signed by the operator's domain. See plugin.AllowRecipient.
+		//
+		// ORDERING: before the retire-prior-links call below, so a flood cannot
+		// keep killing the link the real user is looking at even once the mail
+		// itself is throttled.
+		//
+		// Refusal returns the SAME neutral 200, never a 429 — this route's
+		// entire response contract is that it admits nothing about the address.
+		if !plugin.AllowRecipient(ctx, host, plugin.RateLimitMagicLinkSend, req.Email, maxMailsPerRecipient, mailsPerRecipientWindow) {
+			return ok, nil
+		}
+
+		// Retire any earlier unused link for this address before minting the
+		// next one, so at most ONE live magic link exists per address at a
+		// time. Every /send used to add a live sign-in credential and
+		// invalidate nothing, so a link captured once — shoulder-surfed,
+		// forwarded, sitting in a shared inbox, logged by a mail scanner —
+		// kept working however many fresh ones the real user requested. A
+		// magic link IS the session, which makes this strictly worse than the
+		// reset case emailpassword has handled at the mirror of this line
+		// (registerForgotPassword) all along. Log and continue: failing here
+		// would deny a legitimate sign-in over a cleanup problem.
+		if _, err := repo.DeleteUnusedMagicLinksForEmail(ctx, req.Email); err != nil {
+			p.logger.ErrorContext(ctx, "magic-link: retire prior magic links failed", "err", err)
+		}
+
 		raw, hash, err := generateToken()
 		if err != nil {
 			return ok, nil
@@ -179,7 +234,19 @@ func (p *magicLinkPlugin) registerSend(host plugin.PluginHost, api huma.API, pre
 		}
 
 		link := buildLink(p.cfg.LinkBaseURL, raw)
-		_ = p.cfg.Mailer.SendMagicLink(ctx, req.Email, link)
+		// OFF the request goroutine. Every path through this handler returns
+		// the same body, but the ones that skip the mailer returned in a
+		// millisecond while a real send blocked on the whole SMTP
+		// conversation — which is the account-existence answer the neutral
+		// body exists to withhold, restated as a stopwatch reading. The token
+		// is already persisted, so nothing the caller waits on depends on the
+		// send; a mailer failure is now visible only in the log below.
+		recipient := req.Email
+		p.sendAsync(ctx, func(ctx context.Context) {
+			if err := p.cfg.Mailer.SendMagicLink(ctx, recipient, link); err != nil {
+				p.logger.ErrorContext(ctx, "magic-link: send magic-link email failed", "err", err)
+			}
+		})
 
 		return ok, nil
 	})

@@ -116,6 +116,51 @@ func rateLimitedGuards(rl func(http.Handler) http.Handler, api huma.API) huma.Mi
 	}
 }
 
+// The per-recipient mail budget. See plugin.AllowRecipient for why the per-IP
+// limiter is not enough on the routes that put mail in somebody else's inbox.
+//
+// Deliberately conservative and deliberately NOT operator-configurable yet: a
+// per-recipient bucket is itself a denial-of-recovery lever — an attacker who
+// burns a victim's forgot-password budget locks them out of self-service reset
+// for the window — so the window stays short and the allowance stays generous
+// enough for a real person who mistypes their address twice and re-requests.
+const (
+	maxMailsPerRecipient    = 5
+	mailsPerRecipientWindow = time.Hour
+)
+
+// resendVerificationOp names the per-recipient bucket for
+// /resend-verification. It is NOT in plugin's RateLimitOp const block: that
+// block's string values are yaml keys under rate_limit.*, and this route has no
+// operator-configurable rule (its per-IP limiter is a fixed host.RateLimit).
+// The value is only a bucket namespace.
+const resendVerificationOp = plugin.RateLimitOp("resend_verification")
+
+// sendAsync runs fn — a mail dispatch — off the request goroutine.
+//
+// Two reasons, and the second is why the timeout is not optional. First,
+// response time: a route that blocks on an SMTP conversation for a known
+// address and returns in a millisecond for an unknown one has handed back the
+// account-existence answer whatever its body says. Second, the mail is not
+// part of the transaction the caller is waiting on — the token is already
+// durably persisted, and a mailer failure was already only ever logged.
+//
+// context.WithoutCancel keeps the trace and any request-scoped values while
+// detaching the deadline, so the send is not cancelled the instant the
+// response is written; the 30s cap then bounds how long a detached send may
+// live. Without the cap this helper would convert "one request parked on a
+// wedged relay" into "one goroutine per send, retained forever" — which is
+// also why plugins/mailer/smtp had to grow a real dial timeout and honour
+// cancellation before this could ship.
+func (p *emailPasswordPlugin) sendAsync(ctx context.Context, fn func(context.Context)) {
+	detached := context.WithoutCancel(ctx)
+	go func() {
+		sendCtx, cancel := context.WithTimeout(detached, 30*time.Second)
+		defer cancel()
+		fn(sendCtx)
+	}()
+}
+
 // cookieOptionsFromHost mirrors host config onto auth.CookieOptions.
 // The request is forwarded so a CookieDomain of "auto" resolves to the
 // inbound Host header at issuance time.
@@ -1249,9 +1294,26 @@ func (p *emailPasswordPlugin) registerResendVerification(host plugin.PluginHost,
 		if user.EmailVerified {
 			return ok, nil
 		}
-		if err := p.issueVerificationEmail(ctx, repoRef, user.ID, user.Email); err != nil {
-			p.logger.ErrorContext(ctx, "email-password: issue verification email failed", "user_id", user.ID, "err", err)
+		// Per-RECIPIENT budget on top of the per-IP one. Same amplifier as
+		// /forgot-password: the address that receives the mail is not in the
+		// middleware's key, so N source IPs deliver N mails to one inbox. Its
+		// OWN bucket — sharing with forgot-password would let an attacker burn
+		// one and deny the other. Refusal is the same neutral 200; this route
+		// additionally distinguishes verified from unverified above, so a
+		// distinguishable throttle would be doubly telling.
+		if !plugin.AllowRecipient(ctx, host, resendVerificationOp, req.Email, maxMailsPerRecipient, mailsPerRecipientWindow) {
+			return ok, nil
 		}
+		// Off the request goroutine, for the response-time reason documented
+		// on /forgot-password's send. issueVerificationEmail persists the
+		// token as well as mailing it, so the whole call moves — a token
+		// written for a mail that never goes out is worse than neither.
+		userID, recipient := user.ID, user.Email
+		p.sendAsync(ctx, func(ctx context.Context) {
+			if err := p.issueVerificationEmail(ctx, repoRef, userID, recipient); err != nil {
+				p.logger.ErrorContext(ctx, "email-password: issue verification email failed", "user_id", userID, "err", err)
+			}
+		})
 		return ok, nil
 	})
 }
@@ -1313,6 +1375,23 @@ func (p *emailPasswordPlugin) registerForgotPassword(host plugin.PluginHost, api
 			return ok, nil
 		}
 
+		// Meter the RECIPIENT, not just the caller. See plugin.AllowRecipient:
+		// the per-IP limiter budgets the sender, so one inbox absorbs the sum
+		// of every source address's allowance.
+		//
+		// ORDERING IS LOAD-BEARING. This must sit BEFORE the retire-prior-links
+		// call below. Putting it after would still let each flooded request
+		// kill the reset link the victim is trying to click — half the exploit
+		// survives a throttle that only stops the mail.
+		//
+		// A refusal returns the SAME neutral 200, never a 429: a
+		// distinguishable refusal is the account-existence answer this body
+		// exists to withhold, and the caller has already got past the address
+		// lookup by this point.
+		if !plugin.AllowRecipient(ctx, host, plugin.RateLimitForgotPassword, req.Email, maxMailsPerRecipient, mailsPerRecipientWindow) {
+			return ok, nil
+		}
+
 		// Retire any earlier unused reset link before minting this one, so at
 		// most ONE live reset token exists per account at a time. Previously
 		// every call added a token and invalidated none, so an attacker who had
@@ -1339,9 +1418,21 @@ func (p *emailPasswordPlugin) registerForgotPassword(host plugin.PluginHost, api
 			return ok, nil
 		}
 		link := buildLink(p.cfg.PasswordResetLinkBaseURL, raw)
-		if err := p.cfg.Mailer.SendPasswordReset(ctx, user.Email, link); err != nil {
-			p.logger.ErrorContext(ctx, "email-password: send password-reset email failed", "user_id", user.ID, "err", err)
-		}
+		// OFF the request goroutine. The bodies for a known and an unknown
+		// address are byte-identical, but an unknown address returns above
+		// without touching the mailer while a known one used to block on the
+		// whole SMTP conversation — two orders of magnitude, which IS the
+		// account-existence answer the neutral body exists to withhold. The
+		// duplicate-address branch of /register has backgrounded its send for
+		// exactly this reason since it was written; this call site did not
+		// follow. A mailer failure is consequently no longer visible in the
+		// response — the ErrorContext below is the only remaining signal.
+		recipient, userID := user.Email, user.ID
+		p.sendAsync(ctx, func(ctx context.Context) {
+			if err := p.cfg.Mailer.SendPasswordReset(ctx, recipient, link); err != nil {
+				p.logger.ErrorContext(ctx, "email-password: send password-reset email failed", "user_id", userID, "err", err)
+			}
+		})
 		return ok, nil
 	})
 }
@@ -1417,6 +1508,46 @@ func (p *emailPasswordPlugin) registerResetPassword(host plugin.PluginHost, api 
 		// Attribute the reset to the principal once the token resolves a user.
 		telemetry.SetUserID(ctx, pr.UserID)
 
+		// Re-check the account lifecycle. registerLogin does this on every
+		// leg, and #111 pushed the same re-check through the bearer and
+		// refresh legs; /reset-password consulted no lifecycle field at all,
+		// so the kill switch was not a kill switch. An admin hits
+		// /admin/users/{id}/suspend — or SCIM sends active:false, which sets
+		// suspended_at globally — and anyone holding a link minted BEFORE that
+		// moment could still write a new credential onto the offboarded
+		// account, clear must_change_password, and wipe every session and
+		// refresh token the org still had on it. The password that landed was
+		// chosen by whoever held the link, and it goes live the moment the
+		// suspension is ever lifted.
+		//
+		// The lookup is LOAD-BEARING and therefore fails CLOSED: a repo error
+		// here must not become "no lifecycle state found, carry on". That is
+		// the opposite of the treatment the (purely cosmetic) email lookup
+		// further down used to get — and which this same `u` now replaces.
+		//
+		// Only banned and suspended. Deliberately NOT Staged, and deliberately
+		// not user.CanAuthenticate(): a staged/invited account with a start
+		// date in the future sets its FIRST password from the reset link in
+		// its invite mail, which is a real provisioning flow. The gate has to
+		// name the two states it means.
+		//
+		// The messages are verbatim the two registerLogin uses. Keeping them
+		// distinct is not an enumeration leak here for the same reason it is
+		// not there: the caller has already proven they hold a single-use
+		// token bound to this account. No events are emitted — registerLogin's
+		// emits exist to feed lockout's failure counter, and metering reset
+		// attempts as login failures would be a new behaviour, not a fix.
+		u, err := repoRef.GetUserByID(ctx, pr.UserID)
+		if err != nil || u == nil {
+			return nil, huma.Error500InternalServerError("unable to load account")
+		}
+		if u.Banned {
+			return nil, huma.Error403Forbidden("account suspended")
+		}
+		if u.SuspendedAt != nil {
+			return nil, huma.Error403Forbidden("account is deactivated")
+		}
+
 		// Load current hash (if any) so we can compare and append to
 		// history. Missing password is OK — the user may have signed
 		// up via magic-link and is now setting a password.
@@ -1477,15 +1608,10 @@ func (p *emailPasswordPlugin) registerResetPassword(host plugin.PluginHost, api 
 		// or re-set the password. See invalidateRecoveryTokens.
 		//
 		// The email is needed to reach the magic-link rows (they are keyed by
-		// address, not user id). A lookup failure only costs us that one class,
-		// so it is logged rather than fatal — the reset itself has committed.
-		resetEmail := ""
-		if u, lookupErr := repoRef.GetUserByID(ctx, pr.UserID); lookupErr == nil && u != nil {
-			resetEmail = u.Email
-		} else {
-			p.logger.ErrorContext(ctx, "email-password: user lookup for magic-link invalidation after reset failed", "user_id", pr.UserID, "err", lookupErr)
-		}
-		p.invalidateRecoveryTokens(ctx, repoRef, pr.UserID, resetEmail)
+		// address, not user id). It comes from the `u` the lifecycle gate
+		// above already loaded — there is no second lookup to fail now, and no
+		// window in which the address could have changed under us.
+		p.invalidateRecoveryTokens(ctx, repoRef, pr.UserID, u.Email)
 
 		uid := pr.UserID
 		_, _ = host.Emit(ctx, events.AuthEvent{

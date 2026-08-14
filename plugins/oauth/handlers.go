@@ -39,7 +39,9 @@ func oauthGuards(api huma.API) huma.Middlewares {
 // mw.RequireAuth wrappers. Migrated handlers recover the AuthUser via the
 // unchanged middleware.AuthUserFromContext. /link no longer uses this: it took
 // a native typed Body and needs neither the raw request nor the writer, so it
-// runs RequireAuthHuma alone (no StashHTTPHuma).
+// drops StashHTTPHuma and spells out the remaining two guards inline — it
+// still runs RequireAuthHuma AND RequireUserPrincipalHuma, for the reason
+// given below.
 func authedGuards(api huma.API, mw *middleware.Middleware) huma.Middlewares {
 	return huma.Middlewares{
 		middleware.StashHTTPHuma(api),
@@ -128,27 +130,80 @@ func (p *oauthPlugin) safeRedirect(in string) string {
 }
 
 // stateMetadata serialises into the OAuthState.RedirectURL field as
-// "<mode>|<userID>|<redirect>". The schema does not give us a dedicated
-// column for the link-mode user ID, so we piggy-back on the redirect-URL
-// field: this keeps the migration surface untouched while still allowing
-// /callback to distinguish link-flow from login-flow callbacks.
-func encodeStatePayload(mode, userID, redirect string) string {
-	return mode + "|" + userID + "|" + redirect
+// "<mode>|<userID>|<verifier>|<redirect>". The schema does not give us a
+// dedicated column for the link-mode user ID or the PKCE code verifier, so we
+// piggy-back on the redirect-URL field: this keeps the migration surface
+// untouched while still allowing /callback to distinguish link-flow from
+// login-flow callbacks and to recover the verifier minted at /authorize.
+//
+// The verifier lives HERE rather than in a cookie because the callback is a
+// cross-site navigation back from the IdP: the state row is the only thing the
+// callback can read that the flow's initiator wrote. It is server-side and
+// single-use (ConsumeOAuthState), so the verifier never touches the browser.
+//
+// All three separators are always emitted, so a payload written by this binary
+// is always exactly four segments; redirect stays last so an embedded "|" in a
+// redirect is still preserved intact.
+func encodeStatePayload(mode, userID, verifier, redirect string) string {
+	return mode + "|" + userID + "|" + verifier + "|" + redirect
 }
 
-func decodeStatePayload(raw string) (mode, userID, redirect string) {
-	parts := strings.SplitN(raw, "|", 3)
+func decodeStatePayload(raw string) (mode, userID, verifier, redirect string) {
+	parts := strings.SplitN(raw, "|", 4)
 	switch len(parts) {
+	case 4:
+		// A four-segment payload is AMBIGUOUS across a rolling deploy: the
+		// previous binary wrote "<mode>|<userID>|<redirect>", and a redirect
+		// containing a "|" — auth.SafeRedirect passes any single-leading-slash
+		// path through byte-for-byte, so "/x|//evil.com" is an allowed value —
+		// splits into four parts too. Decoding that legacy row as the new form
+		// would yield verifier="/x" and redirect="//evil.com", and completeLogin
+		// emits `redirect` straight into the Location header without
+		// re-filtering: a protocol-relative open redirect for the whole StateTTL
+		// window after a deploy, which is exactly what the byte-preserving
+		// redirect tests exist to prevent. So only accept parts[2] as a verifier
+		// when it actually looks like one; otherwise fall back to the legacy
+		// decode, where everything after the second "|" is the redirect.
+		if !looksLikeVerifier(parts[2]) {
+			p := strings.SplitN(raw, "|", 3)
+			return p[0], p[1], "", p[2]
+		}
+		return parts[0], parts[1], parts[2], parts[3]
 	case 3:
-		return parts[0], parts[1], parts[2]
+		// Legacy (mode|userID|redirect): no verifier was ever minted, so the
+		// callback must send none rather than an empty one.
+		return parts[0], parts[1], "", parts[2]
 	case 2:
-		return parts[0], parts[1], ""
+		return parts[0], parts[1], "", ""
 	case 1:
 		// Backwards-compat: a bare redirect-URL stored before the
 		// encoding scheme was adopted. Treat as login mode.
-		return linkModeLogin, "", parts[0]
+		return linkModeLogin, "", "", parts[0]
 	}
-	return linkModeLogin, "", ""
+	return linkModeLogin, "", "", ""
+}
+
+// looksLikeVerifier reports whether s is shaped like an RFC 7636 code verifier:
+// 43-128 characters drawn from the unreserved set [A-Za-z0-9-._~].
+// oauth2.GenerateVerifier emits 43 base64url characters, so every verifier this
+// plugin writes matches. It exists only to disambiguate a four-segment state
+// payload written by the previous binary from one written by this one — see
+// decodeStatePayload. A redirect that happened to satisfy this shape would have
+// to contain no "/" and no ":" at all, so it could not name another origin.
+func looksLikeVerifier(s string) bool {
+	if len(s) < 43 || len(s) > 128 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9',
+			c == '-', c == '.', c == '_', c == '~':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // --- /oauth/{provider}/authorize ---------------------------------------
@@ -199,7 +254,22 @@ func (p *oauthPlugin) registerAuthorize(host plugin.PluginHost, api huma.API, pr
 			return nil, huma.Error500InternalServerError("unable to generate state")
 		}
 
-		payload := encodeStatePayload(linkModeLogin, "", redirect)
+		// PKCE (RFC 7636). Without it the authorization code is a pure bearer
+		// value: the state row is the only thing binding a callback to a
+		// browser, and the code itself is checked against nothing. An attacker
+		// who parks their own unfinished /authorize (a live state row bound to
+		// nobody) and then obtains a victim's code — it rides in a query string
+		// through browser history, access logs, a Referer off the landing page,
+		// a proxy — can present <victim code, attacker state> here and be issued
+		// the VICTIM's session on their own browser. That is RFC 9700 §4.5
+		// authorization-code injection. Binding the code to a verifier only this
+		// server knows makes the token endpoint answer invalid_grant instead.
+		// The sibling relying party (plugins/ssooidc) already does this
+		// unconditionally against arbitrary operator-configured IdPs, so there
+		// is no opt-out here either.
+		verifier := oauth2.GenerateVerifier()
+
+		payload := encodeStatePayload(linkModeLogin, "", verifier, redirect)
 		now := time.Now().UTC()
 		var redirectPtr *string
 		if payload != "" {
@@ -216,7 +286,7 @@ func (p *oauthPlugin) registerAuthorize(host plugin.PluginHost, api huma.API, pr
 			return nil, huma.Error500InternalServerError("unable to persist state")
 		}
 
-		authURL := prov.Config().AuthCodeURL(state, oauth2.AccessTypeOffline)
+		authURL := prov.Config().AuthCodeURL(state, oauth2.AccessTypeOffline, oauth2.S256ChallengeOption(verifier))
 		return &redirectOutput{Status: http.StatusFound, Location: authURL}, nil
 	})
 }
@@ -257,9 +327,22 @@ type linkInput struct {
 //
 // This is the one oauth write-op with a native typed Body: it needs neither the
 // raw request (redirect_url now arrives in the body) nor the writer (it returns
-// JSON, not a cookie/302), so it drops StashHTTPHuma and runs only
-// RequireAuthHuma. The redirect/callback flows keep the bridge — they parse
-// query/form/JSON, set cookies, and 302.
+// JSON, not a cookie/302), so it drops StashHTTPHuma. The redirect/callback
+// flows keep the bridge — they parse query/form/JSON, set cookies, and 302.
+//
+// It does NOT drop RequireUserPrincipalHuma. Dropping the bridge dropped that
+// too, leaving /link the only authed oauth route gated by RequireAuthHuma
+// alone, while its three siblings run authedGuards for the reason stated there:
+// an org-scoped API key resolves to a service-account principal wearing the
+// whole user row of the human who minted it, and a machine credential must not
+// start rewriting that person's sign-in methods. Today the second leg saves it
+// — completeLink 401s because /callback runs StashHTTPHuma alone and nothing
+// populates the auth-user key there — so this is the entry point saying no
+// explicitly rather than relying on a downstream accident, and it stops the
+// pointless live link-mode state row being minted against the human's user ID.
+// RequireUserPrincipalHuma refuses only service-account and delegated
+// principals: a USER-scoped key still resolves to a user principal and still
+// links, which is the whole reason it exists.
 func (p *oauthPlugin) registerLink(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
 	huma.Register(api, huma.Operation{
 		OperationID: "oauthLink",
@@ -268,7 +351,10 @@ func (p *oauthPlugin) registerLink(host plugin.PluginHost, api huma.API, mw *mid
 		Summary:     "Start linking an OAuth provider to the current account",
 		Tags:        []string{"oauth"},
 		Security:    []map[string][]string{{"sessionCookie": {}}},
-		Middlewares: huma.Middlewares{middleware.RequireAuthHuma(api, mw)},
+		Middlewares: huma.Middlewares{
+			middleware.RequireAuthHuma(api, mw),
+			middleware.RequireUserPrincipalHuma(api),
+		},
 	}, func(ctx context.Context, in *linkInput) (*linkOutput, error) {
 		au, ok := middleware.AuthUserFromContext(ctx)
 		if !ok || au == nil {
@@ -298,7 +384,12 @@ func (p *oauthPlugin) registerLink(host plugin.PluginHost, api huma.API, mw *mid
 		if err != nil {
 			return nil, huma.Error500InternalServerError("unable to generate state")
 		}
-		payload := encodeStatePayload(linkModeLink, au.User.ID, redirect)
+		// Same PKCE binding as /authorize — the link leg redeems its code on the
+		// same public /callback, so a code obtained from a link flow is just as
+		// injectable as one from a login flow.
+		verifier := oauth2.GenerateVerifier()
+
+		payload := encodeStatePayload(linkModeLink, au.User.ID, verifier, redirect)
 		pp := payload
 		now := time.Now().UTC()
 		if err := host.Repo().CreateOAuthState(ctx, domain.NewOAuthState{
@@ -311,7 +402,7 @@ func (p *oauthPlugin) registerLink(host plugin.PluginHost, api huma.API, mw *mid
 			return nil, huma.Error500InternalServerError("unable to persist state")
 		}
 
-		authURL := prov.Config().AuthCodeURL(state, oauth2.AccessTypeOffline)
+		authURL := prov.Config().AuthCodeURL(state, oauth2.AccessTypeOffline, oauth2.S256ChallengeOption(verifier))
 		return &linkOutput{Body: linkResponse{AuthURL: authURL}}, nil
 	})
 }
@@ -396,12 +487,28 @@ func (p *oauthPlugin) registerCallback(host plugin.PluginHost, api huma.API, pre
 			return nil, huma.Error400BadRequest("state does not belong to this provider")
 		}
 
-		mode, linkUserID, redirect := linkModeLogin, "", ""
+		mode, linkUserID, verifier, redirect := linkModeLogin, "", "", ""
 		if st.RedirectURL != nil {
-			mode, linkUserID, redirect = decodeStatePayload(*st.RedirectURL)
+			mode, linkUserID, verifier, redirect = decodeStatePayload(*st.RedirectURL)
 		}
 
-		tok, err := prov.Config().Exchange(ctx, code)
+		// Present the verifier that /authorize (or /link) minted for THIS state
+		// row. The IdP hashed the matching challenge against the code it issued,
+		// so a code lifted from someone else's flow — a leaked query string
+		// replayed against the attacker's own state row — now fails at the token
+		// endpoint with invalid_grant instead of yielding the victim's identity.
+		//
+		// Conditional, not unconditional: a state row written by the PREVIOUS
+		// binary carries no verifier, and its browser is already parked at an
+		// IdP that saw no challenge. Sending an empty code_verifier there would
+		// make a strict AS reject an otherwise valid in-flight login for the
+		// whole StateTTL window after a deploy, so those rows redeem exactly as
+		// they did before. Rows written from here on always carry one.
+		var opts []oauth2.AuthCodeOption
+		if verifier != "" {
+			opts = append(opts, oauth2.VerifierOption(verifier))
+		}
+		tok, err := prov.Config().Exchange(ctx, code, opts...)
 		if err != nil {
 			return nil, huma.Error502BadGateway("code exchange failed")
 		}
@@ -488,13 +595,43 @@ func (p *oauthPlugin) completeLogin(
 	case errors.Is(err, yautherr.ErrNotFound):
 		// No existing link — try to attach to an existing user with the
 		// same email, otherwise create one.
-		if info.Email == "" {
+		//
+		// Normalise the provider's address at the boundary — the same shape and
+		// the same reasoning as plugins/ssosaml's assertedEmail, deliberately
+		// not a second pattern. yauth_users.email is byte-exact UNIQUE and
+		// GetUserByEmail is `WHERE email = $1` (memrepo's index is a byte-exact
+		// map), while every password path lowercases what it stores, and the
+		// providers hand the claim over untouched: providers/oidc.go only trims,
+		// providers/google.go does neither. So an IdP asserting
+		// "Alice@corp.example" MISSED the local alice@corp.example, walked past
+		// the adoption gate below without it ever running, and took the CREATE
+		// branch — a SECOND global row for one mailbox, carrying whatever
+		// email_verified the claim asserted and owning the provider link.
+		//
+		// The raw claim is kept for a second lookup on a miss, so rows other
+		// plugins persisted unfolded (plugins/scim, and every oauth login before
+		// this change) are still found; that stops this fix regressing those
+		// installs. It does not make the column case-insensitive — folding the
+		// column needs a migration that can collide with ux_yauth_users_email,
+		// and belongs in its own change. info.ProviderUserID is deliberately NOT
+		// folded: it is an opaque IdP identifier, not an address.
+		lookup := strings.ToLower(strings.TrimSpace(info.Email))
+		if lookup == "" {
+			// Tested on the folded value, so a whitespace-only claim cannot
+			// create a junk row either.
 			return nil, huma.Error400BadRequest("provider returned no email; cannot create account")
 		}
-		existingUser, err := repoRef.GetUserByEmail(ctx, info.Email)
+		existingUser, err := repoRef.GetUserByEmail(ctx, lookup)
 		if err != nil && !errors.Is(err, yautherr.ErrNotFound) {
 			return nil, huma.Error500InternalServerError("unable to look up user")
 		}
+		if errors.Is(err, yautherr.ErrNotFound) && info.Email != lookup {
+			existingUser, err = repoRef.GetUserByEmail(ctx, info.Email)
+			if err != nil && !errors.Is(err, yautherr.ErrNotFound) {
+				return nil, huma.Error500InternalServerError("unable to look up user")
+			}
+		}
+		// Either hit runs the SAME gates below, in the same order.
 		if err == nil && existingUser != nil {
 			// Adopting an existing account on a matching email address makes
 			// the provider's word on that address the whole authentication.
@@ -524,8 +661,11 @@ func (p *oauthPlugin) completeLogin(
 				displayName = &n
 			}
 			created, err := repoRef.CreateUser(ctx, domain.NewUser{
-				ID:            uuid.NewString(),
-				Email:         info.Email,
+				ID: uuid.NewString(),
+				// Store the folded address, so the next login — from this
+				// provider or any other, whatever case it asserts — finds this
+				// row instead of forking the identity again.
+				Email:         lookup,
 				DisplayName:   displayName,
 				EmailVerified: info.EmailVerified,
 				Role:          "user",

@@ -859,6 +859,12 @@ func (p *ssoSAMLPlugin) upsertMembership(ctx context.Context, host plugin.Plugin
 	if cur.Role == role {
 		return nil
 	}
+	// Never let JIT downgrade an owner. Owners are managed explicitly, and the
+	// repo refuses to demote the last owner (ErrOwnerProtected) — which would
+	// otherwise fail the entire SSO login with a 500. Keep the elevated role.
+	if cur.Role == auth.RoleOwner {
+		return nil
+	}
 	_, err = host.Repo().UpdateMembership(ctx, cur.ID, domain.UpdateMembership{
 		Role:      &role,
 		UpdatedAt: &now,

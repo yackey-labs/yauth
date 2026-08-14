@@ -165,6 +165,28 @@ func (r *Repo) DeleteOrganization(ctx context.Context, id string) error {
 			delete(r.ssoConnections, cid)
 		}
 	}
+	// Cascade groups, and with them the group members, client group
+	// assignments and group-scoped client role assignments that decide
+	// access. Nobody deleted these before, on either backend, and the
+	// OAuth2 gate never looks at the organization: UserInAssignedGroup
+	// walks clientGroups -> groupMembers and never consults r.groups or
+	// r.organizations, so a deleted org's members kept passing the
+	// enforce_group_assignment check on every client its groups were
+	// assigned to, and kept the "groups" and "roles" claims.
+	//
+	// The group ids are collected first because deleteGroupLocked mutates
+	// r.groups, and it is filtered on OrganizationID so a client that is
+	// also assigned another org's groups keeps those: the assignment rows
+	// are keyed on client_id + group_id, not on the org.
+	orgGroupIDs := make([]string, 0, len(r.groups))
+	for gid, g := range r.groups {
+		if g.OrganizationID == id {
+			orgGroupIDs = append(orgGroupIDs, gid)
+		}
+	}
+	for _, gid := range orgGroupIDs {
+		r.deleteGroupLocked(gid) // we already hold r.mu
+	}
 	return nil
 }
 

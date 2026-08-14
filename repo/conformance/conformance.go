@@ -99,6 +99,7 @@ var groups = []group{
 	{name: "webhook_deliveries", cases: webhookDeliveryCases},
 	{name: "webhook_retries", cases: webhookRetryCases},
 	{name: "memberships", cases: membershipCases},
+	{name: "org_cascade", cases: orgCascadeCases},
 }
 
 // ----- helpers -----

@@ -111,6 +111,16 @@ type RateLimitConfig struct {
 	MagicLinkSend  RateLimitRule
 	UnlockRequest  RateLimitRule
 	MFAVerify      RateLimitRule
+	// OAuthToken covers POST /oauth/token and POST /oauth/device/code, and
+	// OAuthIntrospect covers POST /oauth/introspect and POST /oauth/revoke.
+	// Both are anonymous wire endpoints that reach a 64 MiB argon2id
+	// client-secret verification on nothing but a public client_id — see
+	// plugin.RateLimitOAuthToken. Neither is given a value in
+	// NewDefaultConfig: the zero rule falls through to the defaults
+	// oauth2server itself passes to plugin.RateLimitFor, so there is exactly
+	// ONE source of truth for the number.
+	OAuthToken      RateLimitRule
+	OAuthIntrospect RateLimitRule
 }
 
 // Rule returns the rule configured for op, and whether op is one this
@@ -130,6 +140,10 @@ func (c RateLimitConfig) Rule(op plugin.RateLimitOp) (RateLimitRule, bool) {
 		return c.UnlockRequest, true
 	case plugin.RateLimitMFAVerify:
 		return c.MFAVerify, true
+	case plugin.RateLimitOAuthToken:
+		return c.OAuthToken, true
+	case plugin.RateLimitOAuthIntrospect:
+		return c.OAuthIntrospect, true
 	}
 	return RateLimitRule{}, false
 }

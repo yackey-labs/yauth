@@ -832,6 +832,8 @@ attacker's budget:
 | `magic_link_send` | 5 / 60s | `POST /magic-link/send` |
 | `unlock_request` | 10 / 60s | `POST /account/request-unlock` |
 | `mfa_verify` | 10 / 60s | `POST /mfa/verify`, `POST /token/mfa`, `POST /mfa/totp/setup`, `DELETE /mfa/totp`, `POST /mfa/backup-codes/regenerate` |
+| `oauth_token` | 150 / 60s | `POST /oauth/token`, `POST /oauth/device/code` |
+| `oauth_introspect` | 300 / 60s | `POST /oauth/introspect`, `POST /oauth/revoke` |
 
 ```yaml
 rate_limit:
@@ -840,6 +842,18 @@ rate_limit:
 ```
 
 An omitted `max` keeps yauth's default; `max: 0` is an explicit "no limit".
+
+The OAuth2 wire endpoints are metered because they are anonymous by
+specification and still reach a 64 MiB argon2id client-secret verification on
+nothing but a `client_id`, which is public by construction. **Raise
+`rate_limit.oauth_token` if you run device flow at scale**: an RFC 8628 device
+polls `POST /oauth/token` every
+`plugins.oauth2_server.device_poll_interval` seconds (default `5`, so
+12 requests a minute per device in flight), and the bucket is per **client IP**
+— every device behind one NAT or egress gateway shares it. The same applies to
+an M2M fleet that exchanges `client_credentials` on every call instead of
+caching the access token. Set `max: 0` to turn the limiter off entirely if you
+meter these routes at your edge.
 
 ### Trusted proxies and the client IP
 

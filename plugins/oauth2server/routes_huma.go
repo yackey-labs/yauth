@@ -3,6 +3,7 @@ package oauth2server
 import (
 	"context"
 	"net/http"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -205,6 +206,50 @@ func (p *oauth2Plugin) registerRoutes(host plugin.PluginHost, api huma.API, mw *
 	authed := authGuards(api, mw)
 	public := stashOnly(api)
 
+	// The anonymous wire endpoints get a per-client-IP ceiling.
+	//
+	// WHY: /oauth/token, /oauth/introspect and /oauth/revoke all funnel into
+	// authenticateClient, which looks the client up and — for
+	// client_secret_post / client_secret_basic — runs auth.VerifyPassword,
+	// i.e. argon2id at m=64MiB, t=1, p=4. That happens BEFORE the grant
+	// registration check, and the only input required to get there is a
+	// client_id, which is public by construction. Unmetered, an anonymous
+	// caller could hold 64 MiB of RSS per in-flight request (200 concurrent
+	// is ~12.8 GiB) and OOM the host that also serves /login and session
+	// resolution, while guessing client secrets with no ceiling.
+	// /oauth/device/code authenticates no client at all and writes a
+	// device-code row per request, so it is a free storage-growth primitive.
+	//
+	// WHY THIS GUARD AND NOT A BROADER ONE: these routes are anonymous by
+	// specification — we cannot require a credential, so a per-IP budget is
+	// the only lever that does not break the protocol. The bucket key is
+	// already name+":"+clientIP resolved under the trusted-proxy policy
+	// (middleware/ratelimit.go), so a correctly fronted deployment meters
+	// real client addresses. Two ops, not one: a browser login costs exactly
+	// one /oauth/token call, while a resource server introspects once per
+	// inbound request, so a shared bucket would let login traffic starve
+	// introspection from the same address. Deliberately NOT extended to
+	// /oauth/register (DCR enforces its own anonymous-loopback/admin split
+	// and is opt-in), /.well-known, /oauth/end_session or /federate/redeem.
+	//
+	// The defaults are permissive on purpose. 150/min absorbs a large office
+	// behind one NAT at its 9am peak, but note an RFC 8628 device polls
+	// /oauth/token every DevicePollInterval seconds (default 5 = 12 req/min
+	// per device in flight), so a device-flow fleet or a non-caching M2M
+	// fleet behind one egress IP should raise rate_limit.oauth_token or set
+	// `max: 0`. See README "Rate limits".
+	// TODO: ssooidc / ssosaml have unmetered anonymous callback routes with
+	// the same shape; they need their own op rather than borrowing these.
+	tokenRL := plugin.RateLimitFor(host, plugin.RateLimitOAuthToken, 150, time.Minute)
+	introspectRL := plugin.RateLimitFor(host, plugin.RateLimitOAuthIntrospect, 300, time.Minute)
+	// The limiter MUST be element 0: huma runs middlewares in slice order and
+	// only an OUTERMOST limiter stops the handler — and therefore the argon2
+	// hash — from running at all. Build a fresh slice with the limiter first
+	// rather than appending to `public`, which would alias its backing array
+	// and corrupt the chain of every other route sharing it.
+	tokenChain := append(huma.Middlewares{middleware.RateLimitHuma(tokenRL)}, public...)
+	introspectChain := append(huma.Middlewares{middleware.RateLimitHuma(introspectRL)}, public...)
+
 	tag := []string{"oauth2"}
 	sessionSec := []map[string][]string{{"sessionCookie": {}}}
 	publicSec := []map[string][]string{}
@@ -335,12 +380,12 @@ func (p *oauth2Plugin) registerRoutes(host plugin.PluginHost, api huma.API, mw *
 	reg("oauth2-end-session-post", http.MethodPost, "/oauth/end_session", "OIDC RP-Initiated Logout (POST)", publicSec, public, p.handleEndSession(host))
 
 	// --- token / introspect / revoke (public wire endpoints) ---
-	reg("oauth2-token", http.MethodPost, "/oauth/token", "OAuth2 token endpoint", publicSec, public, p.handleToken(host))
-	reg("oauth2-introspect", http.MethodPost, "/oauth/introspect", "OAuth2 token introspection (RFC 7662)", publicSec, public, p.handleIntrospect(host))
-	reg("oauth2-revoke", http.MethodPost, "/oauth/revoke", "OAuth2 token revocation (RFC 7009)", publicSec, public, p.handleRevoke(host))
+	reg("oauth2-token", http.MethodPost, "/oauth/token", "OAuth2 token endpoint", publicSec, tokenChain, p.handleToken(host))
+	reg("oauth2-introspect", http.MethodPost, "/oauth/introspect", "OAuth2 token introspection (RFC 7662)", publicSec, introspectChain, p.handleIntrospect(host))
+	reg("oauth2-revoke", http.MethodPost, "/oauth/revoke", "OAuth2 token revocation (RFC 7009)", publicSec, introspectChain, p.handleRevoke(host))
 
 	// --- device flow ---
-	reg("oauth2-device-authorize", http.MethodPost, "/oauth/device/code", "OAuth2 device authorization (RFC 8628)", publicSec, public, p.handleDeviceAuth(host))
+	reg("oauth2-device-authorize", http.MethodPost, "/oauth/device/code", "OAuth2 device authorization (RFC 8628)", publicSec, tokenChain, p.handleDeviceAuth(host))
 	reg("oauth2-device-verify", http.MethodPost, "/oauth/device", "Approve a device authorization", sessionSec, authed, p.handleDeviceVerify(host))
 	reg("oauth2-device-verify-get", http.MethodGet, "/oauth/device", "Device verification page", sessionSec, authed, p.handleDeviceVerify(host))
 

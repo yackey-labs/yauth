@@ -164,6 +164,26 @@ const (
 	RateLimitMagicLinkSend  RateLimitOp = "magic_link_send"
 	RateLimitUnlockRequest  RateLimitOp = "unlock_request"
 	RateLimitMFAVerify      RateLimitOp = "mfa_verify"
+	// RateLimitOAuthToken meters the OAuth2 wire endpoints that MINT or
+	// REQUEST a credential: POST /oauth/token and POST /oauth/device/code.
+	//
+	// /oauth/token needs no credential to reach expensive work: a client_id
+	// is public by construction (it is in every /authorize URL, every RFC
+	// 7591 registration response and the RFC 8414 metadata document), and
+	// authenticateClient looks the client up and runs a 64 MiB argon2id
+	// verification BEFORE it ever checks whether the client is registered
+	// for the grant. So an anonymous caller could pin 64 MiB of RSS per
+	// in-flight request, and guess client secrets with no ceiling while
+	// doing it. /oauth/device/code takes no client authentication at all and
+	// writes one device-code row per request.
+	RateLimitOAuthToken RateLimitOp = "oauth_token"
+	// RateLimitOAuthIntrospect meters the two endpoints a RESOURCE SERVER
+	// calls about a token it already holds: POST /oauth/introspect and POST
+	// /oauth/revoke. They reach the same argon2 verify, but their legitimate
+	// call rate is per-inbound-request rather than per-login, so they get a
+	// separate and more generous bucket — sharing one with /oauth/token
+	// would let login traffic starve introspection from the same address.
+	RateLimitOAuthIntrospect RateLimitOp = "oauth_introspect"
 )
 
 // RateLimitConfigurer is the optional extension a PluginHost implements to

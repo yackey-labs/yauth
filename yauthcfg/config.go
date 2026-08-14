@@ -246,6 +246,8 @@ type SessionConfig struct {
 //	mfa_verify       POST /mfa/verify, POST /token/mfa,
 //	                 POST /mfa/totp/setup, DELETE /mfa/totp,
 //	                 POST /mfa/backup-codes/regenerate
+//	oauth_token      POST /oauth/token, POST /oauth/device/code
+//	oauth_introspect POST /oauth/introspect, POST /oauth/revoke
 //
 // The three MFA management routes join mfa_verify because they check the same
 // six-digit secret via the X-MFA-Code step-up header; sharing the bucket stops
@@ -253,6 +255,20 @@ type SessionConfig struct {
 // /mfa/backup-codes and POST /mfa/totp/confirm are deliberately NOT metered —
 // the first is a read with nothing to guess, the second validates against a
 // candidate secret the caller was just shown in full.
+//
+// oauth_token and oauth_introspect meter endpoints that need NO credential to
+// reach a 64 MiB argon2id client-secret verification — only a client_id, which
+// is public by construction. They are separate ops because their honest call
+// rates differ by an order of magnitude: a browser login costs exactly one
+// /oauth/token call, while a resource server introspects once per inbound
+// request.
+//
+// RAISE oauth_token if you run device flow at scale or a non-caching M2M
+// fleet: an RFC 8628 device polls POST /oauth/token every
+// plugins.oauth2_server.device_poll_interval seconds (default 5, i.e. 12
+// requests a minute per device in flight), and the bucket is per CLIENT IP —
+// so every device behind one NAT or egress gateway shares it. `max: 0` is an
+// explicit "no limit" for operators who meter these routes at the edge instead.
 type RateLimitConfig struct {
 	Login          RateLimitRule `yaml:"login" toml:"login"`
 	Register       RateLimitRule `yaml:"register" toml:"register"`
@@ -260,6 +276,9 @@ type RateLimitConfig struct {
 	MagicLinkSend  RateLimitRule `yaml:"magic_link_send" toml:"magic_link_send"`
 	UnlockRequest  RateLimitRule `yaml:"unlock_request" toml:"unlock_request"`
 	MFAVerify      RateLimitRule `yaml:"mfa_verify" toml:"mfa_verify"`
+
+	OAuthToken      RateLimitRule `yaml:"oauth_token" toml:"oauth_token"`
+	OAuthIntrospect RateLimitRule `yaml:"oauth_introspect" toml:"oauth_introspect"`
 }
 
 // RateLimitRule is one (max, window) pair.

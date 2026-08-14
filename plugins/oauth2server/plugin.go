@@ -102,9 +102,12 @@ type Config struct {
 	// vector is closed by the loopback restriction, but the endpoint then
 	// accepts unauthenticated POSTs that create public client rows — apply
 	// rate limiting at your edge (gateway/CDN) as you would for any other
-	// unauthenticated endpoint (yauth-go does not rate-limit /oauth/token,
-	// /oauth/introspect, or /oauth/device/code either). Operators who want
-	// the prior behaviour — every registration gated behind an admin —
+	// unauthenticated endpoint. NOTE: /oauth/register carries no limiter of
+	// its own — its split anonymous-loopback/admin policy is enforced in the
+	// handler instead — whereas /oauth/token, /oauth/device/code,
+	// /oauth/introspect and /oauth/revoke DO carry a per-client-IP limiter
+	// (rate_limit.oauth_token / rate_limit.oauth_introspect). Operators who
+	// want the prior behaviour — every registration gated behind an admin —
 	// set DCRRequireAdminForLoopback.
 	DCREnabled bool
 	// DCRRequireAdminForLoopback restores the strict pre-loopback-anonymous

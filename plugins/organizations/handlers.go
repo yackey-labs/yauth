@@ -590,10 +590,29 @@ func (p *orgsPlugin) registerListMembers(host plugin.PluginHost, api huma.API, m
 
 // --- POST /organizations/{id}/members ---
 
+// directEnrolmentRefused is the 403 body for a consentless direct enrolment.
+// It deliberately names BOTH ways forward — the invitation route (the right
+// answer for a user whose address this org cannot prove it owns) and the
+// operator flag (the right answer for a realm-flat console) — so whoever
+// reads the response learns the alternative without reading the release note.
+//
+// It deliberately does NOT echo the target's address or its domain: the
+// caller supplied only a user id, and telling them "example.com is not yours"
+// would turn the route into a user-id → email-domain oracle for any org
+// admin.
+const directEnrolmentRefused = "this organization has no verified email domain covering that user, " +
+	"so it cannot enrol them without their consent: send POST /organizations/{id}/invitations instead. " +
+	"Operators may restore direct enrolment with plugins.organizations.allow_direct_member_enrollment: true."
+
 // addMemberRequest is the admin "directly enroll a user" payload — the
 // non-interactive complement to invitations. Single-tenant ("realm-flat")
 // consoles use it to make every workforce user a member of the one
 // auto-managed org so the org-scoped group endpoints work for them.
+//
+// It is NOT a way to conscript arbitrary accounts: unless the caller is an
+// install-wide admin, the org must hold a VERIFIED domain covering the
+// target's email address (or the deployment must set
+// allow_direct_member_enrollment). See the consent gate in the handler.
 type addMemberRequest struct {
 	UserID string   `json:"user_id,omitempty"`
 	Role   string   `json:"role,omitempty" doc:"Membership role; defaults to member. owner is rejected (use transfer-ownership)."`
@@ -615,7 +634,7 @@ func (p *orgsPlugin) registerAddMember(host plugin.PluginHost, api huma.API, mw 
 		Method:        http.MethodPost,
 		Path:          prefix + "/organizations/{id}/members",
 		Summary:       "Add a user to an organization (admin, idempotent)",
-		Description:   "Directly enrolls an existing user as a member — no invitation round-trip. Caller must be an org admin/owner or an install-wide admin. Idempotent: enrolling an existing member returns 200 with the current membership untouched (role is NOT changed; use the role endpoint).",
+		Description:   "Directly enrolls an existing user as a member — no invitation round-trip. Caller must be an org admin/owner or an install-wide admin. Unless the caller is an install-wide admin, the organization must hold a VERIFIED domain covering the target's email address (or the deployment must set plugins.organizations.allow_direct_member_enrollment); otherwise 403 — use POST /organizations/{id}/invitations, which the target consents to. Idempotent: enrolling an existing member returns 200 with the current membership untouched (role is NOT changed; use the role endpoint).",
 		Tags:          []string{"organizations"},
 		Security:      []map[string][]string{{"sessionCookie": {}}},
 		DefaultStatus: http.StatusCreated,
@@ -673,6 +692,55 @@ func (p *orgsPlugin) registerAddMember(host plugin.PluginHost, api huma.API, mw 
 			return nil, huma.Error500InternalServerError("membership lookup failed")
 		} else if existing != nil {
 			return &output{Status: http.StatusOK, Body: toMembershipJSON(*existing)}, nil
+		}
+
+		// CONSENT GATE. Everything above asks only whether the CALLER may
+		// administer this org. Nothing asked whether the TARGET agreed to
+		// join it, and the row written below is Status: active with joined_at
+		// stamped — a full membership the target never requested. Since
+		// creating an org has no role gate at all, ANY ordinary account could
+		// mint itself an org and then enrol a stranger by user id, and a user
+		// id is not a secret (it is the `sub` of every id_token, it is in the
+		// member list of any shared org, and it is in the SCIM Users
+		// representation). What that bought: the active membership is exactly
+		// what the group guard demands, ListGroupNamesForUser has no
+		// organization predicate, and oauth2server/oidc feed it into the
+		// id_token `groups` claim — so an attacker-chosen group name rode
+		// into the victim's token at every relying party. It also captured
+		// the victim's next active org, hence the attacker's IP allowlist and
+		// MFA policy.
+		//
+		// So enrolment without an invitation now needs the org to have PROVED
+		// it owns the address's namespace: a VERIFIED organization domain,
+		// the same proof plugins/scim requireAdoptable and
+		// auth.AutoJoinFromEmail already accept. Otherwise the target has to
+		// accept an invitation, which is consent.
+		//
+		// Placement matters twice over:
+		//   - AFTER the idempotency short-circuit above. Re-asserting an
+		//     EXISTING member writes nothing, and the membership is already
+		//     visible to this caller via GET /members, so refusing it would
+		//     protect nothing while breaking provisioning scripts (and every
+		//     org whose members joined by invitation).
+		//   - AFTER the 404s for an unknown org / unknown user, so a typo
+		//     still reads as a typo for legitimate operators.
+		//
+		// isInstallAdmin is exempt because that arm is already install-wide
+		// authority: a global role-"admin" HUMAN can read and write every org
+		// through the admin plugin regardless, so gating them here would buy
+		// nothing and would break the realm-flat console this route was
+		// written for. Note the carve-out above keeps that exemption away
+		// from service accounts — an org-scoped key is refused by this same
+		// domain rule, not for being a machine.
+		if !isInstallAdmin && !p.cfg.AllowDirectMemberEnrollment {
+			ok, derr := auth.VerifiedDomainCoversEmail(ctx, host.Repo(), orgID, target.Email)
+			if derr != nil {
+				// Fail closed: a broken lookup must not become consent.
+				return nil, huma.Error500InternalServerError("domain lookup failed")
+			}
+			if !ok {
+				return nil, huma.Error403Forbidden(directEnrolmentRefused)
+			}
 		}
 
 		now := time.Now().UTC()
@@ -770,6 +838,117 @@ func (p *orgsPlugin) registerCreateInvitation(host plugin.PluginHost, api huma.A
 			Invitation: toInvitationJSON(inv),
 			Token:      token,
 		}}, nil
+	})
+}
+
+// --- GET /organizations/{id}/invitations ---
+//
+// The invited path is what direct enrolment now points AT, so it has to be a
+// surface an operator can actually run. The repository has carried
+// ListPendingInvitationsForOrg and DeleteInvitation on both backends from the
+// start and NO route reached either of them: a mis-sent invitation was live
+// for the whole InvitationTTL (7 days by default) with no way to see it and
+// no way to take it back. These two routes close that.
+
+// listInvitationsResponse mirrors the {"members":[...]} / {"groups":[...]}
+// wrapper the rest of the plugin uses.
+type listInvitationsResponse struct {
+	Invitations []invitationJSON `json:"invitations"`
+}
+
+func (p *orgsPlugin) registerListInvitations(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	type output struct {
+		Body listInvitationsResponse
+	}
+	huma.Register(api, huma.Operation{
+		OperationID: "organizations-list-invitations",
+		Method:      http.MethodGet,
+		Path:        prefix + "/organizations/{id}/invitations",
+		Summary:     "List an organization's pending invitations",
+		Description: "Returns invitations that are neither accepted nor expired. Org-admin gated. The one-time token is NOT included — it is shown exactly once, in the create response.",
+		Tags:        []string{"organizations"},
+		Security:    []map[string][]string{{"sessionCookie": {}}},
+		Middlewares: authGuards(api, mw),
+	}, func(ctx context.Context, in *orgIDInput) (*output, error) {
+		au, err := authUser(ctx)
+		if err != nil {
+			return nil, err
+		}
+		// Admin-gated to match create-invitation: the pending list names the
+		// addresses this org has approached, which is not something an
+		// ordinary member needs.
+		if _, err := requireOrgAdmin(ctx, host, in.ID, au); err != nil {
+			return nil, err
+		}
+		invs, err := host.Repo().ListPendingInvitationsForOrg(ctx, in.ID)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("list invitations failed")
+		}
+		out := make([]invitationJSON, 0, len(invs))
+		for _, inv := range invs {
+			if inv == nil {
+				continue
+			}
+			// toInvitationJSON carries neither the token nor its hash, and
+			// must keep it that way: a listing that re-exposed either would
+			// turn "can read the invitation list" into "can accept any of
+			// these invitations".
+			out = append(out, toInvitationJSON(*inv))
+		}
+		return &output{Body: listInvitationsResponse{Invitations: out}}, nil
+	})
+}
+
+// --- DELETE /organizations/{id}/invitations/{invitation_id} ---
+
+type deleteInvitationInput struct {
+	ID    string `path:"id" doc:"Organization ID"`
+	InvID string `path:"invitation_id" doc:"Invitation ID"`
+}
+
+func (p *orgsPlugin) registerDeleteInvitation(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
+	huma.Register(api, huma.Operation{
+		OperationID:   "organizations-delete-invitation",
+		Method:        http.MethodDelete,
+		Path:          prefix + "/organizations/{id}/invitations/{invitation_id}",
+		Summary:       "Revoke a pending invitation",
+		Description:   "Deletes the invitation row, so its token stops redeeming immediately rather than at the end of the TTL. Org-admin gated; the invitation must belong to this organization.",
+		Tags:          []string{"organizations"},
+		Security:      []map[string][]string{{"sessionCookie": {}}},
+		DefaultStatus: http.StatusNoContent,
+		Middlewares:   authGuards(api, mw),
+	}, func(ctx context.Context, in *deleteInvitationInput) (*orgEmptyOutput, error) {
+		au, err := authUser(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := requireOrgAdmin(ctx, host, in.ID, au); err != nil {
+			return nil, err
+		}
+		inv, err := host.Repo().GetInvitationByID(ctx, in.InvID)
+		if err != nil {
+			// Both backends signal a miss with ErrNotFound (memrepo
+			// GetInvitationByID, pgxrepo's pgx.ErrNoRows mapping), so an
+			// unknown or already-revoked id must read as 404, never 500.
+			if errors.Is(err, yautherr.ErrNotFound) {
+				return nil, huma.Error404NotFound("invitation not found")
+			}
+			return nil, huma.Error500InternalServerError("invitation lookup failed")
+		}
+		// The organization check is LOAD-BEARING, not defence in depth.
+		// DeleteInvitation takes an id ALONE and both backends are idempotent
+		// on a miss (memrepo returns nil, pgxrepo discards the rowcount), so
+		// without this any org admin anywhere could destroy any other org's
+		// invitation by id — the admin gate above only proves they administer
+		// the org named in the PATH. Answering 404 rather than 403 also keeps
+		// the route from confirming that some other org holds that id.
+		if inv == nil || inv.OrganizationID != in.ID {
+			return nil, huma.Error404NotFound("invitation not found")
+		}
+		if err := host.Repo().DeleteInvitation(ctx, in.InvID); err != nil {
+			return nil, huma.Error500InternalServerError("delete invitation failed")
+		}
+		return &orgEmptyOutput{}, nil
 	})
 }
 

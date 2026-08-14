@@ -174,6 +174,55 @@ single-tenant UI) can enroll users into it directly —
 `POST {prefix}/organizations/{id}/members` `{user_id, role?}` (org-admin or
 install-admin gated, idempotent) — no invitation round-trip.
 
+**Precondition (since the consent gate).** Direct enrolment writes an ACTIVE
+membership the target never agreed to, so unless the caller is an *install-wide*
+admin (`user.role == "admin"`, which a realm-flat console usually is — that path
+is unchanged) the org must hold a **verified domain** covering the target's email
+address, else `403`. Three ways to satisfy it, cheapest first:
+
+- verify the org's email domain (`POST /organizations/{id}/domains` then
+  `.../verify`) — the same proof SCIM adoption and domain auto-join already use;
+- invite instead: `POST /organizations/{id}/invitations`, which the user accepts
+  (and which you can now list and revoke, see below);
+- or, for a console that drives the API as an org **owner** while holding the
+  global role `"user"`, set `plugins.organizations.allow_direct_member_enrollment:
+  true`. That restores the old behaviour wholesale, including the fact that an
+  org admin can then place any user in any group — and group names ride into the
+  `groups` claim of that user's id_token at every relying party. Only turn it on
+  where org-admin is already an operator-level trust boundary.
+
+Pending invitations are manageable: `GET /organizations/{id}/invitations` lists
+them (admin-gated, never returns the token) and
+`DELETE /organizations/{id}/invitations/{invitation_id}` revokes one before its
+TTL expires.
+
+**Reviewing memberships that predate the gate.** Rows already in the database
+were written under the old rule, so upgrading does not undo them. This query
+lists memberships with no accepted invitation and no verified domain behind
+them — it is a **review list, not a delete list**:
+
+```sql
+SELECT m.organization_id, m.user_id, m.role, m.created_at
+  FROM yauth_memberships m
+  JOIN yauth_users u ON u.id = m.user_id
+  LEFT JOIN yauth_invitations i
+    ON i.organization_id = m.organization_id
+   AND lower(i.email) = lower(u.email)
+   AND i.accepted_at IS NOT NULL
+  LEFT JOIN yauth_organization_domains d
+    ON d.organization_id = m.organization_id
+   AND d.status = 'verified'
+   AND d.domain_canonical = lower(split_part(u.email, '@', 2))
+ WHERE i.id IS NULL AND d.id IS NULL AND m.invited_at IS NULL;
+```
+
+Two large classes of **false positive** show up here and are perfectly
+legitimate: SCIM-provisioned members (plugins/scim writes an active membership
+directly, with no invitation row) and domain auto-join members (keyed on a
+verified domain at signup time, but they leave `invited_at` NULL and the domain
+row may since have been removed or re-verified elsewhere). Read the list, don't
+pipe it into a DELETE.
+
 ### Lower-level
 
 - `ssooidc.SeedConnection(ctx, repo, key, in)` — connection-as-code when you
@@ -205,7 +254,11 @@ install-admin gated, idempotent) — no invitation round-trip.
    org-scoped shape in a single-tenant app (e.g. for org-scoped groups/SCIM),
    the anchor org is plumbing — don't let it become the data tenant, and enroll
    users via `POST /organizations/{id}/members` (or SCIM), not by hand. If you
-   don't need orgs at all, use a global connection instead.
+   don't need orgs at all, use a global connection instead. Note the enrolment
+   route's consent gate (above): an install-wide admin caller is exempt, but an
+   org-owner caller with the global role `"user"` needs the org's email domain
+   verified, an invitation, or
+   `plugins.organizations.allow_direct_member_enrollment: true`.
 7. **Connection `redirect_url`** (the post-login landing) must be the param the
    RP reads (`redirect_url`) and either a relative `/path` or an entry in
    `ssooidc.Config.AllowedRedirectURLs`.

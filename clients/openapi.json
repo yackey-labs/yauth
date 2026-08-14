@@ -1968,6 +1968,24 @@
         ],
         "type": "object"
       },
+      "ListInvitationsResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "invitations": {
+            "items": {
+              "$ref": "#/components/schemas/InvitationJSON"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "invitations"
+        ],
+        "type": "object"
+      },
       "ListMembersResponse": {
         "additionalProperties": false,
         "properties": {
@@ -9056,6 +9074,53 @@
       }
     },
     "/organizations/{id}/invitations": {
+      "get": {
+        "description": "Returns invitations that are neither accepted nor expired. Org-admin gated. The one-time token is NOT included — it is shown exactly once, in the create response.",
+        "operationId": "organizations-list-invitations",
+        "parameters": [
+          {
+            "description": "Organization ID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "description": "Organization ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListInvitationsResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "List an organization's pending invitations",
+        "tags": [
+          "organizations"
+        ]
+      },
       "post": {
         "operationId": "organizations-create-invitation",
         "parameters": [
@@ -9113,6 +9178,58 @@
         ]
       }
     },
+    "/organizations/{id}/invitations/{invitation_id}": {
+      "delete": {
+        "description": "Deletes the invitation row, so its token stops redeeming immediately rather than at the end of the TTL. Org-admin gated; the invitation must belong to this organization.",
+        "operationId": "organizations-delete-invitation",
+        "parameters": [
+          {
+            "description": "Organization ID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "description": "Organization ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Invitation ID",
+            "in": "path",
+            "name": "invitation_id",
+            "required": true,
+            "schema": {
+              "description": "Invitation ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Revoke a pending invitation",
+        "tags": [
+          "organizations"
+        ]
+      }
+    },
     "/organizations/{id}/members": {
       "get": {
         "operationId": "organizations-list-members",
@@ -9161,7 +9278,7 @@
         ]
       },
       "post": {
-        "description": "Directly enrolls an existing user as a member — no invitation round-trip. Caller must be an org admin/owner or an install-wide admin. Idempotent: enrolling an existing member returns 200 with the current membership untouched (role is NOT changed; use the role endpoint).",
+        "description": "Directly enrolls an existing user as a member — no invitation round-trip. Caller must be an org admin/owner or an install-wide admin. Unless the caller is an install-wide admin, the organization must hold a VERIFIED domain covering the target's email address (or the deployment must set plugins.organizations.allow_direct_member_enrollment); otherwise 403 — use POST /organizations/{id}/invitations, which the target consents to. Idempotent: enrolling an existing member returns 200 with the current membership untouched (role is NOT changed; use the role endpoint).",
         "operationId": "organizations-add-member",
         "parameters": [
           {

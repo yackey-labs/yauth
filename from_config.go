@@ -721,6 +721,10 @@ func addAuthPlugins(builder *YAuthBuilder, cfg *yauthcfg.Config, mailer Mailer, 
 			APIKeyPrefix:      firstNonEmpty(p.Organizations.APIKeyPrefix, apiKeyPrefix),
 			InvitationTTL:     p.Organizations.InvitationTTL,
 			DefaultInviteRole: p.Organizations.DefaultInviteRole,
+			// False by default: direct enrolment needs a verified org
+			// domain unless the operator opts back into the old
+			// consentless behaviour.
+			AllowDirectMemberEnrollment: p.Organizations.AllowDirectMemberEnrollment,
 		}))
 	}
 	if p.SCIM.Enabled {

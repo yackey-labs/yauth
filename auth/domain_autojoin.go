@@ -158,3 +158,45 @@ func extractEmailDomain(email string) (string, bool) {
 	}
 	return strings.ToLower(strings.TrimSpace(email[at+1:])), true
 }
+
+// VerifiedDomainCoversEmail reports whether orgID holds a VERIFIED
+// organization-domain row for the domain part of email — i.e. whether this
+// org has already proved (via the DNS TXT round-trip behind
+// POST /organizations/{id}/domains/{id}/verify) that it owns the namespace
+// that address lives in.
+//
+// It is this library's single statement of "these addresses are mine, so I
+// may act on their owners without asking them individually". Two callers
+// already depended on exactly this proof and each had its own copy of it:
+// AutoJoinFromEmail above (a new signup joins the org that owns its domain)
+// and plugins/scim requireAdoptable (a SCIM POST /Users may bind an
+// already-existing global account into the posting org). It is exported here
+// because plugins/organizations needs the identical test before it will let
+// an org admin enrol a stranger by user id — see registerAddMember. One
+// predicate, one meaning; a second implementation would be a second place for
+// the DomainVerified check to rot.
+//
+// A malformed address, an unclaimed domain, a domain claimed by a DIFFERENT
+// org, and a claim that is still merely pending all answer (false, nil): a
+// pending row is an unproved assertion, and anyone may type any domain into
+// the create-domain route. Only a genuine repository failure returns an
+// error, so callers can tell "not proved" (refuse) from "lookup broke"
+// (500) rather than failing open on an outage.
+func VerifiedDomainCoversEmail(ctx context.Context, lookup repo.OrganizationDomainRepository, orgID, email string) (bool, error) {
+	domainPart, ok := extractEmailDomain(email)
+	if !ok {
+		return false, nil
+	}
+	// GetOrganizationDomainByDomain is case-insensitive and globally unique
+	// on the domain, so this both finds the claim and tells us which org
+	// holds it. Backends signal a miss with ErrNotFound (pgx) and some
+	// return (nil, nil); both mean "nobody has claimed it".
+	d, err := lookup.GetOrganizationDomainByDomain(ctx, domainPart)
+	if err != nil {
+		if errors.Is(err, yautherr.ErrNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	return d != nil && d.OrganizationID == orgID && d.Status == domain.DomainVerified, nil
+}

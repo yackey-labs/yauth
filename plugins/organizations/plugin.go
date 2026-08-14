@@ -16,8 +16,11 @@
 //	PATCH  {prefix}/organizations/{id}                  update org (admin-gated, RequireAuth)
 //	DELETE {prefix}/organizations/{id}                  delete org + cascade (admin-gated, RequireAuth)
 //	GET    {prefix}/organizations/{id}/members          list members (membership-gated, RequireAuth)
-//	POST   {prefix}/organizations/{id}/members          add a member directly (org-admin or install-admin, idempotent)
+//	POST   {prefix}/organizations/{id}/members          add a member directly (org-admin or install-admin, idempotent, verified-domain gated)
 //	POST   {prefix}/organizations/{id}/invitations      create invitation (admin-gated, RequireAuth)
+//	GET    {prefix}/organizations/{id}/invitations      list pending invitations (admin-gated, no token)
+//	DELETE {prefix}/organizations/{id}/invitations/{invitation_id}
+//	                                                    revoke a pending invitation (admin-gated)
 //	POST   {prefix}/invitations/accept                  accept invitation by token (RequireAuth)
 //
 // Invariants enforced by the handlers:
@@ -25,6 +28,10 @@
 //   - Cross-tenant isolation: every org-scoped route gates on a
 //     MembershipRepository lookup for (org_id, caller_id) — non-members
 //     get 403 regardless of any URL fiddling.
+//   - Consent: nobody is made a member without either accepting an
+//     invitation, or belonging to an email domain the org has VERIFIED,
+//     or being enrolled by an install-wide admin. See Config.
+//     AllowDirectMemberEnrollment for the operator escape hatch.
 //   - Owner-protection: at minimum one admin is preserved on org
 //     creation (creator → admin); RBAC role transitions are scope of
 //     follow-up #88 and are intentionally not exposed here.
@@ -94,6 +101,33 @@ type Config struct {
 	// plugin's Config.Prefix so a single resolver path validates
 	// both user- and org-scoped credentials. Defaults to "yak".
 	APIKeyPrefix string
+
+	// AllowDirectMemberEnrollment restores the pre-release behaviour of
+	// POST /organizations/{id}/members: ANY org admin may enrol ANY user
+	// id as an ACTIVE member, with no invitation and no verified domain,
+	// and the target is never asked. FALSE by default — the zero value is
+	// the safe value, so applyDefaults deliberately leaves it alone.
+	//
+	// With it false, a non-install-admin caller may only enrol users whose
+	// email domain the organization has VERIFIED (the same proof
+	// plugins/scim requireAdoptable and auth.AutoJoinFromEmail accept);
+	// everyone else must be invited and must accept.
+	//
+	// Turning it on re-opens a real primitive, not just an ergonomic one:
+	// an active membership is what the group routes require, and group
+	// names flow into the id_token `groups` claim with no organization
+	// predicate — so any org admin can put a group name of their choosing
+	// into another user's token at every relying party. It also lets them
+	// capture that user's default active org, hence the IP allowlist, MFA
+	// requirement and session lifetime that org's policy imposes.
+	//
+	// Set it only where the org-admin role is ALREADY an operator-level
+	// trust boundary — the classic case being a realm-flat / single-tenant
+	// console whose operators drive the API as owner of the one
+	// auto-managed org while holding the global role "user" (a global
+	// role-"admin" human is exempt from the gate anyway, so such consoles
+	// need nothing here).
+	AllowDirectMemberEnrollment bool
 }
 
 func applyDefaults(c Config) Config {
@@ -148,6 +182,13 @@ func (p *orgsPlugin) Routes(host plugin.PluginHost, _ plugin.Router, api huma.AP
 	p.registerListMembers(host, api, mw, prefix)
 	p.registerAddMember(host, api, mw, prefix)
 	p.registerCreateInvitation(host, api, mw, prefix)
+	// Listing and revoking pending invitations. Both repository methods
+	// existed from the start and no route reached either, so a mis-sent
+	// invitation stayed live and invisible for the whole TTL. With direct
+	// enrolment now gated on a verified domain, the invited path is the
+	// default path and it has to be operable.
+	p.registerListInvitations(host, api, mw, prefix)
+	p.registerDeleteInvitation(host, api, mw, prefix)
 	p.registerAcceptInvitation(host, api, mw, prefix)
 
 	// RBAC routes (yauth #88 port).

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"strings"
 	"time"
@@ -314,6 +315,15 @@ func NewBuilderFromConfig(ctx context.Context, cfg *yauthcfg.Config, opts ...Con
 	mailer, err := resolveMailer(cfg.Mailer, o.mailer)
 	if err != nil {
 		return nil, err
+	}
+	// An SMTP relay reached over a network with no requirement of transport
+	// security gets one line at startup. o.mailer wins over cfg.Mailer in
+	// resolveMailer, so a custom mailer means the smtp block is not in play
+	// and warning about it would be noise.
+	if o.mailer == nil {
+		if adv := smtpTLSAdvisory(cfg.Mailer); adv != "" {
+			logger.Warn("yauth: insecure setting", "detail", adv)
+		}
 	}
 
 	if cfg.Telemetry.Enabled {
@@ -909,13 +919,9 @@ func buildSMTPMailer(cfg yauthcfg.MailerConfig) (Mailer, error) {
 	if cfg.From == "" {
 		return nil, errors.New("yauth: mailer.from is required when provider=smtp")
 	}
-	user := ""
-	pass := ""
-	if cfg.SMTP.UsernameEnv != "" {
-		user = os.Getenv(cfg.SMTP.UsernameEnv)
-	}
-	if cfg.SMTP.PasswordEnv != "" {
-		pass = os.Getenv(cfg.SMTP.PasswordEnv)
+	user, pass, err := resolveSMTPCredential(cfg.SMTP)
+	if err != nil {
+		return nil, err
 	}
 	return smtpmailer.New(smtpmailer.Mailer{
 		Host:     cfg.SMTP.Host,
@@ -923,8 +929,97 @@ func buildSMTPMailer(cfg yauthcfg.MailerConfig) (Mailer, error) {
 		Username: user,
 		Password: pass,
 		From:     cfg.From,
-		TLS:      cfg.SMTP.TLS,
+		// TLS is deprecated but still carried through verbatim: it is what
+		// the mailer falls back to when TLSMode is empty, so dropping it
+		// would silently turn every `tls: true` install from implicit TLS
+		// into an opportunistic upgrade.
+		TLS:     cfg.SMTP.TLS,
+		TLSMode: cfg.SMTP.TLSMode,
 	}), nil
+}
+
+// resolveSMTPCredential reads the relay username/password out of the env vars
+// the config NAMES, and refuses a half-set credential.
+//
+// It used to be two unchecked os.Getenv calls. smtp.exchange authenticates
+// only when BOTH values are non-empty, so a password_env that was misspelled,
+// not exported by the unit file, or dropped by a secret-manager rollout
+// produced a mailer that had quietly given up on AUTH: against a strict relay
+// every verification mail, password reset and magic link then failed at send
+// time behind yauth's deliberately neutral 200, and against a permissive one
+// it succeeded unauthenticated, which is worse. Nothing said so at startup.
+//
+// buildCloudflareMailer, twenty lines below, has always rejected an
+// api_token_env that resolves empty. This holds the SMTP branch to its
+// neighbour's standard: the error names the offending variable, because the
+// operator cannot fix what the message does not identify.
+//
+// Setting NEITHER key stays legal and unauthenticated — MailHog and a sidecar
+// Postfix that accepts from localhost are the reason this is a knob and not a
+// requirement. Only a HALF-set credential is refused.
+func resolveSMTPCredential(cfg yauthcfg.SMTPConfig) (user, pass string, err error) {
+	if cfg.UsernameEnv == "" && cfg.PasswordEnv == "" {
+		return "", "", nil
+	}
+	const remedy = "set it, or remove both username_env and password_env to send unauthenticated"
+	if cfg.UsernameEnv == "" {
+		return "", "", fmt.Errorf("yauth: mailer.smtp sets password_env %q but no username_env — SMTP AUTH needs both, so the password would be discarded at send time; %s", cfg.PasswordEnv, remedy)
+	}
+	if cfg.PasswordEnv == "" {
+		return "", "", fmt.Errorf("yauth: mailer.smtp sets username_env %q but no password_env — SMTP AUTH needs both, so the username would be discarded at send time; %s", cfg.UsernameEnv, remedy)
+	}
+	user = os.Getenv(cfg.UsernameEnv)
+	if user == "" {
+		return "", "", fmt.Errorf("yauth: mailer.smtp username_env %q is unset or empty; %s", cfg.UsernameEnv, remedy)
+	}
+	pass = os.Getenv(cfg.PasswordEnv)
+	if pass == "" {
+		return "", "", fmt.Errorf("yauth: mailer.smtp password_env %q is unset or empty; %s", cfg.PasswordEnv, remedy)
+	}
+	return user, pass, nil
+}
+
+// smtpTLSAdvisory returns the one-line startup WARN for an SMTP mailer that
+// does not require transport security, or "" when there is nothing to say.
+//
+// This is the safety signal shipped IN PLACE OF a breaking default. Flipping
+// the default to starttls would silently take mail offline on upgrade for
+// every install behind a relay that does not offer it, and a mail outage is
+// the one failure mode worse than the strip attack. So the posture is
+// unchanged and said out loud instead — the same trade SecurityWarnings makes
+// for cookie_secure, and the same precedent as the console mailer's one-time
+// WARN.
+//
+// Loopback is exempt because a relay on 127.0.0.1/::1 has no wire for anyone
+// to sit on. The check is deliberately NOT auth/safehttp.IsPrivateIP: that
+// covers all of RFC1918, it exists to decide SSRF destinations, and reusing it
+// here would silence the warning for every relay on a corporate LAN — where an
+// on-path attacker is exactly who you are worried about.
+func smtpTLSAdvisory(cfg yauthcfg.MailerConfig) string {
+	if strings.ToLower(strings.TrimSpace(cfg.Provider)) != "smtp" {
+		return ""
+	}
+	mode := strings.ToLower(strings.TrimSpace(cfg.SMTP.TLSMode))
+	if mode == "" {
+		// Mirrors smtp.effectiveTLSMode's derivation from the deprecated bool.
+		mode = smtpmailer.ModeOpportunistic
+		if cfg.SMTP.TLS {
+			mode = smtpmailer.ModeImplicit
+		}
+	}
+	if mode != smtpmailer.ModeOpportunistic && mode != smtpmailer.ModeNone {
+		return ""
+	}
+	host := strings.TrimSpace(cfg.SMTP.Host)
+	if host == "" || strings.EqualFold(host, "localhost") {
+		return ""
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return ""
+	}
+	return fmt.Sprintf("mailer.smtp is sending to %s without requiring TLS (effective tls_mode=%s); "+
+		"an on-path attacker can strip STARTTLS and read password-reset and magic-link tokens in cleartext. "+
+		"Set mailer.smtp.tls_mode: %s", host, mode, smtpmailer.ModeStartTLS)
 }
 
 // buildCloudflareMailer constructs the Cloudflare Email Service mailer from

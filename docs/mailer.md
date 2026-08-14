@@ -44,13 +44,48 @@ mailer:
     port: 587
     username_env: SMTP_USER      # the env VAR NAME — the secret is read at runtime
     password_env: SMTP_PASS
-    tls: true
+    tls_mode: starttls           # require the STARTTLS upgrade; see below
 ```
 
 Secrets are referenced by env-var **name** (`*_env`), never inlined, so the
 config file stays safe to commit. `NewFromConfig` wires this mailer into all
 three plugins automatically. Inspect every field with `yauth schema config`
 (the `mailer` block carries inline descriptions and the `provider` enum).
+
+Set **both** `username_env` and `password_env` or **neither**. SMTP AUTH needs
+both values, so a half-set credential would silently send unauthenticated —
+startup fails instead, naming the variable that is missing. A relay that wants
+no authentication at all (MailHog, a sidecar Postfix accepting from localhost)
+simply omits both keys.
+
+### `tls_mode` — how the connection is secured
+
+Every email yauth sends carries a **single-use bearer token** in its body, so
+the transport is not a detail:
+
+| `tls_mode` | Behaviour | Use for |
+|---|---|---|
+| `starttls` | Connects in cleartext, **requires** the STARTTLS upgrade, and **refuses to send** if the server does not advertise it | **Recommended** for any relay reached over a network (submission port 587) |
+| `implicit` | TLS handshake before the SMTP greeting (`smtps://`) | Port 465 endpoints |
+| `opportunistic` | Upgrades **only if** the server advertises STARTTLS, otherwise sends in cleartext | Legacy relays you cannot change |
+| `none` | Never upgrades | A relay on `localhost` |
+
+Leaving `tls_mode` unset derives it from the deprecated `tls` flag — `true`
+becomes `implicit`, `false` (or absent) becomes **`opportunistic`**, which is
+what yauth has always done and remains the default. Do not read that default as
+protection: `opportunistic` is decided by a line in the server's own EHLO
+response, so an on-path attacker who deletes `250-STARTTLS` makes the upgrade
+vanish and reads the reset token in cleartext, with nothing logged. Only
+`starttls` refuses. yauth emits one `WARN` at startup when the effective mode
+is `opportunistic` or `none` and the host is not loopback; `starttls` will
+become the default in a future major release.
+
+`tls: true` on port 587 does not work and never did: a submission listener
+opens with a cleartext `220` banner, the implicit handshake reads it as a TLS
+record, and every send fails with `smtp: tls handshake: first record does not
+look like a TLS handshake`. Use `tls_mode: starttls` on 587 and
+`tls_mode: implicit` on 465. Setting `tls: true` together with any `tls_mode`
+other than `implicit` is rejected at startup.
 
 ## Configure Cloudflare Email Service (YAML / `NewFromConfig`)
 
@@ -135,7 +170,7 @@ mailer:
     port: 465
     username_env: CLOUDFLARE_SMTP_USER   # env var containing: api_token
     password_env: CLOUDFLARE_API_TOKEN
-    tls: true
+    tls_mode: implicit                   # port 465 is TLS from the first byte
 ```
 
 Prefer `provider: cloudflare` when you want per-recipient delivery status
@@ -176,11 +211,11 @@ sends. Any type implementing the plugin's small `Mailer` interface works — the
 bundled SMTP mailer satisfies all three:
 
 ```go
-m, _ := smtpmailer.New(smtpmailer.Mailer{
+m := smtpmailer.New(smtpmailer.Mailer{
     Host: "smtp.example.com", Port: 587,
     From: "no-reply@example.com",
     Username: os.Getenv("SMTP_USER"), Password: os.Getenv("SMTP_PASS"),
-    TLS: true,
+    TLSMode: smtpmailer.ModeStartTLS, // require the upgrade; ModeImplicit on 465
 })
 
 yauth.New(repo, cfg).

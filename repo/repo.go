@@ -201,6 +201,16 @@ type OAuthStateRepository interface {
 type RefreshTokenRepository interface {
 	CreateRefreshToken(ctx context.Context, input domain.NewRefreshToken) error
 	GetRefreshTokenByHash(ctx context.Context, tokenHash string) (*domain.RefreshToken, error)
+	// RevokeRefreshToken revokes one token row, and must be a
+	// COMPARE-AND-SWAP, not an idempotent write: revoking a row that is
+	// already revoked must change nothing and return yautherr.ErrNotFound.
+	// Rotation reads the row and writes it in two separate statements, so
+	// that error is the only way the loser of a race between two concurrent
+	// uses of one token can tell it lost — the callers in plugins/bearer and
+	// plugins/oauth2server treat it as reuse and revoke the family. An
+	// implementation that reports success to the second caller silently forks
+	// the family into two rotatable branches that can never trip reuse
+	// detection. Exercised by repo/conformance's refresh_tokens/revoke_token.
 	RevokeRefreshToken(ctx context.Context, id string) error
 	RevokeRefreshTokenFamily(ctx context.Context, familyID string) (int64, error)
 	// RevokeAllUserRefreshTokens revokes every active refresh token for a user

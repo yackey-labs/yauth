@@ -535,18 +535,6 @@ func (p *emailPasswordPlugin) registerLogin(host plugin.PluginHost, api huma.API
 		// failed-password attempt is attributable to a user.id. Works under
 		// the consumer's otelhttp root span without yauth's HTTP middleware.
 		telemetry.SetUserID(ctx, user.ID)
-		if user.Banned {
-			p.emitLoginFailed(ctx, host, &user.ID, &user.Email, ip, "banned")
-			return nil, huma.Error403Forbidden("account suspended")
-		}
-		if user.SuspendedAt != nil {
-			p.emitLoginFailed(ctx, host, &user.ID, &user.Email, ip, "suspended")
-			return nil, huma.Error403Forbidden("account is deactivated")
-		}
-		if user.Staged(time.Now().UTC()) {
-			p.emitLoginFailed(ctx, host, &user.ID, &user.Email, ip, "staged")
-			return nil, huma.Error403Forbidden("account is not active yet")
-		}
 
 		pw, err := repo.GetPasswordByUserID(ctx, user.ID)
 		if err != nil {
@@ -577,6 +565,41 @@ func (p *emailPasswordPlugin) registerLogin(host plugin.PluginHost, api huma.API
 				return nil, huma.NewError(decBlockStatus(dec), decBlockMessage(dec))
 			}
 			return nil, huma.Error401Unauthorized("invalid email or password")
+		}
+
+		// Account-lifecycle gates. These used to run the moment the user was
+		// loaded — BEFORE GetPasswordByUserID and VerifyPassword above — which
+		// made /login an unauthenticated oracle: POSTing any address with a
+		// deliberately WRONG password returned 403 "account suspended" /
+		// "account is deactivated" / "account is not active yet" for a real
+		// account in that state, while an unknown address returned 401. An
+		// anonymous caller could therefore enumerate which colleagues had been
+		// banned, offboarded or not yet started, over any address they cared to
+		// guess. The three branches also returned before any Argon2id work, so
+		// the response time repeated the answer even if the bodies had been
+		// unified.
+		//
+		// The fix is ordering, not silence: these three distinct 403s are a
+		// real part of the contract for a caller who has PROVEN they hold the
+		// credential (clients render "your account was deactivated" from them),
+		// so they are kept verbatim — same details, same order — and merely
+		// moved behind the password check. They stay ahead of the
+		// EventLoginSucceeded emit below so no observer (lockout clearing its
+		// failure counter, audit, webhooks) ever sees a completed login for an
+		// account that may not authenticate. p.emitLoginFailed stamps
+		// events.AdministrativeRefusal(), which is what stops the lockout
+		// plugin metering an administrative state as a credential failure.
+		if user.Banned {
+			p.emitLoginFailed(ctx, host, &user.ID, &user.Email, ip, "banned")
+			return nil, huma.Error403Forbidden("account suspended")
+		}
+		if user.SuspendedAt != nil {
+			p.emitLoginFailed(ctx, host, &user.ID, &user.Email, ip, "suspended")
+			return nil, huma.Error403Forbidden("account is deactivated")
+		}
+		if user.Staged(time.Now().UTC()) {
+			p.emitLoginFailed(ctx, host, &user.ID, &user.Email, ip, "staged")
+			return nil, huma.Error403Forbidden("account is not active yet")
 		}
 
 		if p.cfg.RequireEmailVerification && !user.EmailVerified {

@@ -320,7 +320,52 @@ func (p *oauth2Plugin) grantRefreshToken(host plugin.PluginHost, w http.Response
 		}
 	}
 
+	// Application group assignment gate (Okta-style), re-asked on every
+	// rotation. It was applied at /oauth/authorize and on the device approval
+	// leg but never here, and this is the leg a long-lived integration
+	// actually runs: removing a leaver from the application's assigned group —
+	// the per-application control an admin reaches for precisely when they do
+	// NOT want to ban the account outright — stopped nothing. The RP kept
+	// exchanging its refresh token for access tokens and id_tokens carrying the
+	// groups claim for up to the refresh TTL, and every rotation pushed the
+	// window forward, so the entitlement was effectively permanent.
+	//
+	// user is nil for a client_credentials family (sub == client_id, detected
+	// above by UserID == ClientID); there is no person to check assignment for,
+	// so the nil guard is load-bearing — without it every machine client with
+	// the gate on would be locked out of its own refresh.
+	//
+	// Fail-closed on the lookup error, mirroring authorize.go. Placed BEFORE
+	// the RevokeRefreshToken below and deliberately NOT revoking the family: a
+	// policy refusal must be a no-op so re-assigning the user restores the RP
+	// without a full re-authorization, rather than turning "removed from a
+	// group by mistake" into a forced re-consent.
+	if user != nil && client.EnforceGroupAssignment {
+		allowed, gerr := repo.UserInAssignedGroup(r.Context(), client.ClientID, user.ID)
+		if gerr != nil {
+			writeOAuthError(w, "server_error", "group assignment check failed")
+			return
+		}
+		if !allowed {
+			writeOAuthError(w, "invalid_grant", "user is not assigned to this application")
+			return
+		}
+	}
+
+	// RevokeRefreshToken is a compare-and-swap (`AND revoked = false`), so
+	// ErrNotFound means another caller spent this row between our stored.Revoked
+	// test above and this write — the two are separate statements with no
+	// transaction, so two concurrent uses of one token both used to be told they
+	// had rotated it, forking the family into two branches that could never trip
+	// reuse detection. Answer it exactly as a sequential replay is answered
+	// above: revoke the family, invalid_grant. NOT server_error — statusFor maps
+	// that to 500, which would turn a double-clicked refresh into a server fault.
 	if err2 := repo.RevokeRefreshToken(r.Context(), stored.ID); err2 != nil {
+		if errors.Is(err2, yautherr.ErrNotFound) {
+			_, _ = repo.RevokeRefreshTokenFamily(r.Context(), stored.FamilyID)
+			writeOAuthError(w, "invalid_grant", "refresh token reuse detected; family revoked")
+			return
+		}
 		writeOAuthError(w, "server_error", "rotation failed")
 		return
 	}

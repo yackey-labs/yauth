@@ -197,7 +197,15 @@ func (r *Repo) RevokeRefreshToken(ctx context.Context, id string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	t, ok := r.refreshTokens[id]
-	if !ok {
+	// Compare-and-swap, mirroring RevokeRefreshTokenFamily's `revoked = false`
+	// narrowing below and pgxrepo's `AND revoked = false`. This used to set the
+	// flag unconditionally and report success to the SECOND caller as readily as
+	// the first, which is what let two concurrent rotations of one refresh token
+	// each believe they had won: the family forked into two live branches and
+	// reuse detection could never fire on either. An already-revoked row is
+	// therefore "nothing to revoke" — ErrNotFound — so the loser of the race can
+	// see that it lost and trip reuse detection instead.
+	if !ok || t.Revoked {
 		return yautherr.ErrNotFound
 	}
 	t.Revoked = true

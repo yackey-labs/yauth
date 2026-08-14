@@ -1058,6 +1058,15 @@ var refreshTokenCases = []testCase{
 		if got == nil || !got.Revoked {
 			t.Fatalf("expected revoked=true; got %+v", got)
 		}
+		// RevokeRefreshToken is a compare-and-swap, not an idempotent write:
+		// revoking an already-revoked row must affect nothing and say so. That
+		// is what lets a rotation which lost a race against a concurrent use of
+		// the same token detect the collision and trip reuse detection instead
+		// of forking the family. Any implementation of this interface owes the
+		// callers in plugins/bearer and plugins/oauth2server that signal.
+		if err := r.RevokeRefreshToken(ctx(), "rt1"); !errors.Is(err, yautherr.ErrNotFound) {
+			t.Fatalf("second RevokeRefreshToken must report ErrNotFound (compare-and-swap); got %v", err)
+		}
 	}},
 	{"revoke_family", func(t *testing.T, r repo.Repository) {
 		mustCreateUser(t, r, "u1", "alice@example.com")

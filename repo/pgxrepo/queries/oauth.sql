@@ -35,8 +35,13 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9);
 -- name: GetRefreshTokenByHash :one
 SELECT * FROM yauth_refresh_tokens WHERE token_hash = $1 LIMIT 1;
 
+-- Compare-and-swap: `revoked = false` makes the second revoker of a row affect
+-- zero rows, which repo.go maps to yautherr.ErrNotFound. Rotation reads the row
+-- and writes it in two separate statements, so without this narrowing two
+-- concurrent uses of one refresh token both succeeded and forked the family
+-- into branches that could never trip reuse detection.
 -- name: RevokeRefreshToken :execrows
-UPDATE yauth_refresh_tokens SET revoked = true WHERE id = $1;
+UPDATE yauth_refresh_tokens SET revoked = true WHERE id = $1 AND revoked = false;
 
 -- name: RevokeRefreshTokenFamily :execrows
 UPDATE yauth_refresh_tokens SET revoked = true WHERE family_id = $1 AND revoked = false;

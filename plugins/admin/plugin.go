@@ -29,6 +29,8 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/yackey-labs/yauth/auth/hibp"
+	"github.com/yackey-labs/yauth/auth/passwordpolicy"
 	"github.com/yackey-labs/yauth/middleware"
 	"github.com/yackey-labs/yauth/plugin"
 	"github.com/yackey-labs/yauth/yautherr"
@@ -40,10 +42,67 @@ const (
 	maxLimit     = 100
 )
 
-type adminPlugin struct{}
+// Config carries the credential rules POST /admin/users must honour when it
+// provisions an account. Until this existed the admin surface was the only way
+// a password reached the database without meeting the deployment's configured
+// policy: /register, /change-password and /reset-password all run
+// validatePasswordComplexity, and the startup bootstrap admin runs
+// effectiveBootstrapPolicy, but admin.New() took no arguments at all, so the
+// handler had nothing to check against. An admin console posting a fixed weak
+// initial password (or a compromised admin session) could persist a credential
+// that every other surface of the same instance refuses.
+//
+// There is deliberately NO yaml knob of its own: from_config derives this from
+// email_password.password_policy / email_password.hibp_check, so one policy
+// governs both surfaces.
+//
+// The ZERO VALUE means "no policy, no breach check" — i.e. exactly the
+// behaviour this plugin had before Config existed. That matters because
+// admin.New() is still a valid zero-arg call from the builder path, and
+// silently defaulting HIBPCheck to true (the way emailpassword.Config does via
+// HIBPCheckSet) would make every builder-path caller start dialling
+// api.pwnedpasswords.com on user creation. Only from_config turns it on.
+type Config struct {
+	// PasswordPolicy is checked against an ADMIN-SUPPLIED password before the
+	// user row is written, and is the policy the generated one-time password
+	// is sized and shaped to satisfy. Zero value imposes no rules.
+	PasswordPolicy passwordpolicy.Policy
 
-// New constructs the admin plugin.
-func New() plugin.Plugin { return &adminPlugin{} }
+	// HIBPCheck enables the HaveIBeenPwned k-anonymity breach check on an
+	// admin-supplied password. Defaults to FALSE (see above). Network failure
+	// is fail-open — matching emailpassword's documented contract — because a
+	// HIBP outage must not block workforce provisioning.
+	HIBPCheck bool
+	// HIBPClient is the *http.Client used for HIBP requests; nil = new client
+	// with hibp.DefaultTimeout. Tests override with an httptest server.
+	HIBPClient *http.Client
+	// HIBPEndpoint overrides the production HIBP API base URL. Empty =
+	// hibp.DefaultEndpoint. Used only by tests.
+	HIBPEndpoint string
+}
+
+type adminPlugin struct {
+	cfg     Config
+	checker *hibp.Checker
+}
+
+// New constructs the admin plugin. cfg is variadic purely for source
+// compatibility: every existing `admin.New()` call site (the builder path, the
+// examples, the tests) keeps compiling and keeps its previous behaviour via the
+// zero Config. Only the first element is read; any extras are ignored.
+func New(cfg ...Config) plugin.Plugin {
+	var c Config
+	if len(cfg) > 0 {
+		c = cfg[0]
+	}
+	return &adminPlugin{
+		cfg: c,
+		// Built unconditionally (it is inert until consulted) so the handler
+		// never has to nil-check; see createUser, which only calls it when
+		// cfg.HIBPCheck is true.
+		checker: &hibp.Checker{Endpoint: c.HIBPEndpoint, Client: c.HIBPClient},
+	}
+}
 
 // Name implements plugin.Plugin.
 func (p *adminPlugin) Name() string { return "admin" }

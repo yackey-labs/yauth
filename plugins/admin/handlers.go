@@ -2,9 +2,9 @@ package admin
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/yackey-labs/yauth/auth"
+	"github.com/yackey-labs/yauth/auth/passwordpolicy"
 	"github.com/yackey-labs/yauth/domain"
 	"github.com/yackey-labs/yauth/events"
 	"github.com/yackey-labs/yauth/middleware"
@@ -214,32 +215,30 @@ type adminCreateUserResponse struct {
 	Password string `json:"password,omitempty"`
 }
 
-// generateTempPassword returns a 24-char crypto-random password guaranteed to
-// contain upper, lower, and digit classes (passes the default policy).
-func generateTempPassword() (string, error) {
-	const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789"
-	for {
-		b := make([]byte, 24)
-		if _, err := rand.Read(b); err != nil {
-			return "", err
-		}
-		var hasU, hasL, hasD bool
-		for i := range b {
-			c := alphabet[int(b[i])%len(alphabet)]
-			b[i] = c
-			switch {
-			case c >= 'A' && c <= 'Z':
-				hasU = true
-			case c >= 'a' && c <= 'z':
-				hasL = true
-			default:
-				hasD = true
-			}
-		}
-		if hasU && hasL && hasD {
-			return string(b), nil
-		}
+// checkHIBP mirrors emailpassword's helper: it returns (true, message) only
+// when the check is enabled AND the remote API answers AND the password is in a
+// breach. A network error is fail-open — a HIBP outage must not block workforce
+// provisioning — and is logged, matching the contract emailpassword.Config
+// documents for /register.
+func (p *adminPlugin) checkHIBP(ctx context.Context, host plugin.PluginHost, password string) (bool, string) {
+	if !p.cfg.HIBPCheck {
+		return false, ""
 	}
+	count, err := p.checker.CheckPwned(ctx, password)
+	if err != nil {
+		host.Logger().WarnContext(ctx, "admin: HIBP check failed (fail-open)", "err", err)
+		return false, ""
+	}
+	if count <= 0 {
+		return false, ""
+	}
+	// Byte-identical to the /register message so an admin console that already
+	// renders the self-service error needs no new handling.
+	suffix := "es"
+	if count == 1 {
+		suffix = ""
+	}
+	return true, fmt.Sprintf("This password has been seen in %d data breach%s. Choose a different password.", count, suffix)
 }
 
 func (p *adminPlugin) registerCreateUser(host plugin.PluginHost, api huma.API, mw *middleware.Middleware, prefix string) {
@@ -271,8 +270,35 @@ func (p *adminPlugin) registerCreateUser(host plugin.PluginHost, api huma.API, m
 		generated := false
 		if req.Password != nil && *req.Password != "" {
 			password = *req.Password
+			// The deployment states its credential rules once, in
+			// email_password.password_policy, and every other write path
+			// honours them. This surface used to accept the operator's string
+			// verbatim behind nothing but the `minLength:"8"` schema tag, so
+			// an admin console (or a stolen admin session) could persist a
+			// credential — for a real, immediately loginable account — that
+			// /register would refuse with 400. Refuse it BEFORE CreateUser so a
+			// rejection leaves neither a user row nor a credential behind.
+			//
+			// 400 carrying the policy's OWN message, and 422 for a breach hit,
+			// are exactly what /register returns (see emailpassword's
+			// validatePasswordComplexity + checkHIBP), so an admin console
+			// that already renders the self-service errors needs no new
+			// handling.
+			if violations := p.cfg.PasswordPolicy.Violations(password); len(violations) > 0 {
+				return nil, huma.Error400BadRequest(violations[0].Error())
+			}
+			if pwned, msg := p.checkHIBP(ctx, host, password); pwned {
+				return nil, huma.Error422UnprocessableEntity(msg)
+			}
 		} else {
-			pw, err := generateTempPassword()
+			// The generated one-time password is shaped BY the same policy
+			// rather than merely checked against it. The generator this
+			// replaces drew from an alphabet with no special character and was
+			// a fixed 24 chars, so under require_special (or min_length >= 25)
+			// the server handed the operator a credential that violated the
+			// length and classes that same operator had configured, while its
+			// doc comment claimed it "passes the default policy".
+			pw, err := passwordpolicy.Generate(p.cfg.PasswordPolicy)
 			if err != nil {
 				return nil, huma.Error500InternalServerError("password generation failed")
 			}

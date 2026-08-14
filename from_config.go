@@ -537,7 +537,27 @@ func addAuthPlugins(builder *YAuthBuilder, cfg *yauthcfg.Config, mailer Mailer, 
 	}
 
 	if p.Admin.Enabled {
-		builder = builder.WithPlugin(admin.New())
+		// POST /admin/users writes a password, so it must honour the same
+		// policy /register does — it previously honoured none, which made it
+		// the one remaining way a credential the deployment had explicitly
+		// forbidden could reach the database.
+		//
+		// The policy is DERIVED, never re-declared: email_password.
+		// password_policy / hibp_check govern both surfaces, through the same
+		// effectiveBootstrapPolicy the startup bootstrap admin already uses.
+		// That also means the derivation only applies when the email-password
+		// surface that defines it is actually enabled — effectiveBootstrapPolicy
+		// injects a MinLength=12 baseline for an unset policy, and imposing
+		// that on an install with email-password DISABLED would refuse more
+		// than the defect requires, in exactly the configuration where the
+		// operator has configured no password policy at all. With
+		// email-password off, admin keeps its previous behaviour exactly.
+		var acfg admin.Config
+		if p.EmailPassword.Enabled {
+			acfg.PasswordPolicy = effectiveBootstrapPolicy(p.EmailPassword)
+			acfg.HIBPCheck = p.EmailPassword.HIBPCheck == nil || *p.EmailPassword.HIBPCheck
+		}
+		builder = builder.WithPlugin(admin.New(acfg))
 	}
 
 	if p.MFA.Enabled {

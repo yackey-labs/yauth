@@ -1091,6 +1091,7 @@ export interface RotateOrgAPIKeyResponse {
 
 export interface SamlConnectionConfig {
   allow_account_adoption?: boolean;
+  allow_sha1_signatures?: boolean;
   assertion_signed_required?: boolean;
   attribute_mappings?: AttributeMappings;
   idp_entity_id?: string;
@@ -1109,6 +1110,7 @@ export interface SamlConnectionConfig {
 
 export interface SamlPublicConfig {
   allow_account_adoption: boolean;
+  allow_sha1_signatures: boolean;
   assertion_signed_required: boolean;
   attribute_mappings: AttributeMappings;
   idp_entity_id: string;

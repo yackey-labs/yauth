@@ -225,7 +225,7 @@ func (p *ssoSAMLPlugin) registerSamlLogin(host plugin.PluginHost, api huma.API, 
 		if err != nil {
 			return writeError(http.StatusInternalServerError, "INTERNAL", "decode connection config failed"), nil
 		}
-		sp, err := buildServiceProvider(&cfg, host.BaseURL(), conn.ID, p.cfg.ClockSkew)
+		sp, err := buildServiceProvider(&cfg, host.BaseURL(), conn.ID)
 		if err != nil {
 			return writeError(http.StatusInternalServerError, "INTERNAL", "build sp failed: "+err.Error()), nil
 		}
@@ -393,7 +393,7 @@ func (p *ssoSAMLPlugin) registerSamlACS(host plugin.PluginHost, api huma.API, pr
 			return writeError(http.StatusForbidden, "IDP_INITIATED_DENIED", "idp-initiated sso is not enabled for this connection"), nil
 		}
 
-		sp, err := buildServiceProvider(&cfg, host.BaseURL(), conn.ID, p.cfg.ClockSkew)
+		sp, err := buildServiceProvider(&cfg, host.BaseURL(), conn.ID)
 		if err != nil {
 			return writeError(http.StatusInternalServerError, "INTERNAL", "build sp failed: "+err.Error()), nil
 		}
@@ -415,6 +415,23 @@ func (p *ssoSAMLPlugin) registerSamlACS(host plugin.PluginHost, api huma.API, pr
 			// crewjam/saml wraps the underlying cause; we surface a
 			// generic INVALID_ASSERTION code to clients and the full
 			// error text for the audit log.
+			//
+			// The wrapper's public Error() is the constant string
+			// "Authentication failed" — the real cause (including the
+			// SHA-1 refusal from algDenyListVerifier, which names the
+			// allow_sha1_signatures hatch) lives in PrivateErr and is
+			// deliberately NOT put in the response: unwrapping it to the
+			// client would leak signature-verification internals to an
+			// unauthenticated caller. Log it server-side instead, so an
+			// operator whose legacy IdP just stopped working can find
+			// out why and which knob turns it back on.
+			var invalid *saml.InvalidResponseError
+			if errors.As(err, &invalid) && invalid.PrivateErr != nil {
+				host.Logger().Warn("saml acs: response rejected",
+					"connection_id", conn.ID,
+					"error", invalid.PrivateErr.Error(),
+				)
+			}
 			return writeError(http.StatusUnauthorized, "INVALID_ASSERTION", err.Error()), nil
 		}
 
@@ -601,7 +618,7 @@ func (p *ssoSAMLPlugin) registerSamlLogout(host plugin.PluginHost, api huma.API,
 			if err == nil && conn != nil && conn.Kind == domain.ConnectionKindSamlSP {
 				cfg, err := unmarshalSamlConfig(p.cfg.EncryptionKey, conn.Config)
 				if err == nil && cfg.IdpSloURL != "" {
-					sp, err := buildServiceProvider(&cfg, host.BaseURL(), conn.ID, p.cfg.ClockSkew)
+					sp, err := buildServiceProvider(&cfg, host.BaseURL(), conn.ID)
 					if err == nil {
 						nameID := ""
 						if au, ok := middleware.AuthUserFromContext(ctx); ok && au != nil {

@@ -83,6 +83,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewjam/saml"
+
 	"github.com/yackey-labs/yauth/plugin"
 )
 
@@ -119,7 +121,20 @@ type Config struct {
 
 	// ClockSkew is the allowed wall-clock drift between SP and IdP
 	// when validating NotBefore / NotOnOrAfter timestamps. Defaults
-	// to 1 minute (crewjam/saml's default).
+	// to 3 minutes, which is crewjam/saml's own saml.MaxClockSkew.
+	//
+	// This value was previously accepted, defaulted to 1 minute, and
+	// then DISCARDED: it was threaded into buildServiceProvider as a
+	// parameter the body never read, so the effective skew was always
+	// crewjam's 180s and the documented default was a lie. New() now
+	// assigns it to saml.MaxClockSkew — see the comment there, because
+	// that variable is PROCESS-WIDE, not per-plugin.
+	//
+	// Separate and NOT affected by this field: crewjam also enforces
+	// saml.MaxIssueDelay (90s) between the assertion's IssueInstant and
+	// its arrival at ParseResponse. Setting ClockSkew larger than 90s
+	// does not widen that window; it only widens NotBefore /
+	// NotOnOrAfter tolerance.
 	ClockSkew time.Duration
 
 	// HTTPClient is the optional HTTP client used for outbound calls
@@ -158,7 +173,13 @@ func (c *Config) satisfiesMFA() bool {
 const (
 	defaultAuthnRequestTTL = 10 * time.Minute
 	defaultReplayCacheTTL  = 5 * time.Minute
-	defaultClockSkew       = 1 * time.Minute
+	// defaultClockSkew matches crewjam's saml.MaxClockSkew (180s), which
+	// is what every deployment has actually been running. It is 3m and
+	// not the old 1m on purpose: ClockSkew is not exposed through
+	// yauthcfg, so every config-file deployment takes this default, and
+	// now that the value is finally load-bearing a 1m default would
+	// silently tighten every one of them from 180s to 60s at upgrade.
+	defaultClockSkew = 3 * time.Minute
 )
 
 // ssoSAMLPlugin implements plugin.Plugin.
@@ -188,6 +209,21 @@ func New(cfg Config) (plugin.Plugin, error) {
 	if cfg.ClockSkew <= 0 {
 		cfg.ClockSkew = defaultClockSkew
 	}
+	// Publish the configured skew where it can actually take effect.
+	//
+	// Read this plainly: saml.MaxClockSkew is a PACKAGE-LEVEL var in
+	// crewjam/saml. It is not per-ServiceProvider and not per-connection
+	// — crewjam offers no per-SP field — so this assignment applies to
+	// every SAML connection in the process, the LAST ssosaml.New() in a
+	// process wins, and it also retunes any other crewjam consumer
+	// linked into the same binary. That is ugly, and it is still better
+	// than the previous behaviour, which was to accept the knob and
+	// throw it away.
+	//
+	// saml.MaxIssueDelay (90s) is deliberately left alone: it bounds
+	// IssueInstant→arrival, and tightening it to a small ClockSkew would
+	// newly reject slow form_post round-trips that work today.
+	saml.MaxClockSkew = cfg.ClockSkew
 	return &ssoSAMLPlugin{cfg: cfg}, nil
 }
 

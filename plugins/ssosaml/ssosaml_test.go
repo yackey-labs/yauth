@@ -109,8 +109,15 @@ func newFakeIDP(t *testing.T) *fakeIDP {
 		Key:         key,
 		Certificate: cert,
 		Logger:      logger.DefaultLogger,
-		MetadataURL: mustParseURL(srv.URL + "/metadata"),
-		SSOURL:      mustParseURL(srv.URL + "/sso"),
+		// Explicit, and a behaviour change for this fixture: crewjam's
+		// IdentityProvider falls back to RSA-SHA1 when SignatureMethod is
+		// empty, and this line was previously absent — so every assertion
+		// the ssosaml suite verified was SHA-1 signed, and the suite was
+		// pinning the very defect sha1_skew_replay_test.go now refuses.
+		// Tests that WANT SHA-1 set this field back themselves.
+		SignatureMethod: "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256",
+		MetadataURL:     mustParseURL(srv.URL + "/metadata"),
+		SSOURL:          mustParseURL(srv.URL + "/sso"),
 		ServiceProviderProvider: spProviderFunc(func(_ *http.Request, spID string) (*saml.EntityDescriptor, error) {
 			if idp.registeredSP != nil {
 				return idp.registeredSP, nil
@@ -580,7 +587,7 @@ func newE2E(t *testing.T) *e2eFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sp, err := buildServiceProvider(&cfg2, srv.URL, conn.ID, time.Minute)
+	sp, err := buildServiceProvider(&cfg2, srv.URL, conn.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -899,7 +906,7 @@ func TestE2E_IdpInitiatedAllowed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sp2, err := buildServiceProvider(&cfg2, f.srv.URL, f.conn.ID, time.Minute)
+	sp2, err := buildServiceProvider(&cfg2, f.srv.URL, f.conn.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -3431,6 +3431,9 @@
           "allow_account_adoption": {
             "type": "boolean"
           },
+          "allow_sha1_signatures": {
+            "type": "boolean"
+          },
           "assertion_signed_required": {
             "type": "boolean"
           },
@@ -3570,6 +3573,9 @@
           "allow_account_adoption": {
             "type": "boolean"
           },
+          "allow_sha1_signatures": {
+            "type": "boolean"
+          },
           "assertion_signed_required": {
             "type": "boolean"
           },
@@ -3624,6 +3630,7 @@
           "sp_acs_url",
           "idp_initiated_sso_allowed",
           "allow_account_adoption",
+          "allow_sha1_signatures",
           "assertion_signed_required",
           "response_signed_required",
           "want_encrypted_assertions",

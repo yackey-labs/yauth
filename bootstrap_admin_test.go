@@ -204,11 +204,14 @@ func TestBootstrapAdmin_SkipsWhenAdminExists(t *testing.T) {
 }
 
 // TestGenerateCompliantPassword_SatisfiesPolicy fuzzes the generator against a
-// strict policy.
+// strict policy. The generator itself moved from this package down to
+// auth/passwordpolicy so plugins/admin (which cannot import package yauth)
+// could stop carrying a weaker duplicate; the assertions below are unchanged,
+// so this test staying green is the proof the move was behaviour-preserving.
 func TestGenerateCompliantPassword_SatisfiesPolicy(t *testing.T) {
 	policy := passwordpolicy.Policy{MinLength: 16, RequireUpper: true, RequireLower: true, RequireDigit: true, RequireSpecial: true, DisallowCommon: true}
 	for i := 0; i < 200; i++ {
-		pw, err := generateCompliantPassword(policy)
+		pw, err := passwordpolicy.Generate(policy)
 		if err != nil {
 			t.Fatalf("generate: %v", err)
 		}

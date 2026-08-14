@@ -48,6 +48,18 @@ rotated on first sign-in. Omit `password` to have a strong one generated and
 returned once in the response; an operator-provided password is never echoed.
 Duplicate email → 409.
 
+**The deployment password policy applies here too.** A password *you* supply in
+the request body is checked against `email_password.password_policy` (and, when
+`email_password.hibp_check` is on, against HaveIBeenPwned) before anything is
+written — the same rules `/register` enforces, with the same messages:
+`400` for a policy violation, `422` for a breach hit, and no user row or
+credential left behind on either. A *generated* password satisfies that policy
+by construction, exactly as the bootstrap generator does (see below).
+
+There is no separate knob: one policy governs self-service registration, the
+bootstrap admin and admin provisioning. Installs with `email_password` disabled
+keep the previous behaviour — no policy is derived, because none is configured.
+
 **Which way to create users?** Self-registration (`allow_signups`) for open/dev
 installs; `POST /admin/users` when an admin onboards a workforce by hand;
 SCIM when an upstream directory (Okta/Entra) drives provisioning.
@@ -74,7 +86,10 @@ operator-provided. `yauth check` fails if `enabled: true` but `email` is empty.
 The generated password satisfies the same policy `/register` enforces
 (`min_password_length` / `password_policy`), always includes upper/lower/digit/
 special characters, has a 20-character floor, is never a common password, and —
-being random — is never an HaveIBeenPwned breach hit.
+being random — is never an HaveIBeenPwned breach hit. The one-time password
+returned by `POST /admin/users` now comes from that same generator, so it
+carries the same guarantees (and, unlike the alphanumeric-only one it replaced,
+contains a character from `!@#$%^*-_=+` — chosen to stay shell- and URL-safe).
 
 ## Where it runs
 

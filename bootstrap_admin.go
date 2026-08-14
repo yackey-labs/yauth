@@ -2,10 +2,8 @@ package yauth
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
 	"log/slog"
-	"math/big"
 	"strings"
 	"time"
 
@@ -72,7 +70,7 @@ func bootstrapAdmin(ctx context.Context, r repo.Repository, logger *slog.Logger,
 	password := cfg.Password
 	generated := false
 	if password == "" {
-		pw, err := generateCompliantPassword(policy)
+		pw, err := passwordpolicy.Generate(policy)
 		if err != nil {
 			logger.Warn("yauth: bootstrap admin password generation failed — skipping", "err", err)
 			return
@@ -154,94 +152,4 @@ func anAdminExists(ctx context.Context, r repo.Repository) (bool, error) {
 			return false, nil
 		}
 	}
-}
-
-// Character classes for generated passwords. Special chars are restricted to a
-// shell/URL-safe subset so an operator copying the logged password out of a
-// terminal can't be tripped up by quoting.
-const (
-	bsUpper   = "ABCDEFGHJKLMNPQRSTUVWXYZ"
-	bsLower   = "abcdefghijkmnopqrstuvwxyz"
-	bsDigit   = "23456789"
-	bsSpecial = "!@#$%^*-_=+"
-	bsAll     = bsUpper + bsLower + bsDigit + bsSpecial
-)
-
-// generateCompliantPassword returns a cryptographically-random password that
-// satisfies policy by construction: it always includes at least one upper,
-// lower, digit, and special character (covering RequireUpper/Lower/Digit/
-// Special regardless of which are set), and is long enough for MinLength (with
-// a 20-char floor). It then verifies against the policy and retries a few
-// times defensively. A random password is never in the common-password list
-// and (being random) is never an HIBP breach hit.
-func generateCompliantPassword(policy passwordpolicy.Policy) (string, error) {
-	length := policy.MinLength
-	if length < 20 {
-		length = 20
-	}
-	if policy.MaxLength > 0 && length > policy.MaxLength {
-		length = policy.MaxLength
-	}
-	// Need room for the four guaranteed class characters.
-	if length < 4 {
-		length = 4
-	}
-
-	for attempt := 0; attempt < 8; attempt++ {
-		pw, err := randomPassword(length)
-		if err != nil {
-			return "", err
-		}
-		if policy.Check(pw) == nil {
-			return pw, nil
-		}
-	}
-	return "", errors.New("could not generate a policy-compliant password after 8 attempts")
-}
-
-// randomPassword builds a length-n password guaranteeing one char from each
-// class, then filling the remainder from the full alphabet, and finally
-// shuffling so the guaranteed characters aren't positionally predictable.
-func randomPassword(n int) (string, error) {
-	out := make([]byte, 0, n)
-	// Guarantee one of each class.
-	for _, class := range []string{bsUpper, bsLower, bsDigit, bsSpecial} {
-		c, err := randomChar(class)
-		if err != nil {
-			return "", err
-		}
-		out = append(out, c)
-	}
-	for len(out) < n {
-		c, err := randomChar(bsAll)
-		if err != nil {
-			return "", err
-		}
-		out = append(out, c)
-	}
-	if err := shuffle(out); err != nil {
-		return "", err
-	}
-	return string(out), nil
-}
-
-func randomChar(set string) (byte, error) {
-	idx, err := rand.Int(rand.Reader, big.NewInt(int64(len(set))))
-	if err != nil {
-		return 0, err
-	}
-	return set[idx.Int64()], nil
-}
-
-// shuffle performs an in-place Fisher–Yates shuffle using crypto/rand.
-func shuffle(b []byte) error {
-	for i := len(b) - 1; i > 0; i-- {
-		jb, err := rand.Int(rand.Reader, big.NewInt(int64(i+1)))
-		if err != nil {
-			return err
-		}
-		j := int(jb.Int64())
-		b[i], b[j] = b[j], b[i]
-	}
-	return nil
 }

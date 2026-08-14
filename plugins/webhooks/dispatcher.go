@@ -479,14 +479,22 @@ func (d *Dispatcher) deliver(ctx context.Context, job *deliveryJob) deliveryOutc
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody+1))
-	if len(respBody) > maxResponseBody {
-		respBody = respBody[:maxResponseBody]
-	}
+	// Drain (bounded) so the connection can be reused — but do NOT keep the
+	// bytes. Persisting the receiver's response body is what turned a blind
+	// SSRF into a read primitive: whatever an internal endpoint answered was
+	// written to yauth_webhook_deliveries.response_body and served straight
+	// back on GET /webhooks/{id}/deliveries. The status code is the whole of
+	// what an operator needs to diagnose a delivery, and recordDelivery maps
+	// "" to NULL, so the column simply goes empty.
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxResponseBody+1))
 
 	status := int16(resp.StatusCode)
 	success := resp.StatusCode >= 200 && resp.StatusCode < 300
-	d.recordDelivery(ctx, job, body, &status, string(respBody), success)
+	note := ""
+	if !success {
+		note = fmt.Sprintf("receiver returned %d", resp.StatusCode)
+	}
+	d.recordDelivery(ctx, job, body, &status, note, success)
 
 	return deliveryOutcome{
 		success:    success,

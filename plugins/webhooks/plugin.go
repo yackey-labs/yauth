@@ -28,8 +28,7 @@ import (
 	"net/http"
 	"time"
 
-	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
-
+	"github.com/yackey-labs/yauth/auth/safehttp"
 	"github.com/yackey-labs/yauth/plugin"
 )
 
@@ -76,6 +75,24 @@ type Config struct {
 	// When nil, a client with Timeout=DeliveryTimeout is constructed.
 	// Tests can inject a client whose Transport routes to httptest.
 	HTTPClient *http.Client
+
+	// AllowPrivateDestinations opts INTO registering and delivering to
+	// webhook receivers on loopback / RFC 1918 addresses.
+	//
+	// A webhook URL is chosen by a deployment admin over the admin API and is
+	// then dialled by the server on every matching auth event, with the
+	// response recorded. That makes an unfiltered destination an SSRF
+	// primitive aimed at anything the process can reach — the cloud metadata
+	// service, a database port bound to loopback, an internal admin UI. So the
+	// default (false) refuses private destinations both at create time and,
+	// for rows that predate the guard, at dial time.
+	//
+	// Deployments that ship webhooks to an in-cluster collector or a sidecar
+	// need private egress and should set this. It is not a full bypass: the
+	// link-local range (169.254.0.0/16 — the instance metadata service) stays
+	// refused, because that is never the destination an operator meant. See
+	// auth/safehttp.
+	AllowPrivateDestinations bool
 
 	// MaxAttempts is the maximum number of delivery attempts per job
 	// before the dispatcher gives up. Defaults to 5.
@@ -200,14 +217,24 @@ func (p *webhooksPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api h
 
 	httpClient := p.cfg.HTTPClient
 	if httpClient == nil {
-		// Wrap the default transport with otelhttp so each webhook delivery
-		// emits a CLIENT span and injects the W3C traceparent + signature
-		// headers, letting receivers correlate the delivery on their side.
-		// A caller-supplied HTTPClient is used verbatim.
-		httpClient = &http.Client{
-			Timeout:   p.cfg.DeliveryTimeout,
-			Transport: otelhttp.NewTransport(http.DefaultTransport),
-		}
+		// safehttp.Client still wraps the transport in otelhttp (so each
+		// delivery emits a CLIENT span and propagates the W3C traceparent),
+		// but adds the two things this client used to be missing:
+		//
+		//   - a dial-time private-address filter, which is what refuses a
+		//     destination row written before this guard existed, or a
+		//     hostname that only resolves privately at delivery time; and
+		//   - a redirect policy. CheckRedirect used to be nil, so Go followed
+		//     up to 10 hops: a receiver answering 302 turned the signed POST
+		//     into a GET (exactly what IMDSv1 requires) and Go carried every
+		//     header except Authorization and Cookie across the hop — so
+		//     X-YAuth-Signature, computed with the deployment's secret,
+		//     travelled to whatever host the receiver named. maxRedirects=0
+		//     means the 3xx is recorded as the delivery outcome instead.
+		//
+		// A caller-supplied HTTPClient is still used verbatim: operators who
+		// bring their own transport (proxy, mTLS) own its policy.
+		httpClient = safehttp.Client(p.cfg.AllowPrivateDestinations, p.cfg.DeliveryTimeout, 0)
 	}
 
 	p.dispatcher = NewDispatcher(host.Repo(), httpClient, p.cfg.WorkerCount, RetryConfig{

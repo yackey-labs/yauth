@@ -615,6 +615,11 @@ func addAuthPlugins(builder *YAuthBuilder, cfg *yauthcfg.Config, mailer Mailer, 
 	if p.Webhooks.Enabled {
 		builder = builder.WithPlugin(webhooks.New(webhooks.Config{
 			MaxAttempts: p.Webhooks.MaxAttempts,
+			// Off unless the operator says otherwise: a webhook destination is
+			// admin-chosen and then dialled by the server on every event, so
+			// the default must not let it point at loopback or the metadata
+			// service. In-cluster deployments set allow_private_destinations.
+			AllowPrivateDestinations: p.Webhooks.AllowPrivateDestinations,
 		}))
 	}
 

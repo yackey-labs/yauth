@@ -48,7 +48,17 @@ func main() {
 
 	ya, err := yauth.New(repo, yauth.NewDefaultConfig()).
 		WithPlugin(emailpassword.New(emailpassword.Config{})).
-		WithPlugin(webhooks.New(webhooks.Config{WorkerCount: 4, DeliveryTimeout: 10 * time.Second})).
+		WithPlugin(webhooks.New(webhooks.Config{
+			WorkerCount:     4,
+			DeliveryTimeout: 10 * time.Second,
+			// This demo's receiver is in-process on localhost:3000. Webhook
+			// destinations on private addresses are refused by default —
+			// a destination is admin-chosen and then dialled by the server,
+			// so the default must not reach loopback or the metadata service.
+			// A real deployment sets this only when its receiver genuinely
+			// lives inside the cluster.
+			AllowPrivateDestinations: true,
+		})).
 		Build()
 	if err != nil {
 		log.Fatalf("build yauth: %v", err)

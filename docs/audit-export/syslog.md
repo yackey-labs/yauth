@@ -31,6 +31,18 @@ The syslog dispatcher renders each audit event as a strict RFC 5424 line and shi
 }
 ```
 
+### Destination addresses
+
+`config.host` is refused at create/update time if it is a private, loopback or
+link-local **literal**, and the resolved address is re-checked before the
+socket is opened — a destination is admin-chosen and then connected to for
+every exported row, so an unfiltered one lets an admin aim the server at any
+internal listener. A hostname like `logs.internal.example.com` is always
+accepted at create time and judged by what it actually resolves to.
+
+Set `auditexport.Config.AllowPrivateDestinations` for a sidecar or in-cluster
+collector; it permits loopback and RFC 1918, never `169.254.0.0/16`.
+
 `transport` is one of: `udp_unsecured`, `tcp`, `tcp_tls`. UDP is unauthenticated and lossy — recommended only for short hops on a trusted network. TCP+TLS returns `ErrNotImplemented` and dead-letters cleanly; workaround is to point yauth-go at a local Vector/rsyslog forwarder that handles TLS upstream.
 
 ## Pentest assertions

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/yackey-labs/yauth/auth/safehttp"
 	"github.com/yackey-labs/yauth/domain"
 )
 
@@ -32,6 +33,11 @@ var (
 type Dispatcher struct {
 	httpClient      *http.Client
 	signatureWindow time.Duration
+
+	// allowPrivateDestinations mirrors Config.AllowPrivateDestinations. The
+	// HTTP path enforces it inside the client (auth/safehttp); syslog opens
+	// its own raw socket, so it has to consult the flag itself.
+	allowPrivateDestinations bool
 
 	// Test hooks. nil in production.
 	hooks *TestHooks
@@ -207,11 +213,16 @@ func (d *Dispatcher) sendWebhook(ctx context.Context, dest *domain.AuditExportDe
 		_, _ = io.Copy(io.Discard, resp.Body)
 		return nil
 	}
-	// Read up to 512 bytes of the error body for context — DO NOT log
-	// or echo secrets / signatures.
-	bodyBuf := make([]byte, 512)
-	n, _ := io.ReadFull(resp.Body, bodyBuf)
-	return fmt.Errorf("auditexport: webhook returned %d: %s", resp.StatusCode, string(bodyBuf[:n]))
+	// Drain (bounded) so the connection can be reused, but keep NONE of the
+	// bytes. This error string is what worker.drainOnce persists as
+	// AuditOutboxEntry.LastError, and registerOutbox serialises LastError
+	// straight back on GET /audit/destinations/{id}/outbox — so 512 bytes of
+	// whatever the remote answered used to be readable over the admin API.
+	// That is the step that turns "an admin can aim the exporter at an
+	// internal service" into a read primitive. The status code is what an
+	// operator actually needs, and it stays.
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 512))
+	return fmt.Errorf("auditexport: webhook returned %d", resp.StatusCode)
 }
 
 // ---------------------------- Syslog ----------------------------
@@ -236,6 +247,15 @@ func (d *Dispatcher) sendSyslog(ctx context.Context, dest *domain.AuditExportDes
 			d.hooks.mu.Unlock()
 			return nil
 		}
+	}
+	// The HTTP exporter gets its address filter from the client it was built
+	// with; syslog dials a raw socket, so the same policy has to be applied
+	// here or "kind":"syslog" is a trivial way around the whole guard — an
+	// admin picks host:port and the process connects to it for every audit
+	// row. Resolve first and check what we would actually connect to, so a
+	// hostname whose A record points inside the network is caught too.
+	if err := checkSyslogDestination(ctx, host, d.allowPrivateDestinations); err != nil {
+		return err
 	}
 	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
 	switch transport {
@@ -344,4 +364,27 @@ func parseUint16(s string) (uint16, error) {
 
 func startsWith(s, prefix string) bool {
 	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
+}
+
+// checkSyslogDestination refuses a syslog host the deployment has not opted
+// into. It mirrors auth/safehttp's dial-time policy: every resolved address is
+// checked (so DNS rebinding cannot slip past a name-only check), the
+// link-local metadata range is refused even when private egress is allowed,
+// and a hostname is only judged by what it actually resolves to.
+func checkSyslogDestination(ctx context.Context, host string, allowPrivate bool) error {
+	resolved, err := net.DefaultResolver.LookupHost(ctx, host)
+	if err != nil {
+		return fmt.Errorf("auditexport: syslog resolve %q: %w", host, err)
+	}
+	for _, ip := range resolved {
+		if safehttp.IsAlwaysDeniedIP(ip) {
+			return fmt.Errorf("auditexport: syslog host %q resolves to link-local address %s; "+
+				"refusing to connect", host, ip)
+		}
+		if !allowPrivate && safehttp.IsPrivateIP(ip) {
+			return fmt.Errorf("auditexport: syslog host %q resolves to non-public address %s; "+
+				"set allow_private_destinations to export to an in-cluster destination", host, ip)
+		}
+	}
+	return nil
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/google/uuid"
 
+	"github.com/yackey-labs/yauth/auth/safehttp"
 	"github.com/yackey-labs/yauth/domain"
 	"github.com/yackey-labs/yauth/middleware"
 	"github.com/yackey-labs/yauth/yautherr"
@@ -279,6 +280,15 @@ func (p *plugin) createDo(ctx context.Context, scopeOrgID *string, req auditCrea
 	if err != nil {
 		return nil, huma.Error400BadRequest(err.Error())
 	}
+	// req.Config used to be stored verbatim: config["url"] (webhook) and
+	// config["host"] (syslog) were never parsed, and the drain worker later
+	// handed whichever string it found to Dispatcher.SendOne, which POSTs to
+	// it or opens a socket to it. So an admin could aim the process's own
+	// network position at the cloud metadata service or any internal listener
+	// and read the outcome back off the outbox route.
+	if err := p.validateDestinationConfig(kind, req.Config); err != nil {
+		return nil, err
+	}
 	// If we're inside the per-org subtree the scopeOrgID override wins,
 	// otherwise the body's organization_id is honoured.
 	orgID := req.OrganizationID
@@ -437,7 +447,12 @@ func (p *plugin) registerUpdate(api huma.API, mw *middleware.Middleware, prefix,
 }
 
 func (p *plugin) updateDo(ctx context.Context, id string, req auditUpdateDestinationRequest) (*auditDestinationOutput, error) {
-	if _, err := p.store.GetDestination(id); err != nil {
+	// The fetched row used to be discarded. It is needed now: the update body
+	// carries no `kind`, so the only way to know whether config["url"] or
+	// config["host"] is the thing being re-pointed is to look at the existing
+	// destination.
+	existing, err := p.store.GetDestination(id)
+	if err != nil {
 		return nil, huma.Error404NotFound("destination not found")
 	}
 	changes := domain.UpdateAuditExportDestination{
@@ -458,6 +473,15 @@ func (p *plugin) updateDo(ctx context.Context, id string, req auditUpdateDestina
 		changes.Format = &f
 	}
 	if req.Config != nil {
+		// Without this the create-time check would be a formality: this
+		// handler copied req.Config straight into the change set, so a
+		// destination created against a public SIEM could simply be
+		// re-pointed at the metadata service afterwards. Only validated when
+		// config is actually present — a PATCH that only flips status or
+		// renames must stay untouched.
+		if err := p.validateDestinationConfig(existing.Kind, req.Config); err != nil {
+			return nil, err
+		}
 		changes.Config = req.Config
 	}
 	updated, err := p.store.UpdateDestination(id, changes)
@@ -642,4 +666,34 @@ func (p *plugin) auditEvent(ctx context.Context, targetID *string, eventType str
 	// Also fan to outbox.
 	p.store.EnqueueForAudit(id, nil)
 	_ = targetID // currently unused but kept for future scoped audits
+}
+
+// validateDestinationConfig refuses a destination the server must never be
+// pointed at. It checks only the field the kind actually dials — url for a
+// webhook, host for syslog — and it deliberately does NOT resolve hostnames:
+// "otel-collector.observability.svc.cluster.local" and "syslog-sidecar" are
+// the normal shapes, and where they point is re-checked at dial time (see
+// auth/safehttp and checkSyslogDestination). Refusing them here would lock
+// out every in-cluster install while a short DNS TTL would defeat the check
+// anyway.
+func (p *plugin) validateDestinationConfig(kind domain.AuditExportDestinationKind, cfg map[string]string) error {
+	if cfg == nil {
+		return nil
+	}
+	allowPrivate := p.cfg.AllowPrivateDestinations
+	switch kind {
+	case domain.DestinationKindWebhook:
+		if raw := cfg["url"]; raw != "" {
+			if err := safehttp.ValidateDestinationURL(raw, allowPrivate); err != nil {
+				return huma.Error400BadRequest(err.Error())
+			}
+		}
+	case domain.DestinationKindSyslog:
+		if host := cfg["host"]; host != "" {
+			if err := safehttp.ValidateDestinationHost(host, allowPrivate); err != nil {
+				return huma.Error400BadRequest(err.Error())
+			}
+		}
+	}
+	return nil
 }

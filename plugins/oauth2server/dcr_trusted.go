@@ -16,6 +16,8 @@ import (
 
 	"github.com/lestrrat-go/jwx/v3/jwk"
 	"github.com/lestrrat-go/jwx/v3/jwt"
+
+	"github.com/yackey-labs/yauth/auth/safehttp"
 )
 
 // trustedStatement is the verified result of a DCR software_statement.
@@ -44,8 +46,9 @@ var errIssuerFetch = errors.New("could not retrieve the issuer's signing keys")
 // front of it at all, because the trust decision there is the admin's click,
 // which happens AFTER this fetch. That makes the fetch itself the SSRF
 // primitive, so it gets the same post-DNS-resolution IP filter that the
-// private_key_jwt jwks_uri fetch has had (safeDialContext, which resolves and
-// checks every A record before dialling and so is DNS-rebinding-proof).
+// private_key_jwt jwks_uri fetch has had (safehttp.DialContext, which resolves and
+// checks every A record before dialling and so is DNS-rebinding-proof; it now
+// lives in auth/safehttp, shared with the webhook and audit-export exporters).
 //
 // Redirects are capped at 3 rather than the default 10; each hop is re-dialled
 // through the same guard, so the cap is about bounding work, not about safety.
@@ -58,7 +61,7 @@ func (p *oauth2Plugin) trustedIssuerClient() *http.Client {
 	base := http.DefaultTransport
 	if !p.cfg.AllowPrivateNetworkJWKSURI {
 		t := http.DefaultTransport.(*http.Transport).Clone()
-		t.DialContext = safeDialContext(&net.Dialer{
+		t.DialContext = safehttp.DialContext(&net.Dialer{
 			Timeout:   10 * time.Second,
 			KeepAlive: 30 * time.Second,
 		})

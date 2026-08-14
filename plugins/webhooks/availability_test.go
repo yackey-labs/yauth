@@ -264,10 +264,16 @@ func TestEnqueue_StillDeliversWhenDrained(t *testing.T) {
 // request goroutine parks inside Emit and POST /login never returns.
 func TestLogin_NotBlockedBySlowWebhookReceiver(t *testing.T) {
 	srv, ya := newWebhookServerWithYAuthConfig(t, webhooks.Config{
-		WorkerCount:     1,
-		DeliveryTimeout: 30 * time.Second,
-		MaxAttempts:     1,
-		BackoffJitter:   -1,
+		// These receivers are httptest servers on 127.0.0.1. The delivery
+		// client refuses private destinations by default now (see
+		// auth/safehttp) — that guard is CORRECT and stays on; the test
+		// harness is simply the in-cluster deployment shape, so it opts in
+		// the same way such a deployment does.
+		AllowPrivateDestinations: true,
+		WorkerCount:              1,
+		DeliveryTimeout:          30 * time.Second,
+		MaxAttempts:              1,
+		BackoffJitter:            -1,
 	}, func(c *yauth.YAuthConfig) {
 		// The default login limiter is 10/60s from one IP; the queue fills
 		// well before that, but disable it so a 429 can never be mistaken
@@ -332,10 +338,11 @@ func TestLogin_StillDeliversWebhooksWhenReceiverIsHealthy(t *testing.T) {
 	defer rcv.Close()
 
 	srv, ya := newWebhookServerWithYAuthConfig(t, webhooks.Config{
-		WorkerCount:     1,
-		DeliveryTimeout: 5 * time.Second,
-		MaxAttempts:     1,
-		BackoffJitter:   -1,
+		AllowPrivateDestinations: true, // 127.0.0.1 receiver — see the note above.
+		WorkerCount:              1,
+		DeliveryTimeout:          5 * time.Second,
+		MaxAttempts:              1,
+		BackoffJitter:            -1,
 	}, func(c *yauth.YAuthConfig) {
 		c.RateLimit.Login = yauth.RateLimitRule{Max: yauth.RateLimitMax(0)}
 	})
@@ -430,8 +437,9 @@ func adminClient(t *testing.T, srvURL string) *http.Client {
 // transport error rather than a response.
 func TestWebhookList_OverflowPageDoesNotPanic(t *testing.T) {
 	srv, ya := newWebhookServerWithYAuthConfig(t, webhooks.Config{
-		WorkerCount:     1,
-		DeliveryTimeout: time.Second,
+		AllowPrivateDestinations: true, // 127.0.0.1 receiver — see the note above.
+		WorkerCount:              1,
+		DeliveryTimeout:          time.Second,
 	}, func(c *yauth.YAuthConfig) {
 		c.AutoAdminFirstUser = true
 		c.RateLimit.Login = yauth.RateLimitRule{Max: yauth.RateLimitMax(0)}

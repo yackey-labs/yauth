@@ -566,6 +566,13 @@ type WebhooksPluginConfig struct {
 	// webhook signing secrets are issued per-endpoint at creation time.
 	// Deprecated: ignored; will be removed in a future release.
 	DefaultSecretEnv string `yaml:"default_secret_env,omitempty" toml:"default_secret_env,omitempty"`
+
+	// AllowPrivateDestinations opts into private-network webhook receivers.
+	// See webhooks.Config.AllowPrivateDestinations: a webhook URL is chosen
+	// by a deployment admin and then dialled by the server, so an unfiltered
+	// one is an SSRF primitive. Off by default; in-cluster deployments need
+	// it on.
+	AllowPrivateDestinations bool `yaml:"allow_private_destinations,omitempty" toml:"allow_private_destinations,omitempty" doc:"Permit webhook receivers on loopback / RFC 1918 addresses (an in-cluster collector or sidecar). Omitted means false: a private destination is refused when the webhook is created AND when it is dialled, because a webhook URL is admin-chosen and the server connects to it on every matching event. The cloud metadata range 169.254.0.0/16 stays refused either way."`
 }
 
 // AsymJWTPluginConfig configures asymmetric (RS256/ES256) JWT signing.

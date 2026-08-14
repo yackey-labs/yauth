@@ -39,6 +39,15 @@ var (
 	ErrMalformedHeader   = &VerifyError{Reason: "malformed header"}
 	ErrStaleSignature    = &VerifyError{Reason: "outside accepted window"}
 	ErrSignatureMismatch = &VerifyError{Reason: "does not match body"}
+
+	// ErrEmptySecret is returned when the caller passes no key material.
+	// This helper is exported for downstream receivers, and it used to
+	// happily HMAC with the empty key: a consumer whose
+	// YAUTH_AUDIT_HMAC_SECRET env var was unset verified every payload
+	// against a key the whole world knows, and got nil back. Failing open on
+	// missing key material is worse than not verifying at all, because the
+	// receiver believes it verified.
+	ErrEmptySecret = &VerifyError{Reason: "verified with an empty secret"}
 )
 
 // VerifyHMACSignature is the receiver-side verification helper. Tests in
@@ -52,6 +61,12 @@ var (
 // wrapped under (errors.Is) so callers can branch on the failure mode
 // without parsing strings.
 func VerifyHMACSignature(secret string, header string, body []byte, now time.Time, window time.Duration) error {
+	// Before any parsing: with no key there is nothing to verify against, and
+	// an attacker who knows the (documented) recipe can compute a signature
+	// the receiver would accept. Refuse rather than authenticate.
+	if secret == "" {
+		return ErrEmptySecret
+	}
 	var (
 		ts     int64
 		tsSet  bool

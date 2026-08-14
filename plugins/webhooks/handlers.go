@@ -12,6 +12,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/google/uuid"
 
+	"github.com/yackey-labs/yauth/auth/safehttp"
 	"github.com/yackey-labs/yauth/domain"
 	"github.com/yackey-labs/yauth/middleware"
 	"github.com/yackey-labs/yauth/plugin"
@@ -42,6 +43,24 @@ func generateSecret() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(buf), nil
+}
+
+// minSuppliedSecretLen is the floor on a secret the CALLER supplies. The
+// generated one is 64 hex characters; 32 is the shortest thing that still
+// makes an offline brute-force of the signing key hopeless. Below that,
+// X-YAuth-Signature is forgeable by whoever receives one delivery, which is
+// the entire population the header exists to authenticate against.
+const minSuppliedSecretLen = 32
+
+// validateSuppliedSecret enforces that floor. An empty secret is NOT an error:
+// on create it means "generate one", and on update it means "keep the existing
+// one". Only a caller who actually chose a secret is held to the length.
+func validateSuppliedSecret(secret string) error {
+	if secret == "" || len(secret) >= minSuppliedSecretLen {
+		return nil
+	}
+	return huma.Error400BadRequest(
+		"secret must be at least 32 characters (omit it to have one generated)")
 }
 
 // webhookJSON is the API representation. The Secret field is only
@@ -268,8 +287,28 @@ func (p *webhooksPlugin) registerCreate(host plugin.PluginHost, api huma.API, mw
 		if req.URL == "" {
 			return nil, huma.Error400BadRequest("url is required")
 		}
+		// The URL was never parsed here — the string went straight into the
+		// row and, from the first matching event onward, straight into
+		// http.NewRequest. So an admin could register the cloud metadata
+		// service (or any loopback listener) as a receiver and read the answer
+		// back off GET /webhooks/{id}/deliveries. Refuse at the door; a
+		// hostname is still accepted here and re-checked at dial time, because
+		// refusing hostnames would lock out every in-cluster receiver.
+		if err := safehttp.ValidateDestinationURL(req.URL, p.cfg.AllowPrivateDestinations); err != nil {
+			return nil, huma.Error400BadRequest(err.Error())
+		}
 		if len(req.Events) == 0 {
 			return nil, huma.Error400BadRequest("events must contain at least one entry")
+		}
+		// A caller-supplied secret was accepted at any length, including one
+		// character. The whole value of X-YAuth-Signature is that the receiver
+		// cannot forge it; a short secret is brute-forceable offline from a
+		// single delivery, so the header stops meaning anything. Generated
+		// secrets are 32+ chars already — hold callers to the same bar.
+		// In-handler rather than a huma minLength tag: openapi.json is
+		// byte-compared by openapi_gen_test.go.
+		if err := validateSuppliedSecret(req.Secret); err != nil {
+			return nil, err
 		}
 
 		eventsRaw, err := json.Marshal(req.Events)
@@ -416,6 +455,13 @@ func (p *webhooksPlugin) registerUpdate(host plugin.PluginHost, api huma.API, mw
 		now := time.Now().UTC()
 		changes := domain.UpdateWebhook{UpdatedAt: &now}
 		if req.URL != nil {
+			// The create-side check alone would have been a formality: this
+			// handler assigned req.URL into the change set without ever
+			// looking at it, so a webhook created against a public receiver
+			// could simply be re-pointed at the metadata service afterwards.
+			if err := safehttp.ValidateDestinationURL(*req.URL, p.cfg.AllowPrivateDestinations); err != nil {
+				return nil, huma.Error400BadRequest(err.Error())
+			}
 			changes.URL = req.URL
 		}
 		if req.Events != nil {
@@ -430,7 +476,14 @@ func (p *webhooksPlugin) registerUpdate(host plugin.PluginHost, api huma.API, mw
 			changes.Active = req.Active
 		}
 		var newRawSecret string
+		// NOTE the guard sits INSIDE this branch on purpose: the PATCH body
+		// requires the secret field, and an empty string means "keep the
+		// existing secret". Treating "" as too short would 400 every URL-only
+		// update.
 		if req.Secret != nil && *req.Secret != "" {
+			if err := validateSuppliedSecret(*req.Secret); err != nil {
+				return nil, err
+			}
 			newRawSecret = *req.Secret
 			enc, err := encryptSecret(p.encryptionKey(host), newRawSecret)
 			if errors.Is(err, ErrNoEncryptionKey) {

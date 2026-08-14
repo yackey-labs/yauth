@@ -249,7 +249,7 @@ func TestWebhookSecret_NoKey_RefusesRotation(t *testing.T) {
 	}
 
 	// PATCH's body schema requires url/events/active alongside the rotation.
-	const rotated = "rotated-plaintext-secret"
+	const rotated = "rotated-plaintext-secret-32-chars"
 	resp := patchJSON(t, srv.URL+"/webhooks/"+id, map[string]any{
 		"url":    "https://example.test/hook",
 		"events": []string{"user.registered"},
@@ -283,7 +283,7 @@ func TestWebhookSecret_ConfigKey_EncryptsWithoutBearer(t *testing.T) {
 	cfg := Config{WorkerCount: 1, EncryptionKey: []byte("webhook-encryption-key-32-bytes!!")}
 	srv, _ := newSecretsServer(t, cfg, nil, r)
 
-	const plaintext = "operator-chosen-signing-secret"
+	const plaintext = "operator-chosen-signing-secret-32ch"
 	resp := postJSON(t, srv.URL+"/webhooks", map[string]any{
 		"url":    "https://example.test/hook",
 		"events": []string{"user.registered"},
@@ -320,7 +320,7 @@ func TestWebhookSecret_JWTSecret_StillEncrypts(t *testing.T) {
 	r := memrepo.New()
 	srv, _ := newSecretsServer(t, Config{WorkerCount: 1}, []byte("jwt-secret-from-the-bearer-plugin"), r)
 
-	const plaintext = "hmac-secret-under-the-jwt-key"
+	const plaintext = "hmac-secret-under-the-jwt-key-32ch"
 	resp := postJSON(t, srv.URL+"/webhooks", map[string]any{
 		"url":    "https://example.test/hook",
 		"events": []string{"user.registered"},

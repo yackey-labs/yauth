@@ -426,12 +426,17 @@ func stringPtr(s string) *string { return &s }
 // Errors from the audit-log call are intentionally swallowed because
 // the rejection itself is the security-relevant signal — a flaky audit
 // store must not be allowed to either succeed or fail authentication.
+//
+// plugin.WriteAudit rather than host.Repo().LogAuditEvent so the row also
+// reaches the host's audit recorders (audit-export's outbox). Written
+// directly to the repo, it was durable but undeliverable: a banned client
+// hammering /token showed up in yauth_audit_log and in no exported stream.
 func logBannedClientRejection(ctx context.Context, host plugin.PluginHost, clientID string) {
 	meta, _ := json.Marshal(map[string]any{
 		"client_id": clientID,
 		"reason":    "client banned",
 	})
-	_ = host.Repo().LogAuditEvent(ctx, domain.NewAuditLog{
+	_ = plugin.WriteAudit(ctx, host, domain.NewAuditLog{
 		ID:        uuid.NewString(),
 		EventType: "oauth2.client.banned_rejected",
 		Metadata:  meta,

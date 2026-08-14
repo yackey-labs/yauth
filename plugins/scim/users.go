@@ -352,6 +352,14 @@ func projectUser(baseURL, orgID string, u *domain.User, ext *domain.ExternalIden
 // auditScim writes an audit-log row tagged with the SCIM actor and
 // target. Errors are deliberately swallowed: SCIM operations MUST NOT
 // fail when audit logging cannot insert.
+//
+// plugin.WriteAudit rather than host.Repo().LogAuditEvent: the row has to
+// reach the host's audit recorders too, or every SCIM provision and
+// deprovision stays inside yauth_audit_log and never reaches an
+// audit-export destination — the IdP-driven joiner/leaver trail an auditor
+// asks for first. WriteAudit reads the org scope back out of the metadata
+// below ("org_id"), so a row lands on that org's destinations as well as
+// the deployment-wide ones.
 func auditScim(ctx context.Context, host plugin.PluginHost, p *scimPrincipal, event, target string) {
 	meta, _ := json.Marshal(map[string]any{
 		"actor":  "scim_api_key:" + p.KeyID,
@@ -359,7 +367,7 @@ func auditScim(ctx context.Context, host plugin.PluginHost, p *scimPrincipal, ev
 		"target": target,
 	})
 	uid := p.CreatedBy
-	_ = host.Repo().LogAuditEvent(ctx, domain.NewAuditLog{
+	_ = plugin.WriteAudit(ctx, host, domain.NewAuditLog{
 		ID:        uuid.NewString(),
 		UserID:    &uid,
 		EventType: event,

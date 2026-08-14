@@ -142,11 +142,28 @@ func (y *YAuth) recordAuthAudit(ctx context.Context, ev events.AuthEvent, dec ev
 		return
 	}
 
+	y.FanoutAudit(ctx, row.ID, orgID)
+}
+
+// FanoutAudit implements [plugin.AuditFanout]: it hands one committed audit
+// row to every registered recorder. It used to be an inline loop reachable
+// only from recordAuthAudit, which is precisely why the rows plugins wrote
+// themselves — bans, impersonations, SCIM deprovisions, API-key mints —
+// never reached audit export's outbox. plugin.WriteAudit and the
+// middleware's binding-mismatch path now arrive here too.
+//
+// Recorders are read at call time, so a plugin registering one during
+// Routes() is picked up even though the host wired the fan-out earlier in
+// Build.
+func (y *YAuth) FanoutAudit(ctx context.Context, auditLogID string, organizationID *string) {
+	if y == nil || auditLogID == "" {
+		return
+	}
 	for _, rec := range y.auditRecorders {
 		if rec == nil {
 			continue
 		}
-		rec(ctx, row.ID, orgID)
+		rec(ctx, auditLogID, organizationID)
 	}
 }
 

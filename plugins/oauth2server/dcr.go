@@ -278,7 +278,11 @@ func (p *oauth2Plugin) handleDCRRegister(host plugin.PluginHost, prefix string) 
 			"redirect_uris": req.RedirectURIs,
 			"source":        "dcr",
 		})
-		_ = host.Repo().LogAuditEvent(r.Context(), domain.NewAuditLog{
+		// WriteAudit, not LogAuditEvent: the row must also reach the host's
+		// audit recorders so audit export can stream it. A self-service DCR
+		// registration is one of the few things an unauthenticated caller
+		// can make this server do, and it was landing in the table alone.
+		_ = plugin.WriteAudit(r.Context(), host, domain.NewAuditLog{
 			ID:        uuid.NewString(),
 			EventType: "oauth2.client.registered",
 			Metadata:  regMeta,

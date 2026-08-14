@@ -106,12 +106,33 @@ type AuthResolver interface {
 	Resolve(r *http.Request) (*domain.AuthUser, bool, error)
 }
 
+// AuditRecorder is the callback the host invokes immediately after an
+// audit-log row is durable, carrying the row id and the org the row is
+// scoped to (nil for a deployment-wide row). It is the hand-off between
+// the audit TABLE and everything downstream of it — today, audit-export's
+// outbox, which is the only thing that ever streams a row to a SIEM.
+//
+// It is declared HERE, in the lowest package that has to produce one,
+// purely to break an import cycle: package plugin imports middleware, so
+// middleware cannot import plugin. Package plugin re-exports it verbatim
+// as plugin.AuditRecorder (a type alias, so the two are one type), exactly
+// as it already does for middleware.AuthResolver. Plugin authors should
+// refer to plugin.AuditRecorder; this declaration is plumbing.
+type AuditRecorder func(ctx context.Context, auditLogID string, organizationID *string)
+
 // Middleware resolves identity off an incoming http.Request.
 type Middleware struct {
 	repo      repo.Repository
 	cfg       Config
 	resolvers []AuthResolver
 	logger    *slog.Logger
+
+	// auditFanout delivers the rows this middleware writes itself (the
+	// session-binding mismatch row) to the host's recorders. nil on a
+	// bare middleware.New — a consumer wiring the middleware by hand gets
+	// the old behaviour (row written, nothing fanned out) rather than a
+	// panic.
+	auditFanout AuditRecorder
 }
 
 // New returns a Middleware bound to the supplied repo, config, and the
@@ -135,6 +156,22 @@ func New(r repo.Repository, cfg Config, resolvers ...AuthResolver) *Middleware {
 // only invoke during YAuth.Build before the router is mounted.
 func (m *Middleware) AddResolver(r AuthResolver) {
 	m.resolvers = append(m.resolvers, r)
+}
+
+// SetAuditFanout installs the callback that hands every audit row this
+// middleware writes to the host's registered recorders. The host calls it
+// once during Build, after the YAuth value exists (middleware.New runs
+// first, so this cannot be a constructor argument). Recorders are read at
+// call time, so registration order versus plugin Routes() is irrelevant.
+//
+// Without it the binding-mismatch row below was written to the audit table
+// and delivered nowhere: a session invalidated for a User-Agent mismatch —
+// the closest thing yauth has to a hijack alarm — never reached an
+// audit-export destination. Same defect as the handler-authored rows now
+// funnelled through plugin.WriteAudit; middleware cannot call that helper
+// because plugin imports this package.
+func (m *Middleware) SetAuditFanout(f AuditRecorder) {
+	m.auditFanout = f
 }
 
 // ctxKey is a private context key type so external callers cannot collide
@@ -448,14 +485,24 @@ func (m *Middleware) auditMismatch(ctx context.Context, sess *domain.Session, ev
 		"request_value": reqVal,
 	})
 	userID := sess.UserID
+	id := uuid.NewString()
 	if err := m.repo.LogAuditEvent(ctx, domain.NewAuditLog{
-		ID:        uuid.NewString(),
+		ID:        id,
 		UserID:    &userID,
 		EventType: eventType,
 		Metadata:  meta,
 		CreatedAt: time.Now().UTC(),
 	}); err != nil {
 		m.logger.WarnContext(ctx, "yauth: failed to write binding-mismatch audit row", "err", err)
+		return
+	}
+	// Fan the committed row out to the host's audit recorders. Skipping
+	// this is what kept every binding mismatch out of audit export: the
+	// row existed in yauth_audit_log and no SIEM ever saw it. Scoped nil
+	// (deployment-wide) because a session is not org-scoped; org-scoped
+	// destinations still receive nothing they would not have had.
+	if m.auditFanout != nil {
+		m.auditFanout(ctx, id, nil)
 	}
 }
 

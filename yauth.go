@@ -240,6 +240,14 @@ func (b *YAuthBuilder) Build() (*YAuth, error) {
 		trusted:          trusted,
 	}
 
+	// The middleware writes one audit row of its own (the session-binding
+	// mismatch) and cannot reach the recorder list by itself — package
+	// plugin imports middleware, so middleware cannot import plugin and
+	// cannot call plugin.WriteAudit. Hand it the fan-out now that ya
+	// exists; middleware.New has to run first because the plugins take the
+	// middleware handle from the host.
+	mw.SetAuditFanout(ya.FanoutAudit)
+
 	// Every plugin is huma-native: the huma.API is built over the bare mux
 	// (humago.Mux needs only HandleFunc + ServeHTTP, both of which *http.ServeMux
 	// provides), and plugins register their operations on it via huma.Register.
@@ -507,4 +515,5 @@ func (y *YAuth) TrustedProxies() middleware.TrustedProxies { return y.trusted }
 var (
 	_ plugin.PluginHost          = (*YAuth)(nil)
 	_ plugin.RateLimitConfigurer = (*YAuth)(nil)
+	_ plugin.AuditFanout         = (*YAuth)(nil)
 )

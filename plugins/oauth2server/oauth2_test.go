@@ -1092,7 +1092,12 @@ func TestRotatePublicKey_OldAssertionRejected_NewAccepted(t *testing.T) {
 	bb, _ := json.Marshal(body)
 	clientID, _, _ := h.createClient(t, adminCookie, string(bb))
 
-	audience := h.srv.URL + "/api/auth/oauth/token"
+	// The assertion's aud must name THIS authorization server as it
+	// advertises itself — Config.Issuer + BasePath + /oauth/token — not the
+	// httptest listener's ephemeral 127.0.0.1 URL. This test pins key
+	// rotation, not audience laxity; RFC 7523 audience binding is pinned by
+	// TestPrivateKeyJWT_WrongAudienceRejected.
+	audience := "http://idp.test/api/auth/oauth/token"
 
 	// Sanity: the old key works before rotation.
 	form := url.Values{}

@@ -94,13 +94,28 @@ ya, err := yauth.NewFromConfig(ctx, cfg) // cfg from yauthcfg.Load("yauth.yaml")
 These are real, code-level behaviors (not config rules) — get them wrong and the
 IdP degrades silently rather than erroring:
 
-- **`oidc` advertises the authorize/token/registration/end-session endpoints
-  only when `oauth2server` is also loaded.** `oidc` alone serves *only*
-  discovery + `/userinfo` — no login flow. For a real provider, load both.
+- **`oidc` advertises the authorize/token/end-session endpoints only when
+  `oauth2server` is also loaded**, and `registration_endpoint` only when
+  `oauth2server` also has DCR enabled (that flag is what routes
+  `/oauth/register` at all). `oidc` alone serves *only* discovery +
+  `/userinfo` — no login flow. For a real provider, load both.
 - **`oidc`/`oauth2server` sign with `asymjwt` when present, else fall back to
-  HS256.** Without `asymjwt`, the discovery doc advertises `HS256` and there is
-  no JWKS — relying parties cannot verify tokens against a public key. **Load
-  `asymjwt` for any provider RPs will validate tokens from.**
+  HS256.** Without `asymjwt` there is no JWKS, so the discovery doc omits
+  `jwks_uri` and `id_token_signing_alg_values_supported` entirely rather than
+  naming a route that does not exist — relying parties cannot verify tokens
+  against a public key. **Load `asymjwt` for any provider RPs will validate
+  tokens from.**
+- **`/userinfo` returns only the claims the caller's credential was granted.**
+  A session cookie, a user-scoped API key and a first-party bearer token are
+  unrestricted and get everything; a delegated OAuth2 access token gets
+  `email`/`email_verified` under the `email` scope, `name` under `profile` and
+  `groups` under `groups`. An org-scoped (service-account) API key is refused
+  with 403 — it has no user identity of its own.
+- **`private_key_jwt` assertions are bound to this server and single-use.** The
+  `aud` must be this deployment's issuer, its base URL, or the advertised
+  `token_endpoint`; a `jti` is required and is burned on first use; `exp` may
+  not be more than 24h out. Clients must also be registered with
+  `token_endpoint_auth_method: private_key_jwt` (or none recorded).
 - **`oauth2server` needs a signing key from *somewhere*** — the `asymjwt` signer,
   or an HS256 secret via `WithJWTSecret(...)`. Token issuance, introspection, and
   DCR registration-access-tokens fail without one.

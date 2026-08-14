@@ -105,7 +105,17 @@ func (p *oauth2Plugin) handleEndSession(host plugin.PluginHost) http.HandlerFunc
 // uriRegistered reports whether candidate exactly matches one of the registered
 // URIs. Exact string match (no normalization) is required by OIDC for
 // redirect-URI comparison to avoid bypasses.
+//
+// The scheme guard is the same retroactive half applied at /oauth/authorize:
+// post_logout_redirect_uris were unvalidated on both the create and the patch
+// path until this commit, and this function's caller hands the result straight
+// to http.Redirect. A stored `data:`/`javascript:` target would therefore have
+// stayed a working script-execution sink. Only those schemes are refused here —
+// see hasDangerousRedirectScheme.
 func uriRegistered(registered []string, candidate string) bool {
+	if hasDangerousRedirectScheme(candidate) {
+		return false
+	}
 	for _, u := range registered {
 		if u == candidate {
 			return true

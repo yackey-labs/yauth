@@ -102,37 +102,53 @@ func (p *oauth2Plugin) handleRevoke(host plugin.PluginHost) http.HandlerFunc {
 	}
 }
 
-// audienceNamesClient reports whether a JWT `aud` claim names clientID.
+// audienceContainsAny reports whether a JWT `aud` claim names any of want.
 // RFC 7519 §4.1.3 allows `aud` to be either a single string or an array of
 // strings, and which of the two arrives here depends on the signer (asymjwt
 // round-trips the claim map through JSON, so an array comes back as []any),
 // so all three shapes are handled.
+//
+// This is the one copy of the shape-handling in the package: the RFC 7523
+// audience check in client_auth.go needs the same "string or array" walk
+// against a SET of acceptable values, and two copies of a claim parser are
+// how the two drift apart. Empty strings in want never match, so a caller
+// may pass an unconfigured value without branching.
+func audienceContainsAny(aud any, want ...string) bool {
+	match := func(got string) bool {
+		for _, w := range want {
+			if w != "" && got == w {
+				return true
+			}
+		}
+		return false
+	}
+	switch v := aud.(type) {
+	case string:
+		return match(v)
+	case []any:
+		for _, a := range v {
+			if s, ok := a.(string); ok && match(s) {
+				return true
+			}
+		}
+	case []string:
+		for _, s := range v {
+			if match(s) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// audienceNamesClient reports whether a JWT `aud` claim names clientID.
 //
 // There is deliberately NO fallback to a `client_id` claim: signAccessToken
 // never emits one, so such a fallback would be dead code that only widened
 // the set of tokens this endpoint accepts as "mine". An absent or empty `aud`
 // therefore matches nothing and revokes nothing.
 func audienceNamesClient(aud any, clientID string) bool {
-	if clientID == "" {
-		return false
-	}
-	switch v := aud.(type) {
-	case string:
-		return v == clientID
-	case []any:
-		for _, a := range v {
-			if s, ok := a.(string); ok && s == clientID {
-				return true
-			}
-		}
-	case []string:
-		for _, s := range v {
-			if s == clientID {
-				return true
-			}
-		}
-	}
-	return false
+	return audienceContainsAny(aud, clientID)
 }
 
 // timeFromExp pulls "exp" out of claims as a time.Time, or returns the

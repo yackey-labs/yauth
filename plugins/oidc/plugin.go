@@ -55,9 +55,12 @@ type Config struct {
 
 // defaultClaimsSupported is the baseline list advertised when
 // Config.ClaimsSupported is nil. It mirrors the OIDC Core 1.0 standard
-// claims yauth's UserInfo response actually populates.
+// claims yauth's UserInfo response actually populates — which includes
+// "groups": UserInfo has always emitted it (and the id_token carries it under
+// the groups scope), so leaving it off this list under-advertised a claim RPs
+// were already receiving.
 var defaultClaimsSupported = []string{
-	"sub", "email", "email_verified", "name", "aud", "exp", "iat", "iss",
+	"sub", "email", "email_verified", "name", "groups", "aud", "exp", "iat", "iss",
 }
 
 // claimsSupported returns the configured claim list, falling back to
@@ -117,7 +120,10 @@ func (p *oidcPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.
 		Tags:        []string{"oidc"},
 		Security:    []map[string][]string{}, // explicitly public
 	}, func(_ context.Context, _ *discoveryInput) (*discoveryOutput, error) {
-		return p.discovery(host), nil
+		// api+prefix let discovery advertise registration_endpoint only when
+		// oauth2-server actually routed it (its DCREnabled gate). The lookup
+		// runs per request, so plugin registration order does not matter.
+		return p.discovery(host, api, prefix), nil
 	})
 
 	// UserInfo is auth-gated: RequireAuthHuma resolves cookie-or-bearer

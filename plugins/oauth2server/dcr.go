@@ -133,23 +133,12 @@ func (p *oauth2Plugin) handleDCRRegister(host plugin.PluginHost, prefix string) 
 			writeDCRError(w, http.StatusBadRequest, "invalid_redirect_uri", "redirect_uris is required")
 			return
 		}
-		// Strip CR/LF and trim surrounding whitespace: terminals (notably tmux)
-		// line-wrap long URLs on copy/paste, and a valid URI never contains raw
-		// newlines — so this lets a wrapped, pasted redirect_uri register
-		// instead of failing the no-whitespace check below.
-		for i := range req.RedirectURIs {
-			req.RedirectURIs[i] = sanitizeURL(req.RedirectURIs[i])
+		if reason := redirectURIsReason(req.RedirectURIs); reason != "" {
+			writeDCRError(w, http.StatusBadRequest, "invalid_redirect_uri", reason)
+			return
 		}
 		allLoopback := true
 		for _, u := range req.RedirectURIs {
-			if u == "" || strings.ContainsAny(u, " \t\n\r") {
-				writeDCRError(w, http.StatusBadRequest, "invalid_redirect_uri", "redirect_uris must be non-empty URIs without whitespace")
-				return
-			}
-			if reason := redirectURISchemeReason(u); reason != "" {
-				writeDCRError(w, http.StatusBadRequest, "invalid_redirect_uri", reason)
-				return
-			}
 			if !redirectURIIsLoopback(u) {
 				allLoopback = false
 			}
@@ -347,6 +336,61 @@ func dcrAuthMethodSupported(m string) bool {
 var dangerousRedirectSchemes = map[string]bool{
 	"javascript": true, "data": true, "vbscript": true,
 	"file": true, "blob": true, "about": true,
+}
+
+// redirectURIsReason applies the registration-time redirect-target policy to
+// every entry of uris and returns "" when all of them are acceptable, or a
+// human-readable rejection reason for the first that is not. It SANITIZES each
+// entry IN PLACE first (see sanitizeURL: terminals line-wrap long URLs on
+// copy/paste, and a valid URI never contains raw newlines), so a caller that
+// stores uris afterwards stores the normalized form it validated.
+//
+// This is the ONE copy of the policy. It used to be inlined in the dynamic-
+// registration loop and existed nowhere else, so every other door onto the same
+// columns stored whatever it was handed: POST /oauth2/clients (redirect_uris
+// and post_logout_redirect_uris), PATCH /oauth2/clients/{id}
+// (post_logout_redirect_uris) and POST /federate/approve, which writes a remote
+// peer's redirect_uris verbatim. A `javascript:` entry stored through any of
+// them reaches the consent SPA's `location = redirect_url` assignment with a
+// live authorization code attached — script execution in the IdP's own origin
+// under the logged-in user's session.
+//
+// Applied to post_logout_redirect_uris too: handleEndSession 302s the browser
+// to whatever is stored there, which is the same sink one hop further on.
+func redirectURIsReason(uris []string) string {
+	for i := range uris {
+		uris[i] = sanitizeURL(uris[i])
+		u := uris[i]
+		if u == "" || strings.ContainsAny(u, " \t\n\r") {
+			return "redirect_uris must be non-empty URIs without whitespace"
+		}
+		if reason := redirectURISchemeReason(u); reason != "" {
+			return reason
+		}
+	}
+	return ""
+}
+
+// hasDangerousRedirectScheme reports whether raw carries one of the pseudo-
+// schemes above. It is the READ-side half of the policy, consulted by
+// redirectURIAllowed (/oauth/authorize) and uriRegistered (/oauth/end_session)
+// so a row written before the write paths were covered stops being a usable
+// target without a migration or a sweep.
+//
+// It is deliberately NARROWER than redirectURISchemeReason: that function also
+// refuses non-loopback plain http, which the admin create endpoint accepted
+// right up to this commit. Applying the whole policy read-side would silently
+// break live authorization flows for legitimately-registered clients with no
+// migration path, so only the script-execution schemes are retroactive.
+//
+// An unparseable URI is treated as dangerous: we cannot tell what a browser
+// would do with it, and it cannot have been a working redirect target anyway.
+func hasDangerousRedirectScheme(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return true
+	}
+	return dangerousRedirectSchemes[strings.ToLower(u.Scheme)]
 }
 
 // redirectURISchemeReason validates a redirect_uri's scheme per OAuth 2.1 BCP

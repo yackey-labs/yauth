@@ -1,6 +1,7 @@
 package asymjwt
 
 import (
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/rsa"
 	"crypto/x509"
@@ -47,6 +48,34 @@ func NewSigner(cfg Config) (*Signer, error) {
 		return nil, err
 	}
 
+	// The two halves are loaded from independent sources and, until this
+	// check existed, were never compared. That mattered because the public
+	// half is deliberately NOT a secret: gen_keys writes public.pem 0644 and
+	// yauthcfg's public_key_pem_env points it at an ordinary env var /
+	// ConfigMap. But the public slot is also what Verify trusts and what
+	// PublicJWKS publishes — so anyone able to write only the non-secret half
+	// could install a key they hold the private half of, and thereafter mint
+	// {"sub":"<victim>","token_use":"access"} tokens that this deployment
+	// accepts on every RequireAuth route (bearer.verifyAsymAccessToken gates
+	// only on token_use and a non-empty sub) and that every relying party
+	// accepts too, because /.well-known/jwks.json now advertises their key.
+	//
+	// Assert the pair rather than deriving the public key from the private
+	// one: silently repairing a mismatch would hide the misconfiguration, and
+	// a deployment in that state is already broken (its own tokens fail
+	// bearer verification and introspection). Failing at Build is the point.
+	signerKey, ok := priv.(crypto.Signer)
+	if !ok {
+		return nil, fmt.Errorf("asymjwt: private key does not implement crypto.Signer")
+	}
+	eq, ok := pub.(interface{ Equal(crypto.PublicKey) bool })
+	if !ok || !eq.Equal(signerKey.Public()) {
+		// Unreachable in practice — validatePublicKeyType has already narrowed
+		// pub to *rsa.PublicKey or *ecdsa.PublicKey and both implement Equal —
+		// but a future key type must not fall through the check silently.
+		return nil, fmt.Errorf("asymjwt: public key does not match the private key")
+	}
+
 	var method jwt.SigningMethod
 	switch cfg.KeyType {
 	case "RS256":
@@ -87,10 +116,38 @@ func (s *Signer) Sign(claims map[string]any) (string, error) {
 // Verify parses and validates raw against the loaded public key. The
 // signing algorithm is restricted to the algo this signer was built
 // for, so a token signed with a different alg is rejected.
+//
+// An "exp" is required, not merely honoured when present: golang-jwt
+// treats a missing exp as "nothing to check", and a JWT we signed is a
+// bearer credential with no revocation path, so an exp-less token would
+// verify forever. The bearer plugin's HS256 path already passes
+// jwt.WithExpirationRequired(); the asymmetric path — the one carrying
+// OAuth2 access tokens — was the weaker of the two.
+//
+// Deliberately no issuer/audience pinning here: the same Signer verifies
+// oauth2server tokens (cfg.Issuer) and ssooidc's federate request
+// (cfg.SelfIssuer), so a single WithIssuer would break guided
+// federation. Issuer pinning belongs on the callers.
 func (s *Signer) Verify(raw string) (map[string]any, error) {
-	parser := jwt.NewParser(jwt.WithValidMethods([]string{s.algo}))
+	parser := jwt.NewParser(jwt.WithValidMethods([]string{s.algo}), jwt.WithExpirationRequired())
 	var claims jwt.MapClaims
 	tok, err := parser.ParseWithClaims(raw, &claims, func(t *jwt.Token) (interface{}, error) {
+		// Sign writes a kid and PublicJWKS publishes it, but this keyfunc
+		// used to hand back the one loaded key whatever kid the token
+		// claimed — the kid was decorative. Refusing a kid that is not ours
+		// is inert with today's single key and is what keeps a later
+		// rotation sound; it also matches what relying parties already do,
+		// since they match on kid against our single-key JWKS.
+		//
+		// A token with NO kid header still verifies: the HS256->asymmetric
+		// migration path and ssooidc's federate JWTs rely on that. Only a
+		// WRONG kid (or a kid header that is not even a string) is refused.
+		if v, present := t.Header["kid"]; present {
+			k, isStr := v.(string)
+			if !isStr || k != s.kid {
+				return nil, errors.New("asymjwt: unknown kid")
+			}
+		}
 		return s.verifyKey, nil
 	})
 	if err != nil {

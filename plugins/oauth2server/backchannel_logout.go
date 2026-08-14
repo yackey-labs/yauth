@@ -112,6 +112,17 @@ func (p *oauth2Plugin) signLogoutToken(host plugin.PluginHost, audience, userID 
 		"sub": userID,
 		"iat": now.Unix(),
 		"jti": jti,
+		// This was the only token yauth minted with no exp, and it is handed
+		// to every RP the user ever authorized that registered a
+		// backchannel_logout_uri — including one that registered itself
+		// through anonymous DCR. Without an exp it is a permanent signed
+		// assertion naming one of our users, held by parties we have no
+		// relationship with. A logout token is consumed within seconds of
+		// delivery, so two minutes is generous; it is set in the shared claims
+		// map so both the asymmetric signer and the HS256 fallback below carry
+		// it. Signer.Verify now requires exp, and this is the token that check
+		// would otherwise have rejected.
+		"exp": now.Add(2 * time.Minute).Unix(),
 		"events": map[string]any{
 			backchannelLogoutEvent: map[string]any{},
 		},

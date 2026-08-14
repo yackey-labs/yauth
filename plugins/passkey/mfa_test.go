@@ -156,11 +156,16 @@ func seedUser(t *testing.T, r repo.Repository, email string) domain.User {
 // finish drives completeLogin against a real recorder and reports the
 // response body, the raw Set-Cookie header (empty when none was written)
 // and any error.
+//
+// Every case in this file means "a real, USER-VERIFIED passkey" — these tests
+// are about the event pipeline, not about the UV flag — so uvVerified is
+// hard-coded true. The UV=0 half is covered end-to-end, through a real
+// assertion, in assertion_integrity_test.go.
 func finish(t *testing.T, p *passkeyPlugin, host plugin.PluginHost, u domain.User) (*passkeyLoginFinishOutput, string, error) {
 	t.Helper()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/passkey/login/finish", nil)
-	out, err := p.completeLogin(context.Background(), host, rec, req, &u)
+	out, err := p.completeLogin(context.Background(), host, rec, req, &u, true /* uvVerified */)
 	return out, rec.Header().Get("Set-Cookie"), err
 }
 

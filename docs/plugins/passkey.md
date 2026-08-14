@@ -22,22 +22,44 @@ wraps the standard `publicKey` credential options the browser API consumes, and
 the matching `finish` call **requires** the `challenge_id` plus the browser's
 credential response. Migrations create `yauth_webauthn_credentials`.
 
-## A passkey satisfies MFA (default)
+## A user-verified passkey satisfies MFA (default)
 
 When the `mfa` plugin is also wired, a TOTP-enrolled user finishing a passkey
-login is **not** asked for a code. `/passkey/login/finish` reports the login as
-already second-factor-verified and issues the session in one leg. This is a
-deliberate default:
+login **whose authenticator performed user verification** is **not** asked for a
+code. `/passkey/login/finish` reports the login as already
+second-factor-verified and issues the session in one leg. This is a deliberate
+default:
 
-- a passkey assertion is not a single factor — it is possession of the
-  authenticator plus, with user verification, a biometric or PIN. NIST
+- a **user-verified** passkey assertion is not a single factor — it is
+  possession of the authenticator **plus** a biometric or PIN. NIST
   SP 800-63B rates a verified WebAuthn authenticator at AAL2/AAL3, and Entra,
   Okta and Google all accept a passkey on its own;
 - it is phishing-resistant. Chasing it with a shared-secret TOTP adds the
   weaker factor's failure modes (relay, real-time phishing, seed theft) to a
-  flow that had none;
-- it is what this route has always done, so no existing passkey user's login
-  changes shape.
+  flow that had none.
+
+The credit is conditional on the assertion's **UV flag**, which yauth reads off
+the authenticator data. `/passkey/login/begin` asks for user verification
+(`userVerification: "preferred"`), but an authenticator is free to answer UV=0 —
+a PIN-less FIDO2 / U2F security key always will. Such an assertion proved
+**possession only**, so it never carries the second-factor marker no matter how
+`satisfies_mfa` is set.
+
+> **Behaviour change.** A TOTP-enrolled user whose authenticator does **not**
+> perform user verification now receives `{require_mfa, pending_session_id}`
+> with **no** `Set-Cookie` where they previously received a session, and
+> completes at `POST /mfa/verify`. Clients must handle the `require_mfa`
+> response shape. A user with **no** second factor enrolled is unaffected: a
+> UV=0 assertion is still a valid first factor and still logs in one leg, with a
+> cookie. `"preferred"` is used rather than `"required"` precisely so no
+> UV-incapable authenticator is locked out of the ceremony.
+
+yauth also enforces WebAuthn L3 §7.2 step 24: the credential's sign counter is
+written back after every accepted assertion, and an assertion whose counter did
+not advance past the stored one (a **cloned authenticator**) is refused with a
+generic `401`. Authenticators that never implement a counter — synced/platform
+passkeys such as iCloud Keychain — report zero every time and are exempt, as the
+spec intends.
 
 **To demand a step-up anyway**, set `satisfies_mfa: false`
 (`passkey.Config.SatisfiesMFA` = pointer to `false`). `/passkey/login/finish`

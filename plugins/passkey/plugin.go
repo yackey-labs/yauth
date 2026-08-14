@@ -14,15 +14,22 @@
 // credential the account holds must not redefine how the account
 // authenticates — and register/begin additionally requires the account's
 // CURRENT second factor in the X-MFA-Code header when one is enrolled, since
-// a passkey satisfies MFA by default and would otherwise be a permanent way
-// around it. Sessions, first-party bearer tokens and the read routes are
-// unaffected.
+// a user-verified passkey satisfies MFA by default and would otherwise be a
+// permanent way around it. Sessions, first-party bearer tokens and the read
+// routes are unaffected.
 //
-// End-to-end exercise of these routes requires a real authenticator (browser
-// + platform/security key). The upstream go-webauthn library does not ship a
-// virtual authenticator, so the test suite here covers only the bits that do
-// not require one: the User adapter, JSON round-trips, and the shape of
-// /begin responses.
+// /passkey/login/finish grades the assertion's integrity signals rather than
+// assuming them: the login is credited as second-factor-verified only when
+// the authenticator actually set the UV bit, and an assertion whose sign
+// counter went BACKWARDS (go-webauthn's CloneWarning, WebAuthn L3 §7.2 step
+// 24) is refused outright. Both require the post-assertion credential to be
+// written back, which is what repo.UpdatePasskeyCredential is for.
+//
+// The upstream go-webauthn library does not ship a virtual authenticator, so
+// most of this package's tests cover the bits that do not need one: the User
+// adapter, JSON round-trips, and the shape of /begin responses.
+// assertion_integrity_test.go supplies a small software authenticator for the
+// cases that genuinely require a signature-valid assertion.
 package passkey
 
 import (
@@ -32,6 +39,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/webauthn"
 
 	"github.com/yackey-labs/yauth/middleware"
@@ -50,24 +58,33 @@ type Config struct {
 	// Defaults to "yauth".
 	RPName string
 
-	// SatisfiesMFA declares whether a passkey assertion is itself enough
-	// to count as the second factor. nil (the default) means TRUE.
+	// SatisfiesMFA declares whether a USER-VERIFIED passkey assertion is
+	// itself enough to count as the second factor. nil (the default) means
+	// TRUE.
 	//
-	// Defaulting to "a passkey satisfies MFA" means /passkey/login/finish
-	// reports the login as already second-factor-verified and issues the
-	// session in one leg. That is a deliberate product decision, not an
-	// oversight —
+	// Defaulting to "a user-verified passkey satisfies MFA" means
+	// /passkey/login/finish reports the login as already
+	// second-factor-verified and issues the session in one leg. That is a
+	// deliberate product decision, not an oversight —
 	//
-	//   - a passkey assertion is not a single factor. It is possession of
-	//     the authenticator plus, when user verification is performed, a
-	//     biometric or PIN; NIST SP 800-63B rates a verified WebAuthn
-	//     authenticator at AAL2/AAL3 and the major IdPs (Entra, Okta,
-	//     Google) accept a passkey on its own;
+	//   - a USER-VERIFIED passkey assertion is not a single factor. It is
+	//     possession of the authenticator plus a biometric or PIN; NIST SP
+	//     800-63B rates a verified WebAuthn authenticator at AAL2/AAL3 and
+	//     the major IdPs (Entra, Okta, Google) accept a passkey on its own;
 	//   - it is phishing-resistant, which TOTP is not. Chasing a passkey
 	//     with a shared-secret code adds the weaker factor's failure modes
-	//     (relay, real-time phishing, seed theft) to a flow that had none;
-	//   - it matches what this route already did, so no existing passkey
-	//     user's login changes shape.
+	//     (relay, real-time phishing, seed theft) to a flow that had none.
+	//
+	// The credit is conditional on the assertion's UV flag, and that is the
+	// half the code used to skip: an assertion with UV=0 proved POSSESSION
+	// ONLY, so it is one factor and never carries the marker no matter how
+	// this flag is set. BEHAVIOUR CHANGE: a TOTP-enrolled user whose
+	// authenticator does not perform user verification (a PIN-less FIDO2 /
+	// U2F key, say) now receives {require_mfa, pending_session_id} with NO
+	// Set-Cookie where they previously received a session, so clients must
+	// handle the require_mfa response shape. A user with no second factor
+	// enrolled is unaffected — mfa's gate answers Continue and the session
+	// is issued as before.
 	//
 	// An operator who disagrees sets SatisfiesMFA to a pointer to false
 	// (yauth.yaml: plugins.passkey.satisfies_mfa: false). A TOTP-enrolled
@@ -114,6 +131,25 @@ func New(cfg Config) (plugin.Plugin, error) {
 		RPID:          cfg.RPID,
 		RPDisplayName: cfg.RPName,
 		RPOrigins:     cfg.RPOrigins,
+		// ASK for user verification. With the zero-valued
+		// AuthenticatorSelection this field was "", go-webauthn omitted
+		// userVerification from the emitted options entirely, and the RP
+		// therefore never even requested the biometric/PIN that
+		// Config.SatisfiesMFA's rationale rests on — the browser fell back
+		// to its own default and the authenticator was free to answer UV=0.
+		//
+		// "preferred", NOT "required": go-webauthn's validateLogin only
+		// enforces the UV bit when the session says VerificationRequired, so
+		// "required" would hard-fail every UV-incapable / PIN-less security
+		// key — a lockout, not a fix. The security property comes from
+		// grading the RETURNED flag in completeLogin (a UV=0 assertion no
+		// longer counts as the second factor); asking here is what keeps a
+		// UV-CAPABLE authenticator from being needlessly downgraded to a
+		// TOTP prompt. It lands in the registration options too, which is
+		// equally desirable.
+		AuthenticatorSelection: protocol.AuthenticatorSelection{
+			UserVerification: protocol.VerificationPreferred,
+		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("passkey: build webauthn: %w", err)

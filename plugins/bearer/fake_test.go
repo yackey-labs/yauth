@@ -2,6 +2,7 @@ package bearer
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"time"
@@ -283,6 +284,9 @@ func (f *fakeRepo) CreatePasskey(_ context.Context, _ domain.NewWebauthnCredenti
 	return nil
 }
 func (f *fakeRepo) UpdatePasskeyLastUsed(_ context.Context, _ string, _ time.Time) error {
+	return yautherr.ErrNotFound
+}
+func (f *fakeRepo) UpdatePasskeyCredential(_ context.Context, _ string, _ json.RawMessage, _ time.Time) error {
 	return yautherr.ErrNotFound
 }
 func (f *fakeRepo) DeletePasskey(_ context.Context, _ string) error { return yautherr.ErrNotFound }

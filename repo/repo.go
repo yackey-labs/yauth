@@ -142,6 +142,15 @@ type PasskeyRepository interface {
 	GetPasskeyByIDAndUser(ctx context.Context, id, userID string) (*domain.WebauthnCredential, error)
 	CreatePasskey(ctx context.Context, input domain.NewWebauthnCredential) error
 	UpdatePasskeyLastUsed(ctx context.Context, id string, at time.Time) error
+	// UpdatePasskeyCredential replaces the stored webauthn.Credential blob and
+	// stamps last_used_at, in one statement. /passkey/login/finish calls this
+	// after every accepted assertion so the credential's SIGN COUNTER is
+	// carried forward: WebAuthn L3 §7.2 step 24 (cloned-authenticator
+	// detection) compares each assertion against the stored counter, and
+	// without a write-back that counter stays frozen at its registration value
+	// and the check can never fire. Returns yautherr.ErrNotFound when no row
+	// has the given id.
+	UpdatePasskeyCredential(ctx context.Context, id string, credential json.RawMessage, lastUsedAt time.Time) error
 	DeletePasskey(ctx context.Context, id string) error
 }
 

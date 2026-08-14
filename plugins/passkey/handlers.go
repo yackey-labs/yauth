@@ -568,6 +568,27 @@ func (p *passkeyPlugin) handleLoginFinish(host plugin.PluginHost) func(context.C
 		if err != nil || verified == nil || matchedUser == nil {
 			return nil, huma.Error401Unauthorized("passkey verification failed")
 		}
+		// WebAuthn L3 §7.2 step 24, the cloned-authenticator detector.
+		// go-webauthn's Authenticator.UpdateCounter sets CloneWarning when the
+		// asserted sign counter did not advance past the stored one, but it
+		// returns NO error — the `err != nil` check above cannot see it, and
+		// before this the string CloneWarning appeared nowhere in the plugin,
+		// so a detected clone was handed a session anyway.
+		//
+		// Deliberately NOT our own counter comparison: UpdateCounter's guard is
+		// `asserted <= stored && (asserted != 0 || stored != 0)`, which exempts
+		// the always-zero case. That exemption is what keeps synced/platform
+		// passkeys (iCloud Keychain et al., which never implement a counter)
+		// working — a hand-rolled comparison would lock them all out.
+		//
+		// Refused before persistVerifiedCredential and completeLogin so the
+		// clone writes nothing and emits no login.succeeded. The message is the
+		// same generic string as a signature failure on purpose: telling the
+		// caller "your counter is behind" is an oracle for whether they hold
+		// the clone or the original.
+		if verified.Authenticator.CloneWarning {
+			return nil, huma.Error401Unauthorized("passkey verification failed")
+		}
 		// Refuse before persistVerifiedCredential so a deprovisioned account's
 		// credential row is not written to either. completeLogin re-checks at
 		// the choke point; this is the early-out, not the guarantee.
@@ -580,7 +601,11 @@ func (p *passkeyPlugin) handleLoginFinish(host plugin.PluginHost) func(context.C
 			return nil, huma.Error500InternalServerError("unable to update credential")
 		}
 
-		return p.completeLogin(ctx, host, w, r, matchedUser)
+		// verified.Flags.UserVerified is set by go-webauthn from the assertion's
+		// authenticator data (validateLogin -> NewCredentialFlags). It is the
+		// only evidence that a biometric/PIN was collected, and it decides
+		// whether this login may be credited as second-factor-verified.
+		return p.completeLogin(ctx, host, w, r, matchedUser, verified.Flags.UserVerified)
 	}
 }
 
@@ -602,19 +627,28 @@ const loginMethod = "passkey"
 //     Block on login.attempt only (its onSucceeded merely clears state), so
 //     without the attempt event a locked account could still open a session
 //     with its passkey.
-//   - RequireMfa, when Config.SatisfiesMFA is explicitly false. Otherwise
-//     the login.succeeded carries events.MetaMFAVerified, which says
-//     explicitly that the passkey IS the second factor: mfa's gate stands
-//     down instead of minting a challenge nobody would answer, and
-//     observers such as lockout see a COMPLETED login and clear the
-//     failure counter. Silently dropping a RequireMfa decision, as before,
-//     did neither.
+//   - RequireMfa, when Config.SatisfiesMFA is explicitly false OR the
+//     assertion did not perform user verification. Otherwise the
+//     login.succeeded carries events.MetaMFAVerified, which says explicitly
+//     that the passkey IS the second factor: mfa's gate stands down instead
+//     of minting a challenge nobody would answer, and observers such as
+//     lockout see a COMPLETED login and clear the failure counter. Silently
+//     dropping a RequireMfa decision, as before, did neither.
+//
+// uvVerified carries the assertion's UV flag. The MetaMFAVerified marker is
+// an assertion ABOUT THIS LOGIN — "a second factor was collected" — and it
+// used to be stamped on Config.SatisfiesMFA alone, i.e. on a static config
+// value, with nothing in the request ever consulted. A UV=0 assertion proves
+// possession of the authenticator and nothing else, so crediting it as the
+// second factor let a security key lifted from a drawer walk past its
+// owner's enrolled TOTP.
 func (p *passkeyPlugin) completeLogin(
 	ctx context.Context,
 	host plugin.PluginHost,
 	w http.ResponseWriter,
 	r *http.Request,
 	user *domain.User,
+	uvVerified bool,
 ) (*passkeyLoginFinishOutput, error) {
 	// The lifecycle gate lives here, at the single choke point through which
 	// every passkey session is minted, rather than at one call site. It runs
@@ -659,7 +693,15 @@ func (p *passkeyPlugin) completeLogin(
 		IPAddress: ip,
 		Method:    &method,
 	}
-	if p.cfg.satisfiesMFA() {
+	// Both halves are required: the operator must have opted in to "a passkey
+	// is the second factor", AND this particular assertion must actually have
+	// performed user verification. Note this is a CREDIT decision, not a
+	// refusal — a UV=0 assertion is still a perfectly good FIRST factor, so
+	// the login continues and the pipeline decides. For a user with no second
+	// factor enrolled mfa's gate answers Continue and the session is issued
+	// exactly as before; only a user who HAS a second factor gets stepped up,
+	// which is the whole point.
+	if p.cfg.satisfiesMFA() && uvVerified {
 		ev.Metadata = events.MFACompleted()
 	}
 	dec, _ := host.Emit(ctx, ev)
@@ -705,12 +747,19 @@ func (p *passkeyPlugin) persistVerifiedCredential(ctx context.Context, r repo.Re
 		if !bytes.Equal(existing.ID, c.ID) {
 			continue
 		}
-		// The repo interface has no direct "update credential JSON" hook,
-		// but we can re-create with the same id if the backend supports it.
-		// Rather than rewrite the row we update last-used; the sign counter
-		// drift is an acceptable trade-off for the MVP.
-		_ = updated
-		return r.UpdatePasskeyLastUsed(ctx, row.ID, time.Now().UTC())
+		// Write the WHOLE post-assertion credential back, not just
+		// last_used_at. This used to be `_ = updated` — the marshalled
+		// credential was computed and then dropped on the floor — which froze
+		// the stored sign counter at its REGISTRATION value forever. Every
+		// future assertion was then graded against that stale value, so a
+		// cloned authenticator replaying any counter above it always appeared
+		// to "advance" and the CloneWarning check in handleLoginFinish could
+		// never fire. The counter write and the clone refusal are one fix:
+		// either alone is inert.
+		//
+		// UpdatePasskeyCredential writes last_used_at in the same statement,
+		// so the existing bump is preserved.
+		return r.UpdatePasskeyCredential(ctx, row.ID, updated, time.Now().UTC())
 	}
 	return nil
 }

@@ -277,7 +277,21 @@ func newPlugin(t *testing.T) *ssoOIDCPlugin {
 	}
 	// Cooldown=1ns so kid-rollover refetches don't bump against the
 	// rate limiter in the test's < millisecond timing.
-	p, err := New(Config{EncryptionKey: key, StateTTL: 5 * time.Minute, JWKSCacheTTL: time.Minute, JWKSRefreshCooldown: time.Nanosecond})
+	//
+	// AllowPrivateNetworkIdP=true because every login-path fixture in this
+	// package points a connection at an httptest fakeIDP on 127.0.0.1 and
+	// then drives a REAL /sso/login -> /sso/callback round trip through
+	// httpClient(). That client is now safehttp-guarded and refuses loopback
+	// by default (see plugin.go), which is correct for a caller-chosen
+	// discovery_url and exactly what ssrf_test.go pins. The knob is the
+	// supported way to say "this IdP is inside the perimeter" — set here
+	// rather than handing these fixtures an explicit HTTPClient, so they keep
+	// exercising the real client construction rather than routing around it.
+	p, err := New(Config{
+		EncryptionKey: key, StateTTL: 5 * time.Minute,
+		JWKSCacheTTL: time.Minute, JWKSRefreshCooldown: time.Nanosecond,
+		AllowPrivateNetworkIdP: true,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

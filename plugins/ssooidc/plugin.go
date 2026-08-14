@@ -36,8 +36,7 @@ import (
 	"sync"
 	"time"
 
-	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
-
+	"github.com/yackey-labs/yauth/auth/safehttp"
 	"github.com/yackey-labs/yauth/plugin"
 )
 
@@ -76,9 +75,28 @@ type Config struct {
 	JWKSRefreshCooldown time.Duration
 
 	// HTTPClient is the optional HTTP client used for outbound calls
-	// to the IdP (discovery, JWKS, token exchange). nil uses
-	// http.DefaultClient with a 10s timeout applied per-call.
+	// to the IdP (discovery, JWKS, token exchange). nil builds the
+	// egress-guarded default client — see httpClient(). A client supplied
+	// here is used verbatim, guard and all: it is the caller's own
+	// transport and the caller owns its policy.
 	HTTPClient *http.Client
+
+	// AllowPrivateNetworkIdP opts this plugin's outbound IdP calls into
+	// loopback / RFC 1918 destinations.
+	//
+	// A connection's discovery_url is chosen by an ORG admin (org creation is
+	// open to any signed-up user in most deployments), and the server then
+	// dials it: on /test, on every /sso/login, on every /sso/callback, and on
+	// back-channel logout. That makes the server's network position a
+	// primitive the caller aims — at a database bound to loopback, at
+	// anything inside the VPC, at the cloud metadata service. So the default
+	// is FALSE and auth/safehttp refuses the dial.
+	//
+	// Set true when the IdP genuinely lives inside the perimeter — an
+	// in-cluster Keycloak at http://keycloak.identity.svc:8080 is a
+	// first-class deployment shape. Even then 169.254.0.0/16 stays refused;
+	// see safehttp.IsAlwaysDeniedIP.
+	AllowPrivateNetworkIdP bool
 
 	// SelfIssuer is this app's OWN OIDC issuer URL (e.g.
 	// "https://app/api/auth"). When set and an asymmetric signer is registered
@@ -219,22 +237,37 @@ func (p *ssoOIDCPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api hu
 	p.registerBackchannelLogout(host, api, prefix)
 }
 
-// httpClient returns the configured HTTP client or a 10s-timeout
+// httpClient returns the configured HTTP client or the egress-guarded
 // default. The helper exists so tests can swap in an httptest server.
 //
-// The default client's transport is wrapped with otelhttp so the outbound
-// OIDC discovery / JWKS / token-exchange calls emit CLIENT spans and inject
-// the W3C traceparent + baggage (so the IdP-side trace, if any, joins ours).
-// A caller-supplied HTTPClient is used verbatim — instrumenting it is the
-// caller's choice.
+// EVERY outbound call this plugin makes goes through here — discovery, JWKS,
+// the token exchange, the DCR registration POST, the federation-grant
+// redemption — and every one of them is aimed by a destination an admin
+// typed into a connection row. Until this returned a bare
+// &http.Client{Transport: otelhttp.NewTransport(http.DefaultTransport)}, so
+// the only thing standing between "org admin" and "read anything the server
+// can reach" was config.go's "must start with http(s)://" prefix check. An
+// admin set discovery_url = http://127.0.0.1:6379 (or 169.254.169.254) and
+// POSTed .../test, and the route dialled it and echoed the document back.
+//
+// safehttp.Client is yauth's single answer to that shape (the same one the
+// webhook, audit-export and oauth2server jwks_uri fetches use): it resolves
+// the host itself and dials the address it checked, so a DNS-rebinding
+// answer cannot flip between the two, and it caps redirects at 3 — a
+// redirect is otherwise how a public IdP hands the fetch to a private one.
+// safehttp.Client already wraps its transport in otelhttp, so the outbound
+// CLIENT spans and W3C traceparent propagation are unchanged.
+//
+// A caller-supplied HTTPClient is still used VERBATIM. That is the documented
+// escape hatch (see Config.HTTPClient) for a deployment that wants its own
+// transport — proxy, mTLS to the IdP, a test's httptest client — and it is
+// deliberately not second-guessed here; a caller handing us a client has
+// already made the policy decision.
 func (p *ssoOIDCPlugin) httpClient() *http.Client {
 	if p.cfg.HTTPClient != nil {
 		return p.cfg.HTTPClient
 	}
-	return &http.Client{
-		Timeout:   defaultHTTPTimeout,
-		Transport: otelhttp.NewTransport(http.DefaultTransport),
-	}
+	return safehttp.Client(p.cfg.AllowPrivateNetworkIdP, defaultHTTPTimeout, 3)
 }
 
 // jwksCache returns the lazily-initialized process-wide JWKS cache.

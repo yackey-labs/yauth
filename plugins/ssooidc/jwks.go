@@ -146,7 +146,11 @@ func fetchJWKS(ctx context.Context, client *http.Client, url string) (jwk.Set, e
 	req.Header.Set("Accept", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("ssooidc: fetch jwks: %w", err)
+		// errIdPUnreachable for the same reason as fetchDiscovery: the
+		// wrapped transport error names the resolved address and
+		// distinguishes refused/timeout/TLS per host and port, so handlers
+		// collapse this class to a fixed string and log the detail.
+		return nil, fmt.Errorf("%w: %v", errIdPUnreachable, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
@@ -256,7 +260,18 @@ func (c *jwksCache) verifyIDToken(ctx context.Context, jwksURL, rawToken, expect
 		}
 	}
 	verifiedClaims := jwt.MapClaims{}
-	if _, err := jwt.ParseWithClaims(rawToken, verifiedClaims, keyFunc, jwt.WithLeeway(60*time.Second)); err != nil {
+	// WithExpirationRequired because jwt/v5 validates `exp` only when it is
+	// PRESENT: a token carrying no exp claim at all sailed straight through
+	// this parse. OIDC Core 1.0 §2 makes exp REQUIRED in an id_token for the
+	// obvious reason — captured once, an id_token with no expiry is a bearer
+	// credential for that account forever, and this verifier is the entire
+	// trust boundary for an SSO login (everything after it, up to and
+	// including the session, runs on these claims).
+	//
+	// Deliberately NOT applied to verifyLogoutToken below: tolerating an
+	// absent exp there is a documented Back-Channel Logout exception.
+	if _, err := jwt.ParseWithClaims(rawToken, verifiedClaims, keyFunc,
+		jwt.WithLeeway(60*time.Second), jwt.WithExpirationRequired()); err != nil {
 		return nil, fmt.Errorf("ssooidc: verify id_token: %w", err)
 	}
 
@@ -265,8 +280,8 @@ func (c *jwksCache) verifyIDToken(ctx context.Context, jwksURL, rawToken, expect
 		return nil, err
 	}
 
-	// Standard-claim checks beyond exp/iat (already verified by the
-	// jwt library).
+	// Standard-claim checks beyond exp/iat (verified by the jwt library
+	// above, with exp now REQUIRED rather than merely honoured-if-present).
 	if expectedIssuer != "" && out.Issuer != expectedIssuer {
 		return nil, fmt.Errorf("ssooidc: issuer mismatch: got %q want %q", out.Issuer, expectedIssuer)
 	}
@@ -280,6 +295,24 @@ func (c *jwksCache) verifyIDToken(ctx context.Context, jwksURL, rawToken, expect
 		}
 		if !matched {
 			return nil, errors.New("ssooidc: audience mismatch")
+		}
+		// The aud loop is a MEMBERSHIP test — "our client_id appears in the
+		// audience" — not an "issued to us" test. azp is the claim that tells
+		// the two apart, and it was never read. An IdP that mints an id_token
+		// for another relying party and lists our client_id alongside it
+		// produced a token this verifier accepted as though it had been
+		// issued to us, which is a login as that IdP's subject at this app.
+		//
+		// OIDC Core 1.0 §3.1.3.7:
+		//   rule 5 — if azp is present it MUST equal our client_id. This is
+		//     the load-bearing half and it applies at ANY audience count.
+		//   rule 4 — if aud carries more than one value, azp MUST be present.
+		azp, _ := out.Extras["azp"].(string)
+		if azp != "" && azp != expectedAudience {
+			return nil, errors.New("ssooidc: id_token azp names a different relying party")
+		}
+		if azp == "" && len(out.Audience) > 1 {
+			return nil, errors.New("ssooidc: multi-audience id_token has no azp")
 		}
 	}
 	if expectedNonce != "" && out.Nonce != expectedNonce {

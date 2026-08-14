@@ -605,6 +605,12 @@ func addAuthPlugins(builder *YAuthBuilder, cfg *yauthcfg.Config, mailer Mailer, 
 			AllowedRedirectURLs: p.SSOOIDC.AllowedRedirectURLs,
 			SelfIssuer:          p.SSOOIDC.SelfIssuer,
 			SatisfiesMFA:        p.SSOOIDC.SatisfiesMFA,
+			// Off unless the operator says otherwise, same shape as the
+			// webhooks knob above: a connection's discovery_url is chosen by
+			// an org admin and the server then dials it on /test, on every
+			// login and on back-channel logout. In-cluster IdPs set
+			// allow_private_network_idp.
+			AllowPrivateNetworkIdP: p.SSOOIDC.AllowPrivateNetworkIdP,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("yauth: sso_oidc: %w", err)

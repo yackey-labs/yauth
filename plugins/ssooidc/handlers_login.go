@@ -199,6 +199,27 @@ func (p *ssoOIDCPlugin) firstActiveOIDCForOrg(ctx context.Context, host plugin.P
 	return nil, huma.Error404NotFound("no active sso connection for this organization")
 }
 
+// publicIdPFailure logs an outbound-IdP failure and returns a FIXED 502.
+//
+// /sso/login and /sso/callback are public: no session, no admin, anyone who can
+// reach the app. Both used to return huma.Error502BadGateway(err.Error()), and
+// on the callback that error is exchangeCode's
+//
+//	fmt.Errorf("ssooidc: token endpoint returned %d: %s", status, body)
+//
+// carrying up to 1 MiB of the upstream response. Combined with a connection
+// whose discovery document names a token_endpoint inside the perimeter, that
+// made the callback an unauthenticated read of whatever that endpoint answers
+// — and even without a hostile document, the transport error alone narrates
+// which internal hosts and ports are alive. An anonymous caller gets one
+// sentence; the operator gets the detail in the log.
+func publicIdPFailure(ctx context.Context, host plugin.PluginHost, stage string, err error) error {
+	if log := host.Logger(); log != nil {
+		log.WarnContext(ctx, "ssooidc: sso login leg failed", "stage", stage, "err", err)
+	}
+	return huma.Error502BadGateway("the identity provider could not be reached or did not respond correctly")
+}
+
 // --- GET /sso/login ----------------------------------------------------
 
 // registerSsoLogin wires GET {prefix}/sso/login as a public huma-native
@@ -232,7 +253,7 @@ func (p *ssoOIDCPlugin) registerSsoLogin(host plugin.PluginHost, api huma.API, p
 		}
 		disco, err := fetchDiscovery(ctx, p.httpClient(), cfg.DiscoveryURL)
 		if err != nil {
-			return nil, huma.Error502BadGateway(err.Error())
+			return nil, publicIdPFailure(ctx, host, "discovery", err)
 		}
 
 		state, err := generateRandom(32)
@@ -371,7 +392,7 @@ func (p *ssoOIDCPlugin) registerSsoCallback(host plugin.PluginHost, api huma.API
 		}
 		disco, err := fetchDiscovery(ctx, p.httpClient(), cfg.DiscoveryURL)
 		if err != nil {
-			return nil, huma.Error502BadGateway(err.Error())
+			return nil, publicIdPFailure(ctx, host, "discovery", err)
 		}
 
 		// Exchange the code at the IdP token endpoint. Confidential
@@ -386,7 +407,8 @@ func (p *ssoOIDCPlugin) registerSsoCallback(host plugin.PluginHost, api huma.API
 			PKCEVerifier: st.PKCEVerifier,
 		})
 		if err != nil {
-			return nil, huma.Error502BadGateway(err.Error())
+			// This is the one that carried the upstream body verbatim.
+			return nil, publicIdPFailure(ctx, host, "token exchange", err)
 		}
 		if tokenResp.IDToken == "" {
 			return nil, huma.Error502BadGateway("IdP did not return id_token")
@@ -397,7 +419,13 @@ func (p *ssoOIDCPlugin) registerSsoCallback(host plugin.PluginHost, api huma.API
 		claims, err := cache.verifyIDToken(ctx, disco.JWKSURL, tokenResp.IDToken,
 			disco.Issuer, cfg.ClientID, st.Nonce)
 		if err != nil {
-			return nil, huma.Error401Unauthorized(err.Error())
+			// Also fixed text: verifyIDToken's error can be a JWKS FETCH
+			// failure naming the resolved address of disco.JWKSURL, which is
+			// the same read primitive one status code lower.
+			if log := host.Logger(); log != nil {
+				log.WarnContext(ctx, "ssooidc: id_token verification failed", "err", err)
+			}
+			return nil, huma.Error401Unauthorized("the identity provider's id_token could not be verified")
 		}
 
 		// Project claims into a JIT shape.

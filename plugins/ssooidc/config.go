@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/yackey-labs/yauth/auth"
+	"github.com/yackey-labs/yauth/auth/safehttp"
 )
 
 // ClaimMappings selects which claim names yauth pulls from the IdP's
@@ -154,8 +155,21 @@ func (c *OidcConnectionConfig) validate() error {
 	if strings.TrimSpace(c.DiscoveryURL) == "" {
 		return errors.New("ssooidc: discovery_url is required")
 	}
-	if !strings.HasPrefix(c.DiscoveryURL, "https://") && !strings.HasPrefix(c.DiscoveryURL, "http://") {
-		return errors.New("ssooidc: discovery_url must be an absolute URL")
+	// Structural URL check only, and deliberately with allowPrivate=TRUE.
+	//
+	// It refuses what can never be a legitimate IdP however the deployment is
+	// configured: a non-http(s) scheme, a URL with no host, and a link-local
+	// literal (169.254.0.0/16 is the cloud metadata service and is never an
+	// IdP). It does NOT refuse private addresses, because validate() is the
+	// chokepoint for EVERY config write — create, PATCH, SeedConnection,
+	// Federate — and it is a method on the config struct with no view of the
+	// plugin's AllowPrivateNetworkIdP. Refusing private addresses here would
+	// make a literal in-cluster IdP address unconfigurable even with the knob
+	// on, and would make a scopes-only PATCH of a pre-existing row start
+	// failing. Where the destination is allowed to live is a dial-time
+	// question, answered once by httpClient()/safehttp.Client.
+	if err := safehttp.ValidateDestinationURL(strings.TrimSpace(c.DiscoveryURL), true); err != nil {
+		return fmt.Errorf("ssooidc: discovery_url: %w", err)
 	}
 	if strings.TrimSpace(c.ClientID) == "" {
 		return errors.New("ssooidc: client_id is required")

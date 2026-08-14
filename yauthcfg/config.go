@@ -555,6 +555,13 @@ type SSOOIDCPluginConfig struct {
 	// and cannot carry a challenge, a step-up then fails closed with 403
 	// and no session.
 	SatisfiesMFA *bool `yaml:"satisfies_mfa,omitempty" toml:"satisfies_mfa,omitempty" doc:"Treat the upstream IdP's authentication as the second factor. nil = true — the usual reason an org buys SSO. false fails the login closed with 403 — the callback is a browser redirect and cannot carry an MFA challenge."`
+
+	// AllowPrivateNetworkIdP opts the outbound IdP calls into loopback /
+	// RFC 1918 destinations. See ssooidc.Config.AllowPrivateNetworkIdP: a
+	// connection's discovery_url is chosen by an ORG admin and then dialled
+	// by the server on /test, on every login and on back-channel logout, so
+	// the default is off. Turn it on for an in-cluster IdP.
+	AllowPrivateNetworkIdP bool `yaml:"allow_private_network_idp,omitempty" toml:"allow_private_network_idp,omitempty" doc:"Permit SSO connections whose IdP is on a loopback / RFC 1918 address (an in-cluster Keycloak at http://keycloak.identity.svc:8080). Omitted means false: a connection's discovery_url is chosen by an org admin and then dialled by the server, so a private destination is refused at dial time. The cloud metadata range 169.254.0.0/16 stays refused either way."`
 }
 
 // WebhooksPluginConfig configures outbound webhook delivery. Per-webhook HMAC

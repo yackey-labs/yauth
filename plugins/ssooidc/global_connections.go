@@ -250,6 +250,12 @@ func (p *ssoOIDCPlugin) registerGlobalConnectionRoutes(host plugin.PluginHost, a
 				len(req.OIDC.ClaimMappings.GroupToRole) > 0 {
 				merged.ClaimMappings = req.OIDC.ClaimMappings.merged()
 			}
+			// Same guard as the org-scoped twin, from the same helper: this
+			// merge is the second copy of the secret-repoint path, and a fix
+			// applied to only one of them leaves the hole open here.
+			if err := requireFreshSecretOnRepoint(cur, merged, req.OIDC); err != nil {
+				return nil, huma.Error400BadRequest(err.Error())
+			}
 			raw, err := marshalOidcConfig(p.cfg.EncryptionKey, merged)
 			if err != nil {
 				return nil, huma.Error400BadRequest(err.Error())
@@ -325,15 +331,18 @@ func (p *ssoOIDCPlugin) registerGlobalConnectionRoutes(host plugin.PluginHost, a
 		}
 		tctx, cancel := context.WithTimeout(ctx, defaultHTTPTimeout)
 		defer cancel()
+		// Bounded messages + a server-side log, exactly as the org-scoped twin
+		// does: err.Error() here named the resolved address and turned an
+		// install admin's /test into a network scanner.
 		disco, err := fetchDiscovery(tctx, p.httpClient(), cfg.DiscoveryURL)
 		if err != nil {
-			return nil, huma.Error502BadGateway(err.Error())
+			return nil, huma.Error502BadGateway(idpFetchMessage(ctx, host, "discovery", err))
 		}
 		keyCount := 0
 		if disco.JWKSURL != "" {
 			set, err := fetchJWKS(tctx, p.httpClient(), disco.JWKSURL)
 			if err != nil {
-				return nil, huma.Error502BadGateway(err.Error())
+				return nil, huma.Error502BadGateway(idpFetchMessage(ctx, host, "jwks", err))
 			}
 			keyCount = set.Len()
 		}

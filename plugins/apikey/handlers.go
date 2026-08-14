@@ -28,6 +28,49 @@ func reqFromCtx(ctx context.Context) (*http.Request, error) {
 	return r, nil
 }
 
+// auditAPIKeyEvent writes one API-key lifecycle row through the audit
+// choke point, so it is both persisted and handed to the host's audit
+// recorders (audit-export's outbox). Errors are swallowed on purpose: a
+// key was minted or revoked, and an unhappy audit store must not turn that
+// into a 500 the caller retries.
+//
+// The actor is au.User.ID, which is the human for a user principal and the
+// key's creator for a service account (domain.AuthUser.Principal
+// synthesises it from CreatedBy). actor_kind carries the distinction, so a
+// key minted BY a machine is never mistaken for one a person asked for.
+func auditAPIKeyEvent(ctx context.Context, host plugin.PluginHost, event string, au *domain.AuthUser, r *http.Request, fields map[string]any) {
+	if au == nil {
+		return
+	}
+	meta := map[string]any{"actor_kind": actorKind(au)}
+	for k, v := range fields {
+		meta[k] = v
+	}
+	raw, _ := json.Marshal(meta)
+	uid := au.User.ID
+	var ip *string
+	if r != nil {
+		ip = middleware.RequestIP(r)
+	}
+	_ = plugin.WriteAudit(ctx, host, domain.NewAuditLog{
+		ID:        uuid.NewString(),
+		UserID:    &uid,
+		EventType: event,
+		Metadata:  raw,
+		IPAddress: ip,
+		CreatedAt: time.Now().UTC(),
+	})
+}
+
+// actorKind reports whether the caller acted as a human or as a service
+// account, for the audit row.
+func actorKind(au *domain.AuthUser) string {
+	if au.Principal.IsServiceAccount() {
+		return "service_account"
+	}
+	return "user"
+}
+
 // apiKeyJSON is the JSON shape returned by the management endpoints. It
 // deliberately omits any secret material — only the prefix and metadata.
 type apiKeyJSON struct {
@@ -218,6 +261,30 @@ func parsePositiveInt(s string) (int, error) {
 
 // --- POST /api-keys -----------------------------------------------------
 
+const (
+	// MaxExpiresInDays bounds expires_in_days on every key-creating route
+	// (this one and the org-scoped one in plugins/organizations, which
+	// reuses the constant).
+	//
+	// The lifetime is computed as time.Duration(days) * 24 * time.Hour,
+	// which is int64 nanoseconds and WRAPS above roughly 106,751 days:
+	// expires_in_days=200000 answered 201, handed back a plaintext secret,
+	// and stored an expires_at in 1989 — a credential dead on arrival, with
+	// nothing in the response to say so.
+	//
+	// The bound is 100 years rather than a tidier ten because no maximum
+	// was ever documented (not in openapi.json, not in the generated
+	// clients) and a request that works today must keep working: a 20-year
+	// service key is unusual, not invalid. This refuses only values that
+	// were already broken, with three orders of magnitude of headroom below
+	// the wrap.
+	MaxExpiresInDays = 36500
+
+	// ExpiresInDaysRangeMsg is the 400 detail for an out-of-range value,
+	// shared so both key-creating routes answer identically.
+	ExpiresInDaysRangeMsg = "expires_in_days must be between 1 and 36500"
+)
+
 type createRequest struct {
 	Name          string   `json:"name"`
 	Scopes        []string `json:"scopes,omitempty"`
@@ -269,6 +336,10 @@ func (p *apiKeyPlugin) registerCreate(host plugin.PluginHost, api huma.API, mw *
 		Security:      apiKeySecurity(),
 		DefaultStatus: http.StatusCreated,
 		Middlewares: huma.Middlewares{
+			// Stashed so the audit row below can carry the client IP that
+			// minted the key. Middlewares are absent from the OpenAPI
+			// document, and the typed Body still auto-derives its schema.
+			middleware.StashHTTPHuma(api),
 			middleware.RequireAuthHuma(api, mw),
 			middleware.RejectMachineCredentialHuma(api),
 		},
@@ -280,6 +351,10 @@ func (p *apiKeyPlugin) registerCreate(host plugin.PluginHost, api huma.API, mw *
 		if err := requireUserPrincipal(au); err != nil {
 			return nil, err
 		}
+		r, err := reqFromCtx(ctx)
+		if err != nil {
+			return nil, err
+		}
 		req := in.Body
 		req.Name = strings.TrimSpace(req.Name)
 		if req.Name == "" {
@@ -289,6 +364,9 @@ func (p *apiKeyPlugin) registerCreate(host plugin.PluginHost, api huma.API, mw *
 		if req.ExpiresInDays != nil {
 			if *req.ExpiresInDays <= 0 {
 				return nil, huma.Error400BadRequest("expires_in_days must be positive")
+			}
+			if *req.ExpiresInDays > MaxExpiresInDays {
+				return nil, huma.Error400BadRequest(ExpiresInDaysRangeMsg)
 			}
 			t := time.Now().UTC().Add(time.Duration(*req.ExpiresInDays) * 24 * time.Hour)
 			expiresAt = &t
@@ -326,6 +404,24 @@ func (p *apiKeyPlugin) registerCreate(host plugin.PluginHost, api huma.API, mw *
 		if err := repo.CreateAPIKey(ctx, input); err != nil {
 			return nil, huma.Error500InternalServerError("unable to store api key")
 		}
+
+		// Minting a key is a persistence primitive — a bearer credential
+		// that authenticates as its owner on every route and, by default,
+		// never expires — and it used to leave exactly the footprint of a
+		// GET: none. An attacker who held a session for five minutes could
+		// issue themselves a standing credential and the audit log showed
+		// only the login. Every other credential lifecycle in the tree
+		// (password change, admin ban, SCIM deprovision) writes a row.
+		//
+		// credential_id, not key_id: the host's scrubber redacts any
+		// metadata key containing "key", and while WriteAudit does not
+		// scrub, keeping the field name clear of that fragment means the row
+		// reads the same wherever it is copied. Only the id and the public
+		// prefix go in — never the plaintext secret and never its hash.
+		auditAPIKeyEvent(ctx, host, "apikey.created", au, r, map[string]any{
+			"credential_id": input.ID,
+			"prefix":        input.KeyPrefix,
+		})
 
 		return &createOutput{Body: createResponse{
 			APIKey: apiKeyJSON{
@@ -395,6 +491,8 @@ func (p *apiKeyPlugin) registerDelete(host plugin.PluginHost, api huma.API, mw *
 		Security:      apiKeySecurity(),
 		DefaultStatus: http.StatusNoContent,
 		Middlewares: huma.Middlewares{
+			// Stashed for the audit row's client IP, as on create.
+			middleware.StashHTTPHuma(api),
 			middleware.RequireAuthHuma(api, mw),
 			middleware.RejectMachineCredentialHuma(api),
 		},
@@ -404,6 +502,10 @@ func (p *apiKeyPlugin) registerDelete(host plugin.PluginHost, api huma.API, mw *
 			return nil, huma.Error401Unauthorized("not authenticated")
 		}
 		if err := requireUserPrincipal(au); err != nil {
+			return nil, err
+		}
+		r, err := reqFromCtx(ctx)
+		if err != nil {
 			return nil, err
 		}
 
@@ -425,6 +527,12 @@ func (p *apiKeyPlugin) registerDelete(host plugin.PluginHost, api huma.API, mw *
 			}
 			return nil, huma.Error500InternalServerError("unable to delete api key")
 		}
+		// The mirror of the mint row: without it there is no record of WHEN
+		// a credential stopped being valid, which is the first question
+		// asked about a key that turns up in a leak.
+		auditAPIKeyEvent(ctx, host, "apikey.revoked", au, r, map[string]any{
+			"credential_id": in.ID,
+		})
 		return &emptyOutput{}, nil
 	})
 }

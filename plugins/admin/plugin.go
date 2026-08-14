@@ -108,14 +108,22 @@ func New(cfg ...Config) plugin.Plugin {
 func (p *adminPlugin) Name() string { return "admin" }
 
 // Routes implements plugin.Plugin. Every admin route is huma-native: a typed
-// operation guarded by RequireAdminHuma. Operations whose handler needs the
-// underlying *http.Request / http.ResponseWriter (custom query precedence,
-// RequestIP for audit rows, response-side cookie writes) also chain
-// StashHTTPHuma (see adminGuards); the write-ops that only parse a JSON body use
-// a native huma typed Body (so the request schema auto-derives) and the
-// stash-free guard chain (see adminGuardsNoStash). The mux is retained in the
-// signature for plugins that still register raw net/http routes; admin no
-// longer uses it.
+// operation guarded by RequireAdminHuma, chained after StashHTTPHuma (see
+// adminGuards) so the handler can reach the underlying *http.Request /
+// http.ResponseWriter for custom query precedence, RequestIP on the audit
+// row, and response-side cookie writes.
+//
+// There used to be a second, stash-free chain for the write-ops that only
+// parse a JSON body. It came off when create-user, patch-user and
+// schedule-start started writing audit rows: an admin row without the
+// acting client's IP is a materially weaker record, and the stash is what
+// makes middleware.RequestIP work. Middlewares are not part of the OpenAPI
+// document (huma tags Operation.Middlewares `yaml:"-"` and omits it from
+// MarshalJSON), and a typed Body still auto-derives its schema underneath
+// the stash — registerBanUser has always paired the two.
+//
+// The mux is retained in the signature for plugins that still register raw
+// net/http routes; admin no longer uses it.
 func (p *adminPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.API, prefix string) {
 	mw := host.Middleware()
 
@@ -139,22 +147,13 @@ func (p *adminPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma
 	p.registerListAudit(host, api, mw, prefix)
 }
 
-// adminGuards is the per-operation middleware chain for admin routes whose
-// handler still needs the raw request/writer: stash the raw request/writer,
-// then require an admin identity. Used by the GETs (custom query parsing) and
-// the write-ops that read RequestIP for audit rows or write a Set-Cookie.
+// adminGuards is the per-operation middleware chain for every admin route:
+// stash the raw request/writer, then require an admin identity. Used by the
+// GETs (custom query parsing) and by the write-ops, which read RequestIP for
+// their audit rows or write a Set-Cookie.
 func adminGuards(api huma.API, mw *middleware.Middleware) huma.Middlewares {
 	return huma.Middlewares{
 		middleware.StashHTTPHuma(api),
-		middleware.RequireAdminHuma(api, mw),
-	}
-}
-
-// adminGuardsNoStash is the guard chain for write-ops that parse their request
-// body via a native huma typed Body and need nothing else off the raw request.
-// Dropping StashHTTPHuma lets the request schema auto-derive from the Body type.
-func adminGuardsNoStash(api huma.API, mw *middleware.Middleware) huma.Middlewares {
-	return huma.Middlewares{
 		middleware.RequireAdminHuma(api, mw),
 	}
 }

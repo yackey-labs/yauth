@@ -544,7 +544,11 @@ func logClientAuditEvent(r *http.Request, host plugin.PluginHost, eventType, cli
 		meta[k] = v
 	}
 	raw, _ := json.Marshal(meta)
-	_ = host.Repo().LogAuditEvent(r.Context(), domain.NewAuditLog{
+	// WriteAudit, not LogAuditEvent: client secret rotations, bans and
+	// public-key swaps are exactly the rows a SIEM is watching for, and
+	// writing straight to the repo skipped the recorder hook that feeds
+	// audit export.
+	_ = plugin.WriteAudit(r.Context(), host, domain.NewAuditLog{
 		ID:        uuid.NewString(),
 		EventType: eventType,
 		Metadata:  raw,

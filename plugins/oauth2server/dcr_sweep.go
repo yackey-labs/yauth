@@ -46,7 +46,11 @@ func (p *oauth2Plugin) sweepStaleClients(host plugin.PluginHost) {
 		"client_ids": swept,
 		"cutoff":     cutoff,
 	})
-	_ = host.Repo().LogAuditEvent(ctx, domain.NewAuditLog{
+	// WriteAudit, not LogAuditEvent, so the sweep is exported like every
+	// other audit row. Note this is the one caller with no request behind
+	// it — a background goroutine — which is why AuditRecorder's contract
+	// spells out that recorders must not assume a request context.
+	_ = plugin.WriteAudit(ctx, host, domain.NewAuditLog{
 		ID:        uuid.NewString(),
 		EventType: "oauth2.client.swept",
 		Metadata:  meta,

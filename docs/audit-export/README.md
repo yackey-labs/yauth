@@ -31,6 +31,26 @@ matching destination. Because every credential plugin already funnels its
 lifecycle through `Emit`, that covers all of them at once — including
 plugins written later.
 
+Rows a **handler** writes itself — administrative actions, which never pass
+through `Emit` — reach the same recorder via `plugin.WriteAudit`. They used
+not to: they were written straight to the table and delivered nowhere, so a
+SIEM streaming yauth received every login and not one ban, impersonation,
+SCIM deprovision or client-secret rotation. If your destination filters on
+an **allow-list of event types**, widen it — these types are new to the
+exported stream even though most of them have been in the table for
+releases:
+
+| Event | Written by |
+|---|---|
+| `admin.ban`, `admin.unban`, `admin.suspend`, `admin.unsuspend`, `admin.impersonation`, `admin.user.deleted`, `admin.session.terminated` | admin plugin (previously table-only) |
+| `admin.user_created`, `admin.user_updated`, `admin.schedule_start`, `admin.sessions_revoked` | admin plugin (**new rows** — these four mutations wrote nothing at all; `admin.user_updated` carries `role_from`/`role_to` so a privilege grant is legible without diffing the users table) |
+| `apikey.created`, `apikey.revoked`, `apikey.rotated` | **new rows** — personal keys (`plugins/apikey`) and org-scoped service accounts (`plugins/organizations`). Metadata carries `credential_id`, the public `prefix`, `actor_kind` and, for org keys, `organization_id` + `role`. Never the secret or its hash. |
+| `oauth2.client.registered`, `oauth2.client.banned_rejected`, `oauth2.client.swept`, and the client-admin rows | oauth2-server plugin (previously table-only) |
+| `scim.*` | SCIM plugin (previously table-only) |
+| `session_ip_mismatch*`, `session_ua_mismatch*` | middleware session binding (previously table-only) |
+
+The `Emit`-sourced half of the trail is unchanged:
+
 | Event | Recorded |
 |---|---|
 | `login.succeeded`, `login.failed`, `logout` | Always |
@@ -45,8 +65,15 @@ refused is never exported as a plain success. Recorders run whatever the
 decision, which an `events.Handler` could not do — a gate's `Block`
 short-circuits the handler stage.
 
-MFA enrolment and API-key minting emit no `AuthEvent` today, so they are not
-in the trail; they need an emission at the point of enrolment/mint first.
+`user.unbanned` and `user.unsuspended` are emitted by the admin plugin's
+unban/unsuspend routes, so a subscriber that reacted to `user.banned` now
+sees the account come back up. SCIM reactivation still emits nothing.
+
+MFA enrolment emits no `AuthEvent` today, so it is not in the trail; it needs
+an emission at the point of enrolment first. API-key minting is now covered,
+but by a handler-authored `apikey.created` row rather than an `AuthEvent` —
+it is in the export stream, not in the event pipeline, so an `events.Handler`
+still does not see it.
 
 ### Resolver-level failures are deliberately out of scope
 
@@ -80,7 +107,12 @@ than one with a documented scope.
   and the free-form `Metadata` map is scrubbed: any key containing
   `password`, `token`, `secret`, `code`, `key`, `hash`, `otp`, `recovery`,
   `credential`, `signature` (and similar) has its **value** replaced with
-  `[redacted]` while the key stays visible.
+  `[redacted]` while the key stays visible. The scrubber runs on `Emit`
+  metadata, which originates in a request; handler-authored rows
+  (`plugin.WriteAudit`) are assembled in Go and are not scrubbed, so their
+  authors are responsible for never putting a secret in one — which is why
+  the API-key rows carry `credential_id` and the public `prefix` and nothing
+  else about the credential.
 - No control characters. `email`, `method` and `reason` are
   attacker-influenced — `email` is literally whatever was typed into a login
   form — and the RFC 5424 formatter would happily emit an embedded newline

@@ -132,6 +132,19 @@ func reqFromCtx(ctx context.Context) (*http.Request, error) {
 	return r, nil
 }
 
+// requestUA returns the request's User-Agent for the session row, or nil
+// when the client sent none. Each plugin that issues a session keeps its
+// own copy of this three-liner by design (emailpassword, magiclink, mfa,
+// oauth, passkey, ssooidc, ssosaml all have one) rather than importing
+// across plugin boundaries.
+func requestUA(r *http.Request) *string {
+	ua := r.UserAgent()
+	if ua == "" {
+		return nil
+	}
+	return &ua
+}
+
 // --- GET /admin/users -----------------------------------------------------
 
 type listUsersResponse struct {
@@ -254,8 +267,12 @@ func (p *adminPlugin) registerCreateUser(host plugin.PluginHost, api huma.API, m
 		Tags:          []string{"admin"},
 		Security:      []map[string][]string{{"sessionCookie": {}}},
 		DefaultStatus: http.StatusCreated,
-		Middlewares:   adminGuardsNoStash(api, mw),
+		Middlewares:   adminGuards(api, mw),
 	}, func(ctx context.Context, in *adminCreateUserInput) (*output, error) {
+		r, err := reqFromCtx(ctx)
+		if err != nil {
+			return nil, err
+		}
 		req := in.Body
 		email := strings.ToLower(strings.TrimSpace(req.Email))
 		if email == "" {
@@ -342,6 +359,30 @@ func (p *adminPlugin) registerCreateUser(host plugin.PluginHost, api huma.API, m
 			return nil, huma.Error500InternalServerError("unable to store credential")
 		}
 
+		// Provisioning an account is an admin mutation like any other, and
+		// it was one of the four that wrote nothing. Ban, unban, suspend,
+		// unsuspend, impersonate, delete-user and delete-session all left a
+		// row, so an investigator reading GET /admin/audit saw a
+		// trail that looked complete while an account — possibly with
+		// role=admin, possibly with a password the admin chose and knows —
+		// had appeared out of nowhere. `generated` records whether the
+		// credential was yauth-generated (returned once) or admin-supplied;
+		// the password itself is never recorded, generated or not.
+		meta, _ := json.Marshal(map[string]any{
+			"admin_id":  actorIDFromContext(ctx),
+			"email":     u.Email,
+			"role":      u.Role,
+			"generated": generated,
+		})
+		_ = plugin.WriteAudit(ctx, host, domain.NewAuditLog{
+			ID:        newID(),
+			UserID:    &u.ID,
+			EventType: "admin.user_created",
+			Metadata:  meta,
+			IPAddress: middleware.RequestIP(r),
+			CreatedAt: now,
+		})
+
 		out := adminCreateUserResponse{User: toUserJSON(u)}
 		if generated {
 			out.Password = password
@@ -390,10 +431,27 @@ func (p *adminPlugin) registerPatchUser(host plugin.PluginHost, api huma.API, mw
 		Summary:     "Update a user (partial)",
 		Tags:        []string{"admin"},
 		Security:    []map[string][]string{{"sessionCookie": {}}},
-		Middlewares: adminGuardsNoStash(api, mw),
+		Middlewares: adminGuards(api, mw),
 	}, func(ctx context.Context, in *patchUserInput) (*userOutput, error) {
+		r, err := reqFromCtx(ctx)
+		if err != nil {
+			return nil, err
+		}
 		req := in.Body
 		now := time.Now().UTC()
+
+		// A role change is a privilege grant, and the audit row has to make
+		// it legible on its own — "role_from=user, role_to=admin", not a
+		// diff an investigator has to reconstruct from two snapshots of the
+		// users table. That needs the PRE-update role, so read it first, and
+		// only when Role is actually in the patch (the common display-name
+		// edit keeps its single write).
+		var roleFrom string
+		if req.Role != nil {
+			if before, err := host.Repo().GetUserByID(ctx, in.ID); err == nil && before != nil {
+				roleFrom = before.Role
+			}
+		}
 
 		changes := domain.UpdateUser{UpdatedAt: &now}
 		if req.DisplayName != nil {
@@ -439,6 +497,35 @@ func (p *adminPlugin) registerPatchUser(host plugin.PluginHost, api huma.API, mw
 			}
 			u.MustChangePassword = *req.MustChangePassword
 		}
+
+		// The gap that mattered most: PATCH {"role":"admin"} passed straight
+		// into domain.UpdateUser and left no trace whatsoever, while ban,
+		// unban, suspend, unsuspend, impersonate and delete all wrote rows.
+		// A stolen admin session could hand itself a second, quieter admin
+		// account and the log kept reading as complete.
+		fields := map[string]any{"admin_id": actorIDFromContext(ctx)}
+		if req.Role != nil {
+			fields["role_from"] = roleFrom
+			fields["role_to"] = u.Role
+		}
+		if req.DisplayName != nil {
+			fields["display_name_changed"] = true
+		}
+		if req.EmailVerified != nil {
+			fields["email_verified"] = *req.EmailVerified
+		}
+		if req.MustChangePassword != nil {
+			fields["must_change_password"] = *req.MustChangePassword
+		}
+		meta, _ := json.Marshal(fields)
+		_ = plugin.WriteAudit(ctx, host, domain.NewAuditLog{
+			ID:        newID(),
+			UserID:    &u.ID,
+			EventType: "admin.user_updated",
+			Metadata:  meta,
+			IPAddress: middleware.RequestIP(r),
+			CreatedAt: now,
+		})
 		return &userOutput{Body: toUserJSON(u)}, nil
 	})
 }
@@ -525,13 +612,20 @@ func (p *adminPlugin) registerBanUser(host plugin.PluginHost, api huma.API, mw *
 		_, _ = host.Repo().RevokeAllUserRefreshTokens(ctx, id)
 
 		// Audit log: admin.ban with the acting admin's id.
+		//
+		// Written through plugin.WriteAudit, not host.Repo().LogAuditEvent —
+		// as is every audit row in this file. LogAuditEvent only inserts the
+		// row; WriteAudit also hands it to the host's audit recorders, which
+		// is the sole feed for audit-export's outbox. Every one of these rows
+		// used to be invisible to a SIEM while logins streamed to it
+		// perfectly, so the exported trail read as complete.
 		actorID := actorIDFromContext(ctx)
 		meta, _ := json.Marshal(map[string]any{
 			"admin_id": actorID,
 			"reason":   req.Reason,
 			"until":    req.Until,
 		})
-		_ = host.Repo().LogAuditEvent(ctx, domain.NewAuditLog{
+		_ = plugin.WriteAudit(ctx, host, domain.NewAuditLog{
 			ID:        newID(),
 			UserID:    &u.ID,
 			EventType: "admin.ban",
@@ -591,13 +685,30 @@ func (p *adminPlugin) registerUnbanUser(host plugin.PluginHost, api huma.API, mw
 
 		actorID := actorIDFromContext(ctx)
 		meta, _ := json.Marshal(map[string]any{"admin_id": actorID})
-		_ = host.Repo().LogAuditEvent(ctx, domain.NewAuditLog{
+		_ = plugin.WriteAudit(ctx, host, domain.NewAuditLog{
 			ID:        newID(),
 			UserID:    &u.ID,
 			EventType: "admin.unban",
 			Metadata:  meta,
 			IPAddress: middleware.RequestIP(r),
 			CreatedAt: now,
+		})
+		// Emit the inverse of the ban event. events.EventUserUnbanned has
+		// existed since the event package was written and nothing in the
+		// tree emitted it, so a webhook subscriber that reacted to
+		// user.banned — disabling a downstream account, paging a human —
+		// watched accounts go down and never saw one come back up.
+		// docs/audit-export/README.md has always documented the pair.
+		//
+		// This is not a back-channel logout: bclEventHandler.Handle switches
+		// on EventUserBanned/EventUserSuspended only, so the inverse falls
+		// through untouched. Like ban, the unban now produces TWO audit rows
+		// (admin.unban here plus user.unbanned via the host's Emit path) —
+		// the symmetry is the point.
+		uid := u.ID
+		_, _ = host.Emit(ctx, events.AuthEvent{
+			Type: events.EventUserUnbanned, UserID: &uid,
+			IPAddress: middleware.RequestIP(r), Timestamp: now,
 		})
 
 		return &userOutput{Body: toUserJSON(u)}, nil
@@ -669,7 +780,7 @@ func (p *adminPlugin) registerSuspendUser(host plugin.PluginHost, api huma.API, 
 		_, _ = host.Repo().RevokeAllUserRefreshTokens(ctx, id)
 
 		meta, _ := json.Marshal(map[string]any{"admin_id": actorIDFromContext(ctx), "reason": reason})
-		_ = host.Repo().LogAuditEvent(ctx, domain.NewAuditLog{
+		_ = plugin.WriteAudit(ctx, host, domain.NewAuditLog{
 			ID: newID(), UserID: &u.ID, EventType: "admin.suspend", Metadata: meta,
 			IPAddress: middleware.RequestIP(r), CreatedAt: now,
 		})
@@ -716,9 +827,19 @@ func (p *adminPlugin) registerUnsuspendUser(host plugin.PluginHost, api huma.API
 			return nil, huma.Error500InternalServerError("unable to reactivate user")
 		}
 		meta, _ := json.Marshal(map[string]any{"admin_id": actorIDFromContext(ctx)})
-		_ = host.Repo().LogAuditEvent(ctx, domain.NewAuditLog{
+		_ = plugin.WriteAudit(ctx, host, domain.NewAuditLog{
 			ID: newID(), UserID: &u.ID, EventType: "admin.unsuspend", Metadata: meta,
 			IPAddress: middleware.RequestIP(r), CreatedAt: now,
+		})
+		// The inverse of the suspend event, for the same reason unban emits
+		// one: a subscriber that reacted to user.suspended by offboarding
+		// the account downstream had no signal that the account was
+		// reinstated. Note SCIM reactivation (plugins/scim) still emits
+		// nothing — this closes the admin path only.
+		uid := u.ID
+		_, _ = host.Emit(ctx, events.AuthEvent{
+			Type: events.EventUserUnsuspended, UserID: &uid,
+			IPAddress: middleware.RequestIP(r), Timestamp: now,
 		})
 		return &userOutput{Body: toUserJSON(u)}, nil
 	})
@@ -748,8 +869,12 @@ func (p *adminPlugin) registerScheduleStart(host plugin.PluginHost, api huma.API
 		Summary:     "Set/clear staged activation (activates_at)",
 		Tags:        []string{"admin"},
 		Security:    []map[string][]string{{"sessionCookie": {}}},
-		Middlewares: adminGuardsNoStash(api, mw),
+		Middlewares: adminGuards(api, mw),
 	}, func(ctx context.Context, in *scheduleStartInput) (*userOutput, error) {
+		r, err := reqFromCtx(ctx)
+		if err != nil {
+			return nil, err
+		}
 		req := in.Body
 		id := in.ID
 		now := time.Now().UTC()
@@ -769,6 +894,21 @@ func (p *adminPlugin) registerScheduleStart(host plugin.PluginHost, api huma.API
 			}
 			return nil, huma.Error500InternalServerError("unable to schedule start")
 		}
+		// Staged activation decides WHEN an account may sign in, so pushing
+		// activates_at forward is a lockout and clearing it is an immediate
+		// grant of access. Neither left a row.
+		meta, _ := json.Marshal(map[string]any{
+			"admin_id":     actorIDFromContext(ctx),
+			"activates_at": at,
+		})
+		_ = plugin.WriteAudit(ctx, host, domain.NewAuditLog{
+			ID:        newID(),
+			UserID:    &u.ID,
+			EventType: "admin.schedule_start",
+			Metadata:  meta,
+			IPAddress: middleware.RequestIP(r),
+			CreatedAt: now,
+		})
 		return &userOutput{Body: toUserJSON(u)}, nil
 	})
 }
@@ -815,14 +955,25 @@ func (p *adminPlugin) registerImpersonate(host plugin.PluginHost, api huma.API, 
 			return nil, huma.Error500InternalServerError("unable to load user")
 		}
 
-		raw, _, err := auth.IssueSession(ctx, host.Repo(), target.ID, middleware.RequestIP(r), nil, host.SessionTTL())
+		// The User-Agent used to be a literal nil here while every other
+		// session-issuing site in the tree passes the request's UA.
+		// middleware.enforceBinding is guarded on
+		// `m.cfg.BindUA && sess.UserAgent != nil`, so a NULL user_agent
+		// column silently exempted this session from UA binding for its
+		// whole life: on a deployment running bind_ua with
+		// ua_mismatch_action=invalidate, the impersonation cookie — a live
+		// credential for someone else's account — was the one session type
+		// that could be replayed from any client, while every password
+		// login was refused. The admin's UA is the right value: the
+		// Set-Cookie below goes to the admin's browser.
+		raw, _, err := auth.IssueSession(ctx, host.Repo(), target.ID, middleware.RequestIP(r), requestUA(r), host.SessionTTL())
 		if err != nil {
 			return nil, huma.Error500InternalServerError("unable to issue session")
 		}
 
 		actorID := actorIDFromContext(ctx)
 		meta, _ := json.Marshal(map[string]any{"admin_id": actorID})
-		_ = host.Repo().LogAuditEvent(ctx, domain.NewAuditLog{
+		_ = plugin.WriteAudit(ctx, host, domain.NewAuditLog{
 			ID:        newID(),
 			UserID:    &target.ID,
 			EventType: "admin.impersonation",
@@ -861,10 +1012,32 @@ func (p *adminPlugin) registerDeleteUserSessions(host plugin.PluginHost, api hum
 		Security:    []map[string][]string{{"sessionCookie": {}}},
 		Middlewares: adminGuards(api, mw),
 	}, func(ctx context.Context, in *idInput) (*deleteSessionsOutput, error) {
+		r, err := reqFromCtx(ctx)
+		if err != nil {
+			return nil, err
+		}
 		n, err := host.Repo().DeleteUserSessions(ctx, in.ID)
 		if err != nil {
 			return nil, huma.Error500InternalServerError("unable to delete sessions")
 		}
+		// DELETE /admin/sessions/{id} writes admin.session.terminated for a
+		// single session; revoking EVERY session for a user — the same
+		// action at scale, and a plausible cover for evicting a victim
+		// mid-investigation — wrote nothing. `revoked` carries the count so
+		// the row is useful without a join.
+		meta, _ := json.Marshal(map[string]any{
+			"admin_id": actorIDFromContext(ctx),
+			"revoked":  n,
+		})
+		uid := in.ID
+		_ = plugin.WriteAudit(ctx, host, domain.NewAuditLog{
+			ID:        newID(),
+			UserID:    &uid,
+			EventType: "admin.sessions_revoked",
+			Metadata:  meta,
+			IPAddress: middleware.RequestIP(r),
+			CreatedAt: time.Now().UTC(),
+		})
 		return &deleteSessionsOutput{Body: deleteSessionsResponse{Deleted: n}}, nil
 	})
 }
@@ -933,7 +1106,7 @@ func (p *adminPlugin) registerDeleteUser(host plugin.PluginHost, api huma.API, m
 			"deleted_user": id,
 			"reason":       reason,
 		})
-		_ = host.Repo().LogAuditEvent(ctx, domain.NewAuditLog{
+		_ = plugin.WriteAudit(ctx, host, domain.NewAuditLog{
 			ID:        newID(),
 			EventType: "admin.user.deleted",
 			Metadata:  meta,
@@ -1055,7 +1228,7 @@ func (p *adminPlugin) registerDeleteSession(host plugin.PluginHost, api huma.API
 			"admin_id":   actorID,
 			"session_id": id,
 		})
-		_ = host.Repo().LogAuditEvent(ctx, domain.NewAuditLog{
+		_ = plugin.WriteAudit(ctx, host, domain.NewAuditLog{
 			ID:        newID(),
 			UserID:    targetUser,
 			EventType: "admin.session.terminated",

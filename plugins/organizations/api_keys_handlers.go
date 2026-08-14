@@ -254,6 +254,68 @@ func isBuiltinPermission(p auth.Permission) bool {
 	return false
 }
 
+// apiKeyGuards is authGuards plus StashHTTPHuma, used by the three routes
+// that MUTATE org key material (create, rotate, revoke). The stash exists
+// solely so the audit rows below can carry the client IP that minted or
+// destroyed the credential; the read routes keep the plain chain.
+//
+// It deliberately adds no new refusal. authGuards lets a service account
+// through on purpose — an org-scoped key is a first-class caller on these
+// routes, and per-key authority is enforced in-handler by requireOrgAdmin —
+// so a guard that rejected machine credentials here would lock org keys out
+// of the very routes they exist to serve. The audit row records WHICH kind
+// of caller acted (actor_kind) instead of refusing one.
+func apiKeyGuards(api huma.API, mw *middleware.Middleware) huma.Middlewares {
+	return append(huma.Middlewares{middleware.StashHTTPHuma(api)}, authGuards(api, mw)...)
+}
+
+// orgKeyAuditEvent writes one org-key lifecycle row through the audit choke
+// point (plugin.WriteAudit), so it is both persisted and handed to the
+// host's audit recorders. Before this, `grep LogAuditEvent` over this whole
+// plugin returned nothing: an org admin whose session was stolen could mint
+// a permanent admin-role service account — the strongest credential this
+// plugin issues — as silently as listing them.
+//
+// organization_id is in the metadata both because an auditor needs it and
+// because plugin.WriteAudit reads the org scope back out of it, which is
+// what routes the row to that org's own export destinations.
+//
+// Errors are swallowed: the key operation already succeeded, and an unhappy
+// audit store must not turn it into a 500 the caller retries.
+func orgKeyAuditEvent(ctx context.Context, host plugin.PluginHost, event, orgID string, au *domain.AuthUser, fields map[string]any) {
+	if au == nil {
+		return
+	}
+	// Actor is au.User.ID — the human, or for a service-account caller the
+	// human who minted the calling key (Principal synthesises it from
+	// CreatedBy). actor_kind keeps the two distinguishable.
+	kind := "user"
+	if au.Principal.IsServiceAccount() {
+		kind = "service_account"
+	}
+	meta := map[string]any{
+		"organization_id": orgID,
+		"actor_kind":      kind,
+	}
+	for k, v := range fields {
+		meta[k] = v
+	}
+	raw, _ := json.Marshal(meta)
+	uid := au.User.ID
+	var ip *string
+	if r := middleware.HTTPRequestFromContext(ctx); r != nil {
+		ip = middleware.RequestIP(r)
+	}
+	_ = plugin.WriteAudit(ctx, host, domain.NewAuditLog{
+		ID:        uuid.NewString(),
+		UserID:    &uid,
+		EventType: event,
+		Metadata:  raw,
+		IPAddress: ip,
+		CreatedAt: time.Now().UTC(),
+	})
+}
+
 // --- Handlers ---
 
 // handleCreateOrgAPIKey mints a new org-scoped API key.
@@ -273,7 +335,7 @@ func (p *orgsPlugin) registerCreateOrgAPIKey(host plugin.PluginHost, api huma.AP
 		Tags:          []string{"organizations"},
 		Security:      []map[string][]string{{"sessionCookie": {}}},
 		DefaultStatus: http.StatusCreated,
-		Middlewares:   authGuards(api, mw),
+		Middlewares:   apiKeyGuards(api, mw),
 	}, func(ctx context.Context, in *createOrgAPIKeyInput) (*output, error) {
 		au, err := authUser(ctx)
 		if err != nil {
@@ -305,6 +367,13 @@ func (p *orgsPlugin) registerCreateOrgAPIKey(host plugin.PluginHost, api huma.AP
 			if *req.ExpiresInDays <= 0 {
 				return nil, huma.Error400BadRequest("expires_in_days must be positive")
 			}
+			// Same int64 wrap as the personal-key route, same bound (see
+			// apikey.MaxExpiresInDays): above ~106,751 days the duration
+			// multiplication overflows and the endpoint answered 201 with a
+			// plaintext secret already expired decades ago.
+			if *req.ExpiresInDays > apikey.MaxExpiresInDays {
+				return nil, huma.Error400BadRequest(apikey.ExpiresInDaysRangeMsg)
+			}
 			t := time.Now().UTC().Add(time.Duration(*req.ExpiresInDays) * 24 * time.Hour)
 			expiresAt = &t
 		}
@@ -331,6 +400,18 @@ func (p *orgsPlugin) registerCreateOrgAPIKey(host plugin.PluginHost, api huma.AP
 		if err := host.Repo().CreateAPIKey(ctx, input); err != nil {
 			return nil, huma.Error500InternalServerError("unable to store api key")
 		}
+
+		// The key carries a ROLE (up to admin) and a permission set and
+		// authenticates on every org-scoped route, so the role goes in the
+		// row: "a service account was created" and "an admin-role service
+		// account was created" are different findings. credential_id rather
+		// than key_id — the host's metadata scrubber redacts anything
+		// containing "key". Never the secret, never its hash.
+		orgKeyAuditEvent(ctx, host, "apikey.created", orgID, au, map[string]any{
+			"credential_id": input.ID,
+			"prefix":        input.KeyPrefix,
+			"role":          derefOrEmpty(input.Role),
+		})
 
 		// Reflect the just-persisted row back to the caller. We
 		// could synthesize the JSON straight from `input`, but
@@ -409,7 +490,7 @@ func (p *orgsPlugin) registerDeleteOrgAPIKey(host plugin.PluginHost, api huma.AP
 		Tags:          []string{"organizations"},
 		Security:      []map[string][]string{{"sessionCookie": {}}},
 		DefaultStatus: http.StatusNoContent,
-		Middlewares:   authGuards(api, mw),
+		Middlewares:   apiKeyGuards(api, mw),
 	}, func(ctx context.Context, in *orgKeyInput) (*orgEmptyOutput, error) {
 		au, err := authUser(ctx)
 		if err != nil {
@@ -435,6 +516,13 @@ func (p *orgsPlugin) registerDeleteOrgAPIKey(host plugin.PluginHost, api huma.AP
 			}
 			return nil, huma.Error500InternalServerError("unable to delete api key")
 		}
+		// Without this row there is no record of when a service account
+		// lost its access — the first thing asked when a key surfaces in a
+		// leak, and the only evidence that an intruder revoked the key an
+		// integration depended on.
+		orgKeyAuditEvent(ctx, host, "apikey.revoked", orgID, au, map[string]any{
+			"credential_id": keyID,
+		})
 		return &orgEmptyOutput{}, nil
 	})
 }
@@ -457,7 +545,7 @@ func (p *orgsPlugin) registerRotateOrgAPIKey(host plugin.PluginHost, api huma.AP
 		Summary:     "Rotate an org-scoped API key",
 		Tags:        []string{"organizations"},
 		Security:    []map[string][]string{{"sessionCookie": {}}},
-		Middlewares: authGuards(api, mw),
+		Middlewares: apiKeyGuards(api, mw),
 	}, func(ctx context.Context, in *orgKeyInput) (*output, error) {
 		au, err := authUser(ctx)
 		if err != nil {
@@ -526,6 +614,15 @@ func (p *orgsPlugin) registerRotateOrgAPIKey(host plugin.PluginHost, api huma.AP
 			// revoke the old key if they need to.
 			return nil, huma.Error500InternalServerError("rotation completed but failed to expire old key")
 		}
+		// Rotation both mints and retires a credential, so the row names
+		// both ids — otherwise a reader of the trail sees a key appear and
+		// another go quiet with nothing linking them.
+		orgKeyAuditEvent(ctx, host, "apikey.rotated", orgID, au, map[string]any{
+			"credential_id":          input.ID,
+			"previous_credential_id": old.ID,
+			"prefix":                 input.KeyPrefix,
+			"role":                   derefOrEmpty(input.Role),
+		})
 		stored := domain.APIKey{
 			ID:              input.ID,
 			OrganizationID:  input.OrganizationID,
@@ -588,6 +685,15 @@ func (p *orgsPlugin) registerOrgAPIKeyUsage(host plugin.PluginHost, api huma.API
 			ExpiresAt:  k.ExpiresAt,
 		}}, nil
 	})
+}
+
+// derefOrEmpty flattens an optional string for an audit metadata field,
+// where a missing value and an empty one mean the same thing.
+func derefOrEmpty(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }
 
 // cloneStrPtr deep-copies a *string so the request struct cannot

@@ -134,6 +134,17 @@ func (p *oauth2Plugin) handleFederateApprove(host plugin.PluginHost) http.Handle
 			federateErr(w, http.StatusBadRequest, "federation_request has no redirect_uris")
 			return
 		}
+		// The redirect_uris come off a REMOTE peer's signed request and were
+		// stored verbatim, while this same handler validated that request's
+		// return_uri and initiate_login_uri two checks below. The admin's click
+		// is a trust decision about the peer, not a waiver of the scheme policy
+		// — a peer that sends "javascript:…" gets a client row whose redirect
+		// target the consent SPA will execute. Refuse before randomHex /
+		// HashPassword / CreateOAuth2Client, so nothing is minted or persisted.
+		if reason := redirectURIsReason(ts.RedirectURIs); reason != "" {
+			federateErr(w, http.StatusBadRequest, reason)
+			return
+		}
 		if ts.InitiateLoginURI != "" {
 			if reason := initiateLoginURIReason(ts.InitiateLoginURI); reason != "" {
 				federateErr(w, http.StatusBadRequest, reason)

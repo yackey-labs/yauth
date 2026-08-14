@@ -159,8 +159,10 @@ func TestDiscovery_Document(t *testing.T) {
 	if !ok {
 		t.Fatalf("claims_supported missing or wrong type: %v", doc["claims_supported"])
 	}
+	// "groups" joined the baseline: UserInfo has always emitted the claim, so
+	// the previous 8-entry list under-advertised what RPs already received.
 	want := map[string]struct{}{
-		"sub": {}, "email": {}, "email_verified": {}, "name": {},
+		"sub": {}, "email": {}, "email_verified": {}, "name": {}, "groups": {},
 		"aud": {}, "exp": {}, "iat": {}, "iss": {},
 	}
 	if len(rawClaims) != len(want) {

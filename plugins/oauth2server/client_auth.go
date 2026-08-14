@@ -138,10 +138,41 @@ func secretMatches(client *domain.OAuth2Client, raw string) bool {
 	return ok
 }
 
+// pkjwtMaxAssertionTTL bounds how far in the future a client assertion's
+// `exp` may sit, and therefore how long the replay record below is kept.
+//
+// Two reasons for a ceiling rather than honouring the client's own exp.
+// (1) The replay record is written with ttl = time.Until(exp): a client
+// picking exp = now+1y would make every one of its assertions a permanent
+// row in the revocation store, i.e. an authenticated storage-growth
+// primitive. (2) A long-lived assertion is a long-lived bearer credential
+// — the whole point of RFC 7523 §3 is that it is short-lived. 24h is
+// comfortably above every convention in the wild (Google's are 1h), so no
+// realistic client is broken by it.
+const pkjwtMaxAssertionTTL = 24 * time.Hour
+
 // verifyPrivateKeyJWT validates a private_key_jwt client assertion per
 // RFC 7523. The assertion's "iss" and "sub" identify the client; the
 // signature is verified against the client's registered public_key_pem
 // or jwks_uri (cached).
+//
+// Beyond the signature it enforces the three bindings RFC 7523 §3 requires
+// and this function used to skip entirely:
+//
+//   - rule 3, AUDIENCE. The verifying parse below asked only for
+//     WithValidMethods/WithIssuer/WithExpirationRequired, so `aud` was never
+//     read. A client that uses one keypair at two authorization servers —
+//     the ordinary M2M federation shape — signs an assertion naming server
+//     B; whoever holds it (server B, or anyone who can read B's request
+//     logs) replayed it here verbatim and was authenticated as that client.
+//   - rule 7, REPLAY. `jti` appeared nowhere in this package, so a captured
+//     assertion (proxy log, APM trace, an error report echoing the form
+//     body) was redeemable without limit until it expired.
+//   - the client's REGISTERED auth method. authenticateClient enters this
+//     function purely on the client_assertion_type form field, before
+//     TokenEndpointAuthMethod is consulted, so a client registered
+//     client_secret_basic that also carried a public_key_pem had a second,
+//     unadvertised credential path that rotating its secret did not close.
 func (p *oauth2Plugin) verifyPrivateKeyJWT(ctx context.Context, host plugin.PluginHost, assertion string) (*domain.OAuth2Client, *authErr) {
 	if assertion == "" {
 		return nil, &authErr{"invalid_client", "client_assertion is required"}
@@ -151,6 +182,9 @@ func (p *oauth2Plugin) verifyPrivateKeyJWT(ctx context.Context, host plugin.Plug
 	if err != nil {
 		return nil, &authErr{"invalid_client", "client_assertion is malformed"}
 	}
+	// These claims are UNVERIFIED — usable only to look up which client is
+	// being claimed. Everything decided below reads the claims of the parse
+	// that actually validated the signature.
 	claims := parsed.Claims.(jwt.MapClaims)
 	clientID, _ := claims["sub"].(string)
 	if clientID == "" {
@@ -169,27 +203,99 @@ func (p *oauth2Plugin) verifyPrivateKeyJWT(ctx context.Context, host plugin.Plug
 		return nil, &authErr{"invalid_client", "client banned"}
 	}
 
+	// The registered auth method is the contract, resolved exactly as the
+	// secret path resolves it in authenticateClient: IsPublic wins, then an
+	// explicitly recorded token_endpoint_auth_method. A nil/empty method
+	// still passes — clients registered before the column was recorded must
+	// keep working. The IsPublic half does double duty: this branch returns
+	// BEFORE authenticateClient's allowConfidentialOnly switch, so without
+	// it a public client carrying a public_key_pem also slipped the
+	// confidential-only gate that /oauth/introspect relies on.
+	if client.IsPublic {
+		return nil, &authErr{"invalid_client", "public clients cannot use private_key_jwt"}
+	}
+	if m := client.TokenEndpointAuthMethod; m != nil && *m != "" && *m != "private_key_jwt" {
+		return nil, &authErr{"invalid_client", "client is not registered for private_key_jwt"}
+	}
+
 	keys, err := p.resolveClientKeys(ctx, client)
 	if err != nil {
 		return nil, &authErr{"invalid_client", err.Error()}
 	}
 
 	// Re-parse with verification, trying each candidate key until one
-	// validates the signature.
-	verified := false
+	// validates the signature. Keep the claims of the parse that succeeded:
+	// the audience/jti/exp checks below MUST read signed claims.
+	var verified jwt.MapClaims
 	for _, key := range keys {
-		_, err := jwt.Parse(assertion, func(t *jwt.Token) (interface{}, error) { return key, nil },
+		tok, err := jwt.Parse(assertion, func(t *jwt.Token) (interface{}, error) { return key, nil },
 			jwt.WithValidMethods([]string{"RS256", "ES256"}),
 			jwt.WithIssuer(clientID),
 			jwt.WithExpirationRequired(),
 		)
 		if err == nil {
-			verified = true
+			if mc, ok := tok.Claims.(jwt.MapClaims); ok {
+				verified = mc
+			}
 			break
 		}
 	}
-	if !verified {
+	if verified == nil {
 		return nil, &authErr{"invalid_client", "client_assertion signature failed"}
+	}
+
+	// RFC 7523 §3 rule 3. `aud` is a string OR an array (RFC 7519 §4.1.3),
+	// so jwt.WithAudience — which takes one literal and one shape — is not
+	// usable here. The accepted values are the issuer this AS publishes and
+	// the token_endpoint it advertises in its RFC 8414 metadata document
+	// (built exactly as metadata.go builds it, so the value we advertise is
+	// the value we accept); the bare base is accepted too because several
+	// client libraries default to it.
+	base := strings.TrimRight(p.cfg.Issuer, "/") + strings.TrimRight(p.cfg.BasePath, "/")
+	if !audienceContainsAny(verified["aud"], p.cfg.Issuer, base, base+"/oauth/token") {
+		return nil, &authErr{"invalid_client", "client_assertion aud does not name this authorization server"}
+	}
+
+	// RFC 7523 §3 rule 7. No jti means nothing to record, which means the
+	// assertion is unconditionally replayable — refuse rather than accept a
+	// credential we cannot burn.
+	jti, _ := verified["jti"].(string)
+	if jti == "" {
+		return nil, &authErr{"invalid_client", "client_assertion must carry a jti"}
+	}
+	exp, err := verified.GetExpirationTime()
+	if err != nil || exp == nil {
+		return nil, &authErr{"invalid_client", "client_assertion must carry an exp"}
+	}
+	ttl := time.Until(exp.Time)
+	if ttl > pkjwtMaxAssertionTTL {
+		return nil, &authErr{"invalid_client", "client_assertion exp is too far in the future"}
+	}
+
+	// The replay record reuses the revocation store rather than adding a
+	// table. The "pkjwt:" prefix is load-bearing: plugins/bearer reads the
+	// same table keyed by a raw access-token jti, so an unprefixed key would
+	// let a client-chosen assertion jti collide with (and pre-emptively
+	// revoke) an access token. Scoping by client_id on top means one
+	// client's jti cannot burn another's.
+	//
+	// This is a check-then-set, so two truly simultaneous replays could both
+	// pass. That is an accepted limit of a replay defence built on a
+	// non-atomic store; the window is microseconds and does not widen the
+	// credential's reach.
+	key := "pkjwt:" + client.ClientID + ":" + jti
+	replayed, err := host.Repo().IsTokenRevoked(ctx, key)
+	if err != nil {
+		return nil, &authErr{"server_error", "assertion replay check failed"}
+	}
+	if replayed {
+		return nil, &authErr{"invalid_client", "client_assertion has already been used"}
+	}
+	// Never record for longer than the assertion is valid: once it expires
+	// the signature check refuses it anyway, so a longer record is pure
+	// storage. ttl is already <= pkjwtMaxAssertionTTL by the check above.
+	if err := host.Repo().RevokeToken(ctx, key, ttl); err != nil {
+		return nil, &authErr{"server_error", "assertion replay record failed"}
 	}
 	return client, nil
 }

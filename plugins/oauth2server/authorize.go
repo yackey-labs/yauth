@@ -359,7 +359,18 @@ func buildErrorRedirect(redirectURI, code, desc, state string) string {
 
 // redirectURIAllowed reports whether candidate is in the registered
 // redirect_uris of client.
+//
+// A registered row is not enough on its own: the scheme policy reached the
+// admin-create, admin-patch and federate-approve write paths only in this
+// commit, so rows already carrying a `javascript:`/`data:` target exist in
+// live databases and exact-string equality would keep honouring them forever.
+// Refusing them here retires them without a migration or a sweep. The check is
+// deliberately only the script-execution schemes — see
+// hasDangerousRedirectScheme for why the rest of the policy is write-side only.
 func redirectURIAllowed(c *domain.OAuth2Client, candidate string) bool {
+	if hasDangerousRedirectScheme(candidate) {
+		return false
+	}
 	registered := decodeScopes(c.RedirectURIs)
 	for _, r := range registered {
 		if r == candidate {

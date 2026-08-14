@@ -68,7 +68,12 @@ func (p *oauth2Plugin) handleAuthServerMetadata(host plugin.PluginHost) http.Han
 			TokenEndpointAuthSigningAlgValuesSupported: signingAlgs,
 			IDTokenSigningAlgValuesSupported:           idTokenAlgs,
 			CodeChallengeMethodsSupported:              []string{"S256"},
-			ScopesSupported:                            []string{"openid", "email", "profile"},
+			// "groups" is a real, registrable, token-gated scope here and
+			// plugins/oidc's discovery document has always advertised it.
+			// Omitting it made the two metadata documents describe different
+			// servers, so an RP that read this one refused to request a scope
+			// it was entitled to.
+			ScopesSupported: []string{"openid", "email", "profile", "groups"},
 		}
 
 		if signer := host.JWTSigner(); signer != nil {

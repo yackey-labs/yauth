@@ -178,13 +178,18 @@ func (p *oauth2Plugin) handleCreateClient(host plugin.PluginHost) func(context.C
 		// have zero redirect_uris. Validation is per-grant on the
 		// /authorize and /token paths.
 
-		// Repair copy/paste damage: strip CR/LF that terminals inject when
-		// wrapping long redirect URIs.
-		for i := range req.RedirectURIs {
-			req.RedirectURIs[i] = sanitizeURL(req.RedirectURIs[i])
+		// Same redirect-target policy dynamic registration applies (it sanitizes
+		// in place, repairing the CR/LF terminals inject when wrapping long
+		// URLs). This endpoint used to run sanitizeURL and nothing else, so an
+		// admin could register redirect_uris: ["javascript:…"] — accepted by
+		// /oauth/authorize, which compares by exact string, and handed to the
+		// consent SPA with a live authorization code in the query. The refusal
+		// happens BEFORE any repo write so a rejected client leaves no row.
+		if reason := redirectURIsReason(req.RedirectURIs); reason != "" {
+			return nil, huma.Error400BadRequest(reason)
 		}
-		for i := range req.PostLogoutRedirectURIs {
-			req.PostLogoutRedirectURIs[i] = sanitizeURL(req.PostLogoutRedirectURIs[i])
+		if reason := redirectURIsReason(req.PostLogoutRedirectURIs); reason != "" {
+			return nil, huma.Error400BadRequest(reason)
 		}
 		if req.BackchannelLogoutURI != nil {
 			s := sanitizeURL(*req.BackchannelLogoutURI)
@@ -308,6 +313,18 @@ func (p *oauth2Plugin) handlePatchClient(host plugin.PluginHost) func(context.Co
 	return func(ctx context.Context, in *patchClientInput) (*clientOutput, error) {
 		req := in.Body
 		id := in.ID
+
+		// Validate the redirect targets BEFORE any repo write: this handler
+		// applies several independent mutations in sequence, and a 400 raised
+		// halfway through would leave the earlier ones committed. PATCH cannot
+		// rewrite redirect_uris (patchClientRequest has no such field, and must
+		// not grow one), so post_logout_redirect_uris — which handleEndSession
+		// 302s the browser to — is the whole exposure here.
+		if req.PostLogoutRedirectURIs != nil {
+			if reason := redirectURIsReason(*req.PostLogoutRedirectURIs); reason != "" {
+				return nil, huma.Error400BadRequest(reason)
+			}
+		}
 
 		if req.Banned != nil {
 			now := time.Now().UTC()

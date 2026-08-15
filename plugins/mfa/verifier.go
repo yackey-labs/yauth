@@ -37,7 +37,7 @@ func (v *challengeVerifier) VerifyPendingChallenge(ctx context.Context, pendingS
 	if !found {
 		return "", false, nil
 	}
-	ok, err := v.p.verifyCode(ctx, v.repo, userID, code)
+	ok, err := v.p.verifyCode(ctx, v.repo, v.host.Logger(), userID, code)
 	if err != nil {
 		return "", false, err
 	}
@@ -62,7 +62,7 @@ func (v *challengeVerifier) VerifyUserCode(ctx context.Context, userID, code str
 	if userID == "" || code == "" {
 		return false, nil
 	}
-	ok, err := v.p.verifyCode(ctx, v.repo, userID, code)
+	ok, err := v.p.verifyCode(ctx, v.repo, v.host.Logger(), userID, code)
 	if err != nil {
 		return false, err
 	}

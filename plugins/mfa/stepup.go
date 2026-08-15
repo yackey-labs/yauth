@@ -195,7 +195,7 @@ func (p *mfaPlugin) requireStepUp(ctx context.Context, host plugin.PluginHost, u
 	if code == "" {
 		return huma.Error403Forbidden(StepUpRequiredDetail)
 	}
-	ok, err := p.verifyCode(ctx, repoRef, userID, code)
+	ok, err := p.verifyCode(ctx, repoRef, host.Logger(), userID, code)
 	if err != nil {
 		return huma.Error500InternalServerError("unable to verify mfa code")
 	}

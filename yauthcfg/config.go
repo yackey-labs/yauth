@@ -638,6 +638,22 @@ type WebhooksPluginConfig struct {
 	// Deprecated: ignored; will be removed in a future release.
 	DefaultSecretEnv string `yaml:"default_secret_env,omitempty" toml:"default_secret_env,omitempty"`
 
+	// EncryptionKeyEnv names the env var holding the key material that
+	// per-endpoint webhook secrets are sealed with at rest. Every other
+	// plugin that stores something encrypted has this knob
+	// (plugins.mfa/oauth/sso_oidc.encryption_key_env); webhooks did not, so
+	// on the declarative path webhooks.Config.EncryptionKey was always empty
+	// and the plugin fell back to HKDF(PluginHost.JWTSecret()). That chained
+	// every yauth_webhooks.secret row to the BEARER plugin's JWT secret —
+	// rotating JWT_SECRET, a routine operation whose whole point is to
+	// invalidate tokens, silently made those rows undecryptable — and left a
+	// deployment that runs webhooks WITHOUT bearer unable to store a signing
+	// secret at all, with no way out from config.
+	//
+	// Unset keeps the historical behaviour exactly: fall back to the JWT
+	// secret, and if there is none, the plugin's loud boot-time refusal.
+	EncryptionKeyEnv string `yaml:"encryption_key_env,omitempty" toml:"encryption_key_env,omitempty" doc:"Env var holding the key webhook signing secrets are encrypted with at rest (HKDF-SHA256 input; any length, 32+ bytes recommended). Omitted falls back to the bearer plugin's JWT secret, which means rotating JWT_SECRET makes every stored webhook secret undecryptable — and a deployment without bearer cannot store one at all. WARNING: this is one-way. Setting it on a deployment whose secrets were already sealed under the JWT secret makes those existing rows undecryptable, so each webhook's secret must be rotated after the change."`
+
 	// AllowPrivateDestinations opts into private-network webhook receivers.
 	// See webhooks.Config.AllowPrivateDestinations: a webhook URL is chosen
 	// by a deployment admin and then dialled by the server, so an unfiltered

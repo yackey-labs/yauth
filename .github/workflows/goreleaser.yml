@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - 'v*.*.*'
+  # Dispatched by release-please.yml at the tag it just created, because a tag
+  # pushed with GITHUB_TOKEN does not itself start a workflow run. Always
+  # dispatch this with `--ref <tag>`: goreleaser releases the checked-out
+  # commit, so a run against a branch has nothing to release (see the guard
+  # below). Also useful for re-running a release by hand.
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -23,6 +29,16 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+
+      # Fail fast and legibly on a workflow_dispatch aimed at a branch, rather
+      # than logging into GHCR and letting goreleaser fail deep in the run.
+      - name: Require a tag ref
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" != refs/tags/v* ]]; then
+            echo "::error::This workflow releases a tag, but ref is '${GITHUB_REF}'. Re-run with --ref vX.Y.Z."
+            exit 1
+          fi
 
       - name: Set up Go
         uses: actions/setup-go@v6

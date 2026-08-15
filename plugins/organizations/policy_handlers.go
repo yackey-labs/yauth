@@ -316,6 +316,8 @@ func (p *orgsPlugin) registerPatchOrgPolicy(host plugin.PluginHost, api huma.API
 			return nil, huma.Error500InternalServerError("policy upsert failed")
 		}
 
+		orgAudit(ctx, host, "organization.policy_updated", orgID, au, nil)
+
 		bindIP, bindUA := host.SessionBinding()
 		enf := auth.NewPolicyEnforcer(&updated, auth.GlobalPolicyDefaults{
 			SessionTTL:   host.SessionTTL(),

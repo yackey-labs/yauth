@@ -394,6 +394,9 @@ func (p *orgsPlugin) registerCreate(host plugin.PluginHost, api huma.API, mw *mi
 			_ = host.Repo().DeleteOrganization(ctx, org.ID)
 			return nil, huma.Error500InternalServerError("create owner membership failed")
 		}
+		orgAudit(ctx, host, "organization.created", org.ID, au, map[string]any{
+			"name": org.Name, "slug": org.Slug,
+		})
 		return &organizationOutput{Body: toOrgJSON(org)}, nil
 	})
 }
@@ -510,6 +513,9 @@ func (p *orgsPlugin) registerUpdate(host plugin.PluginHost, api huma.API, mw *mi
 			}
 			return nil, huma.Error500InternalServerError("update failed")
 		}
+		orgAudit(ctx, host, "organization.updated", updated.ID, au, map[string]any{
+			"name": updated.Name, "slug": updated.Slug,
+		})
 		return &organizationOutput{Body: toOrgJSON(updated)}, nil
 	})
 }
@@ -541,6 +547,10 @@ func (p *orgsPlugin) registerDelete(host plugin.PluginHost, api huma.API, mw *mi
 		if err := host.Repo().DeleteOrganization(ctx, id); err != nil {
 			return nil, huma.Error500InternalServerError("delete failed")
 		}
+		// Audited AFTER the delete so the row records a deletion that
+		// happened, and with the org id still in metadata so the export
+		// scoping that reads it back can route this final row.
+		orgAudit(ctx, host, "organization.deleted", id, au, nil)
 		return &orgEmptyOutput{}, nil
 	})
 }
@@ -763,6 +773,12 @@ func (p *orgsPlugin) registerAddMember(host plugin.PluginHost, api huma.API, mw 
 			}
 			return nil, huma.Error500InternalServerError("create membership failed")
 		}
+		orgAudit(ctx, host, "organization.member_added", orgID, au, map[string]any{
+			"target_user_id": mem.UserID,
+			"membership_id":  mem.ID,
+			"role":           mem.Role,
+			"status":         mem.Status,
+		})
 		return &output{Status: http.StatusCreated, Body: toMembershipJSON(mem)}, nil
 	})
 }
@@ -834,6 +850,11 @@ func (p *orgsPlugin) registerCreateInvitation(host plugin.PluginHost, api huma.A
 			}
 			return nil, huma.Error500InternalServerError("create invitation failed")
 		}
+		orgAudit(ctx, host, "organization.invitation_created", id, au, map[string]any{
+			"invitation_id": inv.ID,
+			"invited_email": inv.Email,
+			"role":          inv.Role,
+		})
 		return &output{Body: createInvitationResponse{
 			Invitation: toInvitationJSON(inv),
 			Token:      token,
@@ -948,6 +969,10 @@ func (p *orgsPlugin) registerDeleteInvitation(host plugin.PluginHost, api huma.A
 		if err := host.Repo().DeleteInvitation(ctx, in.InvID); err != nil {
 			return nil, huma.Error500InternalServerError("delete invitation failed")
 		}
+		orgAudit(ctx, host, "organization.invitation_revoked", in.ID, au, map[string]any{
+			"invitation_id": in.InvID,
+			"invited_email": inv.Email,
+		})
 		return &orgEmptyOutput{}, nil
 	})
 }
@@ -1030,6 +1055,10 @@ func (p *orgsPlugin) registerAcceptInvitation(host plugin.PluginHost, api huma.A
 			}
 			return nil, huma.Error500InternalServerError("create membership failed")
 		}
+		orgAudit(ctx, host, "organization.invitation_accepted", mem.OrganizationID, au, map[string]any{
+			"membership_id": mem.ID,
+			"role":          mem.Role,
+		})
 		return &output{Body: toMembershipJSON(mem)}, nil
 	})
 }

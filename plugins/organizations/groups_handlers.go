@@ -183,6 +183,9 @@ func (p *orgsPlugin) registerCreateGroup(host plugin.PluginHost, api huma.API, m
 			}
 			return nil, huma.Error500InternalServerError("unable to create group")
 		}
+		orgAudit(ctx, host, "organization.group_created", orgID, au, map[string]any{
+			"group_id": g.ID, "group_name": g.Name, "external_id": g.ExternalID,
+		})
 		return &groupOutput{Body: toGroupJSON(g)}, nil
 	})
 }
@@ -268,6 +271,9 @@ func (p *orgsPlugin) registerPatchGroup(host plugin.PluginHost, api huma.API, mw
 			}
 			return nil, huma.Error500InternalServerError("unable to update group")
 		}
+		orgAudit(ctx, host, "organization.group_updated", orgID, au, map[string]any{
+			"group_id": updated.ID, "group_name": updated.Name,
+		})
 		return &groupOutput{Body: toGroupJSON(updated)}, nil
 	})
 }
@@ -298,6 +304,9 @@ func (p *orgsPlugin) registerDeleteGroup(host plugin.PluginHost, api huma.API, m
 		if err := host.Repo().DeleteGroup(ctx, g.ID); err != nil {
 			return nil, huma.Error500InternalServerError("unable to delete group")
 		}
+		orgAudit(ctx, host, "organization.group_deleted", orgID, au, map[string]any{
+			"group_id": g.ID, "group_name": g.Name,
+		})
 		return &orgEmptyOutput{}, nil
 	})
 }
@@ -405,6 +414,9 @@ func (p *orgsPlugin) registerAddGroupMember(host plugin.PluginHost, api huma.API
 		if err := host.Repo().AddGroupMember(ctx, g.ID, req.UserID, time.Now().UTC()); err != nil {
 			return nil, huma.Error500InternalServerError("unable to add member")
 		}
+		orgAudit(ctx, host, "organization.group_member_added", orgID, au, map[string]any{
+			"group_id": g.ID, "group_name": g.Name, "target_user_id": req.UserID,
+		})
 		return &orgEmptyOutput{}, nil
 	})
 }
@@ -435,6 +447,9 @@ func (p *orgsPlugin) registerRemoveGroupMember(host plugin.PluginHost, api huma.
 		if err := host.Repo().RemoveGroupMember(ctx, g.ID, in.UserID); err != nil {
 			return nil, huma.Error500InternalServerError("unable to remove member")
 		}
+		orgAudit(ctx, host, "organization.group_member_removed", orgID, au, map[string]any{
+			"group_id": g.ID, "group_name": g.Name, "target_user_id": in.UserID,
+		})
 		return &orgEmptyOutput{}, nil
 	})
 }

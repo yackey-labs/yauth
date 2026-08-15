@@ -459,8 +459,6 @@ func (d *Dispatcher) deliver(ctx context.Context, job *deliveryJob) deliveryOutc
 			"re-encrypted on the next restart, but treat it as disclosed and rotate it",
 			job.webhook.ID)
 	}
-	signature := signPayload(rawSecret, body)
-
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, job.webhook.URL, bytes.NewReader(body))
 	if err != nil {
 		d.recordDelivery(ctx, job, body, nil, fmt.Sprintf("build request: %v", err), false)
@@ -469,7 +467,29 @@ func (d *Dispatcher) deliver(ctx context.Context, job *deliveryJob) deliveryOutc
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-YAuth-Event", job.eventType)
 	req.Header.Set("X-YAuth-Delivery", deliveryID)
-	req.Header.Set("X-YAuth-Signature", signaturePrefix+signature)
+	// Only sign when there is a key to sign with. This header used to be set
+	// unconditionally, so a row with an empty secret went out carrying
+	// HMAC-SHA256 keyed on "" — a value any stranger can compute from the body
+	// alone, since the recipe is documented. Present, well-formed and worthless
+	// is strictly worse than absent: a receiver that verifies it accepts every
+	// forged delivery AND believes it checked, whereas an absent header makes a
+	// checking receiver reject and never protected a non-checking one anyway.
+	//
+	// The admin API cannot mint such a row (handlers.go generates a secret when
+	// the caller omits one), so this is defence-in-depth for rows written
+	// straight to yauth_webhooks, where the column is only NOT NULL — the
+	// pattern examples/webhooks/main.go seedWebhook demonstrates.
+	//
+	// It must NOT fail the delivery: trading a silent integrity bug for a silent
+	// outage visible only in the deliveries table is not an improvement. Log it
+	// loudly instead, so the gap is on someone's screen rather than on the wire.
+	if rawSecret != "" {
+		req.Header.Set("X-YAuth-Signature", signaturePrefix+signPayload(rawSecret, body))
+	} else {
+		d.logf("webhooks: webhook %s has NO signing secret; this delivery goes out UNSIGNED "+
+			"(no X-YAuth-Signature header) — a receiver cannot authenticate it. Set a secret "+
+			"via the admin API to restore signing", job.webhook.ID)
+	}
 
 	resp, err := d.httpClient.Do(req)
 	if err != nil {

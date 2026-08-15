@@ -15,6 +15,25 @@ import (
 // same input recipe — Stripe-style — so a captured signature cannot be
 // replayed against a different body.
 func ComputeHMACSignature(secret string, unixTS int64, body []byte) string {
+	// No key material, no answer. This closes an asymmetry with the other half
+	// of the exported pair: VerifyHMACSignature has always refused an empty
+	// secret (ErrEmptySecret, below), while this one happily keyed HMAC with ""
+	// and handed back a well-formed 64-hex value. docs/audit-export/webhook.md
+	// points integrators at this helper, and the ones who write the comparison
+	// by hand rather than calling VerifyHMACSignature would, with their secret
+	// unset, compute an `expected` that anyone on the internet can reproduce
+	// from the public recipe — accepting every forged delivery while believing
+	// they verified. "" is not a signature, so no constant-time compare against
+	// a real header can succeed on it.
+	//
+	// The return type stays `string` on purpose: this is exported and
+	// documented, and both internal callers are already guarded (the dispatcher
+	// only signs inside `if secret != ""`, and VerifyHMACSignature reaches it
+	// only past the ErrEmptySecret check), so switching to (string, error) would
+	// break downstream receivers to buy nothing.
+	if secret == "" {
+		return ""
+	}
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(strconv.FormatInt(unixTS, 10)))
 	mac.Write([]byte("."))

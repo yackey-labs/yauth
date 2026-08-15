@@ -300,6 +300,11 @@ func (p *plugin) createDo(ctx context.Context, scopeOrgID *string, req auditCrea
 	if err := p.validateDestinationConfig(kind, req.Config); err != nil {
 		return nil, err
 	}
+	// A create supplies the whole config, so "what the caller supplied" and
+	// "what will be stored" are the same map here.
+	if err := validateSuppliedHMACSecret(req.Config); err != nil {
+		return nil, err
+	}
 	// If we're inside the per-org subtree the scopeOrgID override wins,
 	// otherwise the body's organization_id is honoured.
 	orgID := req.OrganizationID
@@ -493,6 +498,15 @@ func (p *plugin) updateDo(ctx context.Context, id string, req auditUpdateDestina
 		changes.Format = &f
 	}
 	if req.Config != nil {
+		// The HMAC floor runs HERE — against the incoming fragment, before the
+		// merge below — and deliberately NOT against `merged`. A create-time-only
+		// floor would be a formality since PATCH replaces the config, but a floor
+		// on the merged map would reject every url-only PATCH against a row whose
+		// grandfathered secret this request never mentioned. See
+		// validateSuppliedHMACSecret.
+		if err := validateSuppliedHMACSecret(req.Config); err != nil {
+			return nil, err
+		}
 		// The config the API HANDS OUT is not the config it stores: toResponse
 		// runs it through sanitizeConfig, which drops hmac_secret / hec_token /
 		// api_key and every header.* entry. The store then REPLACES Config
@@ -728,6 +742,50 @@ func (p *plugin) auditEvent(ctx context.Context, targetID *string, eventType str
 	// Also fan to outbox.
 	p.store.EnqueueForAudit(id, nil)
 	_ = targetID // currently unused but kept for future scoped audits
+}
+
+// minAuditHMACSecretLen is the floor on a signing key the CALLER supplied.
+// It mirrors plugins/webhooks minSuppliedSecretLen: the two plugins sign with
+// the same primitive and the same threat model, and there is no reason for the
+// one whose payload is the audit log itself to be the lenient one.
+const minAuditHMACSecretLen = 32
+
+// validateSuppliedHMACSecret puts a length floor on config["hmac_secret"].
+//
+// The stream is signed with HMAC-SHA256 keyed on this value (dispatcher.go ->
+// ComputeHMACSignature) and the receiver is told to recompute it, so the MAC is
+// the ONLY thing separating a genuine audit delivery from one an attacker POSTs
+// at the same collector — and audit exports are precisely the stream someone
+// wants to forge into, because they are the record of what happened. Nothing
+// looked at this key at all: "hunter2" was stored verbatim, GET reported
+// hmac_configured=true, and one captured delivery is enough to recover a short
+// key offline on a laptop. A dictionary word and no signature are the same
+// security; only one of them tells the operator so.
+//
+// Two deliberate narrowings, both load-bearing:
+//
+//   - It is checked ONLY against the map the request actually supplied, never
+//     against updateDo's merged config. GET strips hmac_secret (sanitizeConfig),
+//     so updateDo carries the stored value forward when the incoming config
+//     omits it; a floor on the merged map would 400 every url-only PATCH against
+//     a destination created before this floor existed, with no way for the
+//     operator to satisfy it because the API never showed them the secret.
+//     Pre-existing short secrets are therefore grandfathered until someone
+//     re-sends one.
+//   - It covers hmac_secret only, not the other secretConfigKeys (hec_token,
+//     api_key) or header.* values. Those are credentials a third party issued
+//     in a format yauth does not control; imposing our length rule on them would
+//     reject valid tokens.
+//
+// Absent and empty both stay legal: absent means an unsigned destination (an
+// in-cluster collector on a private link), and "" is the documented "stop
+// signing" hatch, which updateDo turns into a delete of the key.
+func validateSuppliedHMACSecret(cfg map[string]string) error {
+	v, ok := cfg["hmac_secret"]
+	if !ok || v == "" || len(v) >= minAuditHMACSecretLen {
+		return nil
+	}
+	return huma.Error400BadRequest("hmac_secret must be at least 32 characters (omit it for an unsigned destination, or send \"\" to stop signing)")
 }
 
 // validateDestinationConfig refuses a destination the server must never be

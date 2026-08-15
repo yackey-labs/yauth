@@ -146,6 +146,12 @@ func (p *orgsPlugin) registerChangeMemberRole(host plugin.PluginHost, api huma.A
 		if err != nil || updated == nil {
 			return nil, huma.Error500InternalServerError("post-update lookup failed")
 		}
+		orgAudit(ctx, host, "organization.member_role_changed", orgID, au, map[string]any{
+			"target_user_id": targetUserID,
+			"membership_id":  target.ID,
+			"prior_role":     target.Role,
+			"new_role":       req.Role,
+		})
 		return &output{Body: toMembershipJSON(*updated)}, nil
 	})
 }
@@ -240,6 +246,10 @@ func (p *orgsPlugin) registerTransferOwnership(host plugin.PluginHost, api huma.
 			return nil, huma.Error500InternalServerError("demote prior owner failed")
 		}
 
+		orgAudit(ctx, host, "organization.ownership_transferred", orgID, au, map[string]any{
+			"new_owner_user_id":   req.NewOwnerUserID,
+			"prior_owner_user_id": au.User.ID,
+		})
 		return &output{Body: transferOwnershipResponse{
 			OrganizationID:   orgID,
 			NewOwnerUserID:   req.NewOwnerUserID,
@@ -368,6 +378,11 @@ func (p *orgsPlugin) registerRemoveMember(host plugin.PluginHost, api huma.API, 
 			host.Logger().Error("failed to revoke group memberships on org member removal",
 				"org_id", orgID, "user_id", targetUserID, "error", err)
 		}
+		orgAudit(ctx, host, "organization.member_removed", orgID, au, map[string]any{
+			"target_user_id": targetUserID,
+			"membership_id":  target.ID,
+			"prior_role":     target.Role,
+		})
 		return &orgEmptyOutput{}, nil
 	})
 }

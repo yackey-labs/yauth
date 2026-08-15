@@ -227,6 +227,9 @@ func (p *orgsPlugin) registerCreateOrgDomain(host plugin.PluginHost, api huma.AP
 			}
 			return nil, huma.Error500InternalServerError("create domain failed")
 		}
+		orgAudit(ctx, host, "organization.domain_created", orgID, au, map[string]any{
+			"domain_id": d.ID, "domain": d.Domain,
+		})
 		return &output{Body: toOrgDomainJSON(d)}, nil
 	})
 }
@@ -343,6 +346,12 @@ func (p *orgsPlugin) registerVerifyOrgDomain(host plugin.PluginHost, api huma.AP
 		if setErr != nil {
 			return nil, huma.Error500InternalServerError("persist verification failed")
 		}
+		// A verified domain is a trust anchor: it is what lets this org bind
+		// pre-existing accounts through SSO and SCIM. The transition is worth
+		// a row whichever way it went.
+		orgAudit(ctx, host, "organization.domain_verification_attempted", orgID, au, map[string]any{
+			"domain_id": updated.ID, "domain": updated.Domain, "status": nextStatus,
+		})
 		return &output{Body: toOrgDomainJSON(updated)}, nil
 	})
 }
@@ -379,6 +388,9 @@ func (p *orgsPlugin) registerDeleteOrgDomain(host plugin.PluginHost, api huma.AP
 		if err := host.Repo().DeleteOrganizationDomain(ctx, domainID); err != nil {
 			return nil, huma.Error500InternalServerError("delete domain failed")
 		}
+		orgAudit(ctx, host, "organization.domain_deleted", orgID, au, map[string]any{
+			"domain_id": domainID,
+		})
 		return &orgEmptyOutput{}, nil
 	})
 }
@@ -429,6 +441,12 @@ func (p *orgsPlugin) registerPatchOrgDomain(host plugin.PluginHost, api huma.API
 			}
 			return nil, huma.Error500InternalServerError("update domain failed")
 		}
+		// auto_join_on_signup and default_role_on_auto_join decide who lands in
+		// this org without an invitation and with what role, so a PATCH here is
+		// a change to who can join, not a cosmetic edit.
+		orgAudit(ctx, host, "organization.domain_updated", orgID, au, map[string]any{
+			"domain_id": updated.ID, "domain": updated.Domain,
+		})
 		return &output{Body: toOrgDomainJSON(updated)}, nil
 	})
 }

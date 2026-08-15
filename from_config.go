@@ -21,6 +21,7 @@ import (
 	"github.com/yackey-labs/yauth/plugins/admin"
 	"github.com/yackey-labs/yauth/plugins/apikey"
 	"github.com/yackey-labs/yauth/plugins/asymjwt"
+	"github.com/yackey-labs/yauth/plugins/auditexport"
 	"github.com/yackey-labs/yauth/plugins/bearer"
 	"github.com/yackey-labs/yauth/plugins/emailpassword"
 	"github.com/yackey-labs/yauth/plugins/lockout"
@@ -656,6 +657,22 @@ func addAuthPlugins(builder *YAuthBuilder, cfg *yauthcfg.Config, mailer Mailer, 
 			return nil, fmt.Errorf("yauth: sso_oidc: %w", err)
 		}
 		builder = builder.WithPlugin(plug)
+	}
+
+	if p.AuditExport.Enabled {
+		builder = builder.WithPlugin(auditexport.New(auditexport.Config{
+			BatchSize:        p.AuditExport.BatchSize,
+			BatchInterval:    p.AuditExport.BatchInterval,
+			MaxInflight:      p.AuditExport.MaxInflight,
+			RetryMaxAttempts: p.AuditExport.RetryMaxAttempts,
+			HTTPTimeout:      p.AuditExport.HTTPTimeout,
+			SignatureWindow:  p.AuditExport.SignatureWindow,
+			// Off unless the operator says otherwise, the same shape as the
+			// webhooks and sso_oidc egress knobs: a destination is admin-chosen
+			// over the API and then dialled by the server for every exported
+			// row. In-cluster collectors set allow_private_destinations.
+			AllowPrivateDestinations: p.AuditExport.AllowPrivateDestinations,
+		}))
 	}
 
 	if p.SSOSAML.Enabled {

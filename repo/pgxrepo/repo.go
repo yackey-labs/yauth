@@ -48,6 +48,10 @@ func (r *Repo) withTx(ctx context.Context, fn func(tx pgx.Tx) error) error {
 // ─── User ────────────────────────────────────────────────────────────────────
 
 func (r *Repo) CreateUser(ctx context.Context, input domain.NewUser) (domain.User, error) {
+	// Fold at the store, not at the caller. See domain.NormalizeEmail. The
+	// unique index added in migration 012 is on lower(email), so an unfolded
+	// write would collide with itself rather than store a second casing.
+	input.Email = domain.NormalizeEmail(input.Email)
 	row, err := r.q.CreateUser(ctx, pgxgen.CreateUserParams{
 		ID:                 input.ID,
 		Email:              input.Email,
@@ -83,7 +87,10 @@ func (r *Repo) GetUserByID(ctx context.Context, id string) (*domain.User, error)
 }
 
 func (r *Repo) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) {
-	row, err := r.q.GetUserByEmail(ctx, email)
+	// The query is `WHERE email = $1`, which is case-sensitive; folding the
+	// argument is what makes it match, and migration 012 guarantees every
+	// stored value is already folded.
+	row, err := r.q.GetUserByEmail(ctx, domain.NormalizeEmail(email))
 	if err != nil {
 		return nil, notFound(err)
 	}
@@ -103,7 +110,8 @@ func (r *Repo) UpdateUser(ctx context.Context, id string, changes domain.UpdateU
 		UpdatedAt: updatedAt,
 	}
 	if changes.Email != nil {
-		params.Email = changes.Email
+		folded := domain.NormalizeEmail(*changes.Email)
+		params.Email = &folded
 	}
 	if changes.DisplayName != nil {
 		params.SetDisplayName = true

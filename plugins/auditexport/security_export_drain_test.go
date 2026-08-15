@@ -2,25 +2,25 @@
 // audit-export delivery finding: an audit row that was never delivered is
 // recorded as delivered, and the documented retry backoff does not exist.
 //
-// 1. drainOnce (worker.go) claims an outbox row, calls loadAudit, and on
-//    `err != nil || audit == nil` does `_ = st.MarkSent(e.ID)` with the comment
-//    "Audit row missing — treat as sent so we don't loop." loadAudit is a linear
-//    scan over ListAuditLog(Limit: 10000), newest-first on both backends, so
-//    any audit row past the 10 000 most recent — or any transient repo error —
-//    takes that branch. Nothing was ever POSTed to the receiver, no metric was
-//    recorded, no LastError was written, and GET /audit/destinations/{id}/outbox
-//    reports the row as sent. For a compliance export that is the worst possible
-//    failure mode: a silent hole in the SIEM feed that the admin panel swears
-//    is complete.
+//  1. drainOnce (worker.go) claims an outbox row, calls loadAudit, and on
+//     `err != nil || audit == nil` does `_ = st.MarkSent(e.ID)` with the comment
+//     "Audit row missing — treat as sent so we don't loop." loadAudit is a linear
+//     scan over ListAuditLog(Limit: 10000), newest-first on both backends, so
+//     any audit row past the 10 000 most recent — or any transient repo error —
+//     takes that branch. Nothing was ever POSTed to the receiver, no metric was
+//     recorded, no LastError was written, and GET /audit/destinations/{id}/outbox
+//     reports the row as sent. For a compliance export that is the worst possible
+//     failure mode: a silent hole in the SIEM feed that the admin panel swears
+//     is complete.
 //
-// 2. BackoffSchedule (worker.go:16, 1s/5s/30s/5m/1h) is referenced nowhere
-//    outside its own declaration. store.MarkFailed puts the row straight back to
-//    `pending` and ClaimPending re-claims it on the very next BatchInterval tick,
-//    so the RetryMaxAttempts=5 ladder is burned through in 5 ticks. docs/
-//    audit-export/README.md advertises "backoff, dead-letter after 5 attempts";
-//    what actually happens is that a receiver that blips for a few seconds
-//    dead-letters the entire backlog, and dead_letter is terminal — those rows
-//    are never delivered.
+//  2. BackoffSchedule (worker.go:16, 1s/5s/30s/5m/1h) is referenced nowhere
+//     outside its own declaration. store.MarkFailed puts the row straight back to
+//     `pending` and ClaimPending re-claims it on the very next BatchInterval tick,
+//     so the RetryMaxAttempts=5 ladder is burned through in 5 ticks. docs/
+//     audit-export/README.md advertises "backoff, dead-letter after 5 attempts";
+//     what actually happens is that a receiver that blips for a few seconds
+//     dead-letters the entire backlog, and dead_letter is terminal — those rows
+//     are never delivered.
 //
 // Both tests carry a POSITIVE CONTROL: the audit row that IS present must still
 // be delivered and marked sent, and a receiver that fails once and then recovers

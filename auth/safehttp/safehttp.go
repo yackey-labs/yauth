@@ -56,6 +56,27 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
+// privateIPBlocks is the RFC 1918 + link-local + unspecified set, built once.
+// It was a composite literal inside IsPrivateIP, which meant five net.IPNet
+// values and their backing byte slices were allocated on every call — and this
+// package is the library's single outbound-egress chokepoint, so that call runs
+// per resolved address on every webhook delivery, every OIDC discovery and JWKS
+// fetch, and every syslog audit export.
+var privateIPBlocks = []net.IPNet{
+	{IP: net.IP{10, 0, 0, 0}, Mask: net.CIDRMask(8, 32)},
+	{IP: net.IP{172, 16, 0, 0}, Mask: net.CIDRMask(12, 32)},
+	{IP: net.IP{192, 168, 0, 0}, Mask: net.CIDRMask(16, 32)},
+	{IP: net.IP{169, 254, 0, 0}, Mask: net.CIDRMask(16, 32)}, // link-local
+	{IP: net.IP{0, 0, 0, 0}, Mask: net.CIDRMask(8, 32)},      // 0.0.0.0/8
+}
+
+// alwaysDeniedLinkLocal and alwaysDeniedUnspecified are hoisted for the same
+// reason as privateIPBlocks.
+var (
+	alwaysDeniedLinkLocal   = net.IPNet{IP: net.IP{169, 254, 0, 0}, Mask: net.CIDRMask(16, 32)}
+	alwaysDeniedUnspecified = net.IPNet{IP: net.IP{0, 0, 0, 0}, Mask: net.CIDRMask(8, 32)}
+)
+
 // IsPrivateIP reports whether addr is a loopback, link-local, or RFC 1918
 // address — used to block SSRF after DNS resolution so that DNS rebinding
 // cannot bypass a pre-dial hostname check.
@@ -70,17 +91,10 @@ func IsPrivateIP(addr string) bool {
 	if v4 := ip.To4(); v4 != nil {
 		ip = v4
 	}
-	private := []net.IPNet{
-		{IP: net.IP{10, 0, 0, 0}, Mask: net.CIDRMask(8, 32)},
-		{IP: net.IP{172, 16, 0, 0}, Mask: net.CIDRMask(12, 32)},
-		{IP: net.IP{192, 168, 0, 0}, Mask: net.CIDRMask(16, 32)},
-		{IP: net.IP{169, 254, 0, 0}, Mask: net.CIDRMask(16, 32)}, // link-local
-		{IP: net.IP{0, 0, 0, 0}, Mask: net.CIDRMask(8, 32)},      // 0.0.0.0/8
-	}
 	if ip.IsLoopback() {
 		return true
 	}
-	for _, block := range private {
+	for _, block := range privateIPBlocks {
 		if block.Contains(ip) {
 			return true
 		}
@@ -114,9 +128,7 @@ func IsAlwaysDeniedIP(addr string) bool {
 	if v4 := ip.To4(); v4 != nil {
 		ip = v4
 	}
-	linkLocal := net.IPNet{IP: net.IP{169, 254, 0, 0}, Mask: net.CIDRMask(16, 32)}
-	unspecified := net.IPNet{IP: net.IP{0, 0, 0, 0}, Mask: net.CIDRMask(8, 32)}
-	return linkLocal.Contains(ip) || unspecified.Contains(ip) || ip.IsLinkLocalUnicast()
+	return alwaysDeniedLinkLocal.Contains(ip) || alwaysDeniedUnspecified.Contains(ip) || ip.IsLinkLocalUnicast()
 }
 
 // DialContext returns a DialContext function that rejects connections to

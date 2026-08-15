@@ -370,6 +370,7 @@ type PluginsConfig struct {
 	Organizations OrganizationsPluginConfig `yaml:"organizations" toml:"organizations"`
 	SCIM          SCIMPluginConfig          `yaml:"scim" toml:"scim"`
 	SSOOIDC       SSOOIDCPluginConfig       `yaml:"sso_oidc" toml:"sso_oidc"`
+	SSOSAML       SSOSAMLPluginConfig       `yaml:"sso_saml" toml:"sso_saml"`
 }
 
 // EmailPasswordPluginConfig configures plugins/emailpassword.
@@ -589,6 +590,47 @@ type OAuthPluginConfig struct {
 // connections themselves are data, not config: global (org-less) or
 // org-scoped rows managed at runtime via /sso/connections and
 // /organizations/{id}/sso/connections. This block only mounts the plugin.
+// SSOSAMLPluginConfig configures plugins/ssosaml.
+//
+// This section did not exist until it was added alongside the SP-initiated
+// login binding. plugins/ssosaml was one of only two plugins in the tree with
+// no declarative surface, which meant a yauth.yaml deployment could not enable
+// SAML SSO at all — and, more sharply, could not reach the login_state_binding
+// escape hatch that the binding refusal tells operators to use.
+type SSOSAMLPluginConfig struct {
+	Enabled bool `yaml:"enabled" toml:"enabled"`
+	// EncryptionKeyEnv names the env var holding the base64-encoded 32-byte
+	// AES-256 key that encrypts each connection's IdP secrets at rest.
+	// Required when enabled. Generate one with `yauth gen-secrets`.
+	EncryptionKeyEnv string `yaml:"encryption_key_env" toml:"encryption_key_env"`
+	// AuthnRequestTTL bounds the /sso/saml/login -> /sso/saml/acs round trip.
+	// Zero means the plugin default (10m).
+	AuthnRequestTTL time.Duration `yaml:"authn_request_ttl" toml:"authn_request_ttl"`
+	// ReplayCacheTTL is how long an accepted assertion ID is remembered so a
+	// replay is refused. Zero means the plugin default.
+	ReplayCacheTTL time.Duration `yaml:"replay_cache_ttl" toml:"replay_cache_ttl"`
+	// ClockSkew is the allowed drift between SP and IdP. Zero means the plugin
+	// default (3m). NOTE this is applied process-wide by crewjam/saml, not
+	// per-connection.
+	ClockSkew time.Duration `yaml:"clock_skew" toml:"clock_skew"`
+	// AllowedRedirectURLs is the allow-list of post-login redirect_url
+	// targets. Empty means redirect_url is ignored entirely (the safest
+	// default).
+	AllowedRedirectURLs []string `yaml:"allowed_redirect_urls" toml:"allowed_redirect_urls"`
+	// SatisfiesMFA declares whether the IdP's own authentication counts as the
+	// second factor. nil = true, matching sso_oidc.
+	SatisfiesMFA *bool `yaml:"satisfies_mfa,omitempty" toml:"satisfies_mfa,omitempty" doc:"Treat the IdP's authentication as the second factor. nil = true. false fails a step-up closed with 403 — the ACS is a browser POST and cannot carry an MFA challenge."`
+	// LoginStateBinding ties the RelayState to the browser that started the
+	// flow, closing login CSRF / session fixation on /sso/saml/acs.
+	//
+	// "auto" (the default) binds only when the deployment issues Secure
+	// cookies: the SAML HTTP-POST binding returns cross-site, so the binding
+	// cookie must be SameSite=None, which browsers honour only with Secure.
+	// "required" always binds. "off" disables it, for a deployment that cannot
+	// carry the cookie across the ACS boundary.
+	LoginStateBinding string `yaml:"login_state_binding,omitempty" toml:"login_state_binding,omitempty" enum:"auto,required,off" doc:"Bind an SP-initiated SAML login to the browser that started it. \"auto\" (default) binds when cookie_secure is true — the binding cookie must be SameSite=None to survive the IdP's HTTP-POST binding, which browsers only honour with Secure. \"required\" always binds. \"off\" disables it."`
+}
+
 type SSOOIDCPluginConfig struct {
 	Enabled bool `yaml:"enabled" toml:"enabled"`
 	// EncryptionKeyEnv names the env var holding the base64-encoded 32-byte

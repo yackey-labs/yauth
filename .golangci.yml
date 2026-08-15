@@ -48,6 +48,14 @@ linters:
         linters:
           - staticcheck
 
+# Formatting is enforced rather than left to habit. Two test files had drifted
+# out of gofmt shape and CI had nothing that would notice: the linters above are
+# all correctness/vet checks, and golangci-lint v2 keeps formatters in their own
+# section, so "gofmt" was never actually running.
+formatters:
+  enable:
+    - gofmt
+
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0

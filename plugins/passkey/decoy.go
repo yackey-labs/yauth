@@ -57,24 +57,6 @@ var (
 	decoyFallbackKey  []byte
 )
 
-// decoyDerivedCache memoises the last HKDF expansion. POST /passkey/login/begin
-// is registered with empty Security and no Middlewares (plugin.go), so it is
-// public, unauthenticated and unmetered: without a cache every anonymous probe
-// would pay a fresh HKDF, twice over. A deployment has ONE JWT secret, so a
-// single-entry cache keyed on the secret hits essentially always.
-//
-// It must be keyed on the secret, not a sync.Once: a process-wide "derive once,
-// ignore the argument" cache would make the decoys independent of the
-// deployment key, which silently destroys the property that two deployments
-// disagree (enumeration_test.go) and that tests exercising several keys in one
-// process see different answers. A map would be an unbounded allocation driven
-// by an argument, so this is deliberately one entry.
-var decoyDerivedCache struct {
-	mu         sync.RWMutex
-	lastSecret string
-	derived    []byte
-}
-
 // decoyKey returns the HMAC key for the decoy construction.
 //
 // It used to return the JWT secret VERBATIM. Those same bytes are the
@@ -87,32 +69,29 @@ var decoyDerivedCache struct {
 // keeping when one HKDF label removes it. The webhook at-rest path already does
 // exactly this with the same input bytes (deriveWebhookKey, info
 // "yauth:webhook:secret:v1"); this is the passkey-side label.
+// The expansion is computed fresh on each call rather than memoised. It has one
+// caller, hoisted above the per-credential loop, so this is a single
+// HKDF-SHA256 read of 32 bytes per request — immaterial beside the HMACs the
+// same request goes on to perform. The memoising variant this replaces carried
+// a package-level mutable guarded by an RWMutex plus the standing requirement
+// that it stay keyed on the secret (a plain sync.Once would have made the
+// decoys independent of the deployment key and silently broken the property
+// that two deployments disagree). That is a lot of surface to maintain for a
+// microsecond.
 func decoyKey(jwtSecret []byte) []byte {
-	if len(jwtSecret) > 0 {
-		s := string(jwtSecret)
-		decoyDerivedCache.mu.RLock()
-		if decoyDerivedCache.derived != nil && decoyDerivedCache.lastSecret == s {
-			k := decoyDerivedCache.derived
-			decoyDerivedCache.mu.RUnlock()
-			return k
-		}
-		decoyDerivedCache.mu.RUnlock()
-
-		key := make([]byte, 32)
-		r := hkdf.New(sha256.New, jwtSecret, nil, []byte("yauth:passkey:decoy:v1"))
-		if _, err := io.ReadFull(r, key); err != nil {
-			// HKDF over a SHA-256 reader cannot fail for a 32-byte read; if it
-			// somehow did, falling back to the process-random key keeps the
-			// login ceremony answering rather than failing it, and still does
-			// not reuse the token-signing key.
-			return decoyFallback()
-		}
-		decoyDerivedCache.mu.Lock()
-		decoyDerivedCache.lastSecret, decoyDerivedCache.derived = s, key
-		decoyDerivedCache.mu.Unlock()
-		return key
+	if len(jwtSecret) == 0 {
+		return decoyFallback()
 	}
-	return decoyFallback()
+	key := make([]byte, 32)
+	r := hkdf.New(sha256.New, jwtSecret, nil, []byte("yauth:passkey:decoy:v1"))
+	if _, err := io.ReadFull(r, key); err != nil {
+		// HKDF over a SHA-256 reader cannot fail for a 32-byte read; if it
+		// somehow did, falling back to the process-random key keeps the login
+		// ceremony answering rather than failing it, and still does not reuse
+		// the token-signing key.
+		return decoyFallback()
+	}
+	return key
 }
 
 // decoyFallback is the no-JWT-secret path: a process-random key, generated

@@ -2,27 +2,27 @@
 // delivery finding that only show up through the admin HTTP surface, which is
 // the only way an operator ever creates a destination.
 //
-// 1. NO DESTINATION CREATED THROUGH THE API EVER GETS A DRAIN WORKER.
-//    plugin.Routes calls spawnWorkersForActive() exactly once, at router build
-//    time, when the destination store (an in-process map, newStore()) is still
-//    empty. createDo / updateDo / deleteDo (routes.go) never touch the worker
-//    map, and Refresh() has no non-test caller anywhere in the module. So on a
-//    real deployment WorkerCount() is 0 forever: an admin POSTs a webhook
-//    destination, the API answers 201, GET reports it "active", the outbox
-//    fills up — and nothing is ever exported. The store-level tests all pass
-//    because they seed p.store directly and then call Refresh(); this file goes
-//    through the route, which is the path an operator actually uses.
+//  1. NO DESTINATION CREATED THROUGH THE API EVER GETS A DRAIN WORKER.
+//     plugin.Routes calls spawnWorkersForActive() exactly once, at router build
+//     time, when the destination store (an in-process map, newStore()) is still
+//     empty. createDo / updateDo / deleteDo (routes.go) never touch the worker
+//     map, and Refresh() has no non-test caller anywhere in the module. So on a
+//     real deployment WorkerCount() is 0 forever: an admin POSTs a webhook
+//     destination, the API answers 201, GET reports it "active", the outbox
+//     fills up — and nothing is ever exported. The store-level tests all pass
+//     because they seed p.store directly and then call Refresh(); this file goes
+//     through the route, which is the path an operator actually uses.
 //
-// 2. A READ-EDIT-PATCH SILENTLY UNSIGNS THE STREAM. toResponse returns
-//    sanitizeConfig(), which strips hmac_secret / hec_token / api_key and every
-//    header.* entry, while updateDo assigns changes.Config = req.Config and
-//    store.UpdateDestination REPLACES row.Config wholesale. The ordinary console
-//    flow — GET the destination, change one field, PATCH the object back —
-//    therefore deletes the HMAC secret and every static auth header the operator
-//    configured. hmac_configured flips to false, the webhooks keep flowing with
-//    no X-Yauth-Signature, and the receiver's VerifyHMACSignature now has an
-//    unsigned, unauthenticated audit stream it cannot distinguish from a forged
-//    one. Nothing warns.
+//  2. A READ-EDIT-PATCH SILENTLY UNSIGNS THE STREAM. toResponse returns
+//     sanitizeConfig(), which strips hmac_secret / hec_token / api_key and every
+//     header.* entry, while updateDo assigns changes.Config = req.Config and
+//     store.UpdateDestination REPLACES row.Config wholesale. The ordinary console
+//     flow — GET the destination, change one field, PATCH the object back —
+//     therefore deletes the HMAC secret and every static auth header the operator
+//     configured. hmac_configured flips to false, the webhooks keep flowing with
+//     no X-Yauth-Signature, and the receiver's VerifyHMACSignature now has an
+//     unsigned, unauthenticated audit stream it cannot distinguish from a forged
+//     one. Nothing warns.
 //
 // Both tests are paired with POSITIVE CONTROLS: an explicitly-Refreshed
 // destination must still deliver (so a "fix" cannot pass by breaking export),

@@ -2024,44 +2024,32 @@ func (r *Repo) UpdateOrganization(ctx context.Context, id string, changes domain
 // fresh org keeps the IdP link), and nothing user-scoped — sessions, refresh
 // tokens, users and consents all survive, exactly as memrepo has always done.
 func (r *Repo) DeleteOrganization(ctx context.Context, id string) error {
+	// Table-driven rather than ten hand-written if-blocks. This function has
+	// twice shipped missing a child table (groups and their assignments, then
+	// policies and SSO connections — see the note above), and the failure mode
+	// each time was an omission that read as ordinary code. A list makes the set
+	// of cascaded tables the thing you look at, and adding one a line rather
+	// than a four-line paste. Slice order IS execution order and is load-bearing:
+	// group children must precede yauth_groups.
+	cascades := []string{
+		"DELETE FROM yauth_invitations WHERE organization_id = $1",
+		"DELETE FROM yauth_memberships WHERE organization_id = $1",
+		"DELETE FROM yauth_organization_domains WHERE organization_id = $1",
+		"DELETE FROM yauth_api_keys WHERE organization_id = $1",
+		"DELETE FROM yauth_client_role_assignments WHERE group_id IN (SELECT id FROM yauth_groups WHERE organization_id = $1)",
+		"DELETE FROM yauth_client_group_assignments WHERE group_id IN (SELECT id FROM yauth_groups WHERE organization_id = $1)",
+		"DELETE FROM yauth_group_members WHERE group_id IN (SELECT id FROM yauth_groups WHERE organization_id = $1)",
+		"DELETE FROM yauth_groups WHERE organization_id = $1",
+		"DELETE FROM yauth_organization_policies WHERE organization_id = $1",
+		"DELETE FROM yauth_sso_connections WHERE organization_id = $1",
+	}
 	return r.withTx(ctx, func(tx pgx.Tx) error {
-		q := pgxgen.New(tx)
-		if _, err := tx.Exec(ctx, "DELETE FROM yauth_invitations WHERE organization_id = $1", id); err != nil {
-			return err
+		for _, stmt := range cascades {
+			if _, err := tx.Exec(ctx, stmt, id); err != nil {
+				return err
+			}
 		}
-		if _, err := tx.Exec(ctx, "DELETE FROM yauth_memberships WHERE organization_id = $1", id); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx, "DELETE FROM yauth_organization_domains WHERE organization_id = $1", id); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx, "DELETE FROM yauth_api_keys WHERE organization_id = $1", id); err != nil {
-			return err
-		}
-		// Group children first — see the ordering note above.
-		if _, err := tx.Exec(ctx, "DELETE FROM yauth_client_role_assignments WHERE group_id IN (SELECT id FROM yauth_groups WHERE organization_id = $1)", id); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx, "DELETE FROM yauth_client_group_assignments WHERE group_id IN (SELECT id FROM yauth_groups WHERE organization_id = $1)", id); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx, "DELETE FROM yauth_group_members WHERE group_id IN (SELECT id FROM yauth_groups WHERE organization_id = $1)", id); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx, "DELETE FROM yauth_groups WHERE organization_id = $1", id); err != nil {
-			return err
-		}
-		// memrepo has always dropped these two; pgx never did, so the org's
-		// auth policy came back when idempotent provisioning re-created the
-		// org under the same id, and its SSO connections stayed resolvable —
-		// plugins/ssooidc only checks Status == active, never the org.
-		if _, err := tx.Exec(ctx, "DELETE FROM yauth_organization_policies WHERE organization_id = $1", id); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx, "DELETE FROM yauth_sso_connections WHERE organization_id = $1", id); err != nil {
-			return err
-		}
-		return q.DeleteOrganization(ctx, id)
+		return pgxgen.New(tx).DeleteOrganization(ctx, id)
 	})
 }
 

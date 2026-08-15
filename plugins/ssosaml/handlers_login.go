@@ -652,77 +652,6 @@ var (
 	errNotInConnectionOrg = errors.New("ssosaml: account is not provisioned in this connection's organization")
 )
 
-// connectionMayBindExistingUser answers the question resolveOrJITUser never
-// asked: is THIS connection entitled to speak for an account that already
-// exists here? It mirrors the ssooidc helper of the same name.
-//
-// The SAML shape of the hole is a cross-tenant takeover. The link namespace is
-// "saml:" + IssuerKeyFromEntityID(cfg.IdpEntityID) — keyed by an entity ID the
-// connection's own admin typed into an opaque encrypted config blob, with no
-// uniqueness constraint and no ownership check anywhere, and
-// yauth_external_identities is UNIQUE (provider, external_id) globally with no
-// org column. So any signed-up user could POST /organizations to become an
-// OWNER, create a connection naming another org's entity ID while supplying
-// their OWN certificate, and mint an assertion that ParseResponse verifies
-// (against their cert) and validateAssertion accepts (Issuer equals the entity
-// ID they chose). The existing-link branch then returned the victim's user id
-// after only a Banned check — before the JIT gate, before the adoption gate —
-// and the caller upserted a membership and issued the victim's session.
-//
-// The guard is deliberately narrow: only whether the account has a pre-existing
-// tie to this org. The CREATE branch takes nothing over and is untouched.
-func (p *ssoSAMLPlugin) connectionMayBindExistingUser(ctx context.Context, host plugin.PluginHost, conn *domain.SsoConnection, userID, localEmail string) bool {
-	// SAML has no org-less global connections today; the branch mirrors ssooidc
-	// so a future one cannot be locked out by this guard, and it must stay
-	// first — a connection with no organization has no org to check against.
-	if conn.OrganizationID == "" {
-		return true
-	}
-	// Anchor 1: the account is already an active member. Invited and suspended
-	// memberships confer no authority anywhere else in the codebase
-	// (middleware.EffectiveOrgMembership), so they confer none here — fail
-	// closed on anything that is not exactly Active.
-	if m, err := host.Repo().GetMembershipByOrgUser(ctx, conn.OrganizationID, userID); err == nil && m != nil {
-		if m.Status == domain.MembershipActive {
-			return true
-		}
-	}
-	// Anchor 2: the org has proved, by DNS, that it owns the email domain of
-	// the LOCAL account. Note this reads the resolved local row's stored
-	// address, never the asserted attribute: on the existing-link branch the
-	// assertion's email is arbitrary attacker-supplied text and is not what
-	// identified the account, so trusting it would let an org that legitimately
-	// verified its own domain vouch for an account that has nothing to do with
-	// it. Gated on JIT so an org that switched self-service provisioning off
-	// does not keep self-serving through its verified domain.
-	if !conn.JitProvisioningEnabled {
-		return false
-	}
-	dom, ok := emailDomainOf(localEmail)
-	if !ok {
-		return false
-	}
-	d, err := host.Repo().GetOrganizationDomainByDomain(ctx, dom)
-	if err != nil || d == nil {
-		return false
-	}
-	return d.Status == domain.DomainVerified && d.OrganizationID == conn.OrganizationID
-}
-
-// emailDomainOf returns the lowercased domain portion of an address, mirroring
-// auth.extractEmailDomain (unexported there). Multiple '@' is rejected rather
-// than guessed at.
-func emailDomainOf(email string) (string, bool) {
-	at := strings.IndexByte(email, '@')
-	if at <= 0 || at == len(email)-1 {
-		return "", false
-	}
-	if strings.IndexByte(email[at+1:], '@') >= 0 {
-		return "", false
-	}
-	return strings.ToLower(strings.TrimSpace(email[at+1:])), true
-}
-
 // resolveOrJITUser is the SAML-flavored mirror of the OIDC plugin's
 // helper of the same name. The behavior is identical: look up the
 // (provider, ext_id) link, JIT-provision if missing and allowed,
@@ -752,7 +681,7 @@ func (p *ssoSAMLPlugin) resolveOrJITUser(ctx context.Context, host plugin.Plugin
 		// It runs before UpdateExternalIdentityLastLogin: refreshing
 		// last_login_at first would let a refused login still write to another
 		// tenant's identity row.
-		if !p.connectionMayBindExistingUser(ctx, host, conn, u.ID, u.Email) {
+		if !auth.ConnectionMayBindExistingUser(ctx, host.Repo(), conn, u.ID, u.Email) {
 			return "", false, errNotInConnectionOrg
 		}
 		_ = host.Repo().UpdateExternalIdentityLastLogin(ctx, ident.ID, time.Now().UTC())
@@ -814,7 +743,7 @@ func (p *ssoSAMLPlugin) resolveOrJITUser(ctx context.Context, host plugin.Plugin
 		// the account has any relationship to the org doing the adopting. That
 		// is what this asks. Additive: the allowAdoption gate above still
 		// applies.
-		if !p.connectionMayBindExistingUser(ctx, host, conn, existing.ID, existing.Email) {
+		if !auth.ConnectionMayBindExistingUser(ctx, host.Repo(), conn, existing.ID, existing.Email) {
 			return "", false, errNotInConnectionOrg
 		}
 		userID = existing.ID

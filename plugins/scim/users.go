@@ -216,19 +216,24 @@ func normalizeSCIMEmail(raw string) (string, bool) {
 // Conflict (409 uniqueness), never Forbidden, because that is the answer
 // docs/scim/README.md promises an IdP for "you may not have this userName"
 // and TestPentest02_EmailCollisionOnPatch_Returns409 pins it.
+// The domain test itself is auth.VerifiedDomainCoversEmail — the same predicate
+// requireAdoptable uses sixty lines above, and the one whose doc comment asks
+// for exactly one implementation. This function had its own copy, and the copy
+// had already drifted: it split on strings.LastIndex, so a malformed address
+// with more than one '@' ("a@evil.com@acme.com") yielded "acme.com" and was
+// accepted under that org's verified claim, where the shared helper rejects
+// multiple '@' outright. Calling the helper closes the divergence in the
+// refusing direction. Only the control flow is local: the answer stays 409, not
+// 403, because that is what docs/scim/README.md promises an IdP for "you may not
+// have this userName" and what TestPentest02_EmailCollisionOnPatch_Returns409
+// pins.
 func requireVerifiedNamespace(ctx context.Context, host plugin.PluginHost, orgID, email string) *ScimResponseError {
-	at := strings.LastIndex(email, "@")
-	if at >= 0 && at < len(email)-1 {
-		// GetOrganizationDomainByDomain is case-insensitive and globally
-		// unique on the domain, so this both finds the claim and tells us
-		// which org holds it.
-		d, err := host.Repo().GetOrganizationDomainByDomain(ctx, email[at+1:])
-		if err != nil && !errors.Is(err, yautherr.ErrNotFound) {
-			return repoToScim(err)
-		}
-		if d != nil && d.OrganizationID == orgID && d.Status == domain.DomainVerified {
-			return nil
-		}
+	ok, err := auth.VerifiedDomainCoversEmail(ctx, host.Repo(), orgID, email)
+	if err != nil {
+		return repoToScim(err)
+	}
+	if ok {
+		return nil
 	}
 	return Conflict("userName may only be changed to an address under a domain this organization has verified")
 }

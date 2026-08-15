@@ -638,82 +638,6 @@ var (
 	errNotInConnectionOrg = errors.New("ssooidc: account is not provisioned in this connection's organization")
 )
 
-// connectionMayBindExistingUser answers the question resolveOrJITUser never
-// asked: is THIS connection entitled to speak for an account that already
-// exists here?
-//
-// Both branches that bind a pre-existing user — resolving an established
-// (provider, sub) link, and adopting an account matched by email — used to
-// return the user id after nothing but a Banned check, with conn.OrganizationID
-// never read. Two things fell out of that:
-//
-//   - The link namespace is "oidc:<issuer>", derived from a discovery URL the
-//     connection's own admin typed. Any authenticated user can POST
-//     /organizations to become an OWNER and wire a connection to any issuer, so
-//     a link written through org A's connection was resolvable through org B's.
-//     The existing-link branch also runs BEFORE the `!conn.JitProvisioningEnabled`
-//     gate while the caller upserts a membership unconditionally, so an
-//     invite-only org minted memberships for outsiders.
-//   - Adoption was gated only on email_verified — a claim written by whoever
-//     operates the IdP the attacker pointed their own connection at.
-//
-// The guard is deliberately narrow: it asks only whether the account has a
-// pre-existing tie to this org, and it does not touch the CREATE branch (which
-// takes nothing over) or org-less global connections (which mint no membership
-// and have no org to check).
-func (p *ssoOIDCPlugin) connectionMayBindExistingUser(ctx context.Context, host plugin.PluginHost, conn *domain.SsoConnection, userID, localEmail string) bool {
-	// Global, install-admin-wired connections have no organization to belong
-	// to and JIT no membership. Every single-IdP "Sign in with <IdP>" install
-	// rides this path; it must stay first.
-	if conn.OrganizationID == "" {
-		return true
-	}
-	// Anchor 1: the account is already an active member. Invited and suspended
-	// memberships confer no authority anywhere else in the codebase
-	// (middleware.EffectiveOrgMembership), so they confer none here — fail
-	// closed on anything that is not exactly Active.
-	if m, err := host.Repo().GetMembershipByOrgUser(ctx, conn.OrganizationID, userID); err == nil && m != nil {
-		if m.Status == domain.MembershipActive {
-			return true
-		}
-	}
-	// Anchor 2: the org has proved, by DNS, that it owns the email domain of
-	// the LOCAL account — the same trust anchor the HRD selector in
-	// resolveConnection already demands. Note this reads the resolved local
-	// row's stored address, never the asserted claim: on the existing-link
-	// branch the claim is arbitrary attacker-supplied text and is not what
-	// identified the account, so using it would let an org that legitimately
-	// verified its own domain vouch for an account that has nothing to do with
-	// it. Gated on JIT so an org that switched self-service provisioning off
-	// does not keep self-serving through its verified domain.
-	if !conn.JitProvisioningEnabled {
-		return false
-	}
-	dom, ok := emailDomainOf(localEmail)
-	if !ok {
-		return false
-	}
-	d, err := host.Repo().GetOrganizationDomainByDomain(ctx, dom)
-	if err != nil || d == nil {
-		return false
-	}
-	return d.Status == domain.DomainVerified && d.OrganizationID == conn.OrganizationID
-}
-
-// emailDomainOf returns the lowercased domain portion of an address, mirroring
-// auth.extractEmailDomain (unexported there). Multiple '@' is rejected rather
-// than guessed at.
-func emailDomainOf(email string) (string, bool) {
-	at := strings.IndexByte(email, '@')
-	if at <= 0 || at == len(email)-1 {
-		return "", false
-	}
-	if strings.IndexByte(email[at+1:], '@') >= 0 {
-		return "", false
-	}
-	return strings.ToLower(strings.TrimSpace(email[at+1:])), true
-}
-
 // resolveOrJITUser looks up an ExternalIdentity for (provider, extID).
 // On hit, returns the joined user. On miss, JIT-provisions a fresh
 // user (if the connection allows it) and creates the link. Returns
@@ -742,7 +666,7 @@ func (p *ssoOIDCPlugin) resolveOrJITUser(ctx context.Context, host plugin.Plugin
 		// The check runs before UpdateExternalIdentityLastLogin: refreshing
 		// last_login_at first would let a refused login still write to another
 		// tenant's identity row.
-		if !p.connectionMayBindExistingUser(ctx, host, conn, u.ID, u.Email) {
+		if !auth.ConnectionMayBindExistingUser(ctx, host.Repo(), conn, u.ID, u.Email) {
 			return "", false, errNotInConnectionOrg
 		}
 		// Existing link — refresh last_login_at and return.
@@ -816,7 +740,7 @@ func (p *ssoOIDCPlugin) resolveOrJITUser(ctx context.Context, host plugin.Plugin
 		// DNS-verified the account's own email domain) is the piece of context
 		// that says "this IdP has no relationship to this person". Additive: the
 		// emailVerified gate above still applies.
-		if !p.connectionMayBindExistingUser(ctx, host, conn, existing.ID, existing.Email) {
+		if !auth.ConnectionMayBindExistingUser(ctx, host.Repo(), conn, existing.ID, existing.Email) {
 			return "", false, errNotInConnectionOrg
 		}
 		userID = existing.ID

@@ -69,7 +69,7 @@ func AutoJoinFromEmail(
 	emailVerified bool,
 	now time.Time,
 ) ([]AutoJoinResult, error) {
-	domainPart, ok := extractEmailDomain(email)
+	domainPart, ok := ExtractEmailDomain(email)
 	if !ok {
 		return nil, nil
 	}
@@ -142,10 +142,16 @@ func AutoJoinFromEmail(
 	return out, nil
 }
 
-// extractEmailDomain returns the lowercased domain portion of an email
+// ExtractEmailDomain returns the lowercased domain portion of an email
 // address ("alice@ACME.com" → "acme.com", true). Returns ("", false)
 // for malformed input (no '@', empty domain, multiple '@').
-func extractEmailDomain(email string) (string, bool) {
+//
+// Exported because the SSO plugins need exactly this parse to decide domain
+// autojoin, and while it was unexported they each carried a byte-identical
+// private copy whose comment said so. One definition means a later tightening
+// here — IDN homographs, say — reaches the federated login paths instead of
+// silently leaving them on the older, weaker rule.
+func ExtractEmailDomain(email string) (string, bool) {
 	at := strings.IndexByte(email, '@')
 	if at <= 0 || at == len(email)-1 {
 		return "", false
@@ -183,7 +189,7 @@ func extractEmailDomain(email string) (string, bool) {
 // error, so callers can tell "not proved" (refuse) from "lookup broke"
 // (500) rather than failing open on an outage.
 func VerifiedDomainCoversEmail(ctx context.Context, lookup repo.OrganizationDomainRepository, orgID, email string) (bool, error) {
-	domainPart, ok := extractEmailDomain(email)
+	domainPart, ok := ExtractEmailDomain(email)
 	if !ok {
 		return false, nil
 	}

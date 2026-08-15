@@ -33,6 +33,7 @@ import (
 
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
@@ -75,6 +76,22 @@ type Config struct {
 	// id_tokens with unknown kids from hammering the IdP's JWKS
 	// endpoint. Defaults to 1 minute.
 	JWKSRefreshCooldown time.Duration
+
+	// JWKSMaxStale bounds how long a cached JWKS document keeps being
+	// served after refreshes start failing. Below it, an unreachable IdP
+	// does not cause a login outage; past it, logins through that
+	// connection fail rather than continue trusting key material yauth can
+	// no longer confirm.
+	//
+	// The bound exists because removing a key from the JWKS document is the
+	// only way an IdP can revoke it. Without an upper limit, "the IdP is
+	// down" and "that key was revoked" are indistinguishable here forever,
+	// and an attacker who has taken a signing key keeps it usable by keeping
+	// this URL unreachable. Defaults to 12h — long enough to ride out any
+	// ordinary outage, short enough that a revocation takes effect the same
+	// day. Raise it for an IdP with a poor availability record; note that
+	// doing so widens exactly that window.
+	JWKSMaxStale time.Duration
 
 	// HTTPClient is the optional HTTP client used for outbound calls
 	// to the IdP (discovery, JWKS, token exchange). nil builds the
@@ -146,12 +163,19 @@ const (
 	defaultStateTTL            = 10 * time.Minute
 	defaultJWKSCacheTTL        = time.Hour
 	defaultJWKSRefreshCooldown = time.Minute
+	defaultJWKSMaxStale        = 12 * time.Hour
 	defaultHTTPTimeout         = 10 * time.Second
 )
 
 // ssoOIDCPlugin implements plugin.Plugin.
 type ssoOIDCPlugin struct {
 	cfg Config
+
+	// logger is captured in Routes so the lazily-built JWKS cache can report a
+	// refused stale document. That refusal fails logins closed, so it must be
+	// visible to an operator without reading the source; nil stays safe
+	// (newJWKSCache discards).
+	logger *slog.Logger
 
 	// jwksCacheOnce guards lazy initialization of the per-process
 	// JWKS cache. The cache is shared across every connection in
@@ -179,6 +203,9 @@ func New(cfg Config) (plugin.Plugin, error) {
 	}
 	if cfg.JWKSRefreshCooldown <= 0 {
 		cfg.JWKSRefreshCooldown = defaultJWKSRefreshCooldown
+	}
+	if cfg.JWKSMaxStale <= 0 {
+		cfg.JWKSMaxStale = defaultJWKSMaxStale
 	}
 	// Loud on an unknown mode: "off" mistyped would otherwise silently become
 	// "auto" and refuse every login on a deployment that cannot carry the
@@ -231,6 +258,7 @@ func (p *ssoOIDCPlugin) Name() string { return "sso_oidc" }
 // net/http routes; ssooidc no longer uses it.
 func (p *ssoOIDCPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.API, prefix string) {
 	mw := host.Middleware()
+	p.logger = host.Logger()
 
 	// Admin CRUD (org-scoped).
 	p.registerCreateConnection(host, api, mw, prefix)
@@ -293,7 +321,7 @@ func (p *ssoOIDCPlugin) httpClient() *http.Client {
 // jwksCache returns the lazily-initialized process-wide JWKS cache.
 func (p *ssoOIDCPlugin) jwksCache() *jwksCache {
 	p.jwksCacheOnce.Do(func() {
-		p.jwksCacheRef = newJWKSCache(p.cfg.JWKSCacheTTL, p.cfg.JWKSRefreshCooldown, p.httpClient())
+		p.jwksCacheRef = newJWKSCache(p.cfg.JWKSCacheTTL, p.cfg.JWKSRefreshCooldown, p.cfg.JWKSMaxStale, p.httpClient(), p.logger)
 	})
 	return p.jwksCacheRef
 }

@@ -91,7 +91,7 @@ func (s *idTokenSigner) sign(t *testing.T, claims jwt.MapClaims) string {
 
 func verifierCache(t *testing.T) *jwksCache {
 	t.Helper()
-	return newJWKSCache(time.Minute, time.Nanosecond, &http.Client{Timeout: 5 * time.Second})
+	return newJWKSCache(time.Minute, time.Nanosecond, time.Hour, &http.Client{Timeout: 5 * time.Second}, nil)
 }
 
 func TestVerifyIDToken_RequiresExp(t *testing.T) {

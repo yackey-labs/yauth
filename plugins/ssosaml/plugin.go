@@ -59,8 +59,12 @@
 //     whose AudienceRestriction does not list this value.
 //   - Recipient pinning: ServiceProvider.AcsURL must match the
 //     SubjectConfirmationData/@Recipient on the assertion.
-//   - NotBefore / NotOnOrAfter: enforced by crewjam/saml against a
-//     1-minute clock skew tolerance.
+//   - NotBefore / NotOnOrAfter: enforced by crewjam/saml against
+//     Config.ClockSkew, which defaults to defaultClockSkew (3 minutes,
+//     crewjam/saml's own saml.MaxClockSkew). This comment claimed 1 minute
+//     for as long as it has existed; the value was never 1 minute, and #125
+//     corrected the code that ignored the configured value without
+//     correcting the sentence that misreported the default.
 //   - Replay: we track every accepted assertion's ID for the validity
 //     window in a process-local cache. A repeat ID inside the window
 //     is rejected — defense in depth on top of crewjam/saml's own

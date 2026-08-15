@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"golang.org/x/oauth2"
 
@@ -50,8 +52,24 @@ type oidcDiscovery struct {
 }
 
 type oidcProvider struct {
-	cfg         OIDCConfig
+	cfg OIDCConfig
+
+	// mu guards every field below it. One *oidcProvider is shared by every
+	// request that starts a social login, and Config() re-runs resolution on
+	// each call, so concurrent logins are concurrent writers. Resolution also
+	// happens UNDER this lock rather than merely publishing under it: that
+	// collapses a burst of simultaneous first logins into a single discovery
+	// fetch instead of one per request.
+	mu          sync.Mutex
 	resolved    bool
+	authURL     string
+	tokenURL    string
+	userInfoURL string
+}
+
+// oidcEndpoints is an immutable snapshot of the resolved endpoints, returned
+// by ensureResolved so callers never read the provider's fields directly.
+type oidcEndpoints struct {
 	authURL     string
 	tokenURL    string
 	userInfoURL string
@@ -87,51 +105,66 @@ func MustOIDC(cfg OIDCConfig) oauth.Provider {
 
 func (p *oidcProvider) Name() string { return p.cfg.ProviderName }
 
-func (p *oidcProvider) ensureResolved(ctx context.Context) error {
+// ensureResolved resolves the endpoints once and returns a snapshot of them.
+//
+// It builds the result in LOCALS and publishes to the struct only on success.
+// The previous version assigned p.authURL/p.tokenURL/p.userInfoURL from the
+// config at the top — resetting them to "" on a discovery-based provider —
+// and repopulated them only after the network fetch returned. Any concurrent
+// reader in that window saw an empty endpoint, and Config() discards the error
+// by design, so the caller was handed an oauth2.Config that redirects nowhere.
+// Resolving into locals means the fields are never observable in a partial
+// state, whatever the interleaving.
+func (p *oidcProvider) ensureResolved(ctx context.Context) (oidcEndpoints, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	if p.resolved {
-		return nil
+		return oidcEndpoints{authURL: p.authURL, tokenURL: p.tokenURL, userInfoURL: p.userInfoURL}, nil
 	}
-	p.authURL = p.cfg.AuthURL
-	p.tokenURL = p.cfg.TokenURL
-	p.userInfoURL = p.cfg.UserInfoURL
 
-	if (p.authURL == "" || p.tokenURL == "" || p.userInfoURL == "") && p.cfg.DiscoveryURL != "" {
+	authURL := p.cfg.AuthURL
+	tokenURL := p.cfg.TokenURL
+	userInfoURL := p.cfg.UserInfoURL
+
+	if (authURL == "" || tokenURL == "" || userInfoURL == "") && p.cfg.DiscoveryURL != "" {
 		hc := p.cfg.HTTPClient
 		if hc == nil {
 			hc = http.DefaultClient
 		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.cfg.DiscoveryURL, nil)
 		if err != nil {
-			return fmt.Errorf("oidc: build discovery request: %w", err)
+			return oidcEndpoints{}, fmt.Errorf("oidc: build discovery request: %w", err)
 		}
 		resp, err := hc.Do(req)
 		if err != nil {
-			return fmt.Errorf("oidc: discovery: %w", err)
+			return oidcEndpoints{}, fmt.Errorf("oidc: discovery: %w", err)
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode/100 != 2 {
 			body, _ := io.ReadAll(resp.Body)
-			return fmt.Errorf("oidc: discovery status %d: %s", resp.StatusCode, string(body))
+			return oidcEndpoints{}, fmt.Errorf("oidc: discovery status %d: %s", resp.StatusCode, string(body))
 		}
 		var d oidcDiscovery
 		if err := json.NewDecoder(resp.Body).Decode(&d); err != nil {
-			return fmt.Errorf("oidc: decode discovery: %w", err)
+			return oidcEndpoints{}, fmt.Errorf("oidc: decode discovery: %w", err)
 		}
-		if p.authURL == "" {
-			p.authURL = d.AuthorizationEndpoint
+		if authURL == "" {
+			authURL = d.AuthorizationEndpoint
 		}
-		if p.tokenURL == "" {
-			p.tokenURL = d.TokenEndpoint
+		if tokenURL == "" {
+			tokenURL = d.TokenEndpoint
 		}
-		if p.userInfoURL == "" {
-			p.userInfoURL = d.UserInfoEndpoint
+		if userInfoURL == "" {
+			userInfoURL = d.UserInfoEndpoint
 		}
 	}
-	if p.authURL == "" || p.tokenURL == "" {
-		return errors.New("oidc: missing authorization_endpoint or token_endpoint")
+	if authURL == "" || tokenURL == "" {
+		return oidcEndpoints{}, errors.New("oidc: missing authorization_endpoint or token_endpoint")
 	}
+
+	p.authURL, p.tokenURL, p.userInfoURL = authURL, tokenURL, userInfoURL
 	p.resolved = true
-	return nil
+	return oidcEndpoints{authURL: authURL, tokenURL: tokenURL, userInfoURL: userInfoURL}, nil
 }
 
 // Config implements oauth.Provider. It eagerly attempts discovery using
@@ -139,18 +172,29 @@ func (p *oidcProvider) ensureResolved(ctx context.Context) error {
 // Errors during discovery are surfaced via FetchUserInfo / Exchange,
 // which require the same metadata.
 func (p *oidcProvider) Config() *oauth2.Config {
-	_ = p.ensureResolved(context.Background())
+	// Bounded rather than context.Background(): resolution holds p.mu for its
+	// duration, so an IdP that accepts the connection and then never answers
+	// would otherwise park every concurrent login on the lock indefinitely.
+	// http.DefaultClient, the fallback when no HTTPClient is configured, has no
+	// timeout of its own.
+	ctx, cancel := context.WithTimeout(context.Background(), discoveryTimeout)
+	defer cancel()
+	eps, _ := p.ensureResolved(ctx)
 	return &oauth2.Config{
 		ClientID:     p.cfg.ClientID,
 		ClientSecret: p.cfg.ClientSecret,
 		RedirectURL:  p.cfg.RedirectURL,
 		Scopes:       p.cfg.Scopes,
 		Endpoint: oauth2.Endpoint{
-			AuthURL:  p.authURL,
-			TokenURL: p.tokenURL,
+			AuthURL:  eps.authURL,
+			TokenURL: eps.tokenURL,
 		},
 	}
 }
+
+// discoveryTimeout bounds a lazy discovery fetch started from Config(), which
+// has no caller-supplied context to inherit a deadline from.
+const discoveryTimeout = 10 * time.Second
 
 // oidcUserInfo is the subset of the OIDC userinfo claims we consume. The
 // "sub" claim is required; everything else is best-effort.
@@ -164,10 +208,11 @@ type oidcUserInfo struct {
 }
 
 func (p *oidcProvider) FetchUserInfo(ctx context.Context, tok *oauth2.Token) (*oauth.UserInfo, error) {
-	if err := p.ensureResolved(ctx); err != nil {
+	eps, err := p.ensureResolved(ctx)
+	if err != nil {
 		return nil, err
 	}
-	if p.userInfoURL == "" {
+	if eps.userInfoURL == "" {
 		return nil, errors.New("oidc: provider does not expose a userinfo endpoint")
 	}
 
@@ -175,7 +220,7 @@ func (p *oidcProvider) FetchUserInfo(ctx context.Context, tok *oauth2.Token) (*o
 	if hc == nil {
 		hc = p.Config().Client(ctx, tok)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.userInfoURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, eps.userInfoURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("oidc: build userinfo request: %w", err)
 	}

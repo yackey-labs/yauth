@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -46,22 +47,34 @@ type jwksEntry struct {
 // against the immutable set snapshot; refreshes synchronize on a
 // per-URL mutex so concurrent kid-miss refresh attempts coalesce.
 type jwksCache struct {
-	ttl       time.Duration
-	cooldown  time.Duration
+	ttl      time.Duration
+	cooldown time.Duration
+	// maxStale bounds how long a cached document may go on being served after
+	// the IdP has stopped confirming it. See the refusal in refresh().
+	maxStale  time.Duration
 	client    *http.Client
+	logger    *slog.Logger
 	mu        sync.RWMutex // protects entries map
 	entries   map[string]*jwksEntry
 	refreshMu sync.Map // map[string]*sync.Mutex — per-URL refresh lock
 }
 
-func newJWKSCache(ttl, cooldown time.Duration, client *http.Client) *jwksCache {
+func newJWKSCache(ttl, cooldown, maxStale time.Duration, client *http.Client, logger *slog.Logger) *jwksCache {
 	if client == nil {
 		client = &http.Client{Timeout: defaultHTTPTimeout}
+	}
+	if maxStale <= 0 {
+		maxStale = defaultJWKSMaxStale
+	}
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
 	}
 	return &jwksCache{
 		ttl:      ttl,
 		cooldown: cooldown,
+		maxStale: maxStale,
 		client:   client,
+		logger:   logger,
 		entries:  make(map[string]*jwksEntry),
 	}
 }
@@ -110,10 +123,31 @@ func (c *jwksCache) refresh(ctx context.Context, url string) (jwk.Set, error) {
 
 	set, err := fetchJWKS(ctx, c.client, url)
 	if err != nil {
-		// On error, return the stale set if we have one — that lets
-		// a transient IdP failure not cascade into login outages.
+		// Serving the cached set through a fetch failure is deliberate: a
+		// redeploy or a 502 at the IdP must not cascade into a site-wide login
+		// outage. But it cannot be unconditional, because REMOVING a key from
+		// the JWKS document is the only revocation mechanism OIDC gives an IdP.
+		// An unbounded fallback answers "IdP unreachable" and "this key was
+		// revoked" identically and picks the insecure reading forever — so an
+		// attacker holding a retired key keeps it working simply by keeping
+		// this one URL unreachable from the yauth host.
+		//
+		// Past the bound the cached document is no longer evidence about the
+		// IdP's current keys, and this cache is the whole trust boundary for an
+		// SSO login. Refuse rather than keep vouching for it.
 		if ok {
-			return entry.set, nil
+			age := time.Since(entry.fetchedAt)
+			if age <= c.maxStale {
+				c.logger.Warn("ssooidc: serving a stale JWKS after a failed refresh",
+					"jwks_url", url, "age", age.Round(time.Second), "max_stale", c.maxStale, "err", err)
+				return entry.set, nil
+			}
+			c.logger.Error("ssooidc: refusing a JWKS that has not been re-confirmed within the staleness bound; "+
+				"SSO logins through this connection will fail until the IdP is reachable again",
+				"jwks_url", url, "age", age.Round(time.Second), "max_stale", c.maxStale, "err", err)
+			// The URL is deliberately not in the returned error — handlers
+			// collapse this class to a fixed string, as with errIDPUnreachable.
+			return nil, fmt.Errorf("ssooidc: jwks not re-confirmed within %s: %w", c.maxStale, err)
 		}
 		return nil, err
 	}

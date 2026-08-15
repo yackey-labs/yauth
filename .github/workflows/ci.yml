@@ -75,6 +75,26 @@ jobs:
           GOTOOLCHAIN: auto
         run: go test ./...
 
+  test-race:
+    name: Test (race detector)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.23'
+          cache: true
+      # The race detector is the correct instrument for unsynchronised access
+      # to shared state, and until this job existed nothing in CI ran it — so a
+      # concurrency regression could only be caught by someone remembering to
+      # pass -race locally. Plugins hold one provider/cache value per process
+      # and serve it to every concurrent request, which is exactly the shape
+      # that goes wrong silently.
+      - name: Run tests under -race
+        env:
+          GOTOOLCHAIN: auto
+        run: go test -race ./...
+
   test-postgres:
     name: Test (postgres)
     runs-on: ubuntu-latest

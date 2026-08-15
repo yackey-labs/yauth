@@ -40,7 +40,22 @@ import (
 
 const (
 	backupCodeCount = 10
-	backupCodeBytes = 8 // 16 hex chars
+	// backupCodeBytes is 16 (128 bits, 32 hex chars) to clear the NIST
+	// SP 800-63B §5.1.2.2 threshold for a "look-up secret". That section
+	// permits storage under a plain approved one-way function only at 112 bits
+	// or more; below it the secret must be salted and stretched with a KDF.
+	// hashBackupCode is a bare SHA-256, so the previous 8 bytes (64 bits) sat
+	// on the wrong side of the line in both respects at once — and because the
+	// hash is unsalted, a stolen yauth_mfa_backup_codes is attacked for every
+	// user of the installation in a single pass.
+	//
+	// Raising entropy rather than salting is deliberate. hashBackupCode is a
+	// pure function of the code text, so this change alters no stored format
+	// and every code already printed keeps verifying. Salting would invalidate
+	// every recovery code ever issued unless a versioned-hash column shipped
+	// with it — turning a hardening change into the exact lockout these codes
+	// exist to prevent.
+	backupCodeBytes = 16 // 32 hex chars
 )
 
 func cookieOptionsFromHost(host plugin.PluginHost, r *http.Request, maxAge int) auth.CookieOptions {

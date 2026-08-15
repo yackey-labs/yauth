@@ -585,11 +585,6 @@ type OAuthPluginConfig struct {
 	LoginStateBinding string `yaml:"login_state_binding,omitempty" toml:"login_state_binding,omitempty" enum:"auto,required,off" doc:"Bind an OAuth login to the browser that started it, closing login CSRF / session fixation on the callback. \"auto\" (default) binds when cookie_secure is true — the binding cookie must be SameSite=None to survive an IdP's form_post, which browsers only honour with Secure, so plain HTTP is NOT covered. \"required\" always binds. \"off\" disables it, for deployments that cannot carry the cookie (a native client that fetches /authorize with its own HTTP client, or cross-device login continuation)."`
 }
 
-// SSOOIDCPluginConfig configures the sso_oidc plugin — this app acting as an
-// OIDC Relying Party toward an upstream IdP ("Sign in with <IdP>"). The
-// connections themselves are data, not config: global (org-less) or
-// org-scoped rows managed at runtime via /sso/connections and
-// /organizations/{id}/sso/connections. This block only mounts the plugin.
 // SSOSAMLPluginConfig configures plugins/ssosaml.
 //
 // This section did not exist until it was added alongside the SP-initiated
@@ -631,6 +626,11 @@ type SSOSAMLPluginConfig struct {
 	LoginStateBinding string `yaml:"login_state_binding,omitempty" toml:"login_state_binding,omitempty" enum:"auto,required,off" doc:"Bind an SP-initiated SAML login to the browser that started it. \"auto\" (default) binds when cookie_secure is true — the binding cookie must be SameSite=None to survive the IdP's HTTP-POST binding, which browsers only honour with Secure. \"required\" always binds. \"off\" disables it."`
 }
 
+// SSOOIDCPluginConfig configures the sso_oidc plugin — this app acting as an
+// OIDC Relying Party toward an upstream IdP ("Sign in with <IdP>"). The
+// connections themselves are data, not config: global (org-less) or
+// org-scoped rows managed at runtime via /sso/connections and
+// /organizations/{id}/sso/connections. This block only mounts the plugin.
 type SSOOIDCPluginConfig struct {
 	Enabled bool `yaml:"enabled" toml:"enabled"`
 	// EncryptionKeyEnv names the env var holding the base64-encoded 32-byte

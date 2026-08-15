@@ -36,6 +36,7 @@ import (
 	"github.com/yackey-labs/yauth/plugins/passkey"
 	"github.com/yackey-labs/yauth/plugins/scim"
 	"github.com/yackey-labs/yauth/plugins/ssooidc"
+	"github.com/yackey-labs/yauth/plugins/ssosaml"
 	"github.com/yackey-labs/yauth/plugins/status"
 	"github.com/yackey-labs/yauth/plugins/webhooks"
 	yauthrepo "github.com/yackey-labs/yauth/repo"
@@ -653,6 +654,33 @@ func addAuthPlugins(builder *YAuthBuilder, cfg *yauthcfg.Config, mailer Mailer, 
 		})
 		if err != nil {
 			return nil, fmt.Errorf("yauth: sso_oidc: %w", err)
+		}
+		builder = builder.WithPlugin(plug)
+	}
+
+	if p.SSOSAML.Enabled {
+		key, rawKey, err := resolveAESKey(p.SSOSAML.EncryptionKeyEnv)
+		if err != nil {
+			return nil, fmt.Errorf("yauth: sso_saml encryption key: %w", err)
+		}
+		if rawKey {
+			warnRawAESKey(logger, p.SSOSAML.EncryptionKeyEnv)
+		}
+		plug, err := ssosaml.New(ssosaml.Config{
+			EncryptionKey:       key,
+			AuthnRequestTTL:     p.SSOSAML.AuthnRequestTTL,
+			ReplayCacheTTL:      p.SSOSAML.ReplayCacheTTL,
+			ClockSkew:           p.SSOSAML.ClockSkew,
+			AllowedRedirectURLs: p.SSOSAML.AllowedRedirectURLs,
+			SatisfiesMFA:        p.SSOSAML.SatisfiesMFA,
+			// Same default as sso_oidc's and oauth's: "auto", i.e. on wherever
+			// the cookie can actually be delivered. The ACS is reached by a
+			// cross-site POST, so that means Secure-cookie deployments only.
+			// See auth/login_binding.go.
+			LoginStateBinding: p.SSOSAML.LoginStateBinding,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("yauth: sso_saml: %w", err)
 		}
 		builder = builder.WithPlugin(plug)
 	}

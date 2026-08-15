@@ -212,7 +212,7 @@ func (p *ssoSAMLPlugin) registerSamlLogin(host plugin.PluginHost, api huma.API, 
 		Security:    []map[string][]string{}, // explicitly public
 		Middlewares: flowGuards(api),
 	}, func(ctx context.Context, _ *struct{}) (*flowOutput, error) {
-		r, _, err := flowReqResp(ctx)
+		r, w, err := flowReqResp(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -230,7 +230,18 @@ func (p *ssoSAMLPlugin) registerSamlLogin(host plugin.PluginHost, api huma.API, 
 			return writeError(http.StatusInternalServerError, "INTERNAL", "build sp failed: "+err.Error()), nil
 		}
 
-		relayState, err := generateRandom(32)
+		// Bind the RelayState to THIS browser when the deployment can carry the
+		// cookie. Decided HERE, at mint time, and recorded in the state's own
+		// "b." prefix — the ACS reads no config, so an attacker cannot downgrade
+		// by choosing what they POST, and an unbound state (binding off, an
+		// unsolicited IdP-initiated response, or a row from the previous binary)
+		// is simply never checked.
+		var relayState, bindSecret string
+		if auth.BindLoginState(p.cfg.LoginStateBinding, host.CookieSecure()) {
+			bindSecret, relayState, err = auth.NewBoundLoginState()
+		} else {
+			relayState, err = generateRandom(32)
+		}
 		if err != nil {
 			return writeError(http.StatusInternalServerError, "INTERNAL", "relay state gen failed"), nil
 		}
@@ -270,6 +281,19 @@ func (p *ssoSAMLPlugin) registerSamlLogin(host plugin.PluginHost, api huma.API, 
 			return writeError(http.StatusInternalServerError, "INTERNAL", "persist state failed"), nil
 		}
 
+		// Write the browser's half. huma writes the 302 status + Location after
+		// this handler returns, so this header-map mutation lands first — the
+		// same ordering the ACS's own Set-Cookie already relies on. The cookie
+		// MUST be SameSite=None (LoginBindingCookie makes it so): the SAML
+		// HTTP-POST binding returns by having the browser POST cross-site to
+		// /sso/saml/acs, and a Lax cookie is not sent on that request at all.
+		if bindSecret != "" {
+			// TTL is the STATE's — the cookie is worthless once the row expires.
+			if c := auth.LoginBindingCookie(cookieOptionsFromHost(host, r, 0), relayState, bindSecret, p.cfg.AuthnRequestTTL); c != nil {
+				http.SetCookie(w, c)
+			}
+		}
+
 		// Build the HTTP-Redirect URL. crewjam/saml's redirect helper
 		// embeds the AuthnRequest in the URL query string per the
 		// HTTP-Redirect binding spec.
@@ -280,6 +304,13 @@ func (p *ssoSAMLPlugin) registerSamlLogin(host plugin.PluginHost, api huma.API, 
 		return &flowOutput{Status: http.StatusFound, Location: redirectURL.String()}, nil
 	})
 }
+
+// loginBindingRefused is the 400 body for an ACS POST presented by a browser
+// that did not start the flow. It names the knob verbatim so an operator
+// reading a support ticket learns how to disable the binding from the response
+// itself, without reading the source.
+const loginBindingRefused = "this login was not started in this browser (the login-state cookie is missing or does not match); start the sign-in again. " +
+	`Operators: set ssosaml.Config.LoginStateBinding to "off" if your deployment cannot carry the cookie.`
 
 // --- POST /sso/saml/acs -----------------------------------------------
 
@@ -335,6 +366,28 @@ func (p *ssoSAMLPlugin) registerSamlACS(host plugin.PluginHost, api huma.API, pr
 			possibleRequestIDs []string
 			loginState         *domain.SsoLoginState
 		)
+
+		// Prove this browser started the flow, BEFORE consuming anything.
+		//
+		// Order is load-bearing twice over. Consuming first would let a stranger
+		// burn the single-use row belonging to the browser that actually started
+		// the login, turning the guard into a denial of service against the very
+		// victim it protects. And the check keys off the state's own "b." prefix,
+		// not off config: only a RelayState this binary minted with binding on is
+		// checked, so an unsolicited IdP-initiated response and a row from the
+		// previous binary both pass through untouched.
+		if auth.IsBoundLoginState(relayState) {
+			c, cerr := r.Cookie(auth.LoginBindingCookieName(relayState))
+			bound := cerr == nil && c != nil && auth.VerifyLoginBinding(relayState, c.Value)
+			// Cleared on EVERY exit, matched or not: single-use like the state
+			// row it guards, and a stale one must not linger for the whole TTL.
+			if cc := auth.ClearLoginBindingCookie(cookieOptionsFromHost(host, r, 0), relayState); cc != nil {
+				http.SetCookie(w, cc)
+			}
+			if !bound {
+				return writeError(http.StatusBadRequest, "INVALID_REQUEST", loginBindingRefused), nil
+			}
+		}
 
 		if relayState != "" {
 			st, err := host.Repo().ConsumeSsoLoginState(ctx, relayState)

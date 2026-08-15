@@ -83,12 +83,14 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"errors"
+	"fmt"
 	"net/http"
 	"sync"
 	"time"
 
 	"github.com/crewjam/saml"
 
+	"github.com/yackey-labs/yauth/auth"
 	"github.com/yackey-labs/yauth/plugin"
 )
 
@@ -109,6 +111,33 @@ type Config struct {
 	// standard SAML clock-skew tolerance window doubled). RequestID
 	// rows are single-use regardless.
 	AuthnRequestTTL time.Duration
+
+	// LoginStateBinding controls whether /sso/saml/login ties the RelayState
+	// to the browser that started the flow — see auth/login_binding.go.
+	//
+	// Without it a completed (SAMLResponse, RelayState) pair is a portable
+	// credential: an attacker finishes a login as themselves, hands the signed
+	// response to a victim, and the ACS plants the ATTACKER's session in the
+	// VICTIM's browser. The assertion is genuinely IdP-signed for the
+	// attacker's own identity, so no amount of signature, replay or skew
+	// checking sees anything wrong — the response is used exactly once, by the
+	// wrong browser.
+	//
+	// SAML is the shape this mechanism was built for: the ACS is reached by a
+	// cross-site HTTP-POST binding always, not optionally, so the binding
+	// cookie must be SameSite=None and browsers only honour that with Secure.
+	// Hence "" / "auto" binds only when the deployment issues Secure cookies,
+	// "required" always binds, and "off" never does. Validated by New.
+	//
+	// Unlike plugins/sso_oidc this plugin has no yauthcfg surface at all — it is
+	// constructible only from Go — so this knob is reachable only as a struct
+	// field, and the refusal body names it that way rather than inventing a
+	// plugins.sso_saml.* key that no loader reads.
+	//
+	// IdP-initiated (unsolicited) responses carry no state this server minted
+	// and are therefore never checked — the decision is recorded in the state
+	// itself at mint time, so enforcement cannot be downgraded at the ACS.
+	LoginStateBinding string
 
 	// AllowedRedirectURLs is the allow-list of post-login redirect
 	// targets honored by the redirect_url query parameter on
@@ -213,6 +242,13 @@ func New(cfg Config) (plugin.Plugin, error) {
 	if cfg.ClockSkew <= 0 {
 		cfg.ClockSkew = defaultClockSkew
 	}
+	// Loud on an unknown mode: "off" mistyped would otherwise silently become
+	// "auto" and quietly re-open the hole on a Secure deployment.
+	bindMode, err := auth.NormalizeLoginStateBinding(cfg.LoginStateBinding)
+	if err != nil {
+		return nil, fmt.Errorf("ssosaml: %w", err)
+	}
+	cfg.LoginStateBinding = bindMode
 	// Publish the configured skew where it can actually take effect.
 	//
 	// Read this plainly: saml.MaxClockSkew is a PACKAGE-LEVEL var in

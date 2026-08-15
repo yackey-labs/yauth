@@ -13,6 +13,10 @@ import (
 
 func (r *Repo) CreateUser(ctx context.Context, input domain.NewUser) (domain.User, error) {
 	_ = ensureCtx(ctx)
+	// Fold at the store, not at the caller. See domain.NormalizeEmail: every
+	// handler already did this, the repository did not, and the repository is
+	// public API that embedders call directly.
+	input.Email = domain.NormalizeEmail(input.Email)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -73,7 +77,7 @@ func (r *Repo) GetUserByEmail(ctx context.Context, email string) (*domain.User, 
 	_ = ensureCtx(ctx)
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	id, ok := r.emailIdx[email]
+	id, ok := r.emailIdx[domain.NormalizeEmail(email)]
 	if !ok {
 		return nil, yautherr.ErrNotFound
 	}
@@ -91,6 +95,10 @@ func (r *Repo) UpdateUser(ctx context.Context, id string, changes domain.UpdateU
 		return domain.User{}, yautherr.ErrNotFound
 	}
 
+	if changes.Email != nil {
+		folded := domain.NormalizeEmail(*changes.Email)
+		changes.Email = &folded
+	}
 	if changes.Email != nil && *changes.Email != u.Email {
 		if other, dup := r.emailIdx[*changes.Email]; dup && other != id {
 			return domain.User{}, yautherr.ErrUserExists

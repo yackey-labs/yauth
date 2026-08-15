@@ -100,6 +100,7 @@ var groups = []group{
 	{name: "webhook_retries", cases: webhookRetryCases},
 	{name: "memberships", cases: membershipCases},
 	{name: "org_cascade", cases: orgCascadeCases},
+	{name: "email_identity", cases: emailIdentityCases},
 }
 
 // ----- helpers -----

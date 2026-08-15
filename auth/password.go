@@ -18,10 +18,15 @@ import (
 	"golang.org/x/crypto/argon2"
 )
 
-// Argon2id parameters. These match the OWASP "second recommended" profile
-// (m=64MiB, t=1, p=4) and the parameter set used by the Rust reference
-// implementation in yauth/crates/yauth/src/auth/password.rs (which relies on
-// the argon2 crate's defaults).
+// Argon2id parameters used when this package MINTS a hash: m=65536 KiB
+// (64 MiB), t=1, p=4, a 16-byte salt and a 32-byte tag. The memory cost
+// exceeds every current OWASP Argon2id profile (their most expensive is
+// 46 MiB at t=1,p=1), which is where the headroom in this profile sits.
+//
+// parsePHC deliberately accepts a WIDER parameter range than HashPassword
+// emits, so credentials imported from another Argon2id implementation keep
+// verifying; see the bounds at the bottom of parsePHC for the limits of that
+// tolerance.
 const (
 	argonTime    uint32 = 1
 	argonMemory  uint32 = 64 * 1024 // 64 MiB, expressed in KiB
@@ -84,6 +89,15 @@ func VerifyPassword(password, encoded string) (bool, error) {
 	params, salt, want, err := parsePHC(encoded)
 	if err != nil {
 		return false, err
+	}
+	// A zero-length tag would reach argon2 as keyLen=0, where blake2b.New(0)
+	// errors, the error is discarded, and the nil hash.Hash is written to —
+	// a nil dereference inside a third-party library instead of the error this
+	// function documents. parsePHC's len(hash) >= 16 bound already makes this
+	// unreachable; it stays so the contract does not silently depend on that
+	// bound never being relaxed.
+	if len(want) == 0 {
+		return false, ErrInvalidHash
 	}
 
 	got := argon2.IDKey(
@@ -181,6 +195,51 @@ func parsePHC(encoded string) (argonParams, []byte, []byte, error) {
 	}
 	hash, err := rawStdEncoding.DecodeString(parts[5])
 	if err != nil {
+		return argonParams{}, nil, nil, ErrInvalidHash
+	}
+
+	// Bound the cost parameters before anyone can hand them to argon2.IDKey.
+	// Everything above was scanned straight out of a stored column, and this
+	// function is the single choke point shared by every verifier (emailpassword
+	// login and password change, the bearer plugin's password grant, the
+	// unauthenticated /token client_secret check, the password-history walk, and
+	// DummyVerify), so the check belongs here rather than in each caller.
+	// Nothing in yauth writes a caller-chosen PHC string —
+	// every writer goes through HashPassword — so the population this protects
+	// is hashes a consumer put in through repo.UpsertPassword: an import from
+	// another Argon2 implementation, a migration, or a truncating write.
+	//
+	// Out-of-range values are not merely odd, they are three distinct failures:
+	//
+	//   - m below 8*p is CLAMPED UP by x/crypto (deriveKey raises it to
+	//     2*4*threads) rather than refused, so an m=0 hash verifies at 32 KiB —
+	//     1/2048th of the configured cost — and still works as a credential
+	//     while being trivially cheaper to crack offline. Nothing downstream
+	//     notices, which is why the floor is the load-bearing lower bound.
+	//   - t=0 and p=0 hit deriveKey's own panic() calls, turning a documented
+	//     "malformed hash" error into a panic out of a third-party library on a
+	//     pre-authentication path.
+	//   - an unbounded m asks the runtime for the declared allocation. Past a
+	//     point that is not a 500: the failure goes through runtime.throw, where
+	//     recover() and any HTTP panic handler are irrelevant.
+	//
+	// The bounds are deliberately loose — wider than HashPassword emits — because
+	// over-refusal here locks a user out of a legitimately imported credential.
+	// The tag floor is 16, not 32, because argon2-cffi defaulted to hash_len=16
+	// before 21.2.0 and those are exactly the hashes this check exists to make
+	// safe; the salt floor is the PHC spec's own minimum; and the 2 GiB ceiling
+	// sits far above the most aggressive real deployment (1 GiB) while still
+	// bounding the allocation.
+	//
+	// p.threads is widened to uint32 BEFORE the multiply: 8*p.threads in uint8
+	// arithmetic overflows for p > 31 and would wave through the very hashes the
+	// floor is meant to catch.
+	if p.time < 1 ||
+		p.threads < 1 ||
+		p.memory < 8*uint32(p.threads) ||
+		p.memory > 1<<21 ||
+		len(salt) < 8 ||
+		len(hash) < 16 {
 		return argonParams{}, nil, nil, ErrInvalidHash
 	}
 

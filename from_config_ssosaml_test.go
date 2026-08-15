@@ -114,3 +114,59 @@ func TestSSOSAMLFromConfig_RequiresAKey(t *testing.T) {
 		t.Fatal("sso_saml booted with no encryption key: connection secrets would be sealed under a zero key")
 	}
 }
+
+// --- audit_export ------------------------------------------------------
+
+// TestAuditExportFromConfig_RegistersTheRoutes covers the last plugin that had
+// no declarative surface.
+//
+// The reason to run audit export is usually a compliance obligation, and the
+// deployments carrying those obligations are exactly the ones assembled from a
+// checked-in config file rather than a bespoke main() — so this was the worst
+// of the three plugins to have the gap in.
+func TestAuditExportFromConfig_RegistersTheRoutes(t *testing.T) {
+	c := yauthcfg.Default()
+	c.Database.Driver = "memory"
+	c.Database.DSN = ""
+	c.Plugins.EmailPassword.Enabled = true
+	c.Plugins.Admin.Enabled = true
+	c.Plugins.AuditExport.Enabled = true
+
+	ya, err := yauth.NewFromConfig(context.Background(), c, yauth.WithRepo(memrepo.New()))
+	if err != nil {
+		t.Fatalf("NewFromConfig with plugins.audit_export enabled: %v", err)
+	}
+	srv := httptest.NewServer(ya.Router())
+	t.Cleanup(srv.Close)
+
+	// Unauthenticated, so a 401/403 is the proof the route exists; a missing
+	// route is a 404.
+	resp, err := srv.Client().Get(srv.URL + "/audit/destinations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == 404 {
+		t.Fatal("/audit/destinations is not mounted: plugins.audit_export.enabled did not register the " +
+			"plugin, so audit export cannot be turned on from a config file")
+	}
+}
+
+// TestAuditExportFromConfig_TuningReachesThePlugin pins that the delivery knobs
+// are not merely accepted and dropped — the failure this guards is a section
+// that parses, boots clean, and silently runs on defaults.
+func TestAuditExportFromConfig_TuningReachesThePlugin(t *testing.T) {
+	c := yauthcfg.Default()
+	c.Database.Driver = "memory"
+	c.Database.DSN = ""
+	c.Plugins.EmailPassword.Enabled = true
+	c.Plugins.Admin.Enabled = true
+	c.Plugins.AuditExport.Enabled = true
+	c.Plugins.AuditExport.BatchSize = 7
+	c.Plugins.AuditExport.RetryMaxAttempts = 2
+	c.Plugins.AuditExport.AllowPrivateDestinations = true
+
+	if _, err := yauth.NewFromConfig(context.Background(), c, yauth.WithRepo(memrepo.New())); err != nil {
+		t.Fatalf("NewFromConfig with audit_export tuning: %v", err)
+	}
+}

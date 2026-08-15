@@ -371,6 +371,7 @@ type PluginsConfig struct {
 	SCIM          SCIMPluginConfig          `yaml:"scim" toml:"scim"`
 	SSOOIDC       SSOOIDCPluginConfig       `yaml:"sso_oidc" toml:"sso_oidc"`
 	SSOSAML       SSOSAMLPluginConfig       `yaml:"sso_saml" toml:"sso_saml"`
+	AuditExport   AuditExportPluginConfig   `yaml:"audit_export" toml:"audit_export"`
 }
 
 // EmailPasswordPluginConfig configures plugins/emailpassword.
@@ -583,6 +584,48 @@ type OAuthPluginConfig struct {
 	// the victim's browser is handed a session cookie for the ATTACKER's
 	// account. Empty means "auto".
 	LoginStateBinding string `yaml:"login_state_binding,omitempty" toml:"login_state_binding,omitempty" enum:"auto,required,off" doc:"Bind an OAuth login to the browser that started it, closing login CSRF / session fixation on the callback. \"auto\" (default) binds when cookie_secure is true — the binding cookie must be SameSite=None to survive an IdP's form_post, which browsers only honour with Secure, so plain HTTP is NOT covered. \"required\" always binds. \"off\" disables it, for deployments that cannot carry the cookie (a native client that fetches /authorize with its own HTTP client, or cross-device login continuation)."`
+}
+
+// AuditExportPluginConfig configures plugins/auditexport.
+//
+// Like sso_saml, this section did not exist: auditexport was the last plugin in
+// the tree reachable only from Go. That is a poor place to have the gap, since
+// the reason to run audit export at all is usually a compliance obligation, and
+// the deployments carrying those obligations are exactly the ones run from a
+// checked-in config file rather than a bespoke main().
+//
+// Destinations themselves stay data, not config — they are created and rotated
+// at runtime through /audit/destinations, and they carry secrets. This block
+// only mounts the plugin and sets its delivery behaviour.
+type AuditExportPluginConfig struct {
+	Enabled bool `yaml:"enabled" toml:"enabled"`
+	// BatchSize is the maximum number of outbox rows one drain pass claims per
+	// destination. Zero means the plugin default (100).
+	BatchSize int `yaml:"batch_size" toml:"batch_size"`
+	// BatchInterval is the worker poll cadence. Zero means the default (5s).
+	BatchInterval time.Duration `yaml:"batch_interval" toml:"batch_interval"`
+	// MaxInflight caps concurrent dispatches per destination. Zero means the
+	// default (4).
+	MaxInflight int `yaml:"max_inflight" toml:"max_inflight"`
+	// RetryMaxAttempts is the failure count at which a row goes to
+	// dead_letter. Zero means the default (5).
+	RetryMaxAttempts int32 `yaml:"retry_max_attempts" toml:"retry_max_attempts"`
+	// HTTPTimeout is the per-attempt request timeout for webhook delivery.
+	// Zero means the default (10s).
+	HTTPTimeout time.Duration `yaml:"http_timeout" toml:"http_timeout"`
+	// SignatureWindow is the maximum timestamp drift a receiver should accept
+	// when verifying the delivery signature. Zero means the default (5m).
+	SignatureWindow time.Duration `yaml:"signature_window" toml:"signature_window"`
+	// AllowPrivateDestinations opts INTO export destinations on loopback /
+	// RFC 1918 addresses.
+	//
+	// A destination URL or syslog host is chosen by an admin over the API and
+	// then connected to by the server for every exported row, so leaving this
+	// off keeps the process's network position from being aimed at anything it
+	// can reach. Shipping to an in-cluster collector or a syslog sidecar is a
+	// first-class deployment and should set it; the link-local metadata range
+	// stays refused either way. Default false.
+	AllowPrivateDestinations bool `yaml:"allow_private_destinations" toml:"allow_private_destinations"`
 }
 
 // SSOSAMLPluginConfig configures plugins/ssosaml.

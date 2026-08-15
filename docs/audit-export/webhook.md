@@ -60,11 +60,21 @@ The comparison is constant-time. Drift outside the configured window is treated 
   "format": "json",
   "config": {
     "url": "https://collector.example.com/yauth",
-    "hmac_secret": "...",
+    "hmac_secret": "at-least-32-characters-of-key-material",
     "header.Authorization": "Bearer ..."
   }
 }
 ```
+
+`hmac_secret` must be **at least 32 characters** when you supply one. The
+signature is the only thing that distinguishes a genuine audit delivery from
+one an attacker POSTs at the same collector, and a short key is recoverable
+offline from a single captured delivery. Generate it randomly — e.g.
+`openssl rand -hex 32`.
+
+Omitting `hmac_secret` entirely is still supported and means an unsigned
+destination (a collector on a private link, say); deliveries then carry no
+`X-Yauth-Signature` header at all, and `hmac_configured` reports `false`.
 
 Extra static headers are taken from any `header.<name>` key in `config`. Header values are treated as secrets and stripped from list/get responses.
 
@@ -75,6 +85,14 @@ so a client that reads a destination and writes it back cannot send them. On
 `PATCH`/`PUT` those keys are therefore **carried forward** from the stored row
 when the incoming `config` omits them. Every other key still replaces:
 omitting `url` removes it.
+
+The 32-character floor applies **only to a value the request actually
+supplies**, never to the carried-forward one. A destination created before the
+floor existed keeps its shorter secret indefinitely, and a `url`-only `PATCH`
+against it still succeeds — otherwise the ordinary read-edit-write round trip
+would be unfixably rejected, since the API never shows the client the secret it
+would need to send back. The shorter secret is only rejected if someone sends
+it (or another short value) explicitly.
 
 To turn signing off — or to drop a static header — send the key with an
 **empty string**:

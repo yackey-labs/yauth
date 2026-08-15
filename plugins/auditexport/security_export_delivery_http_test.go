@@ -182,7 +182,7 @@ func TestAuditExport_DestinationCreatedViaAPI_GetsAWorker(t *testing.T) {
 		"name":   "siem",
 		"kind":   "webhook",
 		"format": "json",
-		"config": map[string]string{"url": recv.URL(), "hmac_secret": "s3cret"},
+		"config": map[string]string{"url": recv.URL(), "hmac_secret": "shared-secret-that-is-at-least-32-chars"},
 	})
 	id, _ := created["id"].(string)
 	if id == "" {
@@ -296,7 +296,7 @@ func TestAuditExport_PatchPreservesSecrets(t *testing.T) {
 	recv := newCollector()
 	defer recv.Close()
 
-	const secret = "shared-secret"
+	const secret = "shared-secret-that-is-at-least-32-chars"
 	created := createViaAPI(t, env, tok, map[string]any{
 		"name":   "siem",
 		"kind":   "webhook",
@@ -378,7 +378,7 @@ func TestAuditExport_PatchWithoutConfigKeepsSigning(t *testing.T) {
 	recv := newCollector()
 	defer recv.Close()
 
-	const secret = "shared-secret"
+	const secret = "shared-secret-that-is-at-least-32-chars"
 	created := createViaAPI(t, env, tok, map[string]any{
 		"name":   "siem",
 		"kind":   "webhook",
@@ -427,7 +427,7 @@ func TestAuditExport_PatchEmptyStringDeletesKey(t *testing.T) {
 	created := createViaAPI(t, env, tok, map[string]any{
 		"name":   "siem",
 		"kind":   "webhook",
-		"config": map[string]string{"url": recv.URL(), "hmac_secret": "shared-secret"},
+		"config": map[string]string{"url": recv.URL(), "hmac_secret": "shared-secret-that-is-at-least-32-chars"},
 	})
 	id := created["id"].(string)
 	if !recv.waitForDelivery(1, 3*time.Second) {

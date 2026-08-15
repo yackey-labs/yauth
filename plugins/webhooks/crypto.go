@@ -144,7 +144,15 @@ func migrateLegacySecrets(ctx context.Context, r repo.Repository, key []byte) (m
 	now := time.Now().UTC()
 	var firstErr error
 	for _, h := range hooks {
-		if h == nil || h.Secret == "" || isEncrypted(h.Secret) {
+		// An empty secret used to be skipped here, which made the one row shape
+		// that produces an unsigned delivery also the one shape the normalising
+		// sweep refused to look at. Because decryptSecret reports any untagged
+		// value as legacy=true, such a row additionally made the dispatcher log
+		// "stored in CLEARTEXT, rotate it" on EVERY delivery, forever, about a
+		// secret that does not exist. encryptSecret seals an empty plaintext
+		// fine and decryptSecret round-trips it to ("", legacy=false), which
+		// silences the bogus warning and leaves no un-normalised row behind.
+		if h == nil || isEncrypted(h.Secret) {
 			continue
 		}
 		enc, encErr := encryptSecret(key, h.Secret)

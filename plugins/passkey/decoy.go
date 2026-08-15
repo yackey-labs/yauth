@@ -4,9 +4,11 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"io"
 	"sync"
 
 	"github.com/go-webauthn/webauthn/protocol"
+	"golang.org/x/crypto/hkdf"
 )
 
 // POST /passkey/login/begin takes an email and is unauthenticated,
@@ -55,10 +57,70 @@ var (
 	decoyFallbackKey  []byte
 )
 
+// decoyDerivedCache memoises the last HKDF expansion. POST /passkey/login/begin
+// is registered with empty Security and no Middlewares (plugin.go), so it is
+// public, unauthenticated and unmetered: without a cache every anonymous probe
+// would pay a fresh HKDF, twice over. A deployment has ONE JWT secret, so a
+// single-entry cache keyed on the secret hits essentially always.
+//
+// It must be keyed on the secret, not a sync.Once: a process-wide "derive once,
+// ignore the argument" cache would make the decoys independent of the
+// deployment key, which silently destroys the property that two deployments
+// disagree (enumeration_test.go) and that tests exercising several keys in one
+// process see different answers. A map would be an unbounded allocation driven
+// by an argument, so this is deliberately one entry.
+var decoyDerivedCache struct {
+	mu         sync.RWMutex
+	lastSecret string
+	derived    []byte
+}
+
+// decoyKey returns the HMAC key for the decoy construction.
+//
+// It used to return the JWT secret VERBATIM. Those same bytes are the
+// deployment's HS256 token-signing key, so every anonymous probe of
+// /passkey/login/begin made the process compute HMAC-SHA256 under the
+// token-signing key over an attacker-chosen message — the email address goes
+// into the MAC input as-is. Nothing known breaks HMAC-SHA256 that way, so this
+// is hardening rather than a live exploit, but "the public enumeration endpoint
+// is a chosen-message MAC oracle on the token key" is not a property worth
+// keeping when one HKDF label removes it. The webhook at-rest path already does
+// exactly this with the same input bytes (deriveWebhookKey, info
+// "yauth:webhook:secret:v1"); this is the passkey-side label.
 func decoyKey(jwtSecret []byte) []byte {
 	if len(jwtSecret) > 0 {
-		return jwtSecret
+		s := string(jwtSecret)
+		decoyDerivedCache.mu.RLock()
+		if decoyDerivedCache.derived != nil && decoyDerivedCache.lastSecret == s {
+			k := decoyDerivedCache.derived
+			decoyDerivedCache.mu.RUnlock()
+			return k
+		}
+		decoyDerivedCache.mu.RUnlock()
+
+		key := make([]byte, 32)
+		r := hkdf.New(sha256.New, jwtSecret, nil, []byte("yauth:passkey:decoy:v1"))
+		if _, err := io.ReadFull(r, key); err != nil {
+			// HKDF over a SHA-256 reader cannot fail for a 32-byte read; if it
+			// somehow did, falling back to the process-random key keeps the
+			// login ceremony answering rather than failing it, and still does
+			// not reuse the token-signing key.
+			return decoyFallback()
+		}
+		decoyDerivedCache.mu.Lock()
+		decoyDerivedCache.lastSecret, decoyDerivedCache.derived = s, key
+		decoyDerivedCache.mu.Unlock()
+		return key
 	}
+	return decoyFallback()
+}
+
+// decoyFallback is the no-JWT-secret path: a process-random key, generated
+// once. Decoys stay stable for the life of the process, which is enough for a
+// single-replica deployment; a multi-replica one without a shared JWT secret
+// leaks the decoy-vs-real difference to an attacker who can address individual
+// replicas, as the package comment says.
+func decoyFallback() []byte {
 	decoyFallbackOnce.Do(func() {
 		decoyFallbackKey = make([]byte, 32)
 		// A failure here would leave the key all zeroes, which is still stable
@@ -72,7 +134,12 @@ func decoyKey(jwtSecret []byte) []byte {
 // decoyCredentials returns the fabricated allowCredentials list for an address
 // that has no usable passkey here.
 func decoyCredentials(jwtSecret []byte, email string) []protocol.CredentialDescriptor {
-	mac := hmac.New(sha256.New, decoyKey(jwtSecret))
+	// Derived once per call, not once per credential: decoyKey used to be
+	// invoked inside the loop below, on a route anonymous callers can hit as
+	// fast as they like.
+	k := decoyKey(jwtSecret)
+
+	mac := hmac.New(sha256.New, k)
 	mac.Write([]byte(decoyLabel))
 	mac.Write([]byte{0})
 	mac.Write([]byte(email))
@@ -82,7 +149,7 @@ func decoyCredentials(jwtSecret []byte, email string) []protocol.CredentialDescr
 	count := 1 + int(seed[0]&1)
 	out := make([]protocol.CredentialDescriptor, 0, count)
 	for i := 0; i < count; i++ {
-		h := hmac.New(sha256.New, decoyKey(jwtSecret))
+		h := hmac.New(sha256.New, k)
 		h.Write(seed)
 		h.Write([]byte{byte(i)})
 		out = append(out, protocol.CredentialDescriptor{

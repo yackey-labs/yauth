@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.44.0](https://github.com/yackey-labs/yauth/compare/v0.43.0...v0.44.0) (2026-08-15)
+
+
+### ⚠ BREAKING CHANGES
+
+* **yauthcfg,yauth:** yauthcfg.PluginsConfig gains an AuditExport field. The loader runs with KnownFields(true), so a yauth.yaml carrying plugins.audit_export previously failed to boot and now configures the plugin — no existing config changes meaning, but a Go caller constructing PluginsConfig as a positional struct literal will not compile.
+* **ssosaml:** on a deployment issuing Secure cookies, /sso/saml/login now sets a short-lived SameSite=None binding cookie and /sso/saml/acs refuses an SP-initiated response presented without it (HTTP 400). A deployment that terminates the ACS on a different site than the one that served /sso/saml/login, or that strips cookies at a proxy, must set ssosaml.Config.LoginStateBinding to "off". Plain-HTTP deployments are unaffected by default: "auto" binds only when the deployment already issues Secure cookies.
+* **ssooidc,oauth,mfa,ci:** an ssooidc deployment whose IdP JWKS endpoint has been unreachable for longer than plugins.sso_oidc JWKSMaxStale (default 12h) now fails SSO logins for that connection instead of continuing on the cached document. Raise JWKSMaxStale for an IdP with a poor availability record, noting that doing so widens the window in which a revoked key stays accepted.
+
+### Features
+
+* **yauthcfg,yauth:** give plugins/auditexport a declarative surface, and make a missing one impossible to ship ([#136](https://github.com/yackey-labs/yauth/issues/136)) ([4be60a8](https://github.com/yackey-labs/yauth/commit/4be60a8d848c3b5e476d21a417a840907dfeff7b))
+
+
+### Bug Fixes
+
+* **organizations:** audit every mutation, and enforce that mechanically ([#135](https://github.com/yackey-labs/yauth/issues/135)) ([c2a74c7](https://github.com/yackey-labs/yauth/commit/c2a74c7b8396f781ceb370db5da76b0f3525b396))
+* **ssooidc,oauth,mfa,ci:** bound how long a revoked IdP key stays trusted, serialise lazy discovery, and take backup codes over the NIST floor ([#131](https://github.com/yackey-labs/yauth/issues/131)) ([a35dc95](https://github.com/yackey-labs/yauth/commit/a35dc95d42de28bff36bcd0969b60b24ea3a03da))
+* **ssosaml:** bind the SP-initiated SAML login to the browser that started it ([#134](https://github.com/yackey-labs/yauth/issues/134)) ([484e0f8](https://github.com/yackey-labs/yauth/commit/484e0f8bea350c9ec113e35d6f74520fbf4871a0))
+
+
+### Refactors
+
+* **auth,ssooidc,ssosaml,scim,passkey,safehttp,pgxrepo:** one definition for each duplicated security predicate, and enforce formatting ([#133](https://github.com/yackey-labs/yauth/issues/133)) ([e807b49](https://github.com/yackey-labs/yauth/commit/e807b49d104ef9572ac684663f87253c1a83444e))
+
 ## [0.43.0](https://github.com/yackey-labs/yauth/compare/v0.42.0...v0.43.0) (2026-08-15)
 
 

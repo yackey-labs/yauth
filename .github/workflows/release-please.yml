@@ -1,0 +1,82 @@
+name: Release PR
+
+# Maintains a "chore(main): release X.Y.Z" pull request from the
+# conventional-commit history on main, and — once that PR is merged — creates
+# the GitHub release and the vX.Y.Z tag.
+#
+# The tag is the ONLY release trigger in this repo: goreleaser.yml (Go binaries
+# + GHCR image) and release.yml (npm packages) both key off
+# `push: tags: v*.*.*`, and the unified-versioning contract is that one tag
+# releases both. That is what the dispatch step at the bottom protects.
+#
+# Two GITHUB_TOKEN behaviours shape this file, both documented under
+# "Triggering a workflow":
+#
+#   1. Events produced with the default GITHUB_TOKEN do not start new workflow
+#      runs (recursion guard). A tag this job pushes would therefore publish
+#      NOTHING — no binaries, no Docker image, and no npm packages.
+#      workflow_dispatch is an explicit exception that always creates a run, so
+#      the last step invokes both release workflows by hand, pinned to the new
+#      tag. `--ref <tag>` makes each one see refs/tags/vX.Y.Z exactly as a tag
+#      push would, which matters for npm: release.yml resolves its version from
+#      GITHUB_REF, and its npm OIDC trusted-publisher binding is pinned to that
+#      workflow filename — dispatching it directly keeps that identity intact,
+#      where calling it as a reusable workflow would not.
+#
+#   2. A pull request opened with GITHUB_TOKEN does get workflow runs, but in an
+#      approval-required state. Expect an "Approve workflows to run" button on
+#      each release PR; main's required status checks cannot pass until someone
+#      with write access presses it.
+#
+# Setting the optional RELEASE_PLEASE_TOKEN secret (a fine-grained PAT or GitHub
+# App token with contents:write + pull-requests:write) removes both papercuts:
+# CI starts on the release PR unattended, and the tag push triggers the two
+# release workflows on its own. The dispatch step stands down automatically when
+# that secret is present, so nothing is ever released twice.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write # create the release + tag
+  pull-requests: write # open and update the release PR
+  actions: write # dispatch goreleaser.yml and release.yml
+
+concurrency:
+  group: release-please-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    name: Release PR
+    runs-on: ubuntu-latest
+    env:
+      # Read once here so the dispatch step can branch on it: `secrets` is not
+      # available in a step-level `if`, but `env` is.
+      HAS_RELEASE_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN != '' }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      # Only runs on the push that MERGES the release PR, and only when the tag
+      # was pushed with GITHUB_TOKEN (see note 1 above). With
+      # RELEASE_PLEASE_TOKEN set, the tag push has already triggered both
+      # workflows and this is skipped.
+      - name: Publish the release (Go binaries, Docker image, npm packages)
+        if: steps.release.outputs.release_created == 'true' && env.HAS_RELEASE_TOKEN != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.release.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          echo "Dispatching the release workflows at ${TAG}"
+          gh workflow run goreleaser.yml --ref "${TAG}"
+          gh workflow run release.yml --ref "${TAG}"
+          echo "::notice::Dispatched goreleaser.yml and release.yml at ${TAG}"

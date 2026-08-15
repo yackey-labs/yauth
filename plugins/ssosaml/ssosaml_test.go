@@ -299,6 +299,10 @@ type fakeHost struct {
 	repo repo.Repository
 	mw   *middleware.Middleware
 	base string
+	// secure mirrors a deployment that issues Secure cookies. Defaults false so
+	// every existing test keeps its plain-HTTP behaviour; the login-binding
+	// suite flips it to check the SameSite=None the SAML POST binding needs.
+	secure bool
 }
 
 func newFakeHost(r repo.Repository, base string) *fakeHost {
@@ -310,7 +314,7 @@ func (h *fakeHost) Middleware() *middleware.Middleware         { return h.mw }
 func (h *fakeHost) SessionTTL() time.Duration                  { return time.Hour }
 func (h *fakeHost) CookieName() string                         { return "yauth_session" }
 func (h *fakeHost) CookieDomain() string                       { return "" }
-func (h *fakeHost) CookieSecure() bool                         { return false }
+func (h *fakeHost) CookieSecure() bool                         { return h.secure }
 func (h *fakeHost) CookiePath() string                         { return "/" }
 func (h *fakeHost) CookieSameSite() http.SameSite              { return http.SameSiteLaxMode }
 func (h *fakeHost) SessionBinding() (bool, bool)               { return false, false }
@@ -343,7 +347,11 @@ func (s *stubResolver) Resolve(_ *http.Request) (*domain.AuthUser, bool, error) 
 
 // --- helpers ----------------------------------------------------------
 
-func newPlugin(t *testing.T) *ssoSAMLPlugin {
+func newPlugin(t *testing.T) *ssoSAMLPlugin { return newPluginCfg(t, nil) }
+
+// newPluginCfg builds the plugin with an optional Config mutator, so a test can
+// exercise a non-default knob without a second copy of this constructor.
+func newPluginCfg(t *testing.T, mut func(*Config)) *ssoSAMLPlugin {
 	if t != nil {
 		t.Helper()
 	}
@@ -354,12 +362,16 @@ func newPlugin(t *testing.T) *ssoSAMLPlugin {
 		}
 		panic(err)
 	}
-	p, err := New(Config{
+	cfg := Config{
 		EncryptionKey:   key,
 		AuthnRequestTTL: 5 * time.Minute,
 		ReplayCacheTTL:  5 * time.Minute,
 		ClockSkew:       time.Minute,
-	})
+	}
+	if mut != nil {
+		mut(&cfg)
+	}
+	p, err := New(cfg)
 	if err != nil {
 		if t != nil {
 			t.Fatal(err)
@@ -536,11 +548,15 @@ type e2eFixture struct {
 	sp     *saml.ServiceProvider
 }
 
-func newE2E(t *testing.T) *e2eFixture {
+func newE2E(t *testing.T, opts ...func(*Config)) *e2eFixture {
 	t.Helper()
 	r := memrepo.New()
 	idp := newFakeIDP(t)
-	p := newPlugin(t)
+	var mut func(*Config)
+	if len(opts) > 0 {
+		mut = opts[0]
+	}
+	p := newPluginCfg(t, mut)
 	host := newFakeHost(r, "")
 	mux := http.NewServeMux()
 	p.Routes(host, mux, humaapi.New(mux), "")

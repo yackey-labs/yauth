@@ -658,14 +658,32 @@ func addAuthPlugins(builder *YAuthBuilder, cfg *yauthcfg.Config, mailer Mailer, 
 	}
 
 	if p.Webhooks.Enabled {
-		builder = builder.WithPlugin(webhooks.New(webhooks.Config{
+		webhookCfg := webhooks.Config{
 			MaxAttempts: p.Webhooks.MaxAttempts,
 			// Off unless the operator says otherwise: a webhook destination is
 			// admin-chosen and then dialled by the server on every event, so
 			// the default must not let it point at loopback or the metadata
 			// service. In-cluster deployments set allow_private_destinations.
 			AllowPrivateDestinations: p.Webhooks.AllowPrivateDestinations,
-		}))
+		}
+		// Give webhooks a key of its OWN when the operator names one. Without
+		// this the declarative path left Config.EncryptionKey empty and the
+		// plugin derived from PluginHost.JWTSecret() — so a JWT_SECRET
+		// rotation bricked every stored webhook secret, and a deployment
+		// without bearer could never store one.
+		//
+		// NOT routed through resolveAESKey: that helper demands a base64
+		// 32-byte value, whereas webhooks.Config.EncryptionKey is HKDF-SHA256
+		// input and accepts arbitrary bytes (deriveWebhookKey). Refusing key
+		// material the Go API already accepts would be over-refusal.
+		//
+		// An unset or empty env var stays "not configured" — len 0 keeps the
+		// JWT-secret fallback, and the plugin's boot-time Error still fires
+		// when neither exists. A missing value is never padded into a key.
+		if p.Webhooks.EncryptionKeyEnv != "" {
+			webhookCfg.EncryptionKey = []byte(os.Getenv(p.Webhooks.EncryptionKeyEnv))
+		}
+		builder = builder.WithPlugin(webhooks.New(webhookCfg))
 	}
 
 	if p.AsymJWT.Enabled {

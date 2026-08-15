@@ -108,7 +108,12 @@ func TestGenSecretsWritesEnv(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"JWT_SECRET=", "MFA_ENCRYPTION_KEY=", "WEBHOOK_DEFAULT_SECRET="} {
+	// WEBHOOK_DEFAULT_SECRET was pinned here until this commit. It was never
+	// read by anything — plugins.webhooks.default_secret_env, the only field
+	// that named it, is accepted-and-ignored — so this assertion was pinning
+	// the bug. WEBHOOK_ENCRYPTION_KEY replaces it and is consumed by
+	// plugins.webhooks.encryption_key_env.
+	for _, key := range []string{"JWT_SECRET=", "MFA_ENCRYPTION_KEY=", "WEBHOOK_ENCRYPTION_KEY="} {
 		if !strings.Contains(string(body), key) {
 			t.Errorf(".env missing %s; body:\n%s", key, body)
 		}

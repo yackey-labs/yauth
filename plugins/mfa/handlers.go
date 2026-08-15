@@ -478,7 +478,7 @@ func (p *mfaPlugin) handleVerify(host plugin.PluginHost) func(context.Context, *
 			return nil, huma.NewError(decBlockStatus(dec), decBlockMessage(dec))
 		}
 
-		ok, err := p.verifyCode(ctx, repoRef, userID, code)
+		ok, err := p.verifyCode(ctx, repoRef, host.Logger(), userID, code)
 		if err != nil {
 			return nil, huma.Error500InternalServerError("unable to verify mfa code")
 		}
@@ -592,7 +592,25 @@ func (p *mfaPlugin) consumePendingSession(ctx context.Context, repoRef repo.Repo
 // returned as an error rather than swallowed — reporting success without
 // spending the code would leave it replayable, which is the whole thing this
 // prevents.
-func (p *mfaPlugin) verifyCode(ctx context.Context, repoRef repo.Repository, userID, code string) (bool, error) {
+//
+// A TOTP secret that will not DECRYPT is treated as an absent factor rather
+// than as a failure of the whole check. The two factors have independent
+// fates: the TOTP secret is AES-256-GCM ciphertext under cfg.EncryptionKey,
+// while a backup code is a bare SHA-256 hash in yauth_mfa_backup_codes that
+// the AES key never touched. So when an operator rotates MFA_ENCRYPTION_KEY,
+// restores a database into an environment whose key env differs, or simply
+// loses the old value, every stored secret becomes undecryptable while every
+// printed recovery code is still perfectly verifiable. Returning the decrypt
+// error here — which is what this used to do, ABOVE the backup-code loop —
+// turned that into a 500 on every completion path (POST /mfa/verify, bearer's
+// POST /token/mfa, and requireStepUp, i.e. the very routes that would let a
+// user re-enrol), locking out every enrolled account with no self-service
+// exit while the codes in their wallet sat inert. Falling through concedes
+// nothing: a backup code is still checked against its own stored hash, is
+// still single-use, and an attacker gains no credential they did not already
+// have. The failure is logged loudly on every attempt because it is an
+// operator error that only the operator can end.
+func (p *mfaPlugin) verifyCode(ctx context.Context, repoRef repo.Repository, logger *slog.Logger, userID, code string) (bool, error) {
 	verified := true
 	row, err := repoRef.GetTOTPByUserID(ctx, userID, &verified)
 	if err != nil && !errors.Is(err, yautherr.ErrNotFound) {
@@ -601,9 +619,14 @@ func (p *mfaPlugin) verifyCode(ctx context.Context, repoRef repo.Repository, use
 	if row != nil {
 		secret, derr := decryptSecret(p.cfg.EncryptionKey, row.EncryptedSecret)
 		if derr != nil {
-			return false, derr
-		}
-		if step, valid := validateTOTPStep(code, secret, time.Now().UTC()); valid {
+			// Skip the TOTP branch entirely — do NOT validate against an
+			// empty secret, which would compare the submitted code against
+			// key material an attacker can guess at.
+			if logger != nil {
+				logger.Error("mfa: totp secret will not decrypt — the encryption key does not match the stored ciphertext; falling through to backup codes",
+					"error", derr, "user_id", userID)
+			}
+		} else if step, valid := validateTOTPStep(code, secret, time.Now().UTC()); valid {
 			if row.LastUsedStep != nil && step <= *row.LastUsedStep {
 				// Correct code, already spent. Refused, and refused
 				// INDISTINGUISHABLY from a wrong code — telling the two apart

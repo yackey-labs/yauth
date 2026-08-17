@@ -3,8 +3,10 @@ package yauth_test
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
@@ -316,4 +318,146 @@ func TestRateLimitFor_ResolvesConfigOverPluginDefaults(t *testing.T) {
 			t.Fatalf("Rule(%q).Max = %v; want %d", op, r.Max, want)
 		}
 	}
+}
+
+// POST /login can answer 429 for TWO unrelated reasons: the per-IP fixed-window
+// limiter ("you are going too fast") and the lockout plugin's
+// events.Block(429, "Account locked") ("this account is locked"). The lockout
+// one has always rendered through huma.NewError as RFC 9457 problem+json; the
+// limiter's used to be text/plain "Too Many Requests". One route, one status
+// code, two incompatible bodies — a client could not even special-case 429,
+// because the body shape depended on which of the two tripped.
+//
+// Both are problem+json now. This drives the real, fully wired stack (not the
+// middleware in isolation) and asserts every 429 it can produce parses as the
+// same {title,status,detail} envelope with the documented content type.
+func TestRateLimit_BothLoginRefusalsAreProblemJSON(t *testing.T) {
+	type problem struct {
+		Title      string `json:"title"`
+		Status     int    `json:"status"`
+		Detail     string `json:"detail"`
+		RetryAfter int    `json:"retry_after"`
+	}
+
+	// Decode a 429 body as problem+json, failing loudly on the text/plain
+	// this test exists to prevent. json.Unmarshal on "Too Many Requests\n"
+	// is precisely the error real clients surfaced to their users.
+	decode := func(t *testing.T, what string, res *http.Response) problem {
+		t.Helper()
+		body, err := io.ReadAll(res.Body)
+		res.Body.Close()
+		if err != nil {
+			t.Fatalf("%s: read body: %v", what, err)
+		}
+		if res.StatusCode != http.StatusTooManyRequests {
+			t.Fatalf("%s: want 429, got %d (%s)", what, res.StatusCode, body)
+		}
+		if ct := res.Header.Get("Content-Type"); ct != "application/problem+json" {
+			t.Errorf("%s: Content-Type: want application/problem+json, got %q (body=%s)", what, ct, body)
+		}
+		var p problem
+		if err := json.Unmarshal(body, &p); err != nil {
+			t.Fatalf("%s: 429 body is not JSON (%v): %s", what, err, body)
+		}
+		if p.Status != http.StatusTooManyRequests {
+			t.Errorf("%s: problem.status = %d, want 429", what, p.Status)
+		}
+		if p.Title == "" || p.Detail == "" {
+			t.Errorf("%s: problem must carry title and detail, got %+v", what, p)
+		}
+		return p
+	}
+
+	// (a) the per-IP limiter: spend a max=2 login budget, read the refusal.
+	t.Run("rate limiter", func(t *testing.T) {
+		srv, done := ratedServer(t, yauth.RateLimitConfig{Login: rule(2, time.Minute)})
+		defer done()
+
+		var res *http.Response
+		for range 3 {
+			res = postLogin(t, srv, "nobody@example.com", "wrong-password-here")
+			if res.StatusCode == http.StatusTooManyRequests {
+				break
+			}
+			res.Body.Close()
+			res = nil
+		}
+		if res == nil {
+			t.Fatal("the login limiter never refused within max+1 requests")
+		}
+		p := decode(t, "limiter", res)
+		if p.Detail != "rate limit exceeded" {
+			t.Errorf("limiter detail = %q, want %q", p.Detail, "rate limit exceeded")
+		}
+		if p.RetryAfter < 1 {
+			t.Errorf("limiter retry_after = %d, want >= 1 (browsers on another origin cannot read the header)", p.RetryAfter)
+		}
+		if h := res.Header.Get("Retry-After"); h != strconv.Itoa(p.RetryAfter) {
+			t.Errorf("Retry-After header %q disagrees with body retry_after %d", h, p.RetryAfter)
+		}
+		if h := res.Header.Get("X-RateLimit-Remaining"); h != "0" {
+			t.Errorf("X-RateLimit-Remaining: want 0, got %q", h)
+		}
+	})
+
+	// (b) lockout, on the same route, with the limiter disabled so only the
+	// lockout path can produce the 429. It already rendered as problem+json;
+	// this pins that the limiter now MATCHES it rather than the reverse.
+	t.Run("account lockout", func(t *testing.T) {
+		srv, done := ratedServer(t, yauth.RateLimitConfig{Login: rule(0, time.Minute)})
+		defer done()
+
+		const email = "locked-out-probe@example.com"
+		const pw = "correct horse battery staple 9!Z"
+		reg := postJSON2(t, srv, "/api/auth/register", map[string]string{"email": email, "password": pw})
+		if reg.StatusCode >= 300 {
+			body, _ := io.ReadAll(reg.Body)
+			reg.Body.Close()
+			t.Fatalf("register: got %d (%s)", reg.StatusCode, body)
+		}
+		reg.Body.Close()
+
+		// lockout.Config.MaxAttempts defaults to 5.
+		var res *http.Response
+		for i := range 8 {
+			res = postLogin(t, srv, email, "WRONG-bad-password-1!Z")
+			if res.StatusCode == http.StatusTooManyRequests {
+				break
+			}
+			res.Body.Close()
+			res = nil
+			if i == 7 {
+				t.Fatal("lockout never tripped in 8 failed logins")
+			}
+		}
+		if res == nil {
+			t.Fatal("lockout never tripped")
+		}
+		decode(t, "lockout", res)
+	})
+}
+
+// postLogin fires one login and returns the live response for the caller to
+// inspect (postN discards bodies).
+func postLogin(t *testing.T, srv *httptest.Server, email, password string) *http.Response {
+	t.Helper()
+	return postJSON2(t, srv, "/api/auth/login", map[string]string{"email": email, "password": password})
+}
+
+func postJSON2(t *testing.T, srv *httptest.Server, path string, body any) *http.Response {
+	t.Helper()
+	buf, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	req, err := http.NewRequest(http.MethodPost, srv.URL+path, bytes.NewReader(buf))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	return res
 }

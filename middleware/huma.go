@@ -174,18 +174,29 @@ func HTTPResponseFromContext(ctx context.Context) http.ResponseWriter {
 
 // RateLimitHuma adapts a net/http rate-limit middleware (as returned by
 // PluginHost.RateLimit / middleware.RateLimit) into a huma per-operation
-// middleware so migrated routes keep their EXACT fixed-window limiting,
-// X-RateLimit-* headers, and plain-text 429 (NOT problem+json) on block.
+// middleware so migrated routes keep their EXACT fixed-window limiting and
+// X-RateLimit-* headers on block.
 //
 // It runs the limiter against a sentinel http.Handler that records whether it
 // was invoked. On allow the limiter sets the X-RateLimit-* headers on the raw
 // writer and runs the sentinel; we then call huma's next so the operation
 // handler produces its normal response. On block the limiter writes its own
-// 429 ("Too Many Requests", Retry-After, X-RateLimit-*) directly to the raw
-// writer and never runs the sentinel; we then do NOT call next, leaving that
-// byte-identical legacy 429 as the response. It takes no huma.API because it
-// never renders through huma's error path — that is precisely what preserves
-// the legacy 429 shape.
+// 429 (Retry-After, X-RateLimit-*, and an RFC 9457 problem+json body — see
+// middleware.writeRateLimitProblem) directly to the raw writer and never runs
+// the sentinel; we then do NOT call next, leaving that response as-is.
+//
+// It takes no huma.API and does NOT render through huma's error path. That is
+// deliberate, but the reason is no longer "preserve a plain-text 429" — the
+// body IS problem+json now, byte-identical to what huma.NewError would
+// produce. The reason is ownership: the limiter is an opaque net/http
+// middleware a host may supply itself via PluginHost.RateLimit, it owns the
+// headers and the body of its own refusal, and passing that response straight
+// through is what makes the net/http stack and the huma stack agree BY
+// CONSTRUCTION — one writer, no second copy of the body to drift.
+//
+// The one thing this gives up is huma's response content negotiation: a
+// client that asked for application/cbor still gets the 429 as JSON. That is
+// the accepted cost of not double-writing a body the limiter already wrote.
 //
 // A nil limiter (e.g. RateLimit returns next unchanged when disabled) is
 // handled by the limiter itself becoming a passthrough; callers always wrap

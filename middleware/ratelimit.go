@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"time"
@@ -13,12 +14,66 @@ import (
 	"github.com/yackey-labs/yauth/telemetry"
 )
 
+// RateLimitedDetail is the `detail` carried by the 429 this middleware
+// writes when a bucket is exhausted. Clients can match on this exact string
+// (alongside HTTP 429) to tell a throttled request apart from the OTHER 429
+// yauth emits on the same routes — the lockout plugin's
+// events.Block(429, "Account locked"), which means "this account is locked",
+// not "you are going too fast". Two conditions, one status code, so the
+// status alone was never enough to route on.
+const RateLimitedDetail = "rate limit exceeded"
+
+// rateLimitProblem is the RFC 9457 body for the rate-limit 429. The first
+// three fields, and their ORDER, mirror huma.ErrorModel as populated by
+// huma.NewError (Type is empty there, so it is omitted here too) — the same
+// shape every other yauth error renders in, including the lockout 429 that
+// can come back from these very routes.
+//
+// RetryAfter is an RFC 9457 §3.2 extension member duplicating the Retry-After
+// header. It is not decoration: Retry-After and X-RateLimit-* are not
+// CORS-safelisted response headers and yauth sets no
+// Access-Control-Expose-Headers, so a browser client on another origin cannot
+// read them at all. In the body the wait is reachable by every client.
+type rateLimitProblem struct {
+	Title      string `json:"title"`
+	Status     int    `json:"status"`
+	Detail     string `json:"detail"`
+	RetryAfter int    `json:"retry_after"`
+}
+
+// writeRateLimitProblem renders the rate-limit refusal as problem+json:
+//
+//	Content-Type: application/problem+json
+//	{"title":"Too Many Requests","status":429,"detail":"rate limit exceeded","retry_after":30}
+//
+// Callers set Retry-After and the X-RateLimit-* headers themselves; this
+// writes only the status line, the content type, and the body.
+//
+// This is the ONE place a 429 body is produced, for BOTH stacks: the huma
+// bridge (RateLimitHuma) runs this same middleware against the raw writer
+// rather than rendering through huma's error path, so the two cannot drift.
+func writeRateLimitProblem(w http.ResponseWriter, retryAfter int) {
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(http.StatusTooManyRequests)
+	_ = json.NewEncoder(w).Encode(rateLimitProblem{
+		Title:      http.StatusText(http.StatusTooManyRequests),
+		Status:     http.StatusTooManyRequests,
+		Detail:     RateLimitedDetail,
+		RetryAfter: retryAfter,
+	})
+}
+
 // RateLimit returns an http middleware that enforces a fixed-window rate
 // limit against the configured RateLimitRepository. Each request consumes
 // one slot in the bucket keyed by name + ":" + clientIdentifier (the
 // caller's IP host). When the bucket is exhausted the middleware writes
 // a 429 with X-RateLimit-Remaining=0 and Retry-After (seconds) and does
 // not invoke next.
+//
+// The 429 body is RFC 9457 problem+json — {title,status,detail} exactly as
+// huma.NewError renders it, plus a retry_after extension member — served as
+// application/problem+json. It was plain text through v0.44.0; see
+// writeRateLimitProblem for why that changed.
 //
 // Backends are expected to fail-open: a CheckRateLimit error returns a
 // permissive result and the request continues. A nil repo, max <= 0, or
@@ -62,7 +117,7 @@ func RateLimit(r repo.RateLimitRepository, name string, max int, window time.Dur
 				w.Header().Set("X-RateLimit-Limit", strconv.Itoa(max))
 				w.Header().Set("X-RateLimit-Remaining", "0")
 				w.Header().Set("Retry-After", strconv.Itoa(retry))
-				http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
+				writeRateLimitProblem(w, retry)
 				return
 			}
 			w.Header().Set("X-RateLimit-Limit", strconv.Itoa(max))

@@ -105,8 +105,8 @@ func stashGuardsAllowMustChange(api huma.API, mw *middleware.Middleware) huma.Mi
 }
 
 // rateLimitedGuards is the per-operation middleware chain for the six public
-// routes: the route's fixed-window rate limiter (outermost, preserving the
-// plain-text 429 on block) followed by StashHTTPHuma so the handlers that need
+// routes: the route's fixed-window rate limiter (outermost, writing its own
+// problem+json 429 on block) followed by StashHTTPHuma so the handlers that need
 // it can reach RequestIP and the cookie writer. The request body itself is a
 // huma-native typed Body (parsed/validated by huma), not a stashed decode.
 func rateLimitedGuards(rl func(http.Handler) http.Handler, api huma.API) huma.Middlewares {

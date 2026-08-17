@@ -165,8 +165,9 @@ func (p *emailPasswordPlugin) Name() string { return "email-password" }
 // longer uses it.
 //
 // host.RateLimit is a no-op when max<=0, so the same wiring works regardless
-// of the operator's config; the RateLimitHuma bridge preserves the plain-text
-// 429 and X-RateLimit-* headers on block (NOT problem+json).
+// of the operator's config; the RateLimitHuma bridge preserves the limiter's
+// own 429 — Retry-After, X-RateLimit-* headers, and an RFC 9457 problem+json
+// body, the same shape every other error on these routes uses.
 func (p *emailPasswordPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.API, prefix string) {
 	p.logger = host.Logger()
 	// If the default console mailer is in use, give it the host logger and

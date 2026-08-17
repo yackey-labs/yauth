@@ -871,6 +871,28 @@ rate_limit:
 
 An omitted `max` keeps yauth's default; `max: 0` is an explicit "no limit".
 
+A refusal is RFC 9457 problem+json, like every other yauth error:
+
+```http
+HTTP/1.1 429 Too Many Requests
+Content-Type: application/problem+json
+Retry-After: 12
+X-RateLimit-Limit: 10
+X-RateLimit-Remaining: 0
+
+{"title":"Too Many Requests","status":429,"detail":"rate limit exceeded","retry_after":12}
+```
+
+`retry_after` duplicates the header because `Retry-After` and `X-RateLimit-*`
+are not CORS-safelisted response headers — a browser client on another origin
+can only read the body. Match on `detail` to tell this apart from the *other*
+429 these routes emit: the lockout plugin's `Account locked`, which means the
+account is locked, not that the caller is going too fast.
+
+**This body was `text/plain` "Too Many Requests" through v0.44.0.** A client
+that parsed it as text, or that called `JSON.parse` only after checking
+`response.ok`, is unaffected.
+
 The OAuth2 wire endpoints are metered because they are anonymous by
 specification and still reach a 64 MiB argon2id client-secret verification on
 nothing but a `client_id`, which is public by construction. **Raise

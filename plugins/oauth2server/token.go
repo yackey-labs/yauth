@@ -137,8 +137,12 @@ func (p *oauth2Plugin) handleToken(host plugin.PluginHost) http.HandlerFunc {
 // access+refresh tokens. When scopes include "openid", an id_token is
 // also issued.
 func (p *oauth2Plugin) grantAuthCode(host plugin.PluginHost, w http.ResponseWriter, r *http.Request, f *tokenForm) {
-	if f.Code == "" || f.RedirectURI == "" || f.CodeVerifier == "" {
-		writeOAuthError(w, "invalid_request", "code, redirect_uri, code_verifier are required")
+	if reason := missingParams(
+		reqParam{"code", f.Code},
+		reqParam{"redirect_uri", f.RedirectURI},
+		reqParam{"code_verifier", f.CodeVerifier},
+	); reason != "" {
+		writeOAuthError(w, "invalid_request", reason)
 		return
 	}
 

@@ -87,8 +87,12 @@ func (p *oauth2Plugin) handleAuthorize(host plugin.PluginHost) http.HandlerFunc 
 		nonce := q.Get("nonce")
 		scopes := splitScopes(q.Get("scope"))
 
-		if clientID == "" || redirectURI == "" || challenge == "" {
-			writeOAuthError(w, "invalid_request", "client_id, redirect_uri, code_challenge are required")
+		if reason := missingParams(
+			reqParam{"client_id", clientID},
+			reqParam{"redirect_uri", redirectURI},
+			reqParam{"code_challenge", challenge},
+		); reason != "" {
+			writeOAuthError(w, "invalid_request", reason)
 			return
 		}
 		if method == "" {

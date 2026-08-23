@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.45.0](https://github.com/yackey-labs/yauth/compare/v0.44.0...v0.45.0) (2026-08-23)
+
+
+### ⚠ BREAKING CHANGES
+
+* **middleware:** a rate-limited request now answers 429 with Content-Type: application/problem+json and the body {"title":"Too Many Requests","status":429,"detail":"rate limit exceeded","retry_after":N} instead of text/plain "Too Many Requests". Retry-After and the X-RateLimit-* headers are unchanged. Act if you string-compare the 429 body against "Too Many Requests", surface it to users as prose, or log it expecting text; switch to the status code, or to `detail`. Clients that already parse problem+json — including yauth's own TS client — need no change and get a better message. Clients that call JSON.parse before checking response.ok stop erroring on this path.
+
+### Bug Fixes
+
+* **middleware:** answer a throttled request in problem+json like every other error ([#138](https://github.com/yackey-labs/yauth/issues/138)) ([0a92fc5](https://github.com/yackey-labs/yauth/commit/0a92fc59c62defb745ec93b839dcf080585f7d03))
+* **oauth2server:** name the parameter that is actually missing ([#140](https://github.com/yackey-labs/yauth/issues/140)) ([ce59389](https://github.com/yackey-labs/yauth/commit/ce593892c41b5bbb782dd67aadd2d454e52fe38f))
+
 ## [0.44.0](https://github.com/yackey-labs/yauth/compare/v0.43.0...v0.44.0) (2026-08-15)
 
 

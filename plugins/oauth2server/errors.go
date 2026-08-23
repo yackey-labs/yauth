@@ -3,6 +3,7 @@ package oauth2server
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 )
 
 // oauthError is the RFC 6749 §5.2 error response shape.
@@ -73,4 +74,46 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Pragma", "no-cache")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// reqParam is one wire parameter and the value that arrived for it, for
+// [missingParams].
+type reqParam struct {
+	name  string
+	value string
+}
+
+// missingParams builds the error_description for an RFC 6749 invalid_request
+// caused by absent parameters, naming ONLY the ones that are actually absent.
+// It returns "" when every parameter has a value, which is the caller's
+// "carry on" signal.
+//
+// The two call sites used to list every parameter they checked, whichever one
+// was missing. An oauth2-proxy client that sent a perfectly good client_id and
+// redirect_uri but no code_challenge was told "client_id, redirect_uri,
+// code_challenge are required", which reads as a broken client registration and
+// sends whoever is debugging it to re-check the two parameters that were fine.
+// A message that names three things when one is wrong is worse than no message:
+// it is a message pointing the wrong way.
+//
+// Only the human-readable half changes. RFC 6749 §5.2 defines the error CODE
+// as the machine-readable field and error_description as free text for the
+// developer, so the code stays invalid_request and no client that switches on
+// it is affected. Emptiness is still literal "" — a whitespace-only value is
+// left to fail its own downstream validation, exactly as before.
+func missingParams(params ...reqParam) string {
+	missing := make([]string, 0, len(params))
+	for _, p := range params {
+		if p.value == "" {
+			missing = append(missing, p.name)
+		}
+	}
+	switch len(missing) {
+	case 0:
+		return ""
+	case 1:
+		return missing[0] + " is required"
+	default:
+		return strings.Join(missing[:len(missing)-1], ", ") + " and " + missing[len(missing)-1] + " are required"
+	}
 }

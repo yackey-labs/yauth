@@ -32,7 +32,7 @@
     "test": "vp test run"
   },
   "dependencies": {
-    "@simplewebauthn/browser": "^13.0.0",
+    "@simplewebauthn/browser": "^14.0.0",
     "@yackey-labs/yauth-client": "workspace:*",
     "@yackey-labs/yauth-shared": "workspace:*",
     "vue": "^3.5.0"

@@ -206,13 +206,13 @@ func TestWebhookDelivery_OnUserRegistered(t *testing.T) {
 	// a scheme keyed on the body alone verified a captured delivery of a
 	// headerless timestamp forever, since every retry re-sent the identical
 	// signature. Verify the new scheme shapes it exactly.
-	sigTs, err := strconv.ParseInt(hit.Timestamp, 10, 64)
+	sigTS, err := strconv.ParseInt(hit.Timestamp, 10, 64)
 	if err != nil {
 		t.Fatalf("X-YAuth-Timestamp header: got %q (%v)", hit.Timestamp, err)
 	}
-	wantSig := computeHMAC(secret, sigTs, hit.Body)
+	wantSig := computeHMAC(secret, sigTS, hit.Body)
 	if hit.Signature != "sha256="+wantSig {
-		t.Fatalf("signature mismatch:\n got  %s\n want sha256=%s\n ts   %d\n body %s", hit.Signature, wantSig, sigTs, hit.Body)
+		t.Fatalf("signature mismatch:\n got  %s\n want sha256=%s\n ts   %d\n body %s", hit.Signature, wantSig, sigTS, hit.Body)
 	}
 	// The old (body-only) scheme must NOT verify: guard against silently
 	// regressing to a replayable signature.

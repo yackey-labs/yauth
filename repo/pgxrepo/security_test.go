@@ -71,6 +71,12 @@ func secMustOwner(t *testing.T, r *pgxrepo.Repo, id, orgID, userID string) {
 	}
 }
 
+// exactlyOneWon reports whether one call succeeded and the other failed with
+// loserErr, in either order.
+func exactlyOneWon(e1, e2, loserErr error) bool {
+	return (e1 == nil && errors.Is(e2, loserErr)) || (e2 == nil && errors.Is(e1, loserErr))
+}
+
 // runPair releases two functions at the same instant and reports both errors.
 func runPair(fn1, fn2 func() error) (error, error) {
 	start := make(chan struct{})
@@ -111,8 +117,7 @@ func TestOwnerProtectionConcurrentDemote(t *testing.T) {
 		if e1 == nil && e2 == nil {
 			t.Fatalf("iteration %d: TOCTOU — both owner demotions committed, org %s now has zero owners", i, org)
 		}
-		if !((e1 == nil && errors.Is(e2, yautherr.ErrOwnerProtected)) ||
-			(e2 == nil && errors.Is(e1, yautherr.ErrOwnerProtected))) {
+		if !exactlyOneWon(e1, e2, yautherr.ErrOwnerProtected) {
 			t.Fatalf("iteration %d: want (nil, ErrOwnerProtected) in some order, got (%v, %v)", i, e1, e2)
 		}
 		ms, err := r.ListMembershipsByOrg(secCtx(), org)
@@ -150,8 +155,7 @@ func TestOwnerProtectionConcurrentDelete(t *testing.T) {
 		if e1 == nil && e2 == nil {
 			t.Fatalf("iteration %d: TOCTOU — both owner deletions committed, org %s now has zero owners", i, org)
 		}
-		if !((e1 == nil && errors.Is(e2, yautherr.ErrOwnerProtected)) ||
-			(e2 == nil && errors.Is(e1, yautherr.ErrOwnerProtected))) {
+		if !exactlyOneWon(e1, e2, yautherr.ErrOwnerProtected) {
 			t.Fatalf("iteration %d: want (nil, ErrOwnerProtected) in some order, got (%v, %v)", i, e1, e2)
 		}
 	}
@@ -191,8 +195,7 @@ func TestDeviceCodeConcurrentApprove(t *testing.T) {
 			got, _ := r.GetDeviceCodeByDeviceCodeHash(secCtx(), "dh-"+tag)
 			t.Fatalf("iteration %d: both approvals committed (last-writer-wins on user_id=%v)", i, got.UserID)
 		}
-		if !((e1 == nil && errors.Is(e2, yautherr.ErrNotFound)) ||
-			(e2 == nil && errors.Is(e1, yautherr.ErrNotFound))) {
+		if !exactlyOneWon(e1, e2, yautherr.ErrNotFound) {
 			t.Fatalf("iteration %d: want (nil, ErrNotFound) in some order, got (%v, %v)", i, e1, e2)
 		}
 	}
@@ -305,8 +308,7 @@ func TestDeleteUserConcurrentCoOwnersNoDeadlock(t *testing.T) {
 			func() error { return r.DeleteUser(secCtx(), u1) },
 			func() error { return r.DeleteUser(secCtx(), u2) },
 		)
-		if !((e1 == nil && errors.Is(e2, yautherr.ErrOwnerProtected)) ||
-			(e2 == nil && errors.Is(e1, yautherr.ErrOwnerProtected))) {
+		if !exactlyOneWon(e1, e2, yautherr.ErrOwnerProtected) {
 			t.Fatalf("iteration %d: want (nil, ErrOwnerProtected) in some order, got (%v, %v)", i, e1, e2)
 		}
 	}

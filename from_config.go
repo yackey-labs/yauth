@@ -1039,7 +1039,7 @@ func buildSMTPMailer(cfg yauthcfg.MailerConfig) (Mailer, error) {
 		// the mailer falls back to when TLSMode is empty, so dropping it
 		// would silently turn every `tls: true` install from implicit TLS
 		// into an opportunistic upgrade.
-		TLS:     cfg.SMTP.TLS,
+		TLS:     cfg.SMTP.TLS, //nolint:staticcheck // deprecated fallback carried on purpose; see above
 		TLSMode: cfg.SMTP.TLSMode,
 	}), nil
 }

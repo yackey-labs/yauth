@@ -462,7 +462,9 @@ func (r *Repo) UpdateDeviceCodeStatus(ctx context.Context, id, status string, us
 	// queries/oauth2_server.sql (UpdateDeviceCodeStatus).
 	// A pending code can never be consumed directly: redemption requires a
 	// prior approval.
-	if !(d.Status == "pending" && status != "consumed") && !(d.Status == "approved" && status == "consumed") {
+	allowed := (d.Status == "pending" && status != "consumed") ||
+		(d.Status == "approved" && status == "consumed")
+	if !allowed {
 		return yautherr.ErrNotFound
 	}
 	d.Status = status

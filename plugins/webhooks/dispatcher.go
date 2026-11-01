@@ -471,7 +471,7 @@ func (d *Dispatcher) deliver(ctx context.Context, job *deliveryJob) deliveryOutc
 		d.recordDelivery(ctx, job, body, nil, fmt.Sprintf("build request: %v", err), false)
 		return deliveryOutcome{success: false, retryable: false}
 	}
-	signingTs := time.Now().UTC().Unix()
+	signingTS := time.Now().UTC().Unix()
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-YAuth-Event", job.eventType)
 	req.Header.Set("X-YAuth-Delivery", deliveryID)
@@ -499,8 +499,8 @@ func (d *Dispatcher) deliver(ctx context.Context, job *deliveryJob) deliveryOutc
 	// outage visible only in the deliveries table is not an improvement. Log it
 	// loudly instead, so the gap is on someone's screen rather than on the wire.
 	if rawSecret != "" {
-		req.Header.Set("X-YAuth-Timestamp", strconv.FormatInt(signingTs, 10))
-		req.Header.Set("X-YAuth-Signature", signaturePrefix+signPayload(rawSecret, signingTs, body))
+		req.Header.Set("X-YAuth-Timestamp", strconv.FormatInt(signingTS, 10))
+		req.Header.Set("X-YAuth-Signature", signaturePrefix+signPayload(rawSecret, signingTS, body))
 	} else {
 		d.logf("webhooks: webhook %s has NO signing secret; this delivery goes out UNSIGNED "+
 			"(no X-YAuth-Signature header) — a receiver cannot authenticate it. Set a secret "+

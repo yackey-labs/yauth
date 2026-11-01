@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.45.1](https://github.com/yackey-labs/yauth/compare/v0.45.0...v0.45.1) (2026-11-01)
+
+
+### Bug Fixes
+
+* **deps,passkey:** apply all open Dependabot updates; keep MFA credit on the assertion's UV under go-webauthn v0.18 ([#153](https://github.com/yackey-labs/yauth/issues/153)) ([178040c](https://github.com/yackey-labs/yauth/commit/178040c7bd09a875af45c33acb16b6b727be4cc9))
+
 ## [0.45.0](https://github.com/yackey-labs/yauth/compare/v0.44.0...v0.45.0) (2026-11-01)
 
 

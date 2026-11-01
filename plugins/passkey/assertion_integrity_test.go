@@ -90,6 +90,9 @@ type virtualAuthenticator struct {
 	credID []byte
 	pub    ed25519.PublicKey
 	priv   ed25519.PrivateKey
+	// recordUV seeds the stored credential record as registered with user
+	// verification (webauthn.Credential.Flags.UserVerified).
+	recordUV bool
 }
 
 func newVirtualAuthenticator(t *testing.T) *virtualAuthenticator {
@@ -109,12 +112,16 @@ func newVirtualAuthenticator(t *testing.T) *virtualAuthenticator {
 // so protocol.Verify -> webauthncose.ParsePublicKey accepts it. Hand-rolled
 // CBOR rather than pulling fxamacker/cbor into go.mod for a test:
 //
-//	a3            map(3)
+//	a4            map(4)
 //	  01 01       1 (kty)  : 1  (OKP)
 //	  03 27       3 (alg)  : -8 (EdDSA)
+//	  20 06       -1 (crv) : 6  (Ed25519)
 //	  21 58 20 .. -2 (x)   : bstr(32)
+//
+// crv is required for OKP keys (RFC 9053 §7.2) and real authenticators always
+// send it; go-webauthn >= 0.18 rejects an EdDSA key without it.
 func (a *virtualAuthenticator) coseKey() []byte {
-	return append([]byte{0xa3, 0x01, 0x01, 0x03, 0x27, 0x21, 0x58, 0x20}, a.pub...)
+	return append([]byte{0xa4, 0x01, 0x01, 0x03, 0x27, 0x20, 0x06, 0x21, 0x58, 0x20}, a.pub...)
 }
 
 // storedCredential is the webauthn.Credential JSON blob the repo holds for this
@@ -129,6 +136,7 @@ func (a *virtualAuthenticator) storedCredential(t *testing.T, signCount uint32) 
 		AttestationFormat: "none",
 	}
 	c.Authenticator.SignCount = signCount
+	c.Flags.UserVerified = a.recordUV
 	raw, err := json.Marshal(c)
 	if err != nil {
 		t.Fatalf("marshal credential: %v", err)
@@ -372,6 +380,31 @@ func TestLoginFinish_UnverifiedAssertionMustNotSatisfyMFA(t *testing.T) {
 // plus a biometric/PIN, so the same TOTP-enrolled account still completes in
 // one leg with a cookie — no second prompt, no behaviour change for anyone
 // whose authenticator does the verification it is supposed to.
+// TestLoginFinish_UVRecordDoesNotCreditUnverifiedAssertion: MFA credit must
+// come from THIS assertion's UV bit, never from the stored credential record.
+// Since go-webauthn v0.18 the returned Credential.Flags.UserVerified is the
+// record's latched state, so reading it would let a credential registered with
+// UV skip the second factor on a UV=0 login.
+func TestLoginFinish_UVRecordDoesNotCreditUnverifiedAssertion(t *testing.T) {
+	h := newAssertionHarness(t, true)
+	u := seedUser(t, h.repo, vaUserEml)
+	enrollTOTP(t, h.repo, u.ID)
+	a := newVirtualAuthenticator(t)
+	a.recordUV = true
+	h.seedAuthenticator(t, u.ID, a, 0)
+
+	rec := h.login(t, a, u, false /* userVerified */, 1)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected a 200 challenge response, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if body := decodeFinish(t, rec); !body.RequireMfa || body.User != nil {
+		t.Errorf("UV=0 assertion on a UV-registered credential was credited as the second factor: %+v", body)
+	}
+	if n := sessionCount(t, h.repo); n != 0 {
+		t.Errorf("UV=0 assertion created %d session rows against a TOTP-enrolled account", n)
+	}
+}
+
 func TestLoginFinish_VerifiedAssertionStillSatisfiesMFA(t *testing.T) {
 	h := newAssertionHarness(t, true)
 	u := seedUser(t, h.repo, vaUserEml)

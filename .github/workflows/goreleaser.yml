@@ -43,7 +43,9 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.25'
+          # Release binaries are built with the patched toolchain go.mod pins
+          # (the `toolchain` line), not just the module's minimum Go version.
+          go-version-file: go.mod
           cache: true
 
       - name: Set up QEMU

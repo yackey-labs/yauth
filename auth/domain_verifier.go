@@ -85,7 +85,10 @@ func CanonicalizeDomain(s string) (string, error) {
 	// not a valid name and idna will refuse what remains.
 	t = strings.TrimSuffix(t, ".")
 	t = strings.ToLower(t)
-	if t == "" {
+	// Reject empty labels up front: ToASCII keeps a trailing dot, and the
+	// defensive strip below would otherwise turn "acme.com.." into
+	// "acme.com".
+	if t == "" || strings.HasPrefix(t, ".") || strings.HasSuffix(t, ".") || strings.Contains(t, "..") {
 		return "", ErrInvalidDomain
 	}
 	ascii, err := idna.Lookup.ToASCII(t)

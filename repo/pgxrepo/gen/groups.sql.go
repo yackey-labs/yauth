@@ -384,8 +384,8 @@ const updateGroup = `-- name: UpdateGroup :one
 UPDATE yauth_groups
 SET
     name        = COALESCE($3, name),
-    description = CASE WHEN $6::boolean THEN NULL ELSE COALESCE($4, description) END,
-    external_id = CASE WHEN $7::boolean THEN NULL ELSE COALESCE($5, external_id) END,
+    description = CASE WHEN $4::boolean THEN NULL ELSE COALESCE($5, description) END,
+    external_id = CASE WHEN $6::boolean THEN NULL ELSE COALESCE($7, external_id) END,
     updated_at  = $1
 WHERE id = $2
 RETURNING id, organization_id, name, description, external_id, created_at, updated_at
@@ -395,10 +395,10 @@ type UpdateGroupParams struct {
 	UpdatedAt        pgtype.Timestamptz
 	ID               string
 	Name             *string
-	Description      *string
-	ExternalID       *string
 	ClearDescription bool
+	Description      *string
 	ClearExternalID  bool
+	ExternalID       *string
 }
 
 func (q *Queries) UpdateGroup(ctx context.Context, arg UpdateGroupParams) (YauthGroup, error) {
@@ -406,10 +406,10 @@ func (q *Queries) UpdateGroup(ctx context.Context, arg UpdateGroupParams) (Yauth
 		arg.UpdatedAt,
 		arg.ID,
 		arg.Name,
-		arg.Description,
-		arg.ExternalID,
 		arg.ClearDescription,
+		arg.Description,
 		arg.ClearExternalID,
+		arg.ExternalID,
 	)
 	var i YauthGroup
 	err := row.Scan(

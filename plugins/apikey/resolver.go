@@ -118,13 +118,17 @@ func (r *apiKeyResolver) Resolve(req *http.Request) (*domain.AuthUser, bool, err
 	if rec.OrganizationID != nil {
 		creator, err := repo.GetUserByID(ctx, rec.CreatedByUserID)
 		if err != nil {
-			if errors.Is(err, yautherr.ErrNotFound) {
-				// Creator was deleted — the key is orphaned but
-				// the org still owns it. Surface as a clean 401
-				// rather than crashing on a nil deref.
-				return nil, true, yautherr.ErrUnauthorized
+			if !errors.Is(err, yautherr.ErrNotFound) {
+				return nil, true, err
 			}
-			return nil, true, err
+			// Creator was deleted. The key belongs to the org, not the
+			// creator (DeleteUser deliberately keeps org keys), so it
+			// keeps working. Stand in a bare user carrying only the
+			// creator's id as the audit pointer: no email, no global
+			// role. Nothing on the service-account path reads more —
+			// every user-identity gate (admin, active-org hydration,
+			// install-admin) refuses or skips service-account principals.
+			creator = &domain.User{ID: rec.CreatedByUserID}
 		}
 		// A banned creator does NOT invalidate the org key on its
 		// own (the key belongs to the org, not the creator). The

@@ -268,3 +268,46 @@ func TestUpdateGroupConcurrentMerge(t *testing.T) {
 		}
 	}
 }
+
+// TestDeleteUserConcurrentCoOwnersNoDeadlock: two users co-own orgs X and Y,
+// and their memberships were created in opposite orders, so each user's
+// membership list names the orgs in opposite order. DeleteUser must lock
+// owners in a fixed (org id) order; locking in membership order deadlocks
+// (Postgres aborts one side with 40P01). Exactly one delete may win; the
+// other leaves the survivor as last owner and must see ErrOwnerProtected.
+func TestDeleteUserConcurrentCoOwnersNoDeadlock(t *testing.T) {
+	r := newSecRepo(t)
+	mkOwner := func(id, orgID, userID string, at time.Time) {
+		t.Helper()
+		if _, err := r.CreateMembership(secCtx(), domain.NewMembership{
+			ID: id, OrganizationID: orgID, UserID: userID,
+			Role: "owner", Status: domain.MembershipActive,
+			CreatedAt: at, UpdatedAt: at, OwnerRoleAuthorized: true,
+		}); err != nil {
+			t.Fatalf("CreateMembership(%s): %v", id, err)
+		}
+	}
+	base := secNow()
+	for i := 0; i < 25; i++ {
+		x, y := fmt.Sprintf("o-dl-%d-x", i), fmt.Sprintf("o-dl-%d-y", i)
+		u1, u2 := fmt.Sprintf("u-dl-%d-1", i), fmt.Sprintf("u-dl-%d-2", i)
+		secMustOrg(t, r, x, "X "+x, "slug-"+x)
+		secMustOrg(t, r, y, "Y "+y, "slug-"+y)
+		secMustUser(t, r, u1, u1+"@example.com")
+		secMustUser(t, r, u2, u2+"@example.com")
+		// u1 joins Y first, then X; u2 joins X first, then Y.
+		mkOwner("m-"+u1+"-y", y, u1, base)
+		mkOwner("m-"+u1+"-x", x, u1, base.Add(time.Second))
+		mkOwner("m-"+u2+"-x", x, u2, base)
+		mkOwner("m-"+u2+"-y", y, u2, base.Add(time.Second))
+
+		e1, e2 := runPair(
+			func() error { return r.DeleteUser(secCtx(), u1) },
+			func() error { return r.DeleteUser(secCtx(), u2) },
+		)
+		if !((e1 == nil && errors.Is(e2, yautherr.ErrOwnerProtected)) ||
+			(e2 == nil && errors.Is(e1, yautherr.ErrOwnerProtected))) {
+			t.Fatalf("iteration %d: want (nil, ErrOwnerProtected) in some order, got (%v, %v)", i, e1, e2)
+		}
+	}
+}

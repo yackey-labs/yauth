@@ -182,13 +182,7 @@ func (r *Repo) DeleteUser(ctx context.Context, id string) error {
 		if m.UserID != id || m.Role != memrepoOwnerRole {
 			continue
 		}
-		owners := 0
-		for _, o := range r.memberships {
-			if o.OrganizationID == m.OrganizationID && o.Role == memrepoOwnerRole {
-				owners++
-			}
-		}
-		if owners <= 1 {
+		if r.countOwnersInOrg(m.OrganizationID) <= 1 {
 			return yautherr.ErrOwnerProtected
 		}
 	}

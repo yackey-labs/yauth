@@ -78,13 +78,9 @@ var rateLimitWarns sync.Map // name -> time.Time of last WARN
 // public contract), so it logs through slog.Default — the same sink the
 // YAuth builder installs its resolved logger as when the app uses the builder.
 func noteRateLimitError(name string, err error) {
-	now := time.Now()
-	if v, ok := rateLimitWarns.Load(name); ok {
-		if last, ok := v.(time.Time); ok && now.Sub(last) < time.Minute {
-			return
-		}
+	if !logThrottled(&rateLimitWarns, name) {
+		return
 	}
-	rateLimitWarns.Store(name, now)
 	slog.Default().Warn("yauth: rate-limit check failed — failing open (requests are NOT throttled)",
 		"limiter", name, "err", err)
 }

@@ -1132,6 +1132,9 @@ func (p *adminPlugin) registerDeleteUser(host plugin.PluginHost, api huma.API, m
 			if errors.Is(err, yautherr.ErrNotFound) {
 				return nil, huma.Error404NotFound("user not found")
 			}
+			if errors.Is(err, yautherr.ErrOwnerProtected) {
+				return nil, huma.Error409Conflict("user is the last owner of an organization; transfer ownership before deleting")
+			}
 			return nil, huma.Error500InternalServerError("unable to delete user")
 		}
 

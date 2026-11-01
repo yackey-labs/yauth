@@ -25,6 +25,7 @@ import (
 	"github.com/yackey-labs/yauth/plugins/asymjwt"
 	"github.com/yackey-labs/yauth/plugins/bearer"
 	"github.com/yackey-labs/yauth/plugins/oauth2server"
+	"github.com/yackey-labs/yauth/repo"
 	"github.com/yackey-labs/yauth/repo/memrepo"
 )
 
@@ -37,11 +38,22 @@ type harness struct {
 
 func newHarness(t *testing.T) *harness {
 	t.Helper()
+	return newHarnessWrapped(t, nil)
+}
+
+// newHarnessWrapped is newHarness with the repo yauth sees optionally
+// wrapped (fault injection); h.repo stays the underlying memrepo.
+func newHarnessWrapped(t *testing.T, wrap func(repo.Repository) repo.Repository) *harness {
+	t.Helper()
 	r := memrepo.New()
+	var yr repo.Repository = r
+	if wrap != nil {
+		yr = wrap(r)
+	}
 
 	jwtSecret := []byte("test-only-jwt-secret-please-change-32b")
 
-	ya, err := yauth.New(r, yauth.NewDefaultConfig()).
+	ya, err := yauth.New(yr, yauth.NewDefaultConfig()).
 		WithJWTSecret(jwtSecret).
 		WithPlugin(bearer.New(bearer.Config{})).
 		WithPlugin(oauth2server.New(oauth2server.Config{

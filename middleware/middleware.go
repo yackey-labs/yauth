@@ -591,11 +591,11 @@ func (m *Middleware) requireAuth(next http.Handler, allowMustChange bool) http.H
 	})
 }
 
-// mustChangeProblem is the RFC 9457 body for the must_change_password 403.
+// problemBody is the RFC 9457 body the net/http middlewares write.
 // Field set and ORDER mirror huma.ErrorModel as populated by huma.NewError
 // (Type is empty there, so omitted here too), which is what makes the two
 // stacks byte-identical.
-type mustChangeProblem struct {
+type problemBody struct {
 	Title  string `json:"title"`
 	Status int    `json:"status"`
 	Detail string `json:"detail"`
@@ -615,12 +615,18 @@ type mustChangeProblem struct {
 // shapes for one condition, depending on which middleware stack happened to
 // serve the route, is a worse trap than one inconsistent body in this file.
 func writeMustChangeProblem(w http.ResponseWriter) {
+	writeProblem(w, http.StatusForbidden, MustChangePasswordDetail)
+}
+
+// writeProblem renders status + detail as problem+json in huma's shape.
+// The 429 has its own writer only because it adds a retry_after member.
+func writeProblem(w http.ResponseWriter, status int, detail string) {
 	w.Header().Set("Content-Type", "application/problem+json")
-	w.WriteHeader(http.StatusForbidden)
-	_ = json.NewEncoder(w).Encode(mustChangeProblem{
-		Title:  http.StatusText(http.StatusForbidden),
-		Status: http.StatusForbidden,
-		Detail: MustChangePasswordDetail,
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(problemBody{
+		Title:  http.StatusText(status),
+		Status: status,
+		Detail: detail,
 	})
 }
 

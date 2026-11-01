@@ -256,7 +256,7 @@ func (p *oauth2Plugin) grantDeviceCode(host plugin.PluginHost, w http.ResponseWr
 			writeOAuthError(w, "invalid_grant", "device_code not recognised")
 			return
 		}
-		writeOAuthError(w, "server_error", err2.Error())
+		writeOAuthError(w, "server_error", "unable to load device_code")
 		return
 	}
 	if dc.ClientID != client.ClientID {
@@ -301,14 +301,21 @@ func (p *oauth2Plugin) grantDeviceCode(host plugin.PluginHost, w http.ResponseWr
 		return
 	}
 	if err2 := host.Repo().UpdateDeviceCodeStatus(r.Context(), dc.ID, "consumed", dc.UserID); err2 != nil {
-		writeOAuthError(w, "server_error", err2.Error())
+		// The status update is a compare-and-swap: ErrNotFound means a
+		// concurrent poll already redeemed (or the code vanished). That is
+		// the client's grant being spent, not a server fault (RFC 8628 §3.5).
+		if errors.Is(err2, yautherr.ErrNotFound) {
+			writeOAuthError(w, "invalid_grant", "device_code already used")
+			return
+		}
+		writeOAuthError(w, "server_error", "unable to redeem device_code")
 		return
 	}
 
 	scopes := decodeScopes(dc.Scopes)
 	resp, err3 := p.mintTokens(r.Context(), host, client, user, scopes, nil)
 	if err3 != nil {
-		writeOAuthError(w, "server_error", err3.Error())
+		writeOAuthError(w, "server_error", "unable to issue tokens")
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)

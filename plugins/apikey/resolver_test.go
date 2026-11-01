@@ -271,21 +271,24 @@ func TestResolver_OrgScopedKey(t *testing.T) {
 	}
 }
 
-// TestResolver_OrgScopedKey_CreatorDeleted asserts that a key whose
-// human creator has been deleted returns 401 cleanly rather than
-// crashing.
+// TestResolver_OrgScopedKey_CreatorDeleted asserts that an org key
+// outlives its human creator: DeleteUser keeps org keys (they belong to
+// the org), so the resolver must keep honouring them. The stand-in user
+// carries only the creator id — no email, no global role.
 func TestResolver_OrgScopedKey_CreatorDeleted(t *testing.T) {
 	r := newFakeRepo()
 	h := newFakeHost(r)
 	// Do NOT seed creator; key references a missing user.
 	gen := mustGenerateKey(t)
 	orgID := uuid.NewString()
+	memberRole := "member"
 	r.putKey(domain.APIKey{
 		ID:              uuid.NewString(),
 		OrganizationID:  &orgID,
 		KeyPrefix:       gen.Prefix,
 		KeyHash:         gen.Hash,
 		Name:            "orphan",
+		Role:            &memberRole,
 		Scopes:          []byte("[]"),
 		CreatedAt:       time.Now().UTC(),
 		CreatedByUserID: "deleted-user-id",
@@ -294,10 +297,16 @@ func TestResolver_OrgScopedKey_CreatorDeleted(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set(headerName, gen.Plaintext)
 	au, recognized, err := res.Resolve(req)
-	if au != nil || !recognized {
-		t.Fatalf("want (nil, true), got (%v, %v)", au, recognized)
+	if err != nil || !recognized || au == nil {
+		t.Fatalf("want (au, true, nil), got (%v, %v, %v)", au, recognized, err)
 	}
-	if !errors.Is(err, yautherr.ErrUnauthorized) {
-		t.Errorf("want ErrUnauthorized, got %v", err)
+	if !au.Principal.IsServiceAccount() {
+		t.Errorf("want service-account principal, got %+v", au.Principal)
+	}
+	if au.User.ID != "deleted-user-id" || au.User.Role != "" || au.User.Email != "" {
+		t.Errorf("stand-in user must carry only the creator id, got %+v", au.User)
+	}
+	if au.ActiveOrgID == nil || *au.ActiveOrgID != orgID || au.OrgRole == nil || *au.OrgRole != "member" {
+		t.Errorf("org binding not surfaced: org=%v role=%v", au.ActiveOrgID, au.OrgRole)
 	}
 }

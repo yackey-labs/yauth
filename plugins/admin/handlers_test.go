@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -548,6 +549,44 @@ func TestAdmin_DeleteUser_RefusesSelfDelete(t *testing.T) {
 
 	if _, err := env.repo.GetUserByID(context.Background(), adminUser.ID); err != nil {
 		t.Fatalf("admin should still exist: %v", err)
+	}
+}
+
+// TestAdmin_DeleteUser_LastOrgOwner409 asserts that deleting a user who is
+// the only owner of an org is refused as a 409 with an actionable message,
+// not a 500, and that nothing is deleted.
+func TestAdmin_DeleteUser_LastOrgOwner409(t *testing.T) {
+	env := newEnv(t)
+	defer env.stop()
+
+	adminUser := env.seedUser(t, "admin@example.com", "admin")
+	target := env.seedUser(t, "owner@example.com", "user")
+	tok := env.issueSession(t, adminUser.ID)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	if _, err := env.repo.CreateOrganization(ctx, domain.NewOrganization{
+		ID: "org-1", Name: "Org", Slug: "org", CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	if _, err := env.repo.CreateMembership(ctx, domain.NewMembership{
+		ID: "m-1", OrganizationID: "org-1", UserID: target.ID,
+		Role: "owner", Status: domain.MembershipActive,
+		CreatedAt: now, UpdatedAt: now, OwnerRoleAuthorized: true,
+	}); err != nil {
+		t.Fatalf("create membership: %v", err)
+	}
+
+	res := env.do(t, http.MethodDelete, "/api/auth/admin/users/"+target.ID, tok, nil)
+	body := drain(res)
+	if res.StatusCode != http.StatusConflict {
+		t.Fatalf("last-owner delete: expected 409, got %d (%s)", res.StatusCode, body)
+	}
+	if !strings.Contains(body, "transfer ownership") {
+		t.Fatalf("409 body should say how to resolve, got %s", body)
+	}
+	if _, err := env.repo.GetUserByID(ctx, target.ID); err != nil {
+		t.Fatalf("target should still exist: %v", err)
 	}
 }
 

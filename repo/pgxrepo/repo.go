@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 
@@ -209,15 +210,23 @@ func (r *Repo) DeleteUser(ctx context.Context, id string) error {
 		// cascade removes the user's memberships, so refuse when that would
 		// leave an org with no owner. LockOrgOwners serializes concurrent
 		// removals of co-owners.
+		//
+		// Locks are taken in org-id order, not membership order: two
+		// concurrent DeleteUser calls for co-owners of the same orgs would
+		// otherwise lock them in opposite orders and deadlock.
 		memberships, err := pgxgen.New(tx).ListMembershipsByUser(ctx, id)
 		if err != nil {
 			return err
 		}
+		ownedOrgs := make([]string, 0, len(memberships))
 		for _, m := range memberships {
-			if m.Role != pgxOwnerRole {
-				continue
+			if m.Role == pgxOwnerRole {
+				ownedOrgs = append(ownedOrgs, m.OrganizationID)
 			}
-			owners, err := pgxgen.New(tx).LockOrgOwners(ctx, m.OrganizationID)
+		}
+		slices.Sort(ownedOrgs)
+		for _, orgID := range slices.Compact(ownedOrgs) {
+			owners, err := pgxgen.New(tx).LockOrgOwners(ctx, orgID)
 			if err != nil {
 				return err
 			}

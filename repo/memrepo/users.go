@@ -176,6 +176,22 @@ func (r *Repo) DeleteUser(ctx context.Context, id string) error {
 	if !ok {
 		return yautherr.ErrNotFound
 	}
+	// Last-owner protection, mirroring pgxrepo: refuse before mutating
+	// anything when the cascade would leave an org with no owner.
+	for _, m := range r.memberships {
+		if m.UserID != id || m.Role != memrepoOwnerRole {
+			continue
+		}
+		owners := 0
+		for _, o := range r.memberships {
+			if o.OrganizationID == m.OrganizationID && o.Role == memrepoOwnerRole {
+				owners++
+			}
+		}
+		if owners <= 1 {
+			return yautherr.ErrOwnerProtected
+		}
+	}
 	delete(r.emailIdx, u.Email)
 	delete(r.users, id)
 	// Explicit cascade: memrepo holds no foreign keys either, so every
@@ -198,7 +214,7 @@ func (r *Repo) DeleteUser(ctx context.Context, id string) error {
 		}
 	}
 	for kid, k := range r.apiKeys {
-		if (k.UserID != nil && *k.UserID == id) || k.CreatedByUserID == id {
+		if k.UserID != nil && *k.UserID == id {
 			delete(r.apiKeyPrefixIdx, k.KeyPrefix)
 			delete(r.apiKeys, kid)
 		}

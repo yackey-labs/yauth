@@ -96,6 +96,9 @@ func (r *Repo) UpdateGroup(ctx context.Context, id string, changes domain.Update
 		Name:        changes.Name,
 		Description: changes.Description,
 		ExternalID:  changes.ExternalID,
+
+		ClearDescription: changes.ClearDescription,
+		ClearExternalID:  changes.ClearExternalID,
 	})
 	if err != nil {
 		return domain.Group{}, notFound(err)

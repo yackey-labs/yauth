@@ -720,6 +720,15 @@ func (p *scimPlugin) handleListUsers(host plugin.PluginHost) http.HandlerFunc {
 				continue
 			}
 			u, err := repo.GetUserByID(ctx, m.UserID)
+			if err != nil && !errors.Is(err, yautherr.ErrNotFound) {
+				// A transient repo failure must not silently shorten the
+				// page: a connector that stops on a short page would end
+				// its sync early. Only a genuinely missing user (an
+				// orphaned membership row, which DeleteUser's cascade now
+				// prevents) is skipped.
+				writeScimError(w, repoToScim(err))
+				return
+			}
 			if err != nil || u == nil {
 				continue
 			}

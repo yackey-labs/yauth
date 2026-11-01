@@ -176,13 +176,16 @@ func (r *Repo) DeleteUser(ctx context.Context, id string) error {
 	// survive the user), challenges/rate-limit/revocation rows (keyed by
 	// opaque caller-chosen keys, not reliably user-mapped), OAuth/SSO
 	// login-state rows (no user column; they expire in minutes), and
-	// invitations the user sent (deleting them would strand invitees).
+	// invitations the user sent (deleting them would strand invitees), and
+	// org-scoped (service-account) API keys the user merely minted — those
+	// belong to the org and its integrations (SCIM, CI), and
+	// created_by_user_id stays behind as an audit pointer.
 	cascades := []string{
 		"DELETE FROM yauth_oidc_nonces WHERE authorization_code_id IN (SELECT id FROM yauth_authorization_codes WHERE user_id = $1)",
 		"DELETE FROM yauth_authorization_codes WHERE user_id = $1",
 		"DELETE FROM yauth_sessions WHERE user_id = $1",
 		"DELETE FROM yauth_refresh_tokens WHERE user_id = $1",
-		"DELETE FROM yauth_api_keys WHERE user_id = $1 OR created_by_user_id = $1",
+		"DELETE FROM yauth_api_keys WHERE user_id = $1",
 		"DELETE FROM yauth_oauth_accounts WHERE user_id = $1",
 		"DELETE FROM yauth_consents WHERE user_id = $1",
 		"DELETE FROM yauth_memberships WHERE user_id = $1",
@@ -202,6 +205,26 @@ func (r *Repo) DeleteUser(ctx context.Context, id string) error {
 		"DELETE FROM yauth_magic_links WHERE email = (SELECT email FROM yauth_users WHERE id = $1)",
 	}
 	return r.withTx(ctx, func(tx pgx.Tx) error {
+		// Last-owner protection, same contract as DeleteMembership: the
+		// cascade removes the user's memberships, so refuse when that would
+		// leave an org with no owner. LockOrgOwners serializes concurrent
+		// removals of co-owners.
+		memberships, err := pgxgen.New(tx).ListMembershipsByUser(ctx, id)
+		if err != nil {
+			return err
+		}
+		for _, m := range memberships {
+			if m.Role != pgxOwnerRole {
+				continue
+			}
+			owners, err := pgxgen.New(tx).LockOrgOwners(ctx, m.OrganizationID)
+			if err != nil {
+				return err
+			}
+			if len(owners) <= 1 {
+				return yautherr.ErrOwnerProtected
+			}
+		}
 		for _, stmt := range cascades {
 			if _, err := tx.Exec(ctx, stmt, id); err != nil {
 				return err

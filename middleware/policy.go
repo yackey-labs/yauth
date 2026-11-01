@@ -57,7 +57,9 @@
 package middleware
 
 import (
+	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -167,7 +169,9 @@ func (e *OrgPolicyEnforcer) Wrap(next http.Handler) http.Handler {
 				// row's contents are not the caller's business.
 				// NotFound still means "no policy row" and passes through
 				// to the inherit-global path below.
-				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+				slog.Default().Error("yauth: org policy lookup failed — refusing request (fail closed)",
+					"org_id", orgID, "err", err)
+				writePolicyProblem(w, http.StatusInternalServerError, "Internal Server Error")
 				return
 			}
 
@@ -179,8 +183,15 @@ func (e *OrgPolicyEnforcer) Wrap(next http.Handler) http.Handler {
 
 			// IP allowlist — 403 on mismatch. Skip the check when the
 			// allowlist is empty (the enforcer returns true on empty).
-			if !enf.CheckIPAllowlist(clientIP(r)) {
-				http.Error(w, "Forbidden — IP not in allowlist", http.StatusForbidden)
+			if ok, ipErr := enf.CheckIPAllowlistStrict(clientIP(r)); !ok {
+				if ipErr != nil {
+					// Distinguish a misconfiguration / blank client address
+					// from an ordinary mismatch so the operator can see WHY
+					// an org's members are locked out.
+					slog.Default().Warn("yauth: org IP allowlist denied request",
+						"org_id", orgID, "reason", ipErr.Error())
+				}
+				writePolicyProblem(w, http.StatusForbidden, "Forbidden — IP not in allowlist")
 				return
 			}
 
@@ -188,12 +199,24 @@ func (e *OrgPolicyEnforcer) Wrap(next http.Handler) http.Handler {
 			// the proxy for "last activity" until a dedicated
 			// LastSeenAt column is added.
 			if idleExceeded(enf, au.Session) {
-				http.Error(w, "Unauthorized — session idle timeout", http.StatusUnauthorized)
+				writePolicyProblem(w, http.StatusUnauthorized, "Unauthorized — session idle timeout")
 				return
 			}
 		}
 
 		next.ServeHTTP(w, r)
+	})
+}
+
+// writePolicyProblem renders a policy refusal as problem+json, matching
+// every other error the API produces.
+func writePolicyProblem(w http.ResponseWriter, status int, detail string) {
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"title":  http.StatusText(status),
+		"status": status,
+		"detail": detail,
 	})
 }
 

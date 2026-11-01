@@ -80,6 +80,8 @@ func bootstrapAdmin(ctx context.Context, r repo.Repository, logger *slog.Logger,
 		if v := strings.TrimSpace(os.Getenv(cfg.PasswordEnv)); v != "" {
 			password = v
 			resolvedOutsideConfig = true
+		} else {
+			logger.Warn("yauth: bootstrap_admin password_env is set but the variable is unset or empty — falling back to password_file/password or a generated password", "env", cfg.PasswordEnv)
 		}
 	}
 	if !resolvedOutsideConfig && cfg.PasswordFile != "" {

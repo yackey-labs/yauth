@@ -460,7 +460,9 @@ func (r *Repo) UpdateDeviceCodeStatus(ctx context.Context, id, status string, us
 	// concurrent approval loses with ErrNotFound instead of
 	// last-writer-winning on user_id. Mirrors the SQL predicate in
 	// queries/oauth2_server.sql (UpdateDeviceCodeStatus).
-	if d.Status != "pending" && !(d.Status == "approved" && status == "consumed") {
+	// A pending code can never be consumed directly: redemption requires a
+	// prior approval.
+	if !(d.Status == "pending" && status != "consumed") && !(d.Status == "approved" && status == "consumed") {
 		return yautherr.ErrNotFound
 	}
 	d.Status = status

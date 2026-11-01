@@ -395,8 +395,13 @@ func (r *Repo) ListMembershipsByOrg(ctx context.Context, orgID string) ([]*domai
 			out = append(out, cloneMembership(m))
 		}
 	}
+	// (created_at, id) — the same total order as the SQL, so windowed
+	// reads (SCIM pagination) never overlap or skip on timestamp ties.
 	sort.Slice(out, func(i, j int) bool {
-		return out[i].CreatedAt.Before(out[j].CreatedAt)
+		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].CreatedAt.Before(out[j].CreatedAt)
+		}
+		return out[i].ID < out[j].ID
 	})
 	return out, nil
 }

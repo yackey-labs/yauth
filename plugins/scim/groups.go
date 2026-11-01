@@ -319,8 +319,12 @@ func (p *scimPlugin) handlePutGroup(host plugin.PluginHost) http.HandlerFunc {
 		}
 		if payload.ExternalID != "" {
 			changes.ExternalID = &payload.ExternalID
+		} else {
+			// PUT is a full replace: an absent externalId means "no
+			// external id", not "keep the stale one".
+			changes.ClearExternalID = true
 		}
-		if changes.Name != nil || changes.ExternalID != nil {
+		if changes.Name != nil || changes.ExternalID != nil || changes.ClearExternalID {
 			if updated, err := host.Repo().UpdateGroup(r.Context(), g.ID, changes); err == nil {
 				g = &updated
 			} else if errors.Is(err, yautherr.ErrConflict) {

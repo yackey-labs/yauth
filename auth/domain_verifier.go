@@ -22,6 +22,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"regexp"
 	"strings"
 
 	"golang.org/x/net/idna"
@@ -60,6 +61,11 @@ func (a LookupTXTAdapter) LookupTXT(ctx context.Context, name string) ([]string,
 // Resolves via the OS default. Concurrency-safe for shared use.
 var DefaultDomainTXTResolver DomainTXTResolver = LookupTXTAdapter{}
 
+var (
+	idnaRelaxed     = idna.New(idna.MapForLookup(), idna.BidiRule(), idna.StrictDomainName(false))
+	relaxedDomainRE = regexp.MustCompile(`^[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?(\.[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?)*$`)
+)
+
 // CanonicalizeDomain normalizes a DNS domain name for comparison and
 // lookup: surrounding whitespace is trimmed, a single trailing dot (the
 // FQDN root marker, as in "acme.com.") is stripped, the name is
@@ -84,13 +90,22 @@ func CanonicalizeDomain(s string) (string, error) {
 	}
 	ascii, err := idna.Lookup.ToASCII(t)
 	if err != nil {
-		return "", ErrInvalidDomain
+		// The strict (STD3) profile rejects "_", which is legal in DNS
+		// names and in real mail domains (my_corp.example). Retry with the
+		// relaxed profile, then re-impose an explicit hostname-ish
+		// alphabet so the relaxation admits underscores and nothing else
+		// (no spaces, slashes, or other injection characters).
+		relaxed, rerr := idnaRelaxed.ToASCII(t)
+		if rerr != nil || !relaxedDomainRE.MatchString(strings.ToLower(relaxed)) {
+			return "", ErrInvalidDomain
+		}
+		ascii = relaxed
 	}
 	// ToASCII preserves a trailing dot on FQDN input that still carried
 	// one (and lowercases); normalize again defensively.
 	ascii = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(ascii), "."))
-	if ascii == "" {
-		return "", ErrInvalidDomain
+	if ascii == "" || strings.Contains(ascii, "..") || strings.HasPrefix(ascii, ".") {
+		return "", ErrInvalidDomain // empty label
 	}
 	return ascii, nil
 }

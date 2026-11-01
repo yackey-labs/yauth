@@ -601,11 +601,16 @@ func (p *passkeyPlugin) handleLoginFinish(host plugin.PluginHost) func(context.C
 			return nil, huma.Error500InternalServerError("unable to update credential")
 		}
 
-		// verified.Flags.UserVerified is set by go-webauthn from the assertion's
-		// authenticator data (validateLogin -> NewCredentialFlags). It is the
-		// only evidence that a biometric/PIN was collected, and it decides
-		// whether this login may be credited as second-factor-verified.
-		return p.completeLogin(ctx, host, w, r, matchedUser, verified.Flags.UserVerified)
+		// Whether THIS ceremony verified the user (biometric/PIN) decides if the
+		// login may be credited as second-factor-verified, so it must come from
+		// this assertion's authenticator data. Not verified.Flags.UserVerified:
+		// since go-webauthn v0.18 that is the credential RECORD's latched state
+		// (CredentialFlags.Update keeps it from the stored record), so a
+		// credential registered with UV would credit MFA to a later UV=0
+		// assertion. The assertion has already been verified above, so its
+		// flags are authentic.
+		ceremonyUV := parsed.Response.AuthenticatorData.Flags.HasUserVerified()
+		return p.completeLogin(ctx, host, w, r, matchedUser, ceremonyUV)
 	}
 }
 

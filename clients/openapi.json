@@ -524,6 +524,55 @@
         },
         "type": "object"
       },
+      "AuthenticationExtensions": {
+        "additionalProperties": false,
+        "properties": {
+          "appid": {
+            "type": "string"
+          },
+          "appidExclude": {
+            "type": "string"
+          },
+          "credBlob": {
+            "contentEncoding": "base64",
+            "type": "string"
+          },
+          "credProps": {
+            "type": "boolean"
+          },
+          "credentialProtectionPolicy": {
+            "type": "string"
+          },
+          "enforceCredentialProtectionPolicy": {
+            "type": "boolean"
+          },
+          "getCredBlob": {
+            "type": "boolean"
+          },
+          "hmacCreateSecret": {
+            "type": "boolean"
+          },
+          "hmacGetSecret": {
+            "$ref": "#/components/schemas/HMACGetSecretInputs"
+          },
+          "largeBlob": {
+            "$ref": "#/components/schemas/LargeBlobInputs"
+          },
+          "minPinLength": {
+            "type": "boolean"
+          },
+          "prf": {
+            "$ref": "#/components/schemas/PRFInputs"
+          },
+          "remoteClientDataJSON": {
+            "type": "string"
+          },
+          "uvm": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
       "AuthenticatorSelection": {
         "additionalProperties": false,
         "properties": {
@@ -1301,6 +1350,8 @@
           },
           "status_code": {
             "format": "int32",
+            "maximum": 32767,
+            "minimum": -32768,
             "type": "integer"
           },
           "success": {
@@ -1727,6 +1778,23 @@
         ],
         "type": "object"
       },
+      "HMACGetSecretInputs": {
+        "additionalProperties": false,
+        "properties": {
+          "salt1": {
+            "contentEncoding": "base64",
+            "type": "string"
+          },
+          "salt2": {
+            "contentEncoding": "base64",
+            "type": "string"
+          }
+        },
+        "required": [
+          "salt1"
+        ],
+        "type": "object"
+      },
       "ImpersonateResponse": {
         "additionalProperties": false,
         "properties": {
@@ -1793,6 +1861,22 @@
             "type": "boolean"
           },
           "token_type": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "LargeBlobInputs": {
+        "additionalProperties": false,
+        "properties": {
+          "read": {
+            "type": "boolean"
+          },
+          "support": {
+            "type": "string"
+          },
+          "write": {
+            "contentEncoding": "base64",
             "type": "string"
           }
         },
@@ -2837,6 +2921,38 @@
         ],
         "type": "object"
       },
+      "PRFInputs": {
+        "additionalProperties": false,
+        "properties": {
+          "eval": {
+            "$ref": "#/components/schemas/PRFValues"
+          },
+          "evalByCredential": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/PRFValues"
+            },
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "PRFValues": {
+        "additionalProperties": false,
+        "properties": {
+          "first": {
+            "contentEncoding": "base64",
+            "type": "string"
+          },
+          "second": {
+            "contentEncoding": "base64",
+            "type": "string"
+          }
+        },
+        "required": [
+          "first"
+        ],
+        "type": "object"
+      },
       "PasskeyJSON": {
         "additionalProperties": false,
         "properties": {
@@ -3225,8 +3341,7 @@
             ]
           },
           "extensions": {
-            "additionalProperties": {},
-            "type": "object"
+            "$ref": "#/components/schemas/AuthenticationExtensions"
           },
           "hints": {
             "items": {
@@ -3281,8 +3396,7 @@
             "type": "string"
           },
           "extensions": {
-            "additionalProperties": {},
-            "type": "object"
+            "$ref": "#/components/schemas/AuthenticationExtensions"
           },
           "hints": {
             "items": {

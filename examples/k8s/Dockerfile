@@ -5,7 +5,7 @@
 # Build:
 #   docker build -t yauth-app:latest --target app .
 #   docker build -t yauth-cli:latest --target cli .
-FROM golang:1.25 AS build
+FROM golang:1.26.10 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download

@@ -3,10 +3,15 @@ package scim
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/yackey-labs/yauth/domain"
+	"github.com/yackey-labs/yauth/events"
+	"github.com/yackey-labs/yauth/humaapi"
+	"github.com/yackey-labs/yauth/plugin"
+	"github.com/yackey-labs/yauth/repo/memrepo"
 )
 
 // seedScimUser creates a user via the SCIM API and returns its id.
@@ -110,5 +115,79 @@ func TestScim_PutActiveTrue_DoesNotClearAdminSuspend(t *testing.T) {
 	}
 	if u.SuspendedReason == nil || *u.SuspendedReason != reason {
 		t.Fatalf("expected admin reason preserved, got %v", u.SuspendedReason)
+	}
+}
+
+// emitHost records every event the plugin emits so tests can assert the
+// suspend/unsuspend fan-out pair.
+type emitHost struct {
+	plugin.PluginHost
+	emitted []events.AuthEvent
+}
+
+func (h *emitHost) Emit(_ context.Context, e events.AuthEvent) (events.Decision, error) {
+	h.emitted = append(h.emitted, e)
+	return events.Continue(), nil
+}
+
+func emittedTypes(h *emitHost) []events.EventType {
+	out := make([]events.EventType, 0, len(h.emitted))
+	for _, e := range h.emitted {
+		out = append(out, e.Type)
+	}
+	return out
+}
+
+// TestScim_UnsuspendEmitsEvent pins the Item-12 mirror: deprovision emits
+// EventUserSuspended AND re-provision emits EventUserUnsuspended, so the
+// pipeline (OIDC back-channel logout, webhooks) sees both directions of the
+// global-lifecycle flip. Without the second event the account silently flips
+// from suspended to live with nothing in the pipeline.
+func TestScim_UnsuspendEmitsEvent(t *testing.T) {
+	r := memrepo.New()
+	tnt := seedTenant(t, r, "emit")
+	eh := &emitHost{PluginHost: newFakeHost(r, "")}
+	mux := http.NewServeMux()
+	New(Config{}).(*scimPlugin).Routes(eh, mux, humaapi.New(mux), "")
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	eh.PluginHost.(*fakeHost).base = srv.URL
+	app := &testApp{srv: srv, repo: r, orgA: tnt}
+
+	uid := seedScimUser(t, app, "emit@x.com")
+
+	patch := app.do(t, "PATCH", userPath(app.orgA.orgID, uid), app.orgA.apiKey, map[string]any{
+		"schemas":    []string{PatchOpSchema},
+		"Operations": []map[string]any{{"op": "replace", "path": "active", "value": false}},
+	})
+	if patch.StatusCode != http.StatusOK {
+		t.Fatalf("patch active:false status %d", patch.StatusCode)
+	}
+	patch.Body.Close()
+
+	patch = app.do(t, "PATCH", userPath(app.orgA.orgID, uid), app.orgA.apiKey, map[string]any{
+		"schemas":    []string{PatchOpSchema},
+		"Operations": []map[string]any{{"op": "replace", "path": "active", "value": true}},
+	})
+	if patch.StatusCode != http.StatusOK {
+		t.Fatalf("patch active:true status %d", patch.StatusCode)
+	}
+	patch.Body.Close()
+
+	types := emittedTypes(eh)
+	var sawSuspended, sawUnsuspended bool
+	for _, typ := range types {
+		switch typ {
+		case events.EventUserSuspended:
+			sawSuspended = true
+		case events.EventUserUnsuspended:
+			sawUnsuspended = true
+		}
+	}
+	if !sawSuspended {
+		t.Fatalf("no EventUserSuspended emitted on active:false (got %v)", types)
+	}
+	if !sawUnsuspended {
+		t.Fatalf("no EventUserUnsuspended emitted on active:true (got %v)", types)
 	}
 }

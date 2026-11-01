@@ -29,6 +29,21 @@ func TestIsPrivateIP(t *testing.T) {
 		"192.168.1.1",
 		"169.254.169.254", // cloud instance metadata
 		"0.0.0.0",
+		// IPv6 unique-local (fc00::/7): every in-cluster IPv6 service. A
+		// plain AAAA record is enough to steer a webhook/SSRF fetch inside
+		// a dual-stack deployment.
+		"fd00:dead:beef::10",
+		"fc00::1",
+		// IPv6 link-local (fe80::/10) as a bare literal.
+		"fe80::1",
+		// CGNAT (RFC 6598, 100.64.0.0/10): Oracle VCN, SaaS-mesh fabrics.
+		"100.64.1.1",
+		// Reserved/broadcast spaces that only exist as bypass targets.
+		"255.255.255.255",
+		// IPv4-mapped variants of the ranges above: To4() unwrapping must
+		// apply to the classification, not just loopback.
+		"::ffff:10.0.0.1",
+		"::ffff:100.64.1.1",
 	}
 	for _, addr := range private {
 		if !IsPrivateIP(addr) {

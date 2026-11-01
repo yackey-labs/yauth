@@ -124,6 +124,12 @@ func (r *Repo) UpdateGroup(ctx context.Context, id string, changes domain.Update
 	if changes.ExternalID != nil {
 		g.ExternalID = changes.ExternalID
 	}
+	if changes.ClearDescription {
+		g.Description = nil
+	}
+	if changes.ClearExternalID {
+		g.ExternalID = nil
+	}
 	g.UpdatedAt = time.Now().UTC()
 	return *cloneGroup(g), nil
 }

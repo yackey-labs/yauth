@@ -312,15 +312,24 @@ func (p *scimPlugin) handlePutGroup(host plugin.PluginHost) http.HandlerFunc {
 		}
 		now := time.Now().UTC()
 
-		// Update displayName / externalId.
+		// Update displayName / externalId — only what actually differs, so
+		// an IdP re-PUTting an unchanged group (every sync) writes nothing
+		// and leaves updated_at / meta.lastModified alone.
 		changes := domain.UpdateGroup{}
-		if name := strings.TrimSpace(payload.DisplayName); name != "" {
+		if name := strings.TrimSpace(payload.DisplayName); name != "" && name != g.Name {
 			changes.Name = &name
 		}
-		if payload.ExternalID != "" {
-			changes.ExternalID = &payload.ExternalID
+		switch {
+		case payload.ExternalID != "":
+			if g.ExternalID == nil || *g.ExternalID != payload.ExternalID {
+				changes.ExternalID = &payload.ExternalID
+			}
+		case g.ExternalID != nil:
+			// PUT is a full replace: an absent externalId means "no
+			// external id", not "keep the stale one".
+			changes.ClearExternalID = true
 		}
-		if changes.Name != nil || changes.ExternalID != nil {
+		if changes.Name != nil || changes.ExternalID != nil || changes.ClearExternalID {
 			if updated, err := host.Repo().UpdateGroup(r.Context(), g.ID, changes); err == nil {
 				g = &updated
 			} else if errors.Is(err, yautherr.ErrConflict) {

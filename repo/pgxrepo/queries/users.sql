@@ -40,11 +40,11 @@ SELECT EXISTS(SELECT 1 FROM yauth_users LIMIT 1);
 
 -- name: ListUsersSearch :many
 SELECT * FROM yauth_users
-WHERE ($1::text = '' OR LOWER(email) LIKE '%' || LOWER($1::text) || '%' OR LOWER(COALESCE(display_name, '')) LIKE '%' || LOWER($1::text) || '%')
+WHERE ($1::text = '' OR LOWER(email) LIKE '%' || REPLACE(REPLACE(REPLACE(LOWER($1::text), '\', '\\'), '%', '\%'), '_', '\_') || '%' ESCAPE '\' OR LOWER(COALESCE(display_name, '')) LIKE '%' || REPLACE(REPLACE(REPLACE(LOWER($1::text), '\', '\\'), '%', '\%'), '_', '\_') || '%' ESCAPE '\')
 ORDER BY created_at ASC, id ASC
 LIMIT CASE WHEN $2::int > 0 THEN $2::int ELSE NULL END
 OFFSET $3::int;
 
 -- name: CountUsersSearch :one
 SELECT COUNT(*) FROM yauth_users
-WHERE ($1::text = '' OR LOWER(email) LIKE '%' || LOWER($1::text) || '%' OR LOWER(COALESCE(display_name, '')) LIKE '%' || LOWER($1::text) || '%');
+WHERE ($1::text = '' OR LOWER(email) LIKE '%' || REPLACE(REPLACE(REPLACE(LOWER($1::text), '\', '\\'), '%', '\%'), '_', '\_') || '%' ESCAPE '\' OR LOWER(COALESCE(display_name, '')) LIKE '%' || REPLACE(REPLACE(REPLACE(LOWER($1::text), '\', '\\'), '%', '\%'), '_', '\_') || '%' ESCAPE '\');

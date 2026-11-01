@@ -24,7 +24,7 @@ func (q *Queries) CountOrgOwners(ctx context.Context, organizationID string) (in
 
 const countOrganizationsSearch = `-- name: CountOrganizationsSearch :one
 SELECT COUNT(*) FROM yauth_organizations
-WHERE ($1::text = '' OR LOWER(name) LIKE '%' || LOWER($1::text) || '%' OR slug_lower LIKE '%' || LOWER($1::text) || '%')
+WHERE ($1::text = '' OR LOWER(name) LIKE '%' || REPLACE(REPLACE(REPLACE(LOWER($1::text), '\', '\\'), '%', '\%'), '_', '\_') || '%' ESCAPE '\' OR slug_lower LIKE '%' || REPLACE(REPLACE(REPLACE(LOWER($1::text), '\', '\\'), '%', '\%'), '_', '\_') || '%' ESCAPE '\')
 `
 
 func (q *Queries) CountOrganizationsSearch(ctx context.Context, dollar_1 string) (int64, error) {
@@ -451,7 +451,7 @@ func (q *Queries) ListOrganizationsForUser(ctx context.Context, userID string) (
 
 const listOrganizationsSearch = `-- name: ListOrganizationsSearch :many
 SELECT id, name, slug, slug_lower, display_name, avatar_url, metadata, created_at, updated_at FROM yauth_organizations
-WHERE ($1::text = '' OR LOWER(name) LIKE '%' || LOWER($1::text) || '%' OR slug_lower LIKE '%' || LOWER($1::text) || '%')
+WHERE ($1::text = '' OR LOWER(name) LIKE '%' || REPLACE(REPLACE(REPLACE(LOWER($1::text), '\', '\\'), '%', '\%'), '_', '\_') || '%' ESCAPE '\' OR slug_lower LIKE '%' || REPLACE(REPLACE(REPLACE(LOWER($1::text), '\', '\\'), '%', '\%'), '_', '\_') || '%' ESCAPE '\')
 ORDER BY created_at ASC, id ASC
 LIMIT CASE WHEN $2::int > 0 THEN $2::int ELSE NULL END
 OFFSET $3::int
@@ -518,6 +518,40 @@ func (q *Queries) ListPendingInvitationsForOrg(ctx context.Context, organization
 			&i.ExpiresAt,
 			&i.AcceptedAt,
 			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const lockOrgOwners = `-- name: LockOrgOwners :many
+SELECT id, organization_id, user_id, role, status, invited_at, joined_at, created_at, updated_at FROM yauth_memberships WHERE organization_id = $1 AND role = 'owner' FOR UPDATE
+`
+
+func (q *Queries) LockOrgOwners(ctx context.Context, organizationID string) ([]YauthMembership, error) {
+	rows, err := q.db.Query(ctx, lockOrgOwners, organizationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []YauthMembership{}
+	for rows.Next() {
+		var i YauthMembership
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrganizationID,
+			&i.UserID,
+			&i.Role,
+			&i.Status,
+			&i.InvitedAt,
+			&i.JoinedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}

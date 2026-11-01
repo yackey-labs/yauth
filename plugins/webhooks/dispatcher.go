@@ -14,6 +14,7 @@ import (
 	"math"
 	"math/rand/v2"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -33,6 +34,12 @@ const maxResponseBody = 4 * 1024
 // signaturePrefix is the literal prefix carried in the X-YAuth-Signature
 // header. Only sha256 is supported in the MVP; the prefix lets receivers
 // negotiate algorithms in a future revision without changing the header.
+//
+// The signed material is `{X-YAuth-Timestamp}.{payload}` (HMAC-SHA256,
+// hex): the timestamp rides in X-YAuth-Timestamp and is inside the HMAC,
+// so a captured delivery cannot be replayed past a receiver-side
+// max-age check. The pre-fix scheme covered the body alone, which made
+// every retry's identical signature verifiably authentic forever.
 const signaturePrefix = "sha256="
 
 // deadLetterMarker is the substring written to the response_body of the
@@ -464,9 +471,17 @@ func (d *Dispatcher) deliver(ctx context.Context, job *deliveryJob) deliveryOutc
 		d.recordDelivery(ctx, job, body, nil, fmt.Sprintf("build request: %v", err), false)
 		return deliveryOutcome{success: false, retryable: false}
 	}
+	signingTS := time.Now().UTC().Unix()
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-YAuth-Event", job.eventType)
 	req.Header.Set("X-YAuth-Delivery", deliveryID)
+	// The signing timestamp is minted per request, NOT carried from the
+	// stored payload: the body's `timestamp` field is the emission time of
+	// the event (unchanged across retries), so keying freshness on it would
+	// let a replayed delivery look fresh forever. This header lets a
+	// receiver reject captured-and-later-replayed deliveries with a
+	// max-age check; it is part of the signed material, so it cannot be
+	// rewritten in flight.
 	// Only sign when there is a key to sign with. This header used to be set
 	// unconditionally, so a row with an empty secret went out carrying
 	// HMAC-SHA256 keyed on "" — a value any stranger can compute from the body
@@ -484,7 +499,8 @@ func (d *Dispatcher) deliver(ctx context.Context, job *deliveryJob) deliveryOutc
 	// outage visible only in the deliveries table is not an improvement. Log it
 	// loudly instead, so the gap is on someone's screen rather than on the wire.
 	if rawSecret != "" {
-		req.Header.Set("X-YAuth-Signature", signaturePrefix+signPayload(rawSecret, body))
+		req.Header.Set("X-YAuth-Timestamp", strconv.FormatInt(signingTS, 10))
+		req.Header.Set("X-YAuth-Signature", signaturePrefix+signPayload(rawSecret, signingTS, body))
 	} else {
 		d.logf("webhooks: webhook %s has NO signing secret; this delivery goes out UNSIGNED "+
 			"(no X-YAuth-Signature header) — a receiver cannot authenticate it. Set a secret "+
@@ -646,11 +662,25 @@ func (d *Dispatcher) recordDelivery(ctx context.Context, job *deliveryJob, paylo
 	})
 }
 
-// signPayload returns the lower-case hex HMAC-SHA256 of body using
-// secret as the key. Exported indirectly via the X-YAuth-Signature
-// header; receivers reproduce the calculation to verify authenticity.
-func signPayload(secret string, body []byte) string {
+// signPayload returns the lower-case hex HMAC-SHA256 over the signing
+// timestamp and body using secret as the key. The signed material is the
+// same `{timestamp}.{payload}` form Stripe uses, with the timestamp also
+// carried in the X-YAuth-Timestamp header so a receiver can:
+//
+//   - recompute `HMAC(secret, ts + "." + body)` and compare signatures, and
+//   - reject a delivery whose timestamp is older than its freshness window
+//     — which is what turns a captured signed delivery into a
+//     dead-on-arrival replay instead of a credential with no expiry.
+//
+// Before this scheme a signature covered the body alone, so every retry
+// re-sent the identical signature and a captured delivery was verifiably
+// "authentic" forever.
+//
+// Exported indirectly via the X-YAuth-Signature + X-YAuth-Timestamp
+// headers; receivers reproduce the calculation to verify authenticity.
+func signPayload(secret string, timestamp int64, body []byte) string {
 	mac := hmac.New(sha256.New, []byte(secret))
+	fmt.Fprintf(mac, "%d.", timestamp)
 	mac.Write(body)
 	return hex.EncodeToString(mac.Sum(nil))
 }

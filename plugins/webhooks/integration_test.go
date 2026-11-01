@@ -8,9 +8,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -36,6 +38,7 @@ type receivedHit struct {
 	Event     string
 	Delivery  string
 	Signature string
+	Timestamp string
 }
 
 func newReceiver(t *testing.T) *receiver {
@@ -49,6 +52,7 @@ func newReceiver(t *testing.T) *receiver {
 			Event:     req.Header.Get("X-YAuth-Event"),
 			Delivery:  req.Header.Get("X-YAuth-Delivery"),
 			Signature: req.Header.Get("X-YAuth-Signature"),
+			Timestamp: req.Header.Get("X-YAuth-Timestamp"),
 		})
 		r.mu.Unlock()
 		w.WriteHeader(http.StatusOK)
@@ -198,9 +202,27 @@ func TestWebhookDelivery_OnUserRegistered(t *testing.T) {
 		t.Fatalf("X-YAuth-Signature prefix: got %q", hit.Signature)
 	}
 
-	wantSig := computeHMAC(secret, hit.Body)
+	// The signature covers {X-YAuth-Timestamp}.{body}, not the body alone:
+	// a scheme keyed on the body alone verified a captured delivery of a
+	// headerless timestamp forever, since every retry re-sent the identical
+	// signature. Verify the new scheme shapes it exactly.
+	sigTS, err := strconv.ParseInt(hit.Timestamp, 10, 64)
+	if err != nil {
+		t.Fatalf("X-YAuth-Timestamp header: got %q (%v)", hit.Timestamp, err)
+	}
+	wantSig := computeHMAC(secret, sigTS, hit.Body)
 	if hit.Signature != "sha256="+wantSig {
-		t.Fatalf("signature mismatch:\n got  %s\n want sha256=%s\n body %s", hit.Signature, wantSig, hit.Body)
+		t.Fatalf("signature mismatch:\n got  %s\n want sha256=%s\n ts   %d\n body %s", hit.Signature, wantSig, sigTS, hit.Body)
+	}
+	// The old (body-only) scheme must NOT verify: guard against silently
+	// regressing to a replayable signature.
+	if "sha256="+computeHMAC(secret, -1, hit.Body) == hit.Signature {
+		// ts -1 exercises a different signed material, so equality would be
+		// astronomically improbable; the real regression guard is above.
+		t.Fatalf("signature verified across two distinct signed materials — signing is broken")
+	}
+	if hit.Timestamp == "" {
+		t.Fatalf("X-YAuth-Timestamp missing")
 	}
 
 	var env map[string]any
@@ -290,8 +312,13 @@ func TestWebhookShutdown_DrainsWorkers(t *testing.T) {
 	}
 }
 
-func computeHMAC(secret string, body []byte) string {
+// computeHMAC mirrors the receiver-side recipe: HMAC-SHA256 over
+// "{timestamp}.{payload hex}"... precisely: the UTF-8 bytes of
+// "<decimal ts>." followed by the raw payload. It is the only recipe the
+// dispatcher signs with and the only one a checking receiver accepts.
+func computeHMAC(secret string, ts int64, body []byte) string {
 	mac := hmac.New(sha256.New, []byte(secret))
+	fmt.Fprintf(mac, "%d.", ts)
 	mac.Write(body)
 	return hex.EncodeToString(mac.Sum(nil))
 }

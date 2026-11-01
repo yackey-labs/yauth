@@ -62,12 +62,33 @@ import (
 // package is the library's single outbound-egress chokepoint, so that call runs
 // per resolved address on every webhook delivery, every OIDC discovery and JWKS
 // fetch, and every syslog audit export.
+//
+// It also carries the ranges a dual-stack cluster can reach that the original
+// set missed: IPv6 unique-local (fc00::/7) — the IPv6 counterpart to RFC 1918
+// and the address every in-cluster IPv6 service lives on (a plain AAAA record
+// used to steer an egress fetch straight past this guard); RFC 6598 CGNAT
+// (100.64.0.0/10) — Oracle VCN interconnects and SaaS-mesh fabrics; broadcast
+// (255.255.255.255), which is a localhost alias on some stacks; and
+// 240.0.0.0/4 reserved. The list is deny-only: it can grow, never shrink, so
+// callers that pinned the old contents cannot regress a bypass back open.
 var privateIPBlocks = []net.IPNet{
 	{IP: net.IP{10, 0, 0, 0}, Mask: net.CIDRMask(8, 32)},
 	{IP: net.IP{172, 16, 0, 0}, Mask: net.CIDRMask(12, 32)},
 	{IP: net.IP{192, 168, 0, 0}, Mask: net.CIDRMask(16, 32)},
 	{IP: net.IP{169, 254, 0, 0}, Mask: net.CIDRMask(16, 32)}, // link-local
 	{IP: net.IP{0, 0, 0, 0}, Mask: net.CIDRMask(8, 32)},      // 0.0.0.0/8
+	// RFC 6598 shared address space: carrier / cloud-fabric interconnects
+	// (Oracle VCN, some SDN underlays) that are unreachable from the
+	// internet but very reachable from inside the box.
+	{IP: net.IP{100, 64, 0, 0}, Mask: net.CIDRMask(10, 32)},
+	// 255.255.255.255: broadcast, and a localhost alias on some stacks.
+	{IP: net.IP{255, 255, 255, 255}, Mask: net.CIDRMask(32, 32)},
+	// 240.0.0.0/4 (reserved) — everything else has a legitimate case for
+	// being dialled from a server; this block has none in practice.
+	{IP: net.IP{240, 0, 0, 0}, Mask: net.CIDRMask(4, 32)},
+	// IPv6 unique-local fc00::/7: the IPv6 counterpart of RFC 1918 — an
+	// ordinary AAAA record resolves here inside every dual-stack cluster.
+	{IP: net.ParseIP("fc00::").To16(), Mask: net.CIDRMask(7, 128)},
 }
 
 // alwaysDeniedLinkLocal and alwaysDeniedUnspecified are hoisted for the same
@@ -77,11 +98,15 @@ var (
 	alwaysDeniedUnspecified = net.IPNet{IP: net.IP{0, 0, 0, 0}, Mask: net.CIDRMask(8, 32)}
 )
 
-// IsPrivateIP reports whether addr is a loopback, link-local, or RFC 1918
+// IsPrivateIP reports whether addr is a loopback, link-local, RFC 1918,
+// IPv6 unique-local, CGNAT (RFC 6598), or otherwise non-internet-routable
 // address — used to block SSRF after DNS resolution so that DNS rebinding
 // cannot bypass a pre-dial hostname check.
 //
-// Lifted unchanged from plugins/oauth2server (isPrivateIP).
+// Originally lifted unchanged from plugins/oauth2server (isPrivateIP); the
+// classification has been widened since (IPv6 ULA, CGNAT, IPv6 link-local,
+// broadcast/reserved) because the original set let an AAAA record or a
+// 100.64.x.x target past the deny-by-default dial path on dual-stack hosts.
 func IsPrivateIP(addr string) bool {
 	ip := net.ParseIP(addr)
 	if ip == nil {
@@ -91,7 +116,7 @@ func IsPrivateIP(addr string) bool {
 	if v4 := ip.To4(); v4 != nil {
 		ip = v4
 	}
-	if ip.IsLoopback() {
+	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
 		return true
 	}
 	for _, block := range privateIPBlocks {

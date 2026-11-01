@@ -29,11 +29,15 @@ type NewGroup struct {
 }
 
 // UpdateGroup carries the mutable fields of a group. Nil fields are left
-// unchanged.
+// unchanged. A nullable column can only be reset to NULL through its
+// Clear* flag (a nil pointer means "leave alone", so it cannot also mean
+// "clear"); the flag wins over a non-nil value for the same field.
 type UpdateGroup struct {
-	Name        *string
-	Description *string
-	ExternalID  *string
+	Name             *string
+	Description      *string
+	ExternalID       *string
+	ClearDescription bool
+	ClearExternalID  bool
 }
 
 // GroupMember is a single user's membership in a group.

@@ -58,8 +58,10 @@ package middleware
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/yackey-labs/yauth/auth"
@@ -160,12 +162,19 @@ func (e *OrgPolicyEnforcer) Wrap(next http.Handler) http.Handler {
 		for _, orgID := range e.governingOrgs(r, au) {
 			policy, err := e.repo.GetOrganizationPolicy(r.Context(), orgID)
 			if err != nil && !errors.Is(err, yautherr.ErrNotFound) {
-				// Treat repo failures as fail-open per the
-				// rate-limit precedent: an enforcer error should not
-				// hard-fail the request, but it must be loud in the
-				// logs (the caller's request-log middleware sees the
-				// 500 swallowed here). For now we just continue.
-				continue
+				// Fail CLOSED: a repo error means the policy is UNKNOWN,
+				// and skipping the allowlist + idle checks on an unknown
+				// policy fails open exactly where the deployment asked to
+				// be strict. 500, with no policy detail in the body — the
+				// row's contents are not the caller's business.
+				// NotFound still means "no policy row" and passes through
+				// to the inherit-global path below.
+				if logThrottled(&policyLogs, "lookup:"+orgID) {
+					slog.Default().Error("yauth: org policy lookup failed — refusing request (fail closed)",
+						"org_id", orgID, "err", err)
+				}
+				writeProblem(w, http.StatusInternalServerError, "Internal Server Error")
+				return
 			}
 
 			enf := auth.NewPolicyEnforcer(policy, auth.GlobalPolicyDefaults{
@@ -176,8 +185,15 @@ func (e *OrgPolicyEnforcer) Wrap(next http.Handler) http.Handler {
 
 			// IP allowlist — 403 on mismatch. Skip the check when the
 			// allowlist is empty (the enforcer returns true on empty).
-			if !enf.CheckIPAllowlist(clientIP(r)) {
-				http.Error(w, "Forbidden — IP not in allowlist", http.StatusForbidden)
+			if ok, ipErr := enf.CheckIPAllowlistStrict(clientIP(r)); !ok {
+				if ipErr != nil && logThrottled(&policyLogs, "allowlist:"+orgID) {
+					// Distinguish a misconfiguration / blank client address
+					// from an ordinary mismatch so the operator can see WHY
+					// an org's members are locked out.
+					slog.Default().Warn("yauth: org IP allowlist denied request",
+						"org_id", orgID, "reason", ipErr.Error())
+				}
+				writeProblem(w, http.StatusForbidden, "Forbidden — IP not in allowlist")
 				return
 			}
 
@@ -185,13 +201,33 @@ func (e *OrgPolicyEnforcer) Wrap(next http.Handler) http.Handler {
 			// the proxy for "last activity" until a dedicated
 			// LastSeenAt column is added.
 			if idleExceeded(enf, au.Session) {
-				http.Error(w, "Unauthorized — session idle timeout", http.StatusUnauthorized)
+				writeProblem(w, http.StatusUnauthorized, "Unauthorized — session idle timeout")
 				return
 			}
 		}
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+// policyLogs throttles the enforcer's refusal logs to one line per
+// (kind, org) per minute. Both conditions it logs — a failing policy
+// lookup and an allowlist denial — fire on EVERY request from the org's
+// members, so unthrottled they would bury the log at request rate during
+// exactly the incident the operator is reading about. Keys are bounded by
+// the number of orgs, not by traffic.
+var policyLogs sync.Map // kind+":"+orgID -> time.Time of last line
+
+// logThrottled reports whether key may log now, recording the attempt.
+func logThrottled(m *sync.Map, key string) bool {
+	now := time.Now()
+	if v, ok := m.Load(key); ok {
+		if last, ok := v.(time.Time); ok && now.Sub(last) < time.Minute {
+			return false
+		}
+	}
+	m.Store(key, now)
+	return true
 }
 
 // governingOrgs returns every organization whose policy governs this

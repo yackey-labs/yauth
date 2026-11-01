@@ -200,7 +200,8 @@ func (p *scimPlugin) warnUnrestrictedKey(host plugin.PluginHost, rec *domain.API
 		"scim: API key carries no role and no permissions — granting full SCIM access "+
 			"under a deprecated compatibility rule. Re-mint the key with role=admin (or "+
 			"permissions members:view, members:invite, members:change_role, members:remove) "+
-			"and set scim.Config.RequireKeyPermissions=true to refuse unscoped keys.",
+			"and set plugins.scim.require_key_permissions=true (scim.Config.RequireKeyPermissions) "+
+			"to refuse unscoped keys.",
 		"key_id", rec.ID,
 		"org_id", orgID,
 		"scim_access", access.String(),

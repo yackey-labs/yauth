@@ -111,10 +111,15 @@ func Init(ctx context.Context, cfg Config) (func(context.Context) error, error) 
 		return nil, err
 	}
 
+	// Schemaless (not NewWithAttributes): the attributes we add
+	// (service.name) carry no schema of their own, so the merge adopts
+	// resource.Default()'s schema instead of conflicting with it. This
+	// matters across otel upgrades — the SDK's embedded semconv version
+	// moves (v1.41 → v1.43 in SDK v1.45) and pinning our own SchemaURL
+	// here turned that upgrade into an Init error.
 	res, err := resource.Merge(
 		resource.Default(),
-		resource.NewWithAttributes(
-			semconv.SchemaURL,
+		resource.NewSchemaless(
 			semconv.ServiceName(serviceName),
 		),
 	)

@@ -99,6 +99,22 @@ func TestSecurityHeaders_HSTS(t *testing.T) {
 			t.Errorf("Strict-Transport-Security = %q, want it absent — X-Forwarded-Proto must not enable HSTS", got)
 		}
 	})
+
+	t.Run("inert behind a TLS-terminating proxy even when opted in", func(t *testing.T) {
+		// The deployment that motivates the HSTS field's OPERATIONAL
+		// WARNING: TLS terminates at the edge, so Go sees plaintext and
+		// r.TLS is nil on every request. The header is absent even though
+		// the operator configured a value AND the proxy vouched https —
+		// this is deliberate (X-Forwarded-Proto is attacker-writable), but
+		// it means "I set HSTS" is silently "HSTS is off" here. Operators
+		// behind TLS termination must emit HSTS at the LB/CDN instead.
+		r := httptest.NewRequest(http.MethodGet, "http://idp.test/config", nil)
+		r.Header.Set("X-Forwarded-Proto", "https")
+		rec := secHdrServe(SecurityHeaders(SecurityHeadersConfig{HSTS: value})(secHdrEchoHandler()), r)
+		if got := rec.Header().Get("Strict-Transport-Security"); got != "" {
+			t.Errorf("Strict-Transport-Security = %q behind a proxy, want it absent (r.TLS is the only signal)", got)
+		}
+	})
 }
 
 func TestSecurityHeaders_ZeroValueEnablesAndDisabledDisables(t *testing.T) {

@@ -105,6 +105,12 @@ type Config struct {
 	// Set it true once every SCIM key in the deployment has been re-minted
 	// with role=admin (or the four permissions above). Deployments standing
 	// SCIM up fresh should set it true from the start.
+	//
+	// Declarative surface: plugins.scim.require_key_permissions
+	// (yauthcfg.SCIMPluginConfig.RequireKeyPermissions, wired in from_config.go).
+	// The flag defaults false there too, so flipping the library default is
+	// not needed to keep upgrades safe — and the plugin logs a WARN at
+	// Routes registration time whenever it starts with the flag off.
 	RequireKeyPermissions bool
 }
 
@@ -157,6 +163,18 @@ func (p *scimPlugin) selfBaseURL(host plugin.PluginHost) string {
 // {org_id}/{user_id}/{group_id} wildcards (via humago), so the legacy
 // handlers' r.PathValue / r.URL.Query / r.Body reads keep working unchanged.
 func (p *scimPlugin) Routes(host plugin.PluginHost, mux plugin.Router, api huma.API, prefix string) {
+	// One line at startup when the deployment has NOT opted into strictness:
+	// grandfathered keys keep full SCIM access (see auth.go authorize), so
+	// an operator grepping the boot log must be able to see that the
+	// compatibility rule is live and which single flag turns it off.
+	if !p.cfg.RequireKeyPermissions {
+		host.Logger().Warn(
+			"scim: RequireKeyPermissions=false — org-scoped API keys with no role and no " +
+				"permissions keep FULL SCIM write access under a deprecated compatibility rule. " +
+				"Set plugins.scim.require_key_permissions=true once every SCIM key has been " +
+				"re-minted with role=admin (or the four member-lifecycle permissions).",
+		)
+	}
 	base := prefix + "/scim/v2/organizations/{org_id}"
 
 	// Users. The WRITE routes (POST/PUT/PATCH) carry a RawBody + a derived SCIM

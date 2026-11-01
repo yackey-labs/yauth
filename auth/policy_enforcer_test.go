@@ -86,7 +86,7 @@ func TestPolicyEnforcer_IPAllowlistMatch(t *testing.T) {
 		"192.168.1.11": false,
 		"172.16.0.1":   false,
 		"not-an-ip":    false,
-		"":             true, // empty IP returns true to avoid bricking on proxy strip
+		"":             false, // empty IP with a configured allowlist denies (fail closed)
 	}
 	for ip, want := range cases {
 		if got := enf.CheckIPAllowlist(ip); got != want {
@@ -204,6 +204,79 @@ func TestPolicyEnforcer_MaxConcurrentSessions(t *testing.T) {
 	enf2 := auth.NewPolicyEnforcer(&domain.OrganizationPolicy{MaxConcurrentSessions: &zero}, auth.GlobalPolicyDefaults{})
 	if got := enf2.MaxConcurrentSessions(); got != 0 {
 		t.Fatalf("zero cap must collapse to no-cap; got %d", got)
+	}
+}
+
+func TestPolicyEnforcer_EmptyIPDeniedWhenAllowlistSet(t *testing.T) {
+	// FAIL-CLOSED: an empty client IP with a configured allowlist must
+	// deny. The old semantics returned true (fail-open) to avoid bricking
+	// a deployment whose proxy strips RemoteAddr; callers must now
+	// pre-validate at the trust boundary instead.
+	policy := &domain.OrganizationPolicy{
+		OrganizationID: "o1",
+		IPAllowlist:    []string{"10.0.0.0/8"},
+	}
+	enf := auth.NewPolicyEnforcer(policy, auth.GlobalPolicyDefaults{})
+	if got := enf.CheckIPAllowlist(""); got {
+		t.Fatalf("CheckIPAllowlist(\"\") with configured allowlist: want false, got true")
+	}
+	if got := enf.CheckIPAllowlist("   "); got {
+		t.Fatalf("CheckIPAllowlist(whitespace) with configured allowlist: want false, got true")
+	}
+	// Strict variant must surface the sentinel so callers can log it.
+	ok, err := enf.CheckIPAllowlistStrict("")
+	if ok || err == nil {
+		t.Fatalf("CheckIPAllowlistStrict(\"\"): want (false, err), got (%v, %v)", ok, err)
+	}
+}
+
+func TestPolicyEnforcer_AllInvalidAllowlistFailClosed(t *testing.T) {
+	// An all-typo list must NOT collapse to "no restriction".
+	policy := &domain.OrganizationPolicy{
+		OrganizationID: "o1",
+		IPAllowlist:    []string{"not-a-cidr", "10.0.0.0/99"},
+	}
+	enf := auth.NewPolicyEnforcer(policy, auth.GlobalPolicyDefaults{})
+	eff := enf.Effective()
+	if len(eff.IPAllowlistInvalid) == 0 {
+		t.Fatalf("expected invalid entries to be surfaced, got none")
+	}
+	if got := enf.CheckIPAllowlist("10.0.0.1"); got {
+		t.Fatalf("all-invalid allowlist must deny even in-range IPs (fail closed)")
+	}
+	if got := enf.CheckIPAllowlist(""); got {
+		t.Fatalf("all-invalid allowlist must deny empty IP")
+	}
+	if _, err := enf.CheckIPAllowlistStrict("10.0.0.1"); err == nil {
+		t.Fatalf("expected misconfiguration sentinel from Strict, got nil")
+	}
+}
+
+func TestPolicyEnforcer_InvalidEntriesSurfacedValidStillEnforced(t *testing.T) {
+	policy := &domain.OrganizationPolicy{
+		OrganizationID: "o1",
+		IPAllowlist:    []string{"10.0.0.0/8", "bogus-entry"},
+	}
+	enf := auth.NewPolicyEnforcer(policy, auth.GlobalPolicyDefaults{})
+	eff := enf.Effective()
+	if len(eff.IPAllowlistInvalid) != 1 || eff.IPAllowlistInvalid[0] != "bogus-entry" {
+		t.Fatalf("expected [bogus-entry] invalid, got %q", eff.IPAllowlistInvalid)
+	}
+	// Fail-closed: any invalid entry denies everything until the operator
+	// fixes the list — even an otherwise in-range IP.
+	if enf.CheckIPAllowlist("10.1.2.3") {
+		t.Fatalf("mixed valid+invalid list must deny (fail closed)")
+	}
+}
+
+func TestPolicyEnforcer_EmptyIPAllowedWhenNoAllowlist(t *testing.T) {
+	// No restriction configured → empty IP still passes (nothing to enforce).
+	enf := auth.NewPolicyEnforcer(&domain.OrganizationPolicy{}, auth.GlobalPolicyDefaults{})
+	if !enf.CheckIPAllowlist("") {
+		t.Fatalf("empty allowlist must permit empty IP (no restriction)")
+	}
+	if ok, err := enf.CheckIPAllowlistStrict(""); !ok || err != nil {
+		t.Fatalf("Strict with no allowlist: want (true, nil), got (%v, %v)", ok, err)
 	}
 }
 

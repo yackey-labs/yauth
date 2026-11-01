@@ -137,6 +137,21 @@ func (c Config) scopeNames() []string {
 // the consent UI. All endpoints are public — no credential required — which is
 // what the discovery spec mandates.
 func Mount(root *http.ServeMux, ya *yauth.YAuth, cfg Config) {
+	if cfg.PublicURL == "" {
+		// Item-10 visibility: with no PublicURL the Host header (and the
+		// attacker-writable X-Forwarded-Proto) chooses the URLs mcpauth
+		// emits. It cannot be fixed here — externalOrigin must work behind
+		// a TLS-terminating proxy, where nothing this layer can see
+		// distinguishes a forwarded https from a forged one — so it is
+		// said once, loudly, at mount time. Logged every Mount rather
+		// than sync.Once: Mount runs once per process in real servers;
+		// Once would also hide the warning from tests that mount twice.
+		if l := ya.Logger(); l != nil {
+			l.Warn("mcpauth: Config.PublicURL is empty — discovery/callback URLs derive from " +
+				"the request Host header (and X-Forwarded-Proto). Set PublicURL to the canonical " +
+				"external origin in production so the documents are immune to Host-header spoofing")
+		}
+	}
 	yaRouter := ya.Router()
 
 	// These discovery documents are fetched cross-origin by browser-based
@@ -281,6 +296,17 @@ func proxyFetch(yaRouter http.Handler, r *http.Request, internalPath string) (in
 // exception to that boundary: it is credential state, not tenant policy — the
 // same class of check RequireAuth already makes before any handler runs.
 //
+// Cross-site state changes on an ambient session cookie are refused with 403
+// via the SAME predicate yauth's own routes use
+// (middleware.RefuseCrossSiteWrite, read off the same Middleware handle):
+// Sec-Fetch-Site / Origin are honored, safe methods and bearer/API-key callers
+// pass, and the operator's server.cross_site_writes allow-list applies here
+// exactly as on /admin/* — Guard cannot drift from the unsafe routes into its
+// own CSRF hole. Checked after authentication (a bad credential is still a
+// 401) and before the must-change gate, matching RequireAuth's order. CORS is
+// deliberately NOT applied here: discovery stays on Mount's aliases; /mcp
+// answers the client that presents a credential.
+//
 // It is the thin auth seam that makes the MCP endpoint discoverable; everything
 // domain-specific stays yours.
 func Guard(ya *yauth.YAuth, next http.Handler) http.Handler {
@@ -293,6 +319,13 @@ func Guard(ya *yauth.YAuth, next http.Handler) http.Handler {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{
 				"error":             "unauthorized",
 				"error_description": "authentication required",
+			})
+			return
+		}
+		if mw.RefuseCrossSiteWrite(r, au) {
+			writeJSON(w, http.StatusForbidden, map[string]string{
+				"error":             "forbidden",
+				"error_description": middleware.CrossSiteWriteDetail,
 			})
 			return
 		}
@@ -310,6 +343,67 @@ func Guard(ya *yauth.YAuth, next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r.WithContext(middleware.WithAuthUser(r.Context(), au)))
 	})
+}
+
+// RequireScope returns middleware that refuses, with 403 + WWW-Authenticate,
+// any request whose resolved OAuth2 scope set lacks one of the named scopes.
+// It reads the AuthUser Guard (or RequireAuth) injected into the request
+// context, so it layers INSIDE Guard:
+//
+//	mux.Handle("/mcp", mcpauth.Guard(ya, mcpauth.RequireScope("mcp:invoke")(mcpHandler)))
+//
+// A request with no AuthUser in context is answered 401 with the same
+// RFC 9728 WWW-Authenticate discovery challenge Guard emits, so a bare
+// RequireScope (without Guard) still authenticates nothing by itself — pair
+// it with Guard.
+//
+// Enforcement rides on domain.Principal.HasScope, and that is where the BASE
+// IS NARROW — read this before relying on it:
+//
+//   - A NON-delegated credential (session cookie, first-party bearer token,
+//     user-scoped or org-scoped API key) satisfies EVERY scope: it is the user
+//     acting directly, and no consent screen ever narrowed it. RequireScope
+//     therefore cannot constrain cookie callers at all — the CSRF gate in
+//     Guard is their protection, not this.
+//   - Only a DELEGATED credential (an OAuth2 access token issued to a third
+//     party under a limited grant) carries a bounded scope set, and only those
+//     callers are actually refused here.
+//
+// That matches the advertised RFC 9728 scope catalog honestly: Mount tells
+// clients which scopes exist, and RequireScope enforces them exactly where a
+// bounded grant exists to enforce. If a future credential type carries scopes
+// on AuthUser.Principal any other way, HasScope is the single predicate to
+// extend — this wrapper needs no change.
+func RequireScope(scopes ...string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			au, ok := middleware.AuthUserFromContext(r.Context())
+			if !ok || au == nil {
+				rmURL := externalOrigin(r) + "/.well-known/oauth-protected-resource"
+				w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+rmURL+`"`)
+				writeJSON(w, http.StatusUnauthorized, map[string]string{
+					"error":             "unauthorized",
+					"error_description": "authentication required",
+				})
+				return
+			}
+			for _, s := range scopes {
+				if au.Principal.HasScope(s) {
+					continue
+				}
+				// RFC 6750 §3 insufficient_scope: the challenge names what
+				// was needed so the client can re-authorize without guessing.
+				w.Header().Set("WWW-Authenticate",
+					`Bearer error="insufficient_scope" scope="`+strings.Join(scopes, " ")+`"`)
+				writeJSON(w, http.StatusForbidden, map[string]string{
+					"error":             "insufficient_scope",
+					"error_description": "insufficient_scope",
+				})
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 // originFor returns the canonical origin for the discovery documents: the

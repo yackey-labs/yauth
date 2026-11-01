@@ -23,12 +23,23 @@
 //     roles, not permissions, so a key at role=admin scoped to
 //     ["members:view"] still passes them. Closing that means mapping each
 //     org route to a permission and gating on that instead — a change to
-//     plugins/organizations, not to this file.
+//     plugins/organizations (and middleware, which owns RequireOrgRole),
+//     not to this file. This package now offers KeySatisfiesRole, the
+//     narrowest signature-compatible narrowing check (role + scopes +
+//     required role → bool), for any gate that CAN see the scope list;
+//     until middleware/org routes adopt it (or move to RequireOrgPermission
+//     per route), the gap stands. A test below pins the divergence:
+//     RoleAtLeast(admin, admin) is true while KeySatisfiesRole(admin,
+//     ["members:view"], admin) is false.
 //   - USER-SCOPED KEY SCOPES ARE STILL UNENFORCED. A user-scoped API key
 //     (plugins/apikey, X-Api-Key) resolves to a USER principal with no org
 //     binding, so there is no org permission set to narrow; its scopes would
 //     have to gate every authenticated route in the library. That is a
-//     separate design decision.
+//     separate design decision. Concretely, the apikey resolver builds the
+//     user path via domain.NewUserPrincipal (Scopes always nil) and drops
+//     the stored scopes column at resolution — pinned by
+//     TestUserScopedKeyScopesDroppedAtResolution below — so even a
+//     scope-aware gate would see nothing to enforce.
 package auth
 
 import (
@@ -106,6 +117,51 @@ func KeyHasPermission(role string, scopes []string, perm Permission) bool {
 func KeyHasAllPermissions(role string, scopes []string, perms ...Permission) bool {
 	grants := EffectiveKeyPermissions(role, scopes)
 	for _, p := range perms {
+		if !grants.Has(p) {
+			return false
+		}
+	}
+	return true
+}
+
+// KeySatisfiesRole reports whether an org-scoped API key with the given
+// role and scope list satisfies a role gate requiring `required` — the
+// narrowest signature-compatible narrowing of middleware.RequireOrgRole
+// for callers that CAN see the key's scope list (RequireOrgRole itself,
+// which reads only the membership role, is out of this package and still
+// unnarrowed; see the KNOWN GAPS note above).
+//
+// Semantics (fail closed):
+//   - The key's role must be at least `required` under RoleAtLeast.
+//     Unknown/custom roles on either side deny, matching RequireOrgRole.
+//   - With no scope list (nil/empty/blank — the "bounded by the role
+//     alone" shape), the role decides, matching RequireOrgRole exactly.
+//   - With a scope list, the key's EFFECTIVE permissions (role ∩ scopes
+//     per EffectiveKeyPermissions) must cover every permission the
+//     required role implies under the default catalogue. A key at
+//     role=admin scoped to ["members:view"] therefore FAILS an admin gate
+//     (and even a member gate — it no longer holds the full member set),
+//     which is the strict reading that prevents a narrowed key from
+//     passing any role gate it can no longer fully exercise.
+//
+// User-scoped keys must not use this helper: they resolve to a USER
+// principal (Scopes always nil) with no org binding, so there is no
+// required-org context to test against.
+func KeySatisfiesRole(role string, scopes []string, required string) bool {
+	if !RoleAtLeast(role, required) {
+		return false
+	}
+	listed := 0
+	for _, s := range scopes {
+		if strings.TrimSpace(s) != "" {
+			listed++
+		}
+	}
+	if listed == 0 {
+		return true
+	}
+	grants := EffectiveKeyPermissions(role, scopes)
+	for p := range DefaultPermissions(required) {
 		if !grants.Has(p) {
 			return false
 		}

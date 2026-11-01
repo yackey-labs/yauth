@@ -382,26 +382,34 @@ func (q *Queries) UnassignClientGroup(ctx context.Context, arg UnassignClientGro
 
 const updateGroup = `-- name: UpdateGroup :one
 UPDATE yauth_groups
-SET name = $2, description = $3, external_id = $4, updated_at = $5
-WHERE id = $1
+SET
+    name        = COALESCE($3, name),
+    description = CASE WHEN $4::boolean THEN NULL ELSE COALESCE($5, description) END,
+    external_id = CASE WHEN $6::boolean THEN NULL ELSE COALESCE($7, external_id) END,
+    updated_at  = $1
+WHERE id = $2
 RETURNING id, organization_id, name, description, external_id, created_at, updated_at
 `
 
 type UpdateGroupParams struct {
-	ID          string
-	Name        string
-	Description *string
-	ExternalID  *string
-	UpdatedAt   pgtype.Timestamptz
+	UpdatedAt        pgtype.Timestamptz
+	ID               string
+	Name             *string
+	ClearDescription bool
+	Description      *string
+	ClearExternalID  bool
+	ExternalID       *string
 }
 
 func (q *Queries) UpdateGroup(ctx context.Context, arg UpdateGroupParams) (YauthGroup, error) {
 	row := q.db.QueryRow(ctx, updateGroup,
+		arg.UpdatedAt,
 		arg.ID,
 		arg.Name,
+		arg.ClearDescription,
 		arg.Description,
+		arg.ClearExternalID,
 		arg.ExternalID,
-		arg.UpdatedAt,
 	)
 	var i YauthGroup
 	err := row.Scan(

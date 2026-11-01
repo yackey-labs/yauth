@@ -112,18 +112,40 @@ func TestCORS_WildcardWithoutCredentials(t *testing.T) {
 	}
 }
 
-func TestCORS_WildcardWithCredentialsReflectsOrigin(t *testing.T) {
+// TestCORS_WildcardWithCredentialsDoesNotReflectArpinOrigin pins the
+// credentials-mode wildcard refusal: reflecting an attacker-chosen Origin
+// with Access-Control-Allow-Credentials is what made every credentialed
+// cross-origin response readable from anywhere. The wildcard entry must
+// contribute nothing when credentials are on — explicitly listed origins
+// keep working, and the attacker's origin gets no ACAO at all.
+func TestCORS_WildcardWithCredentialsDoesNotReflectArbitraryOrigin(t *testing.T) {
 	cfg := CORSConfig{
-		AllowedOrigins:   []string{"*"},
+		// "*" is present, but so is a real origin: the real one is the
+		// only thing the wildcard list is still good for.
+		AllowedOrigins:   []string{"*", "https://app.example.com"},
 		AllowCredentials: true,
 	}
 	wrapped := CORS(cfg)(okHandler())
+
+	// The listed origin is still served credentially.
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("Origin", "https://app.example.com")
 	rr := httptest.NewRecorder()
 	wrapped.ServeHTTP(rr, req)
 	if got := rr.Header().Get("Access-Control-Allow-Origin"); got != "https://app.example.com" {
-		t.Fatalf("ACAO: with credentials, * must be reflected as origin, got %q", got)
+		t.Fatalf("ACAO for listed origin: want origin reflected, got %q", got)
+	}
+
+	// A cheeky third-party origin gets nothing, credentials or not.
+	req = httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Origin", "https://attacker.example")
+	rr = httptest.NewRecorder()
+	wrapped.ServeHTTP(rr, req)
+	if got := rr.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Fatalf("ACAO for unlisted origin: want empty, got %q", got)
+	}
+	if got := rr.Header().Get("Access-Control-Allow-Credentials"); got != "" {
+		t.Fatalf("ACAC for unlisted origin: want empty, got %q", got)
 	}
 }
 

@@ -303,3 +303,36 @@ func TestPassThroughForwardsToInner(t *testing.T) {
 		t.Fatalf("inner GetUserByID: got=%v err=%v", got, err)
 	}
 }
+
+func TestSession_CreateCachesActiveOrgID(t *testing.T) {
+	ctx := context.Background()
+	r, _, _, inner := newTestRepo(t)
+
+	now := time.Now().UTC()
+	org := "org-1"
+	in := domain.NewSession{
+		ID:          "s1",
+		UserID:      "u1",
+		TokenHash:   "hash-1",
+		ActiveOrgID: &org,
+		ExpiresAt:   now.Add(time.Hour),
+		CreatedAt:   now,
+	}
+	if err := r.CreateSession(ctx, in); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	// Delete the inner row: the next read MUST come from the write-through
+	// cache entry. If ActiveOrgID was dropped from the cached struct, the
+	// cache hit returns a session with a nil ActiveOrgID.
+	if _, err := inner.DeleteSession(ctx, "hash-1"); err != nil {
+		t.Fatalf("inner DeleteSession: %v", err)
+	}
+	got, err := r.GetSessionByTokenHash(ctx, "hash-1")
+	if err != nil || got == nil {
+		t.Fatalf("expected cache hit after inner delete; got=%v err=%v", got, err)
+	}
+	if got.ActiveOrgID == nil || *got.ActiveOrgID != "org-1" {
+		t.Fatalf("cached session lost ActiveOrgID: %+v", got)
+	}
+}

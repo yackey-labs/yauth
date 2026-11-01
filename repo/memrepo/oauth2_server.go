@@ -454,6 +454,19 @@ func (r *Repo) UpdateDeviceCodeStatus(ctx context.Context, id, status string, us
 	if !ok {
 		return yautherr.ErrNotFound
 	}
+	// Compare-and-swap on the status: only the approval leg (from pending)
+	// and the redemption leg (approved -> consumed) may move a code.
+	// Terminal states (consumed, denied, expired) are final, and a second
+	// concurrent approval loses with ErrNotFound instead of
+	// last-writer-winning on user_id. Mirrors the SQL predicate in
+	// queries/oauth2_server.sql (UpdateDeviceCodeStatus).
+	// A pending code can never be consumed directly: redemption requires a
+	// prior approval.
+	allowed := (d.Status == "pending" && status != "consumed") ||
+		(d.Status == "approved" && status == "consumed")
+	if !allowed {
+		return yautherr.ErrNotFound
+	}
 	d.Status = status
 	if userID != nil {
 		d.UserID = userID

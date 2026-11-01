@@ -32,7 +32,20 @@ type SecurityHeadersConfig struct {
 
 	// HSTS is the Strict-Transport-Security value. EMPTY (the default)
 	// means the header is never emitted. Even when set it is only sent on
-	// a request that actually arrived over TLS — see [SecurityHeaders].
+	// a request that actually arrived over TLS (r.TLS != nil) — see
+	// [SecurityHeaders].
+	//
+	// OPERATIONAL WARNING: behind a TLS-terminating proxy (Traefik,
+	// Cloudflare, an ALB) r.TLS is ALWAYS nil — Go sees the proxy's
+	// plaintext hop, not the browser's TLS — so this header is SILENTLY
+	// INERT no matter what value is configured here. X-Forwarded-Proto is
+	// deliberately NOT consulted: TrustedProxiesMiddleware vets the client
+	// IP, not the scheme, so the header is attacker-writable as far as this
+	// layer knows, and trusting it would let any client switch HSTS on.
+	// If yauth sits behind TLS termination, terminate-or-emit at the edge
+	// instead: configure HSTS on the load balancer / CDN in front of yauth,
+	// or terminate TLS at yauth itself. Do NOT assume setting this field is
+	// enough — verify with curl -sI that the header is on the wire.
 	HSTS string
 
 	// Override replaces the default value of a single header, keyed by

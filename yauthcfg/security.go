@@ -76,5 +76,17 @@ func (c *Config) SecurityWarnings() []string {
 		w = append(w, "session.cookie_secure=false — session cookies will be sent over plaintext HTTP and are readable by anything on the path. This is for local development only; set it true anywhere reachable over a network")
 	}
 
+	// Inline bootstrap password. The schema invariant (package comment) is
+	// that secrets are NEVER stored inline — every other secret-bearing
+	// field is *_env/*_path only — but BootstrapAdminConfig.Password
+	// predates that invariant and survives for air-gapped single-file
+	// setups. It stays permitted, like cookie_secure=false, but is now said
+	// out loud: a config file is committed, copied into images and pasted
+	// into tickets far more readily than an env var or a secret file.
+	if c.Plugins.EmailPassword.BootstrapAdmin.Enabled &&
+		strings.TrimSpace(c.Plugins.EmailPassword.BootstrapAdmin.Password) != "" {
+		w = append(w, "plugins.email_password.bootstrap_admin.password is set inline — the bootstrap password lives in the config file, which is committed, imaged and pasted far more readily than an env var or secret file. Prefer plugins.email_password.bootstrap_admin.password_env (or password_file); the inline value takes lowest precedence")
+	}
+
 	return w
 }

@@ -42,11 +42,12 @@ func TestValidate_RejectsSameSiteNoneWithoutSecure(t *testing.T) {
 	}
 }
 
-// TestValidate_RejectsWildcardOriginWithCredentials. matchOrigin reflects the
-// request's Origin when AllowedOrigins contains "*" AND AllowCredentials is
-// set, which works around the Fetch standard's ban on literal "*" with
-// credentials by removing the guard rather than the danger: every origin on the
-// web can then make credentialed requests and READ the responses.
+// TestValidate_RejectsWildcardOriginWithCredentials. The middleware now
+// refuses to honour the combination rather than "working around" the Fetch
+// standard's ban on literal "*" with credentials — ignoring the wildcard
+// entry would have broken existing deployments silently — but "*" +
+// credentials is never a legitimate config on the declarative surface, so
+// Validate rejects it outright and the operator gets pointed at the fix.
 func TestValidate_RejectsWildcardOriginWithCredentials(t *testing.T) {
 	c := baseValidConfig()
 	c.Server.CORS.AllowedOrigins = []string{"*"}
@@ -97,6 +98,35 @@ func TestSecurityWarnings_CookieSecureFalse(t *testing.T) {
 	for _, w := range c.SecurityWarnings() {
 		if strings.Contains(w, "cookie_secure") {
 			t.Fatalf("advisory still fires with cookie_secure=true: %q", w)
+		}
+	}
+}
+
+// TestSecurityWarnings_BootstrapAdminInlinePassword. The inline
+// bootstrap_admin.password predates the "secrets never inline" schema
+// invariant and stays permitted for air-gapped setups — but it must be said
+// out loud, like cookie_secure=false: a config file is committed, imaged and
+// pasted far more readily than an env var or secret file.
+func TestSecurityWarnings_BootstrapAdminInlinePassword(t *testing.T) {
+	c := baseValidConfig()
+	c.Plugins.EmailPassword.BootstrapAdmin.Enabled = true
+	c.Plugins.EmailPassword.BootstrapAdmin.Password = "inline-secret"
+
+	found := false
+	for _, w := range c.SecurityWarnings() {
+		if strings.Contains(w, "bootstrap_admin.password") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no advisory for inline bootstrap_admin.password; got %v", c.SecurityWarnings())
+	}
+
+	// Env/file-sourced secrets (and no secret at all) stay quiet.
+	c.Plugins.EmailPassword.BootstrapAdmin.Password = ""
+	for _, w := range c.SecurityWarnings() {
+		if strings.Contains(w, "bootstrap_admin.password") {
+			t.Fatalf("advisory fires without an inline password: %q", w)
 		}
 	}
 }

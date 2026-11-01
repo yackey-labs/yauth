@@ -955,6 +955,42 @@ func (p *adminPlugin) registerImpersonate(host plugin.PluginHost, api huma.API, 
 			return nil, huma.Error500InternalServerError("unable to load user")
 		}
 
+		// Refuse to impersonate a target that cannot authenticate. A session
+		// for a banned, suspended or staged (pre-start) account is inert
+		// server-side — auth resolution rejects it on the next hop — so the
+		// only thing issuing it accomplishes is overwriting the ADMIN's own
+		// session cookie (same cookie name) with a useless one: a
+		// self-inflicted logout that also writes a misleading
+		// admin.impersonation audit row. Refuse with 403 and audit the
+		// attempt instead. The reason names the state (the caller is an
+		// admin who can already read it via GET /admin/users/{id}).
+		now := time.Now().UTC()
+		if !target.CanAuthenticate(now) {
+			state := "inactive"
+			switch {
+			case target.Banned:
+				state = "banned"
+			case target.SuspendedAt != nil:
+				state = "suspended"
+			case target.Staged(now):
+				state = "staged"
+			}
+			meta, _ := json.Marshal(map[string]any{
+				"admin_id":    actorIDFromContext(ctx),
+				"target_user": id,
+				"state":       state,
+			})
+			_ = plugin.WriteAudit(ctx, host, domain.NewAuditLog{
+				ID:        newID(),
+				UserID:    &target.ID,
+				EventType: "admin.impersonation.refused",
+				Metadata:  meta,
+				IPAddress: middleware.RequestIP(r),
+				CreatedAt: now,
+			})
+			return nil, huma.Error403Forbidden("cannot impersonate a " + state + " user")
+		}
+
 		// The User-Agent used to be a literal nil here while every other
 		// session-issuing site in the tree passes the request's UA.
 		// middleware.enforceBinding is guarded on
@@ -1095,6 +1131,9 @@ func (p *adminPlugin) registerDeleteUser(host plugin.PluginHost, api huma.API, m
 		if err := host.Repo().DeleteUser(ctx, id); err != nil {
 			if errors.Is(err, yautherr.ErrNotFound) {
 				return nil, huma.Error404NotFound("user not found")
+			}
+			if errors.Is(err, yautherr.ErrOwnerProtected) {
+				return nil, huma.Error409Conflict("user is the last owner of an organization; transfer ownership before deleting")
 			}
 			return nil, huma.Error500InternalServerError("unable to delete user")
 		}

@@ -35,8 +35,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -172,7 +174,16 @@ func TestWebhookDelivery_StillSignsWithARealSecret(t *testing.T) {
 	if sig == "" {
 		t.Fatal("POSITIVE CONTROL: a webhook with a real secret was delivered UNSIGNED")
 	}
+	tsStr := head.Get("X-YAuth-Timestamp")
+	if tsStr == "" {
+		t.Fatal("POSITIVE CONTROL: X-YAuth-Timestamp missing — receivers cannot enforce freshness")
+	}
+	ts, err := strconv.ParseInt(tsStr, 10, 64)
+	if err != nil {
+		t.Fatalf("POSITIVE CONTROL: bad X-YAuth-Timestamp %q: %v", tsStr, err)
+	}
 	mac := hmac.New(sha256.New, []byte(secret))
+	fmt.Fprintf(mac, "%d.", ts)
 	mac.Write(body)
 	want := signaturePrefix + hex.EncodeToString(mac.Sum(nil))
 	if sig != want {

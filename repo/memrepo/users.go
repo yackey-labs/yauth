@@ -176,8 +176,132 @@ func (r *Repo) DeleteUser(ctx context.Context, id string) error {
 	if !ok {
 		return yautherr.ErrNotFound
 	}
+	// Last-owner protection, mirroring pgxrepo: refuse before mutating
+	// anything when the cascade would leave an org with no owner.
+	for _, m := range r.memberships {
+		if m.UserID != id || m.Role != memrepoOwnerRole {
+			continue
+		}
+		if r.countOwnersInOrg(m.OrganizationID) <= 1 {
+			return yautherr.ErrOwnerProtected
+		}
+	}
 	delete(r.emailIdx, u.Email)
 	delete(r.users, id)
+	// Explicit cascade: memrepo holds no foreign keys either, so every
+	// user-owned row must be removed by hand, mirroring pgxrepo's
+	// DeleteUser cascade. Audit log rows deliberately survive (the trail
+	// must outlive the user); challenges, rate-limit windows and
+	// revocations are keyed by opaque caller-chosen keys rather than the
+	// user id, and OAuth/SSO login-state rows carry no user column and
+	// expire in minutes — none of those are user-mapped.
+	for sid, s := range r.sessions {
+		if s.UserID == id {
+			delete(r.sessionTokenIdx, s.TokenHash)
+			delete(r.sessions, sid)
+		}
+	}
+	for rid, rt := range r.refreshTokens {
+		if rt.UserID == id {
+			delete(r.refreshTokenIdx, rt.TokenHash)
+			delete(r.refreshTokens, rid)
+		}
+	}
+	for kid, k := range r.apiKeys {
+		if k.UserID != nil && *k.UserID == id {
+			delete(r.apiKeyPrefixIdx, k.KeyPrefix)
+			delete(r.apiKeys, kid)
+		}
+	}
+	for oid, oa := range r.oauthAccounts {
+		if oa.UserID == id {
+			delete(r.oauthAccounts, oid)
+		}
+	}
+	for cid, c := range r.consents {
+		if c.UserID == id {
+			delete(r.consents, cid)
+		}
+	}
+	for mid, m := range r.memberships {
+		if m.UserID == id {
+			delete(r.membershipOrgUserIdx, membershipKey(m.OrganizationID, m.UserID))
+			delete(r.memberships, mid)
+		}
+	}
+	for _, members := range r.groupMembers {
+		delete(members, id)
+	}
+	for aid, a := range r.clientRoles {
+		if a.UserID != nil && *a.UserID == id {
+			delete(r.clientRoles, aid)
+		}
+	}
+	for pid, p := range r.passkeys {
+		if p.UserID == id {
+			delete(r.passkeys, pid)
+		}
+	}
+	for tid, ts := range r.totp {
+		if ts.UserID == id {
+			delete(r.totp, tid)
+		}
+	}
+	for bid, b := range r.backupCodes {
+		if b.UserID == id {
+			delete(r.backupCodes, bid)
+		}
+	}
+	delete(r.passwords, id)
+	delete(r.passwordHistory, id)
+	for eid, ev := range r.emailVerifs {
+		if ev.UserID == id {
+			delete(r.emailVerifTokenIdx, ev.TokenHash)
+			delete(r.emailVerifs, eid)
+		}
+	}
+	for pid, pr := range r.passwordResets {
+		if pr.UserID == id {
+			delete(r.passwordResetTokenIdx, pr.TokenHash)
+			delete(r.passwordResets, pid)
+		}
+	}
+	if lid, ok := r.accountLockUserIdx[id]; ok {
+		delete(r.accountLockUserIdx, id)
+		delete(r.accountLocks, lid)
+	}
+	for tid, ut := range r.unlockTokens {
+		if ut.UserID == id {
+			delete(r.unlockTokenHashIdx, ut.TokenHash)
+			delete(r.unlockTokens, tid)
+		}
+	}
+	for aid, ac := range r.authCodes {
+		if ac.UserID == id {
+			delete(r.authCodeHashIdx, ac.CodeHash)
+			// Nonces are keyed by authorization code, not by user; drop
+			// the ones anchored to a deleted code.
+			for nid, n := range r.oidcNonces {
+				if n.AuthorizationCodeID == aid {
+					delete(r.oidcNonceHashIdx, n.NonceHash)
+					delete(r.oidcNonces, nid)
+				}
+			}
+			delete(r.authCodes, aid)
+		}
+	}
+	for did, dc := range r.deviceCodes {
+		if dc.UserID != nil && *dc.UserID == id {
+			delete(r.deviceCodeHashIdx, dc.DeviceCodeHash)
+			delete(r.deviceCodes, did)
+		}
+	}
+	for mlid, ml := range r.magicLinks {
+		if ml.Email == u.Email {
+			delete(r.magicLinkTokenIdx, ml.TokenHash)
+			delete(r.magicLinks, mlid)
+		}
+	}
 	// Cascade external identities (yauth #93 / yauth-go #23). The
 	// (provider, external_id) -> id index must be kept consistent.
 	for eid, ext := range r.extIdentities {

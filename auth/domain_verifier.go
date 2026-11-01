@@ -22,7 +22,10 @@ import (
 	"context"
 	"errors"
 	"net"
+	"regexp"
 	"strings"
+
+	"golang.org/x/net/idna"
 )
 
 // DomainTXTLookupPrefix is the DNS label the verifier prepends to the
@@ -58,6 +61,58 @@ func (a LookupTXTAdapter) LookupTXT(ctx context.Context, name string) ([]string,
 // Resolves via the OS default. Concurrency-safe for shared use.
 var DefaultDomainTXTResolver DomainTXTResolver = LookupTXTAdapter{}
 
+var (
+	idnaRelaxed     = idna.New(idna.MapForLookup(), idna.BidiRule(), idna.StrictDomainName(false))
+	relaxedDomainRE = regexp.MustCompile(`^[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?(\.[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?)*$`)
+)
+
+// CanonicalizeDomain normalizes a DNS domain name for comparison and
+// lookup: surrounding whitespace is trimmed, a single trailing dot (the
+// FQDN root marker, as in "acme.com.") is stripped, the name is
+// lowercased, and non-ASCII labels are punycode-encoded via
+// idna.Lookup.ToASCII ("münchen.de" → "xn--mnchen-3ya.de").
+//
+// The direction is fail-closed: an empty input or a name idna rejects
+// returns ErrInvalidDomain, so callers treat it as "not proved" rather
+// than falling back to the raw string. Comparison must always go through
+// this helper on BOTH sides; a stored row written before canonicalization
+// existed (raw Unicode or with a trailing dot) will not match its
+// canonical form until re-saved — a miss, never a false allow.
+func CanonicalizeDomain(s string) (string, error) {
+	t := strings.TrimSpace(s)
+	// Strip one trailing dot: the DNS root marker. "acme.com." and
+	// "acme.com" name the same node. Only one is stripped — ".." is
+	// not a valid name and idna will refuse what remains.
+	t = strings.TrimSuffix(t, ".")
+	t = strings.ToLower(t)
+	// Reject empty labels up front: ToASCII keeps a trailing dot, and the
+	// defensive strip below would otherwise turn "acme.com.." into
+	// "acme.com".
+	if t == "" || strings.HasPrefix(t, ".") || strings.HasSuffix(t, ".") || strings.Contains(t, "..") {
+		return "", ErrInvalidDomain
+	}
+	ascii, err := idna.Lookup.ToASCII(t)
+	if err != nil {
+		// The strict (STD3) profile rejects "_", which is legal in DNS
+		// names and in real mail domains (my_corp.example). Retry with the
+		// relaxed profile, then re-impose an explicit hostname-ish
+		// alphabet so the relaxation admits underscores and nothing else
+		// (no spaces, slashes, or other injection characters).
+		relaxed, rerr := idnaRelaxed.ToASCII(t)
+		if rerr != nil || !relaxedDomainRE.MatchString(strings.ToLower(relaxed)) {
+			return "", ErrInvalidDomain
+		}
+		ascii = relaxed
+	}
+	// ToASCII preserves a trailing dot on FQDN input that still carried
+	// one (and lowercases); normalize again defensively.
+	ascii = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(ascii), "."))
+	if ascii == "" || strings.Contains(ascii, "..") || strings.HasPrefix(ascii, ".") {
+		return "", ErrInvalidDomain // empty label
+	}
+	return ascii, nil
+}
+
 // VerifyDomainTXT looks up TXT records at "_yauth-domain-verify.<domain>"
 // and reports whether any record exactly equals expectedToken. The match
 // is exact-string against each returned TXT chunk; we do not split
@@ -74,8 +129,8 @@ var DefaultDomainTXTResolver DomainTXTResolver = LookupTXTAdapter{}
 // The function never panics. It rejects empty domains with
 // ErrInvalidDomain.
 func VerifyDomainTXT(ctx context.Context, resolver DomainTXTResolver, domainStr, expectedToken string) (bool, error) {
-	domainStr = strings.ToLower(strings.TrimSpace(domainStr))
-	if domainStr == "" {
+	domainStr, err := CanonicalizeDomain(domainStr)
+	if err != nil {
 		return false, ErrInvalidDomain
 	}
 	if expectedToken == "" {

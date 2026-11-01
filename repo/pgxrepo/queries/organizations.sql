@@ -36,14 +36,14 @@ ORDER BY o.created_at ASC, o.id ASC;
 
 -- name: ListOrganizationsSearch :many
 SELECT * FROM yauth_organizations
-WHERE ($1::text = '' OR LOWER(name) LIKE '%' || LOWER($1::text) || '%' OR slug_lower LIKE '%' || LOWER($1::text) || '%')
+WHERE ($1::text = '' OR LOWER(name) LIKE '%' || REPLACE(REPLACE(REPLACE(LOWER($1::text), '\', '\\'), '%', '\%'), '_', '\_') || '%' ESCAPE '\' OR slug_lower LIKE '%' || REPLACE(REPLACE(REPLACE(LOWER($1::text), '\', '\\'), '%', '\%'), '_', '\_') || '%' ESCAPE '\')
 ORDER BY created_at ASC, id ASC
 LIMIT CASE WHEN $2::int > 0 THEN $2::int ELSE NULL END
 OFFSET $3::int;
 
 -- name: CountOrganizationsSearch :one
 SELECT COUNT(*) FROM yauth_organizations
-WHERE ($1::text = '' OR LOWER(name) LIKE '%' || LOWER($1::text) || '%' OR slug_lower LIKE '%' || LOWER($1::text) || '%');
+WHERE ($1::text = '' OR LOWER(name) LIKE '%' || REPLACE(REPLACE(REPLACE(LOWER($1::text), '\', '\\'), '%', '\%'), '_', '\_') || '%' ESCAPE '\' OR slug_lower LIKE '%' || REPLACE(REPLACE(REPLACE(LOWER($1::text), '\', '\\'), '%', '\%'), '_', '\_') || '%' ESCAPE '\');
 
 -- name: CreateMembership :one
 INSERT INTO yauth_memberships (id, organization_id, user_id, role, status, invited_at, joined_at, created_at, updated_at)
@@ -71,6 +71,9 @@ DELETE FROM yauth_memberships WHERE id = $1;
 
 -- name: CountOrgOwners :one
 SELECT COUNT(*) FROM yauth_memberships WHERE organization_id = $1 AND role = 'owner';
+
+-- name: LockOrgOwners :many
+SELECT * FROM yauth_memberships WHERE organization_id = $1 AND role = 'owner' FOR UPDATE;
 
 -- name: ListMembershipsByOrg :many
 SELECT * FROM yauth_memberships WHERE organization_id = $1 ORDER BY created_at ASC, id ASC;

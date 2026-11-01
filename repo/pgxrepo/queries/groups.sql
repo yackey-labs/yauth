@@ -17,8 +17,12 @@ SELECT * FROM yauth_groups WHERE organization_id = $1 ORDER BY name;
 
 -- name: UpdateGroup :one
 UPDATE yauth_groups
-SET name = $2, description = $3, external_id = $4, updated_at = $5
-WHERE id = $1
+SET
+    name        = COALESCE(sqlc.narg('name'), name),
+    description = CASE WHEN sqlc.arg('clear_description')::boolean THEN NULL ELSE COALESCE(sqlc.narg('description'), description) END,
+    external_id = CASE WHEN sqlc.arg('clear_external_id')::boolean THEN NULL ELSE COALESCE(sqlc.narg('external_id'), external_id) END,
+    updated_at  = $1
+WHERE id = $2
 RETURNING *;
 
 -- name: DeleteGroup :exec

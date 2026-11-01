@@ -241,6 +241,11 @@ const revokeRefreshToken = `-- name: RevokeRefreshToken :execrows
 UPDATE yauth_refresh_tokens SET revoked = true WHERE id = $1 AND revoked = false
 `
 
+// Compare-and-swap: `revoked = false` makes the second revoker of a row affect
+// zero rows, which repo.go maps to yautherr.ErrNotFound. Rotation reads the row
+// and writes it in two separate statements, so without this narrowing two
+// concurrent uses of one refresh token both succeeded and forked the family
+// into branches that could never trip reuse detection.
 func (q *Queries) RevokeRefreshToken(ctx context.Context, id string) (int64, error) {
 	result, err := q.db.Exec(ctx, revokeRefreshToken, id)
 	if err != nil {

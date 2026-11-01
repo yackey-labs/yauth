@@ -24,11 +24,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -70,8 +72,18 @@ func main() {
 	mux.HandleFunc("POST /webhooks/sink", func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		sig := r.Header.Get("X-YAuth-Signature")
-		expected := "sha256=" + hmacHex(sharedSecret, body)
-		ok := hmac.Equal([]byte(sig), []byte(expected))
+		ts := r.Header.Get("X-YAuth-Timestamp")
+		// Signed material is {timestamp}.{payload} — the timestamp rides
+		// in X-YAuth-Timestamp and is part of the HMAC, so it cannot be
+		// rewritten in flight. A production receiver would also reject a
+		// timestamp older than its freshness window, which is what makes
+		// captured deliveries non-replayable.
+		tsNum, perr := strconv.ParseInt(ts, 10, 64)
+		expected := ""
+		if perr == nil {
+			expected = "sha256=" + hmacHex(sharedSecret, tsNum, body)
+		}
+		ok := len(expected) > 0 && hmac.Equal([]byte(sig), []byte(expected))
 		log.Printf("[receiver] event=%s delivery=%s sig_ok=%v body=%s",
 			r.Header.Get("X-YAuth-Event"),
 			r.Header.Get("X-YAuth-Delivery"),
@@ -148,8 +160,9 @@ func seedWebhook(repo interface {
 	})
 }
 
-func hmacHex(secret string, body []byte) string {
+func hmacHex(secret string, ts int64, body []byte) string {
 	mac := hmac.New(sha256.New, []byte(secret))
+	fmt.Fprintf(mac, "%d.", ts)
 	mac.Write(body)
 	return hex.EncodeToString(mac.Sum(nil))
 }

@@ -86,6 +86,7 @@ var groups = []group{
 	{name: "backup_codes", cases: backupCodeCases},
 	{name: "oauth_accounts", cases: oauthAccountCases},
 	{name: "oauth_states", cases: oauthStateCases},
+	{name: "sso_login_states", cases: ssoLoginStateCases},
 	{name: "refresh_tokens", cases: refreshTokenCases},
 	{name: "api_keys", cases: apiKeyCases},
 	{name: "oauth2_clients", cases: oauth2ClientCases},
@@ -291,6 +292,225 @@ var userCases = []testCase{
 		}
 		if total != 3 || len(page) != 1 {
 			t.Fatalf("expected total=3 len=1, got total=%d len=%d", total, len(page))
+		}
+	}},
+	{"search_escapes_like_wildcards", func(t *testing.T, r repo.Repository) {
+		mustCreateUser(t, r, "u1", "alice@example.com")
+		mustCreateUser(t, r, "u2", "bob@example.com")
+		// "%", "_" and "\" are LIKE metacharacters/escape characters, not
+		// literal text. An unescaped search term turns into a
+		// match-everything pattern (and defeats any index on the column).
+		// Backends MUST escape LIKE wildcards so these match only rows
+		// containing the literal character — i.e. normally zero rows.
+		for _, term := range []string{"%", "_", "%_%", "\\", "%%"} {
+			got, total, err := r.ListUsers(ctx(), term, 0, 0)
+			if err != nil {
+				t.Fatalf("ListUsers(%q): %v", term, err)
+			}
+			if total != 0 || len(got) != 0 {
+				t.Fatalf("ListUsers(%q) matched %d rows; want 0 (wildcard must not match everything)", term, total)
+			}
+		}
+		// Ordinary substring search still works after the escaping change.
+		got, total, err := r.ListUsers(ctx(), "alice", 0, 0)
+		if err != nil {
+			t.Fatalf("ListUsers(alice): %v", err)
+		}
+		if total != 1 || len(got) != 1 || got[0].Email != "alice@example.com" {
+			t.Fatalf("literal search broke: total=%d list=%+v", total, got)
+		}
+	}},
+	{"delete_user_cascades", func(t *testing.T, r repo.Repository) {
+		now := nowUTC()
+		mustCreateUser(t, r, "u1", "alice@example.com")
+		mustCreateUser(t, r, "u2", "bob@example.com")
+		u1 := "u1"
+		if _, err := r.CreateOrganization(ctx(), domain.NewOrganization{
+			ID: "o1", Name: "Acme", Slug: "acme", CreatedAt: now, UpdatedAt: now,
+		}); err != nil {
+			t.Fatalf("CreateOrganization: %v", err)
+		}
+		if _, err := r.CreateGroup(ctx(), domain.NewGroup{
+			ID: "g1", OrganizationID: "o1", Name: "engineers", CreatedAt: now, UpdatedAt: now,
+		}); err != nil {
+			t.Fatalf("CreateGroup: %v", err)
+		}
+		must := func(op string, err error) {
+			t.Helper()
+			if err != nil {
+				t.Fatalf("%s: %v", op, err)
+			}
+		}
+		must("CreateSession", r.CreateSession(ctx(), domain.NewSession{
+			ID: "s1", UserID: "u1", TokenHash: "h1", ExpiresAt: now.Add(time.Hour), CreatedAt: now,
+		}))
+		must("CreateRefreshToken", r.CreateRefreshToken(ctx(), domain.NewRefreshToken{
+			ID: "rt1", UserID: "u1", TokenHash: "rh1", FamilyID: "fam1",
+			ExpiresAt: now.Add(time.Hour), CreatedAt: now,
+		}))
+		must("CreateAPIKey", r.CreateAPIKey(ctx(), domain.NewAPIKey{
+			ID: "k1", UserID: strRef("u1"), KeyPrefix: "pre_1", KeyHash: "kh",
+			Name: "k", Scopes: json.RawMessage(`[]`), CreatedAt: now, CreatedByUserID: "u1",
+		}))
+		must("CreateOAuthAccount", r.CreateOAuthAccount(ctx(), domain.NewOAuthAccount{
+			ID: "oa1", UserID: "u1", Provider: "google", ProviderUserID: "g1",
+			CreatedAt: now, UpdatedAt: now,
+		}))
+		must("CreateConsent", r.CreateConsent(ctx(), domain.NewConsent{
+			ID: "c1", UserID: "u1", ClientID: "cli", CreatedAt: now,
+		}))
+		must("CreateMembership", func() error {
+			_, err := r.CreateMembership(ctx(), domain.NewMembership{
+				ID: "m1", OrganizationID: "o1", UserID: "u1",
+				Role: "member", Status: domain.MembershipActive, CreatedAt: now, UpdatedAt: now,
+			})
+			return err
+		}())
+		must("AddGroupMember", r.AddGroupMember(ctx(), "g1", "u1", now))
+		must("AssignClientRole", r.AssignClientRole(ctx(), domain.NewClientRoleAssignment{
+			ID: "cra1", ClientID: "cli", Role: "viewer", UserID: &u1, CreatedAt: now,
+		}))
+		must("CreatePasskey", r.CreatePasskey(ctx(), domain.NewWebauthnCredential{
+			ID: "p1", UserID: "u1", Name: "key", Credential: json.RawMessage(`{}`), CreatedAt: now,
+		}))
+		must("CreateTOTP", r.CreateTOTP(ctx(), domain.NewTOTPSecret{
+			ID: "t1", UserID: "u1", EncryptedSecret: "enc", CreatedAt: now,
+		}))
+		must("CreateBackupCode", r.CreateBackupCode(ctx(), domain.NewBackupCode{
+			ID: "b1", UserID: "u1", CodeHash: "ch", CreatedAt: now,
+		}))
+		must("UpsertPassword", r.UpsertPassword(ctx(), domain.NewPassword{
+			UserID: "u1", PasswordHash: "ph",
+		}))
+		must("AppendPasswordHistory", r.AppendPasswordHistory(ctx(), domain.NewPasswordHistory{
+			ID: "ph1", UserID: "u1", PasswordHash: "old", CreatedAt: now,
+		}))
+		must("CreateEmailVerification", r.CreateEmailVerification(ctx(), domain.NewEmailVerification{
+			ID: "ev1", UserID: "u1", TokenHash: "evh", ExpiresAt: now.Add(time.Hour), CreatedAt: now,
+		}))
+		must("CreatePasswordReset", r.CreatePasswordReset(ctx(), domain.NewPasswordReset{
+			ID: "pr1", UserID: "u1", TokenHash: "prh", ExpiresAt: now.Add(time.Hour), CreatedAt: now,
+		}))
+		must("CreateUnlockToken", r.CreateUnlockToken(ctx(), domain.NewUnlockToken{
+			ID: "ut1", UserID: "u1", TokenHash: "uth", ExpiresAt: now.Add(time.Hour), CreatedAt: now,
+		}))
+		must("CreateExternalIdentity", func() error {
+			_, err := r.CreateExternalIdentity(ctx(), domain.NewExternalIdentity{
+				ID: "e1", UserID: "u1", Provider: "google", ExternalID: "ext1",
+			})
+			return err
+		}())
+		must("CreateAuthorizationCode", r.CreateAuthorizationCode(ctx(), domain.NewAuthorizationCode{
+			ID: "ac1", CodeHash: "ach", ClientID: "cli", UserID: "u1",
+			RedirectURI: "https://x/cb", CodeChallenge: "cc", CodeChallengeMethod: "S256",
+			ExpiresAt: now.Add(time.Hour), CreatedAt: now,
+		}))
+		must("CreateOIDCNonce", r.CreateOIDCNonce(ctx(), domain.NewOIDCNonce{
+			ID: "n1", NonceHash: "nh1", AuthorizationCodeID: "ac1", CreatedAt: now,
+		}))
+		must("CreateDeviceCode", r.CreateDeviceCode(ctx(), domain.NewDeviceCode{
+			ID: "d1", DeviceCodeHash: "ddh", UserCode: "ABCD-1234", ClientID: "cli",
+			UserID: &u1, Status: "approved", Interval: 5,
+			ExpiresAt: now.Add(time.Hour), CreatedAt: now,
+		}))
+		must("CreateMagicLink", r.CreateMagicLink(ctx(), domain.NewMagicLink{
+			ID: "ml1", Email: "alice@example.com", TokenHash: "mlh",
+			ExpiresAt: now.Add(time.Hour), CreatedAt: now,
+		}))
+		if _, err := r.CreateAccountLock(ctx(), domain.NewAccountLock{
+			ID: "l1", UserID: "u1", CreatedAt: now, UpdatedAt: now,
+		}); err != nil {
+			t.Fatalf("CreateAccountLock: %v", err)
+		}
+		// A second user's rows pin over-deletion: they must survive.
+		must("CreateSession(u2)", r.CreateSession(ctx(), domain.NewSession{
+			ID: "s2", UserID: "u2", TokenHash: "h2", ExpiresAt: now.Add(time.Hour), CreatedAt: now,
+		}))
+
+		if err := r.DeleteUser(ctx(), "u1"); err != nil {
+			t.Fatalf("DeleteUser: %v", err)
+		}
+		if got, err := r.GetUserByID(ctx(), "u1"); got != nil || !errors.Is(err, yautherr.ErrNotFound) {
+			t.Errorf("user row survived: (%+v, %v)", got, err)
+		}
+		if got, err := r.GetUserByEmail(ctx(), "alice@example.com"); got != nil || !errors.Is(err, yautherr.ErrNotFound) {
+			t.Errorf("user email index survived: (%+v, %v)", got, err)
+		}
+		if got, err := r.GetSessionByTokenHash(ctx(), "h1"); got != nil || !errors.Is(err, yautherr.ErrNotFound) {
+			t.Errorf("session survived: (%+v, %v)", got, err)
+		}
+		if got, err := r.GetSessionByID(ctx(), "s1"); got != nil || !errors.Is(err, yautherr.ErrNotFound) {
+			t.Errorf("session by id survived: (%+v, %v)", got, err)
+		}
+		if got, err := r.GetRefreshTokenByHash(ctx(), "rh1"); got != nil || !errors.Is(err, yautherr.ErrNotFound) {
+			t.Errorf("refresh token survived: (%+v, %v)", got, err)
+		}
+		if got, err := r.GetAPIKeyByPrefix(ctx(), "pre_1"); got != nil || !errors.Is(err, yautherr.ErrNotFound) {
+			t.Errorf("api key survived: (%+v, %v)", got, err)
+		}
+		if ks, err := r.ListAPIKeysByUserID(ctx(), "u1"); err != nil || len(ks) != 0 {
+			t.Errorf("api keys by user survived: (%v, %v)", ks, err)
+		}
+		if got, err := r.GetOAuthAccountByProviderAndProviderUserID(ctx(), "google", "g1"); got != nil || !errors.Is(err, yautherr.ErrNotFound) {
+			t.Errorf("oauth account survived: (%+v, %v)", got, err)
+		}
+		if cs, err := r.ListConsentsByUserID(ctx(), "u1"); err != nil || len(cs) != 0 {
+			t.Errorf("consents survived: (%v, %v)", cs, err)
+		}
+		if m, err := r.GetMembershipByOrgUser(ctx(), "o1", "u1"); m != nil || err != nil {
+			t.Errorf("membership survived: (%+v, %v)", m, err)
+		}
+		if ok, err := r.IsGroupMember(ctx(), "g1", "u1"); err != nil || ok {
+			t.Errorf("group membership survived: (%v, %v)", ok, err)
+		}
+		if roles, err := r.ResolveUserRolesForClient(ctx(), "cli", "u1"); err != nil || len(roles) != 0 {
+			t.Errorf("client role assignment survived: (%v, %v)", roles, err)
+		}
+		if ps, err := r.GetPasskeysByUserID(ctx(), "u1"); err != nil || len(ps) != 0 {
+			t.Errorf("passkeys survived: (%v, %v)", ps, err)
+		}
+		if got, err := r.GetTOTPByUserID(ctx(), "u1", nil); got != nil || !errors.Is(err, yautherr.ErrNotFound) {
+			t.Errorf("totp survived: (%+v, %v)", got, err)
+		}
+		if bs, err := r.GetUnusedBackupCodesByUserID(ctx(), "u1"); err != nil || len(bs) != 0 {
+			t.Errorf("backup codes survived: (%v, %v)", bs, err)
+		}
+		if got, err := r.GetPasswordByUserID(ctx(), "u1"); got != nil || !errors.Is(err, yautherr.ErrNotFound) {
+			t.Errorf("password survived: (%+v, %v)", got, err)
+		}
+		if hs, err := r.GetPasswordHistory(ctx(), "u1", 10); err != nil || len(hs) != 0 {
+			t.Errorf("password history survived: (%v, %v)", hs, err)
+		}
+		if n, err := r.DeleteEmailVerificationsForUser(ctx(), "u1"); err != nil || n != 0 {
+			t.Errorf("email verifications survived: deleted=%d err=%v", n, err)
+		}
+		if n, err := r.DeleteUnusedPasswordResetsForUser(ctx(), "u1"); err != nil || n != 0 {
+			t.Errorf("password resets survived: deleted=%d err=%v", n, err)
+		}
+		if got, err := r.GetUnlockTokenByHash(ctx(), "uth"); got != nil || !errors.Is(err, yautherr.ErrNotFound) {
+			t.Errorf("unlock token survived: (%+v, %v)", got, err)
+		}
+		if es, err := r.ListExternalIdentitiesByUser(ctx(), "u1"); err != nil || len(es) != 0 {
+			t.Errorf("external identities survived: (%v, %v)", es, err)
+		}
+		if got, err := r.GetAuthorizationCodeByHash(ctx(), "ach"); got != nil || !errors.Is(err, yautherr.ErrNotFound) {
+			t.Errorf("authorization code survived: (%+v, %v)", got, err)
+		}
+		if got, err := r.GetOIDCNonceByHash(ctx(), "nh1"); got != nil || !errors.Is(err, yautherr.ErrNotFound) {
+			t.Errorf("oidc nonce survived: (%+v, %v)", got, err)
+		}
+		if got, err := r.GetDeviceCodeByDeviceCodeHash(ctx(), "ddh"); got != nil || !errors.Is(err, yautherr.ErrNotFound) {
+			t.Errorf("device code survived: (%+v, %v)", got, err)
+		}
+		if n, err := r.DeleteUnusedMagicLinksForEmail(ctx(), "alice@example.com"); err != nil || n != 0 {
+			t.Errorf("magic links survived: deleted=%d err=%v", n, err)
+		}
+		if got, err := r.GetAccountLockByUserID(ctx(), "u1"); got != nil || !errors.Is(err, yautherr.ErrNotFound) {
+			t.Errorf("account lock survived: (%+v, %v)", got, err)
+		}
+		// Over-deletion pin: u2's session is untouched.
+		if got, err := r.GetSessionByTokenHash(ctx(), "h2"); err != nil || got == nil || got.UserID != "u2" {
+			t.Errorf("over-deletion: u2's session gone: (%+v, %v)", got, err)
 		}
 	}},
 }
@@ -969,6 +1189,60 @@ var oauthStateCases = []testCase{
 			t.Fatalf("second consume: %+v err=%v", got2, err)
 		}
 	}},
+	{"consume_expired_returns_not_found", func(t *testing.T, r repo.Repository) {
+		now := nowUTC()
+		_ = r.CreateOAuthState(ctx(), domain.NewOAuthState{
+			State: "expired", Provider: "google",
+			ExpiresAt: now.Add(-time.Hour), CreatedAt: now.Add(-2 * time.Hour),
+		})
+		got, err := r.ConsumeOAuthState(ctx(), "expired")
+		if got != nil || !errors.Is(err, yautherr.ErrNotFound) {
+			t.Fatalf("expired consume: (%+v, %v); want (nil, ErrNotFound)", got, err)
+		}
+	}},
+}
+
+// ----- sso login states -----
+
+// SSO login states (and OAuth states above) are bearer credentials for the
+// login flow: whoever holds the token can complete the victim's login.
+// Backends MUST therefore treat them as single-use secrets with a short TTL
+// (the plugins mint them with a 10-minute expiry): consume deletes the row
+// atomically, and expired rows never redeem.
+var ssoLoginStateCases = []testCase{
+	{"create_consume_single_use", func(t *testing.T, r repo.Repository) {
+		now := nowUTC()
+		if err := r.CreateSsoLoginState(ctx(), domain.NewSsoLoginState{
+			State: "st1", ConnectionID: "conn1", Nonce: "n",
+			PKCEVerifier: "v", RedirectURL: "https://app/cb",
+			CreatedAt: now, ExpiresAt: now.Add(10 * time.Minute),
+		}); err != nil {
+			t.Fatalf("CreateSsoLoginState: %v", err)
+		}
+		got, err := r.ConsumeSsoLoginState(ctx(), "st1")
+		if err != nil || got == nil || got.ConnectionID != "conn1" {
+			t.Fatalf("first consume: %+v err=%v", got, err)
+		}
+		// Single-use: the row is gone after the first consume.
+		got2, err := r.ConsumeSsoLoginState(ctx(), "st1")
+		if got2 != nil || err != nil {
+			t.Fatalf("second consume: (%+v, %v); want (nil, nil)", got2, err)
+		}
+	}},
+	{"consume_expired_returns_nil", func(t *testing.T, r repo.Repository) {
+		now := nowUTC()
+		if err := r.CreateSsoLoginState(ctx(), domain.NewSsoLoginState{
+			State: "st-exp", ConnectionID: "conn1", Nonce: "n",
+			PKCEVerifier: "v", RedirectURL: "https://app/cb",
+			CreatedAt: now.Add(-2 * time.Hour), ExpiresAt: now.Add(-time.Hour),
+		}); err != nil {
+			t.Fatalf("CreateSsoLoginState: %v", err)
+		}
+		got, err := r.ConsumeSsoLoginState(ctx(), "st-exp")
+		if got != nil || err != nil {
+			t.Fatalf("expired consume: (%+v, %v); want (nil, nil)", got, err)
+		}
+	}},
 }
 
 // ----- refresh tokens -----
@@ -1599,6 +1873,59 @@ var deviceCodeCases = []testCase{
 		got, err := r.GetDeviceCodeByDeviceCodeHash(ctx(), "dh")
 		if err != nil || got == nil || got.Status != "approved" {
 			t.Fatalf("unexpected: %+v err=%v", got, err)
+		}
+	}},
+	{"update_status_cas_guarded", func(t *testing.T, r repo.Repository) {
+		// Device-code status transitions are compare-and-swap on
+		// status='pending' (plus approved→consumed for redemption).
+		// Terminal states are final: a consumed/denied code must never
+		// flip back to approved, and concurrent approvals must not
+		// last-writer-win on user_id — the loser gets ErrNotFound.
+		mustCreateUser(t, r, "u1", "alice@example.com")
+		mustCreateUser(t, r, "u2", "bob@example.com")
+		now := nowUTC()
+		_ = r.CreateOAuth2Client(ctx(), domain.NewOAuth2Client{
+			ID: "c1", ClientID: "cli",
+			RedirectURIs: json.RawMessage(`[]`), GrantTypes: json.RawMessage(`[]`), Scopes: json.RawMessage(`[]`),
+			CreatedAt: now,
+		})
+		_ = r.CreateDeviceCode(ctx(), domain.NewDeviceCode{
+			ID: "d1", DeviceCodeHash: "dh1", UserCode: "AAAA-1111",
+			ClientID: "cli", Scopes: json.RawMessage(`[]`),
+			Status: "pending", Interval: 5,
+			ExpiresAt: now.Add(time.Hour), CreatedAt: now,
+		})
+		_ = r.CreateDeviceCode(ctx(), domain.NewDeviceCode{
+			ID: "d2", DeviceCodeHash: "dh2", UserCode: "BBBB-2222",
+			ClientID: "cli", Scopes: json.RawMessage(`[]`),
+			Status: "pending", Interval: 5,
+			ExpiresAt: now.Add(time.Hour), CreatedAt: now,
+		})
+		u1, u2 := "u1", "u2"
+		if err := r.UpdateDeviceCodeStatus(ctx(), "d1", "approved", &u1); err != nil {
+			t.Fatalf("pending->approved: %v", err)
+		}
+		// approved->consumed is the redemption leg and must keep working.
+		if err := r.UpdateDeviceCodeStatus(ctx(), "d1", "consumed", &u1); err != nil {
+			t.Fatalf("approved->consumed: %v", err)
+		}
+		// Terminal states never leave: consumed must not flip to approved.
+		if err := r.UpdateDeviceCodeStatus(ctx(), "d1", "approved", &u2); !errors.Is(err, yautherr.ErrNotFound) {
+			t.Fatalf("consumed->approved: got %v, want ErrNotFound", err)
+		}
+		if got, _ := r.GetDeviceCodeByDeviceCodeHash(ctx(), "dh1"); got == nil || got.Status != "consumed" || got.UserID == nil || *got.UserID != "u1" {
+			t.Fatalf("losing transition clobbered the row: %+v", got)
+		}
+		// pending->denied is allowed; denied is terminal too.
+		if err := r.UpdateDeviceCodeStatus(ctx(), "d2", "denied", nil); err != nil {
+			t.Fatalf("pending->denied: %v", err)
+		}
+		if err := r.UpdateDeviceCodeStatus(ctx(), "d2", "approved", &u2); !errors.Is(err, yautherr.ErrNotFound) {
+			t.Fatalf("denied->approved: got %v, want ErrNotFound", err)
+		}
+		// Unknown ids still report not-found.
+		if err := r.UpdateDeviceCodeStatus(ctx(), "missing", "approved", &u1); !errors.Is(err, yautherr.ErrNotFound) {
+			t.Fatalf("missing id: got %v, want ErrNotFound", err)
 		}
 	}},
 }

@@ -22,12 +22,27 @@
 package auth
 
 import (
+	"errors"
 	"net"
 	"strings"
 	"time"
 
 	"github.com/yackey-labs/yauth/domain"
 )
+
+// ErrEmptyIPDenied is returned by PolicyEnforcer.CheckIPAllowlistStrict
+// when the caller supplies an empty client IP while an allowlist (or an
+// invalid-entry set) is configured. CheckIPAllowlist collapses this to
+// "deny" (false); the Strict variant surfaces the sentinel so the caller
+// can log the trust-boundary failure distinctly from a plain mismatch.
+var ErrEmptyIPDenied = errors.New("auth: empty client IP denied: allowlist configured but no client address available")
+
+// ErrIPAllowlistMisconfigured is returned by
+// PolicyEnforcer.CheckIPAllowlistStrict when the merged policy carries
+// unparseable allowlist entries (EffectivePolicy.IPAllowlistInvalid).
+// CheckIPAllowlist collapses this to "deny" (false, fail closed) so a
+// typo'd list can never silently widen to "no restriction".
+var ErrIPAllowlistMisconfigured = errors.New("auth: IP allowlist contains invalid entries")
 
 // AuthMethod constants used by per-org allow-lists. These are
 // login-flow tags, not the post-auth Method discriminator on
@@ -95,9 +110,18 @@ type EffectivePolicy struct {
 	// blocking. Zero means "blocking immediately".
 	MfaGracePeriod time.Duration
 	// IPAllowlist is the parsed CIDR list. Empty means "no restriction".
-	// CIDRs that failed to parse are silently dropped — admins should
-	// validate at the PATCH handler boundary.
+	// Use ValidateCIDRStrings at the PATCH handler boundary to reject
+	// bad entries before persisting; any entry that still fails to
+	// parse at merge time is recorded in IPAllowlistInvalid instead of
+	// being silently dropped.
 	IPAllowlist []*net.IPNet
+	// IPAllowlistInvalid records the raw allowlist entries that failed
+	// to parse at merge time. A non-empty set means the operator's
+	// stored list is corrupt (typo, or a row written before PATCH-time
+	// validation existed); CheckIPAllowlist denies ALL addresses while
+	// it is non-empty (fail closed) so the list can never silently
+	// widen to "no restriction". Empty (nil) means "no invalid entries".
+	IPAllowlistInvalid []string
 	// MaxConcurrentSessions is the per-user-per-org cap. 0 means "no cap".
 	MaxConcurrentSessions int
 	// AllowedAuthMethods is the merged whitelist. Empty means "all allowed".
@@ -152,27 +176,55 @@ func (p *PolicyEnforcer) ClampSessionTTL(ttl time.Duration) time.Duration {
 }
 
 // CheckIPAllowlist reports whether ip is permitted under the merged
-// allowlist. An empty allowlist returns true (no restriction). An
-// empty ip string returns true to avoid bricking a deployment whose
-// reverse proxy strips RemoteAddr — callers should pre-validate the
-// IP at trust-boundary time.
+// allowlist. An empty allowlist with no invalid entries returns true
+// (no restriction). An empty ip with a configured allowlist returns
+// FALSE (fail closed): a missing client address is not evidence the
+// caller is inside the allowlist, and silently passing it bypasses the
+// control whenever a proxy strips RemoteAddr. Callers MUST pre-validate
+// the client IP at the trust boundary (see
+// middleware.TrustedProxies.ClientIP, which returns "" only when
+// RemoteAddr itself is empty) and treat "" as a 403/deny, logging
+// ErrEmptyIPDenied from CheckIPAllowlistStrict for observability.
+//
+// When the merged policy carries invalid entries
+// (EffectivePolicy.IPAllowlistInvalid non-empty) the result is always
+// false (fail closed) until the operator fixes the stored list.
 func (p *PolicyEnforcer) CheckIPAllowlist(ip string) bool {
-	if p == nil || len(p.eff.IPAllowlist) == 0 || ip == "" {
-		return true
+	ok, _ := p.CheckIPAllowlistStrict(ip)
+	return ok
+}
+
+// CheckIPAllowlistStrict is the error-reporting variant of
+// CheckIPAllowlist. It returns (false, ErrIPAllowlistMisconfigured)
+// when invalid entries are present, (false, ErrEmptyIPDenied) when the
+// allowlist is configured but ip is blank, and (allowed, nil) otherwise.
+// A nil enforcer permits all (no per-org restriction).
+func (p *PolicyEnforcer) CheckIPAllowlistStrict(ip string) (bool, error) {
+	if p == nil {
+		return true, nil
 	}
-	parsed := net.ParseIP(ip)
+	if len(p.eff.IPAllowlistInvalid) > 0 {
+		return false, ErrIPAllowlistMisconfigured
+	}
+	if len(p.eff.IPAllowlist) == 0 {
+		return true, nil
+	}
+	if strings.TrimSpace(ip) == "" {
+		return false, ErrEmptyIPDenied
+	}
+	parsed := net.ParseIP(strings.TrimSpace(ip))
 	if parsed == nil {
-		return false
+		return false, nil
 	}
 	for _, cidr := range p.eff.IPAllowlist {
 		if cidr == nil {
 			continue
 		}
 		if cidr.Contains(parsed) {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 // IsAuthMethodAllowed reports whether method is permitted under the
@@ -270,7 +322,9 @@ func mergeOrgPolicy(o *domain.OrganizationPolicy, globals GlobalPolicyDefaults) 
 	eff.MfaGracePeriod = time.Duration(o.MfaGracePeriodDays) * 24 * time.Hour
 
 	if len(o.IPAllowlist) > 0 {
-		eff.IPAllowlist = parseCIDRs(o.IPAllowlist)
+		valid, invalid := parseCIDRs(o.IPAllowlist)
+		eff.IPAllowlist = valid
+		eff.IPAllowlistInvalid = invalid
 	}
 
 	if o.MaxConcurrentSessions != nil && *o.MaxConcurrentSessions > 0 {
@@ -304,16 +358,22 @@ func mergeOrgPolicy(o *domain.OrganizationPolicy, globals GlobalPolicyDefaults) 
 	return eff
 }
 
-// parseCIDRs converts the on-disk string form to net.IPNet pointers.
-// Entries that fail to parse are silently dropped; the admin UI is
-// expected to validate at the PATCH boundary.
-func parseCIDRs(in []string) []*net.IPNet {
+// parseCIDRs converts the on-disk string form to net.IPNet pointers,
+// returning the valid CIDRs and the raw entries that failed to parse.
+// Callers MUST surface the invalid slice (EffectivePolicy.IPAllowlistInvalid)
+// and fail closed while it is non-empty; silently dropping it collapses an
+// all-typo list to "no restriction". The admin UI is expected to validate
+// at the PATCH boundary via ValidateCIDRStrings, but stored rows written
+// before that check (or via another path) still reach this function.
+func parseCIDRs(in []string) ([]*net.IPNet, []string) {
 	out := make([]*net.IPNet, 0, len(in))
-	for _, s := range in {
-		s = strings.TrimSpace(s)
+	var invalid []string
+	for _, raw := range in {
+		s := strings.TrimSpace(raw)
 		if s == "" {
 			continue
 		}
+		rawTrimmed := s
 		// Accept bare IPs by appending /32 or /128 — admins frequently
 		// paste literal IPs and expect them to "just work".
 		if !strings.Contains(s, "/") {
@@ -327,11 +387,12 @@ func parseCIDRs(in []string) []*net.IPNet {
 		}
 		_, cidr, err := net.ParseCIDR(s)
 		if err != nil || cidr == nil {
+			invalid = append(invalid, rawTrimmed)
 			continue
 		}
 		out = append(out, cidr)
 	}
-	return out
+	return out, invalid
 }
 
 // ValidateCIDRStrings checks whether every entry parses as a CIDR (or

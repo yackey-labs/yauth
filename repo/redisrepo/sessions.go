@@ -23,13 +23,14 @@ func (r *Repo) CreateSession(ctx context.Context, input domain.NewSession) error
 	}
 
 	session := domain.Session{
-		ID:        input.ID,
-		UserID:    input.UserID,
-		TokenHash: input.TokenHash,
-		IPAddress: input.IPAddress,
-		UserAgent: input.UserAgent,
-		ExpiresAt: input.ExpiresAt.UTC(),
-		CreatedAt: input.CreatedAt.UTC(),
+		ID:          input.ID,
+		UserID:      input.UserID,
+		TokenHash:   input.TokenHash,
+		IPAddress:   input.IPAddress,
+		UserAgent:   input.UserAgent,
+		ActiveOrgID: input.ActiveOrgID,
+		ExpiresAt:   input.ExpiresAt.UTC(),
+		CreatedAt:   input.CreatedAt.UTC(),
 	}
 	if session.CreatedAt.IsZero() {
 		session.CreatedAt = time.Now().UTC()
@@ -167,6 +168,34 @@ func (r *Repo) DeleteSessionByID(ctx context.Context, id string) error {
 		if _, e := pipe.Exec(ctx); e != nil {
 			r.warn("delete session by id: cache cleanup: %v", e)
 		}
+	}
+	return nil
+}
+
+// DeleteUser forwards to the inner repo and then invalidates every cached
+// session belonging to the user, mirroring DeleteUserSessions: without
+// this the write-through entries outlive the inner rows the cascade just
+// removed and keep serving logged-in sessions for a deleted user until
+// their TTL lapses.
+func (r *Repo) DeleteUser(ctx context.Context, id string) error {
+	ctx = ctxOrBackground(ctx)
+
+	hashes, hErr := r.client.SMembers(ctx, r.userSessionsKey(id)).Result()
+	if hErr != nil && !errors.Is(hErr, redis.Nil) {
+		r.warn("delete user: cache smembers: %v", hErr)
+	}
+
+	if err := r.Repository.DeleteUser(ctx, id); err != nil {
+		return err
+	}
+
+	pipe := r.client.TxPipeline()
+	for _, h := range hashes {
+		pipe.Del(ctx, r.sessionKey(h))
+	}
+	pipe.Del(ctx, r.userSessionsKey(id))
+	if _, e := pipe.Exec(ctx); e != nil {
+		r.warn("delete user: cache cleanup: %v", e)
 	}
 	return nil
 }

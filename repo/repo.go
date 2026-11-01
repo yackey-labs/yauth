@@ -201,6 +201,13 @@ type OAuthAccountRepository interface {
 
 // OAuthStateRepository covers CSRF-protecting OAuth authorization-flow state
 // tokens; ConsumeOAuthState is a single-use lookup-and-delete.
+//
+// States are bearer credentials for the login flow: whoever presents the
+// token completes the victim's login. Backends MUST therefore hold them as
+// short-lived single-use rows — the plugins mint them with a 10-minute
+// expiry, consume deletes the row atomically (a plain SELECT-then-DELETE
+// would let a replay slip between the two statements), and expired rows
+// never redeem.
 type OAuthStateRepository interface {
 	CreateOAuthState(ctx context.Context, input domain.NewOAuthState) error
 	ConsumeOAuthState(ctx context.Context, state string) (*domain.OAuthState, error)
@@ -326,6 +333,18 @@ type ConsentRepository interface {
 }
 
 // DeviceCodeRepository covers OAuth2 device-authorization-grant codes.
+//
+// Status transitions are compare-and-swap, and every backend MUST enforce
+// the same table:
+//
+//   - pending -> approved | consumed | denied | expired (the approval leg)
+//   - approved -> consumed (the redemption leg at token time)
+//   - anything else (consumed/denied/expired -> *, approved -> approved)
+//     MUST change nothing and return yautherr.ErrNotFound.
+//
+// In particular a denied or consumed code can never flip back to approved,
+// and of two concurrent approvals exactly one wins — the loser observes
+// ErrNotFound rather than last-writer-winning on user_id.
 type DeviceCodeRepository interface {
 	CreateDeviceCode(ctx context.Context, input domain.NewDeviceCode) error
 	GetDeviceCodeByUserCodePending(ctx context.Context, userCode string) (*domain.DeviceCode, error)
@@ -659,6 +678,18 @@ type ExternalIdentityRepository interface {
 // SsoLoginStateRepository covers the short-lived state row that ties an
 // outbound /sso/login redirect to its eventual /sso/callback. Single-
 // use: ConsumeSsoLoginState atomically looks up the row and deletes it.
+//
+// Like OAuth states these rows are bearer credentials for the login flow
+// (state token, PKCE verifier, nonce). Backends MUST hold them as
+// short-lived single-use rows — the plugins mint them with a 10-minute
+// expiry, consume is a single atomic DELETE ... RETURNING (a
+// SELECT-then-DELETE would let a replay slip between the two statements),
+// and expired rows never redeem. A full hash-at-rest migration was
+// considered and deliberately deferred: the lookup keys could be hashed
+// with a backwards-compatible dual-read, but the PKCE verifier and nonce
+// payloads must be returned verbatim to the IdP exchange, so hashing
+// them would require plugin changes; the 10-minute single-use envelope
+// above is the agreed containment instead.
 type SsoLoginStateRepository interface {
 	CreateSsoLoginState(ctx context.Context, input domain.NewSsoLoginState) error
 	// ConsumeSsoLoginState atomically looks up the state token and

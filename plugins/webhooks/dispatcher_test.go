@@ -5,34 +5,57 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/yackey-labs/yauth/events"
 )
 
-func TestSignPayload_Deterministic(t *testing.T) {
+// TestSignPayload_BindsTimestampAndBody pins the signed material: the
+// signature must be HMAC-SHA256(secret, "<ts>." + body) — the same
+// {timestamp}.{payload} form Stripe uses — not an HMAC of the body alone,
+// which verified forever against an identical retry, i.e. could not see a
+// replay coming.
+func TestSignPayload_BindsTimestampAndBody(t *testing.T) {
 	body := []byte(`{"event":"user.registered","timestamp":"2026-01-01T00:00:00Z"}`)
 	const secret = "shared-secret"
+	const ts int64 = 1777777777
 
-	got1 := signPayload(secret, body)
-	got2 := signPayload(secret, body)
+	got1 := signPayload(secret, ts, body)
+	got2 := signPayload(secret, ts, body)
 	if got1 != got2 {
 		t.Fatalf("expected deterministic output, got %q vs %q", got1, got2)
 	}
 
 	mac := hmac.New(sha256.New, []byte(secret))
+	fmt.Fprintf(mac, "%d.", ts)
 	mac.Write(body)
 	want := hex.EncodeToString(mac.Sum(nil))
 	if got1 != want {
 		t.Fatalf("signature mismatch: got %q want %q", got1, want)
 	}
+
+	// The headline regression guard: a body-only scheme (the pre-fix one)
+	// must produce a DIFFERENT value for the same secret/body.
+	mac2 := hmac.New(sha256.New, []byte(secret))
+	mac2.Write(body)
+	bodyOnly := hex.EncodeToString(mac2.Sum(nil))
+	if got1 == bodyOnly {
+		t.Fatalf("signature covered the body alone — replay binding is gone again")
+	}
+
+	// A different timestamp must change the signature (the ts is not a
+	// no-op field a receiver could ignore).
+	if signPayload(secret, ts+1, body) == got1 {
+		t.Fatalf("changing the timestamp did not change the signature")
+	}
 }
 
 func TestSignPayload_DifferentSecrets(t *testing.T) {
 	body := []byte(`{"hello":"world"}`)
-	a := signPayload("alpha", body)
-	b := signPayload("bravo", body)
+	a := signPayload("alpha", 1, body)
+	b := signPayload("bravo", 1, body)
 	if a == b {
 		t.Fatalf("different secrets should produce different signatures")
 	}

@@ -85,33 +85,23 @@ func (r *Repo) ListGroupsByOrg(ctx context.Context, orgID string) ([]*domain.Gro
 }
 
 func (r *Repo) UpdateGroup(ctx context.Context, id string, changes domain.UpdateGroup) (domain.Group, error) {
-	// Read-modify-write: overlay the non-nil changes onto the current row so a
-	// single full UPDATE persists the merge.
-	cur, err := r.q.GetGroupByID(ctx, id)
-	if err != nil {
-		return domain.Group{}, notFound(err)
-	}
-	name := cur.Name
-	if changes.Name != nil {
-		name = *changes.Name
-	}
-	desc := cur.Description
-	if changes.Description != nil {
-		desc = changes.Description
-	}
-	ext := cur.ExternalID
-	if changes.ExternalID != nil {
-		ext = changes.ExternalID
-	}
+	// Single-statement COALESCE merge, following the UpdateMembership
+	// pattern: the old read-modify-write (Get + full-row UPDATE) lost
+	// concurrent PATCHes touching different fields, because two readers
+	// could both base their write on the same stale row. One UPDATE is
+	// atomic — each transaction's SET list only touches its own columns.
 	row, err := r.q.UpdateGroup(ctx, pgxgen.UpdateGroupParams{
-		ID:          id,
-		Name:        name,
-		Description: desc,
-		ExternalID:  ext,
 		UpdatedAt:   ts(time.Now().UTC()),
+		ID:          id,
+		Name:        changes.Name,
+		Description: changes.Description,
+		ExternalID:  changes.ExternalID,
+
+		ClearDescription: changes.ClearDescription,
+		ClearExternalID:  changes.ClearExternalID,
 	})
 	if err != nil {
-		return domain.Group{}, err
+		return domain.Group{}, notFound(err)
 	}
 	return groupToDomain(row), nil
 }

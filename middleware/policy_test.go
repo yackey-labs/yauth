@@ -9,6 +9,7 @@ import (
 
 	"github.com/yackey-labs/yauth/domain"
 	"github.com/yackey-labs/yauth/middleware"
+	"github.com/yackey-labs/yauth/repo"
 	"github.com/yackey-labs/yauth/repo/memrepo"
 )
 
@@ -238,6 +239,55 @@ func TestOrgPolicy_TargetOrgAppliesWithNoActiveOrg(t *testing.T) {
 		t.Fatalf("no-active-org caller escaped the target org's allowlist: %d", rec.Code)
 	}
 }
+
+func TestOrgPolicy_RepoErrorFailsClosed(t *testing.T) {
+	// A repo error means the governing policy is UNKNOWN. The old code
+	// treated any non-NotFound error as "no policy" and skipped the
+	// allowlist + idle checks — failing open exactly where the deployment
+	// asked to be strict. Now it must 500 without leaking policy detail,
+	// and must NOT invoke the handler. NotFound (no row) still passes.
+	enf := middleware.NewOrgPolicyEnforcer(failingPolicyRepo{}, middleware.PolicyGlobals{SessionTTL: time.Hour})
+	called := false
+	h := enf.Wrap(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	au := &domain.AuthUser{
+		User:        domain.User{ID: "u1"},
+		Session:     domain.Session{UserID: "u1", CreatedAt: time.Now().UTC()},
+		ActiveOrgID: sp("o1"),
+	}
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "10.0.0.5:1234" // allowlisted-looking: must STILL 500
+	req = req.WithContext(contextWithAuthUserForTest(req.Context(), au))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("repo error: got %d, want 500 (fail closed)", rec.Code)
+	}
+	if called {
+		t.Fatal("next must NOT run when the policy lookup fails")
+	}
+}
+
+// failingPolicyRepo is an OrganizationPolicyRepository whose lookup always
+// errors with a non-NotFound failure (backend down), driving the fail-closed
+// path. It embeds the interface so unrelated methods stay nil-panics — only
+// GetOrganizationPolicy is ever called.
+type failingPolicyRepo struct {
+	repo.OrganizationPolicyRepository
+}
+
+func (failingPolicyRepo) GetOrganizationPolicy(_ context.Context, _ string) (*domain.OrganizationPolicy, error) {
+	return nil, errPolicyBackend
+}
+
+var errPolicyBackend = policyErr("policy backend down")
+
+type policyErr string
+
+func (e policyErr) Error() string { return string(e) }
 
 func TestOrgPolicy_TargetOrgFromPath(t *testing.T) {
 	cases := map[string]string{

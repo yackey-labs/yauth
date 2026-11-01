@@ -3,8 +3,10 @@ package middleware
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel/trace"
@@ -63,6 +65,30 @@ func writeRateLimitProblem(w http.ResponseWriter, retryAfter int) {
 	})
 }
 
+// rateLimitWarns throttles the fail-open WARN below to one line per limiter
+// name per minute. A dead rate-limit backend fails EVERY request, so an
+// unthrottled Warn would bury the log (and the disk) at request rate during
+// exactly the outage the operator is trying to read about. The map holds one
+// timestamp per limiter name — bounded by the number of configured limiters,
+// not by traffic.
+var rateLimitWarns sync.Map // name -> time.Time of last WARN
+
+// noteRateLimitError logs a backend failure at Warn, at most once per minute
+// per limiter name. RateLimit has no logger handle (its signature is the
+// public contract), so it logs through slog.Default — the same sink the
+// YAuth builder installs its resolved logger as when the app uses the builder.
+func noteRateLimitError(name string, err error) {
+	now := time.Now()
+	if v, ok := rateLimitWarns.Load(name); ok {
+		if last, ok := v.(time.Time); ok && now.Sub(last) < time.Minute {
+			return
+		}
+	}
+	rateLimitWarns.Store(name, now)
+	slog.Default().Warn("yauth: rate-limit check failed — failing open (requests are NOT throttled)",
+		"limiter", name, "err", err)
+}
+
 // RateLimit returns an http middleware that enforces a fixed-window rate
 // limit against the configured RateLimitRepository. Each request consumes
 // one slot in the bucket keyed by name + ":" + clientIdentifier (the
@@ -76,7 +102,10 @@ func writeRateLimitProblem(w http.ResponseWriter, retryAfter int) {
 // writeRateLimitProblem for why that changed.
 //
 // Backends are expected to fail-open: a CheckRateLimit error returns a
-// permissive result and the request continues. A nil repo, max <= 0, or
+// permissive result and the request continues — but the failure is no longer
+// silent: noteRateLimitError logs a WARN, throttled to one line per limiter
+// name per minute so a dead backend doesn't flood the log at request rate.
+// A nil repo, max <= 0, or
 // window <= 0 disables the limiter (the middleware becomes a passthrough)
 // so callers can inline the wiring without conditionals.
 //
@@ -104,8 +133,13 @@ func RateLimit(r repo.RateLimitRepository, name string, max int, window time.Dur
 				return e
 			})
 			if err != nil {
-				// Fail-open: log nothing; rate-limit repo is required to
-				// be best-effort by contract.
+				// Fail-open: the request continues unthrottled — but LOUDLY.
+				// The limiter used to swallow backend errors silently, so a
+				// dead store removed every throttle in the deployment with
+				// nothing in the log to show for it. noteRateLimitError
+				// warns at most once a minute per limiter name (see
+				// rateLimitWarns) so the outage itself doesn't flood the log.
+				noteRateLimitError(name, err)
 				next.ServeHTTP(w, req)
 				return
 			}

@@ -56,6 +56,17 @@ func SetUserID(ctx context.Context, id string) {
 // Init registers), so descendant spans and downstream services can read it and
 // enrich their own telemetry.
 //
+// PRIVACY WARNING: baggage propagates to EVERY instrumented outbound call,
+// including third-party APIs (payment, email, analytics) whose SDKs honor the
+// W3C Baggage header — the user.id leaves your infrastructure in cleartext on
+// the wire to vendors who never asked for it, and any proxy logs that capture
+// headers capture it too. Call this ONLY when every downstream hop is
+// first-party, or when you have verified no third-party client in the request
+// path propagates baggage. If you need the id on internal spans only, prefer
+// SetUserID (span-local, never leaves the trace pipeline). There is no
+// allowlist parameter by design: namespacing the key would not stop the
+// propagation, only rename the leak.
+//
 // It returns the input ctx unchanged when id is empty or when id violates the
 // W3C baggage value restrictions (so it never panics or drops the existing
 // context). Reading it back is standard OTel: walk baggage.FromContext(ctx).

@@ -146,6 +146,29 @@ func containsString(haystack []string, needle string) bool {
 }
 
 var orgCascadeCases = []testCase{
+	// LIKE metacharacters in the search box must not become a
+	// match-everything pattern: "%" and "_" have to be escaped so they
+	// match only rows containing the literal character.
+	{"list_organizations_search_escapes_like_wildcards", func(t *testing.T, r repo.Repository) {
+		mustCreateOrgForCascade(t, r, "o1", "Acme", "acme")
+		mustCreateOrgForCascade(t, r, "o2", "Globex", "globex")
+		for _, term := range []string{"%", "_", "%_%", "\\", "%%"} {
+			got, total, err := r.ListOrganizations(ctx(), term, 0, 0)
+			if err != nil {
+				t.Fatalf("ListOrganizations(%q): %v", term, err)
+			}
+			if total != 0 || len(got) != 0 {
+				t.Fatalf("ListOrganizations(%q) matched %d rows; want 0 (wildcard must not match everything)", term, total)
+			}
+		}
+		got, total, err := r.ListOrganizations(ctx(), "acme", 0, 0)
+		if err != nil {
+			t.Fatalf("ListOrganizations(acme): %v", err)
+		}
+		if total != 1 || len(got) != 1 || got[0].ID != "o1" {
+			t.Fatalf("literal search broke: total=%d count=%d", total, len(got))
+		}
+	}},
 	// The headline case: an org is deleted, and every row that decides
 	// access for its members has to go with it.
 	{"delete_organization_revokes_group_access", func(t *testing.T, r repo.Repository) {

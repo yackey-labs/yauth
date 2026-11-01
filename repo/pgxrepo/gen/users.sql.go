@@ -24,7 +24,7 @@ func (q *Queries) AnyUserExists(ctx context.Context) (bool, error) {
 
 const countUsersSearch = `-- name: CountUsersSearch :one
 SELECT COUNT(*) FROM yauth_users
-WHERE ($1::text = '' OR LOWER(email) LIKE '%' || LOWER($1::text) || '%' OR LOWER(COALESCE(display_name, '')) LIKE '%' || LOWER($1::text) || '%')
+WHERE ($1::text = '' OR LOWER(email) LIKE '%' || REPLACE(REPLACE(REPLACE(LOWER($1::text), '\', '\\'), '%', '\%'), '_', '\_') || '%' ESCAPE '\' OR LOWER(COALESCE(display_name, '')) LIKE '%' || REPLACE(REPLACE(REPLACE(LOWER($1::text), '\', '\\'), '%', '\%'), '_', '\_') || '%' ESCAPE '\')
 `
 
 func (q *Queries) CountUsersSearch(ctx context.Context, dollar_1 string) (int64, error) {
@@ -160,7 +160,7 @@ func (q *Queries) GetUserByID(ctx context.Context, id string) (YauthUser, error)
 
 const listUsersSearch = `-- name: ListUsersSearch :many
 SELECT id, email, display_name, email_verified, role, banned, banned_reason, banned_until, created_at, updated_at, suspended_at, suspended_reason, activates_at, must_change_password FROM yauth_users
-WHERE ($1::text = '' OR LOWER(email) LIKE '%' || LOWER($1::text) || '%' OR LOWER(COALESCE(display_name, '')) LIKE '%' || LOWER($1::text) || '%')
+WHERE ($1::text = '' OR LOWER(email) LIKE '%' || REPLACE(REPLACE(REPLACE(LOWER($1::text), '\', '\\'), '%', '\%'), '_', '\_') || '%' ESCAPE '\' OR LOWER(COALESCE(display_name, '')) LIKE '%' || REPLACE(REPLACE(REPLACE(LOWER($1::text), '\', '\\'), '%', '\%'), '_', '\_') || '%' ESCAPE '\')
 ORDER BY created_at ASC, id ASC
 LIMIT CASE WHEN $2::int > 0 THEN $2::int ELSE NULL END
 OFFSET $3::int

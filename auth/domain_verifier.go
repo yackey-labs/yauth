@@ -23,6 +23,8 @@ import (
 	"errors"
 	"net"
 	"strings"
+
+	"golang.org/x/net/idna"
 )
 
 // DomainTXTLookupPrefix is the DNS label the verifier prepends to the
@@ -58,6 +60,41 @@ func (a LookupTXTAdapter) LookupTXT(ctx context.Context, name string) ([]string,
 // Resolves via the OS default. Concurrency-safe for shared use.
 var DefaultDomainTXTResolver DomainTXTResolver = LookupTXTAdapter{}
 
+// CanonicalizeDomain normalizes a DNS domain name for comparison and
+// lookup: surrounding whitespace is trimmed, a single trailing dot (the
+// FQDN root marker, as in "acme.com.") is stripped, the name is
+// lowercased, and non-ASCII labels are punycode-encoded via
+// idna.Lookup.ToASCII ("münchen.de" → "xn--mnchen-3ya.de").
+//
+// The direction is fail-closed: an empty input or a name idna rejects
+// returns ErrInvalidDomain, so callers treat it as "not proved" rather
+// than falling back to the raw string. Comparison must always go through
+// this helper on BOTH sides; a stored row written before canonicalization
+// existed (raw Unicode or with a trailing dot) will not match its
+// canonical form until re-saved — a miss, never a false allow.
+func CanonicalizeDomain(s string) (string, error) {
+	t := strings.TrimSpace(s)
+	// Strip one trailing dot: the DNS root marker. "acme.com." and
+	// "acme.com" name the same node. Only one is stripped — ".." is
+	// not a valid name and idna will refuse what remains.
+	t = strings.TrimSuffix(t, ".")
+	t = strings.ToLower(t)
+	if t == "" {
+		return "", ErrInvalidDomain
+	}
+	ascii, err := idna.Lookup.ToASCII(t)
+	if err != nil {
+		return "", ErrInvalidDomain
+	}
+	// ToASCII preserves a trailing dot on FQDN input that still carried
+	// one (and lowercases); normalize again defensively.
+	ascii = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(ascii), "."))
+	if ascii == "" {
+		return "", ErrInvalidDomain
+	}
+	return ascii, nil
+}
+
 // VerifyDomainTXT looks up TXT records at "_yauth-domain-verify.<domain>"
 // and reports whether any record exactly equals expectedToken. The match
 // is exact-string against each returned TXT chunk; we do not split
@@ -74,8 +111,8 @@ var DefaultDomainTXTResolver DomainTXTResolver = LookupTXTAdapter{}
 // The function never panics. It rejects empty domains with
 // ErrInvalidDomain.
 func VerifyDomainTXT(ctx context.Context, resolver DomainTXTResolver, domainStr, expectedToken string) (bool, error) {
-	domainStr = strings.ToLower(strings.TrimSpace(domainStr))
-	if domainStr == "" {
+	domainStr, err := CanonicalizeDomain(domainStr)
+	if err != nil {
 		return false, ErrInvalidDomain
 	}
 	if expectedToken == "" {

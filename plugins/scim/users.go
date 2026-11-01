@@ -56,6 +56,14 @@ const (
 	maxItemsPerPage     = 500
 )
 
+// scimListScanCap bounds the FILTERED list path (handleListUsers with a
+// filter): orgs with more memberships than this get a 400 on filtered
+// queries instead of a 2N+1 query storm. The no-filter path is windowed
+// before fan-out and never hits this cap. Sized so no real connector sync
+// trips it — a filtered full-org dump past 10k rows is a misconfiguration,
+// not a sync — while keeping the worst case bounded at ~20k queries.
+const scimListScanCap = 10000
+
 // clampPagination accepts SCIM's loose startIndex/count semantics and
 // returns sane values. startIndex is 1-based per RFC 7644 §3.4.2;
 // negative values clamp to 1; wildly large startIndex values are
@@ -652,6 +660,10 @@ func (p *scimPlugin) handleListUsers(host plugin.PluginHost) http.HandlerFunc {
 		}
 		start, count := clampPagination(startPtr, countPtr)
 
+		// scimListScanCap bounds the FULL-SCAN path below (filtered list).
+		// The no-filter path never scans: it slices the membership list to
+		// the page window BEFORE the per-member fan-out, so it is unaffected
+		// by this cap however large the org grows.
 		repo := host.Repo()
 		ctx := r.Context()
 		memberships, err := repo.ListMembershipsByOrg(ctx, orgID)
@@ -659,13 +671,51 @@ func (p *scimPlugin) handleListUsers(host plugin.PluginHost) http.HandlerFunc {
 			writeScimError(w, repoToScim(err))
 			return
 		}
+
+		// The per-member fan-out is 1 + 2 queries per membership
+		// (GetUserByID + ListExternalIdentitiesByUser inside
+		// findExternalIDForUser). The repo surface has no paginated
+		// membership listing (only ListMembershipsByOrg, which returns all),
+		// so the cheapest correct push-down is to slice BEFORE fanning out —
+		// but ONLY when no filter is present:
+		//
+		//   - No filter: SCIM pagination applies to the membership list
+		//     itself, so the page window is a strict slice of it. Fan out on
+		//     the window only; totalResources stays exact. This is the hot
+		//     path for polling connectors and the whole point of the change.
+		//   - Filter present: the filter reads USER and EXTERNAL-ID
+		//     attributes (userName, emails, externalId, active) that do not
+		//     exist on the membership rows, so the window cannot be chosen
+		//     before resolution — slicing first would break filter +
+		//     pagination correctness (the page must be drawn from the
+		//     FILTERED set, not filtered from a pre-sliced window). Keep the
+		//     full scan, but refuse orgs past the cap instead of fanning out
+		//     unbounded: a filtered list over more rows than this is a
+		//     connector misconfiguration (sync without pagination), and a
+		//     loud 400 beats a 2N+1 query storm.
+		scan := memberships
+		if parsed == nil {
+			skip := start - 1
+			if skip > len(memberships) {
+				skip = len(memberships)
+			}
+			end := skip + count
+			if end > len(memberships) {
+				end = len(memberships)
+			}
+			scan = memberships[skip:end]
+		} else if len(memberships) > scimListScanCap {
+			writeScimError(w, BadRequest(
+				"membership list too large to filter in memory; use pagination (startIndex/count) without a filter, or narrow the filter"))
+			return
+		}
 		type row struct {
 			User   *domain.User
 			Status domain.MembershipStatus
 			Ext    *domain.ExternalIdentity
 		}
-		all := make([]row, 0, len(memberships))
-		for _, m := range memberships {
+		all := make([]row, 0, len(scan))
+		for _, m := range scan {
 			if m == nil {
 				continue
 			}
@@ -681,23 +731,32 @@ func (p *scimPlugin) handleListUsers(host plugin.PluginHost) http.HandlerFunc {
 			all = append(all, row{User: u, Status: m.Status, Ext: ext})
 		}
 
-		filtered := make([]row, 0, len(all))
-		for _, r := range all {
-			if parsed == nil || userMatchesFilter(r.User, r.Status, r.Ext, parsed) {
-				filtered = append(filtered, r)
+		var page []row
+		var total int
+		if parsed == nil {
+			// Already windowed above; the in-process filter is a no-op and
+			// totalResources counts the whole membership list.
+			total = len(memberships)
+			page = all
+		} else {
+			filtered := make([]row, 0, len(all))
+			for _, r := range all {
+				if userMatchesFilter(r.User, r.Status, r.Ext, parsed) {
+					filtered = append(filtered, r)
+				}
 			}
-		}
 
-		total := len(filtered)
-		skip := start - 1
-		if skip > total {
-			skip = total
+			total = len(filtered)
+			skip := start - 1
+			if skip > total {
+				skip = total
+			}
+			end := skip + count
+			if end > total {
+				end = total
+			}
+			page = filtered[skip:end]
 		}
-		end := skip + count
-		if end > total {
-			end = total
-		}
-		page := filtered[skip:end]
 		out := make([]ScimUser, 0, len(page))
 		for _, r := range page {
 			out = append(out, projectUser(p.selfBaseURL(host), orgID, r.User, r.Ext, r.Status))
@@ -1259,6 +1318,22 @@ const scimSuspendReason = "SCIM deprovisioned"
 // suspensions — an admin's manual offboard is never silently undone by a
 // routine SCIM sync.
 //
+// CROSS-TENANT SEMANTICS — read this before touching this function. The
+// suspension above is GLOBAL (yauth_users.suspended_at gates every login,
+// token and session for the account) but the authority that triggered it is
+// ONE org-scoped SCIM key: any single IdP connector holding scimWrite on ANY
+// org the user belongs to can lock the account everywhere, including orgs
+// that never provisioned SCIM. That is deliberate — deprovisioning must win
+// over continued access — but it means a compromised or misconfigured
+// connector in org A is a kill switch for the user's access in org B. The
+// authority required is exactly the SCIM write gate (role admin, or the four
+// member-lifecycle permissions; grandfathered unscoped keys while
+// RequireKeyPermissions is false) — the same gate as every other SCIM write,
+// enforced in authenticate() before any handler runs, so there is no weaker
+// path to this side effect. DELETE deliberately does NOT suspend (see
+// handleDeleteUser): removal ends the membership, the kill switch still trips,
+// and a later re-POST provisions a clean account.
+//
 // It is idempotent: a no-op when the user is already in the requested state.
 // Errors from the kill-switch calls are intentionally ignored (best-effort
 // cleanup); only the UpdateUser write is surfaced.
@@ -1299,10 +1374,20 @@ func applyScimActiveLifecycle(ctx context.Context, host plugin.PluginHost, u *do
 	}
 	var nilT *time.Time
 	var nilS *string
-	_, err := repo.UpdateUser(ctx, u.ID, domain.UpdateUser{
+	if _, err := repo.UpdateUser(ctx, u.ID, domain.UpdateUser{
 		SuspendedAt:     &nilT,
 		SuspendedReason: &nilS,
 		UpdatedAt:       &now,
+	}); err != nil {
+		return err
+	}
+	// Mirror the suspend path's EventUserSuspended: a re-provision is as
+	// audit- and fan-out-relevant as a deprovision (OIDC Back-Channel
+	// Logout, webhooks), and without it the account silently flips from
+	// suspended to live with no event in the pipeline.
+	uid := u.ID
+	_, _ = host.Emit(ctx, events.AuthEvent{
+		Type: events.EventUserUnsuspended, UserID: &uid, Timestamp: now,
 	})
-	return err
+	return nil
 }

@@ -36,6 +36,14 @@ func newGenKeysCmd() *cobra.Command {
 			if err := os.WriteFile(privPath, privPEM, 0o600); err != nil {
 				return fmt.Errorf("write private key: %w", err)
 			}
+			// WriteFile's mode applies only at creation: a pre-existing
+			// private.pem keeps whatever mode it already had, so a
+			// world-readable key stays world-readable. The mode is the point
+			// of this file, so repair it explicitly and fail loudly if the
+			// repair doesn't hold.
+			if err := os.Chmod(privPath, 0o600); err != nil {
+				return fmt.Errorf("chmod private key: %w", err)
+			}
 			if err := os.WriteFile(pubPath, pubPEM, 0o644); err != nil {
 				return fmt.Errorf("write public key: %w", err)
 			}

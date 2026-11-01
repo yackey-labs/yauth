@@ -801,8 +801,9 @@ func addAuthPlugins(builder *YAuthBuilder, cfg *yauthcfg.Config, mailer Mailer, 
 	}
 	if p.SCIM.Enabled {
 		builder = builder.WithPlugin(scim.New(scim.Config{
-			APIKeyPrefix: firstNonEmpty(p.SCIM.APIKeyPrefix, apiKeyPrefix),
-			BasePath:     firstNonEmpty(p.SCIM.BasePath, idpBasePath),
+			APIKeyPrefix:          firstNonEmpty(p.SCIM.APIKeyPrefix, apiKeyPrefix),
+			BasePath:              firstNonEmpty(p.SCIM.BasePath, idpBasePath),
+			RequireKeyPermissions: p.SCIM.RequireKeyPermissions,
 		}))
 	}
 

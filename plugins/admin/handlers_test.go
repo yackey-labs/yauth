@@ -336,6 +336,90 @@ func TestAdmin_Impersonate(t *testing.T) {
 	}
 }
 
+// TestAdmin_ImpersonateRefusesInactiveTargets pins the impersonation
+// target-lifecycle gate: a session for a banned, suspended or staged
+// (pre-start) account is inert server-side, so issuing it only destroys the
+// admin's own session cookie (same cookie name) while writing a misleading
+// audit row. Each such target must get a 403 plus an
+// admin.impersonation.refused audit entry — and the admin's own session must
+// survive (still usable afterward).
+func TestAdmin_ImpersonateRefusesInactiveTargets(t *testing.T) {
+	env := newEnv(t)
+	defer env.stop()
+
+	admin := env.seedUser(t, "admin@example.com", "admin")
+	tok := env.issueSession(t, admin.ID)
+	ctx := context.Background()
+
+	banned := env.seedUser(t, "banned@example.com", "user")
+	ban := true
+	if _, err := env.repo.UpdateUser(ctx, banned.ID, domain.UpdateUser{Banned: &ban}); err != nil {
+		t.Fatalf("ban target: %v", err)
+	}
+
+	suspended := env.seedUser(t, "suspended@example.com", "user")
+	now := time.Now().UTC()
+	suspAt := &now
+	if _, err := env.repo.UpdateUser(ctx, suspended.ID, domain.UpdateUser{SuspendedAt: &suspAt}); err != nil {
+		t.Fatalf("suspend target: %v", err)
+	}
+
+	staged := env.seedUser(t, "staged@example.com", "user")
+	future := time.Now().UTC().Add(30 * 24 * time.Hour)
+	activates := &future
+	if _, err := env.repo.UpdateUser(ctx, staged.ID, domain.UpdateUser{ActivatesAt: &activates}); err != nil {
+		t.Fatalf("stage target: %v", err)
+	}
+
+	active := env.seedUser(t, "active@example.com", "user")
+
+	for name, id := range map[string]string{
+		"banned":    banned.ID,
+		"suspended": suspended.ID,
+		"staged":    staged.ID,
+	} {
+		res := env.do(t, http.MethodPost, "/api/auth/admin/users/"+id+"/impersonate", tok, struct{}{})
+		body := drain(res)
+		if res.StatusCode != http.StatusForbidden {
+			t.Fatalf("%s target: status = %d, want 403 (%s)", name, res.StatusCode, body)
+		}
+		for _, c := range res.Cookies() {
+			if c.Name == "yauth_session" && c.Value != "" {
+				t.Fatalf("%s target: refused impersonation must not Set-Cookie (admin session would be clobbered)", name)
+			}
+		}
+	}
+
+	// The admin's own session still works after three refusals.
+	res := env.do(t, http.MethodGet, "/api/auth/admin/users", tok, nil)
+	drain(res)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("admin session died during refused impersonations: status = %d", res.StatusCode)
+	}
+
+	// Active target still impersonates fine (positive control).
+	res = env.do(t, http.MethodPost, "/api/auth/admin/users/"+active.ID+"/impersonate", tok, struct{}{})
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("active target: status = %d, want 200 (%s)", res.StatusCode, drain(res))
+	}
+	res.Body.Close()
+
+	// One refused audit row per inactive target.
+	entries, err := env.repo.ListAuditLog(ctx, domain.ListAuditFilters{Limit: 100})
+	if err != nil {
+		t.Fatalf("list audit: %v", err)
+	}
+	refused := 0
+	for _, e := range entries {
+		if e.EventType == "admin.impersonation.refused" {
+			refused++
+		}
+	}
+	if refused != 3 {
+		t.Fatalf("admin.impersonation.refused rows = %d, want 3 (one per inactive target)", refused)
+	}
+}
+
 func TestAdmin_DeleteUserSessions(t *testing.T) {
 	env := newEnv(t)
 	defer env.stop()

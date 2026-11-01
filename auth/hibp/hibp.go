@@ -39,6 +39,17 @@ const DefaultUserAgent = "yauth-go-security-check"
 // constructed without a custom *http.Client.
 const DefaultTimeout = 5 * time.Second
 
+// maxHIBPResponseBytes caps the HIBP range response body we will buffer.
+// Legitimate k-anonymity responses are hundreds of KB at most (one line
+// per hash sharing the 5-hex-char prefix); 1 MiB leaves ample headroom
+// while bounding memory on an operator-configured or compromised
+// endpoint that returns gigabytes. Oversize bodies are rejected with an
+// error (fail closed at the transport layer — the documented integration
+// is fail-open with a log line, so the caller decides how to treat it)
+// rather than silently truncated, because truncation could cut off the
+// matching suffix and turn a breach into a false "not found".
+const maxHIBPResponseBytes = 1 << 20
+
 // Checker performs k-anonymity password-breach lookups against the
 // HIBP range API. The zero value uses sensible defaults; populate
 // fields to override the endpoint or HTTP client.
@@ -103,9 +114,12 @@ func (c *Checker) CheckPwned(ctx context.Context, password string) (int, error) 
 	if resp.StatusCode/100 != 2 {
 		return 0, fmt.Errorf("hibp: unexpected status %d", resp.StatusCode)
 	}
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxHIBPResponseBytes+1))
 	if err != nil {
 		return 0, fmt.Errorf("hibp: read body: %w", err)
+	}
+	if len(body) > maxHIBPResponseBytes {
+		return 0, fmt.Errorf("hibp: response body exceeds %d bytes", maxHIBPResponseBytes)
 	}
 	return parseResponse(suffix, string(body)), nil
 }

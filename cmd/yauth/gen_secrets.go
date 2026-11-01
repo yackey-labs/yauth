@@ -58,6 +58,15 @@ func newGenSecretsCmd() *cobra.Command {
 			if err := os.WriteFile(out, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
 				return fmt.Errorf("write %s: %w", out, err)
 			}
+			// WriteFile's mode applies only at creation: a pre-existing
+			// secrets file keeps whatever mode it already had, so a
+			// world-readable .env survives --force with the secrets exposed.
+			// The mode is the point of this file, so repair it explicitly
+			// and fail loudly if the repair doesn't hold (rather than
+			// reporting success with a still-readable secret).
+			if err := os.Chmod(out, 0o600); err != nil {
+				return fmt.Errorf("chmod %s: %w", out, err)
+			}
 			fmt.Fprintf(cmd.OutOrStdout(), "wrote %s (3 secrets)\n", out)
 			return nil
 		},

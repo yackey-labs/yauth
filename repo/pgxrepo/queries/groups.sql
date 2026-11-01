@@ -17,8 +17,12 @@ SELECT * FROM yauth_groups WHERE organization_id = $1 ORDER BY name;
 
 -- name: UpdateGroup :one
 UPDATE yauth_groups
-SET name = $2, description = $3, external_id = $4, updated_at = $5
-WHERE id = $1
+SET
+    name        = COALESCE(sqlc.narg('name'), name),
+    description = COALESCE(sqlc.narg('description'), description),
+    external_id = COALESCE(sqlc.narg('external_id'), external_id),
+    updated_at  = $1
+WHERE id = $2
 RETURNING *;
 
 -- name: DeleteGroup :exec

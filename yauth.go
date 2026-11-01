@@ -200,6 +200,25 @@ func (b *YAuthBuilder) Build() (*YAuth, error) {
 		logger = slog.Default()
 	}
 
+	// The declarative config surface (yauthcfg) refuses the dangerous
+	// combinations and warns on the merely-inadvisable ones. The Go builder
+	// path stores YAuthConfig verbatim, so without this pass an embedder who
+	// assembles the struct by hand gets the dangerous behaviour with nothing
+	// ever said about it. Same words, same conditions, just logged rather
+	// than fatal/warned at config load. (Kept in sync by
+	// yauthcfg.SecurityWarnings — both lists name the same fields.)
+	if !b.cfg.CookieSecure {
+		logger.Warn("yauth: cookie_secure=false (the builder default) — session cookies will be sent " +
+			"over plaintext HTTP and are readable by anything on the path. Set CookieSecure true " +
+			"anywhere reachable over a network")
+	}
+	if b.cfg.AutoAdminFirstUser {
+		logger.Warn("yauth: auto_admin_first_user is enabled — the first account registered on an empty " +
+			"deployment claims the admin role, so the register endpoint is a public admin-claim " +
+			"race. It survives because removing it would strand single-operator installs on upgrades; " +
+			"call BootstrapAdmin instead and turn it off")
+	}
+
 	// Rejected here rather than at first request: a typo'd CIDR must not
 	// silently degrade to "trust nobody" (which would break the audit
 	// trail) or to "trust everybody" (which would restore the forgery).

@@ -78,7 +78,8 @@ LIMIT 1;
 SELECT * FROM yauth_device_codes WHERE device_code_hash = $1 LIMIT 1;
 
 -- name: UpdateDeviceCodeStatus :execrows
-UPDATE yauth_device_codes SET status = $2, user_id = $3 WHERE id = $1;
+UPDATE yauth_device_codes SET status = $2, user_id = $3 WHERE id = $1
+  AND (status = 'pending' OR (status = 'approved' AND $2 = 'consumed'));
 
 -- name: UpdateDeviceCodeLastPolled :execrows
 UPDATE yauth_device_codes SET last_polled_at = $2 WHERE id = $1;

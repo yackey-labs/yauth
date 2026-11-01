@@ -161,14 +161,61 @@ func (r *Repo) UpdateUser(ctx context.Context, id string, changes domain.UpdateU
 }
 
 func (r *Repo) DeleteUser(ctx context.Context, id string) error {
-	n, err := r.q.DeleteUser(ctx, id)
-	if err != nil {
-		return err
+	// migrate/postgres declares NO foreign keys — every child column is bare
+	// TEXT — so nothing cascades in the database and this function IS the
+	// cascade, mirroring DeleteOrganization. Without it every credential,
+	// grant and membership row for the user survives as an orphan: sessions
+	// stay valid, refresh tokens stay redeemable, API keys keep working.
+	//
+	// Slice order IS execution order and is load-bearing where marked:
+	// oidc nonces select through the user's auth codes, so they must go
+	// before the auth codes; the magic-link delete reads the user's email,
+	// so it must run before the user row goes.
+	//
+	// Deliberately NOT cascaded: audit_log rows (the audit trail must
+	// survive the user), challenges/rate-limit/revocation rows (keyed by
+	// opaque caller-chosen keys, not reliably user-mapped), OAuth/SSO
+	// login-state rows (no user column; they expire in minutes), and
+	// invitations the user sent (deleting them would strand invitees).
+	cascades := []string{
+		"DELETE FROM yauth_oidc_nonces WHERE authorization_code_id IN (SELECT id FROM yauth_authorization_codes WHERE user_id = $1)",
+		"DELETE FROM yauth_authorization_codes WHERE user_id = $1",
+		"DELETE FROM yauth_sessions WHERE user_id = $1",
+		"DELETE FROM yauth_refresh_tokens WHERE user_id = $1",
+		"DELETE FROM yauth_api_keys WHERE user_id = $1 OR created_by_user_id = $1",
+		"DELETE FROM yauth_oauth_accounts WHERE user_id = $1",
+		"DELETE FROM yauth_consents WHERE user_id = $1",
+		"DELETE FROM yauth_memberships WHERE user_id = $1",
+		"DELETE FROM yauth_group_members WHERE user_id = $1",
+		"DELETE FROM yauth_client_role_assignments WHERE user_id = $1",
+		"DELETE FROM yauth_webauthn_credentials WHERE user_id = $1",
+		"DELETE FROM yauth_totp_secrets WHERE user_id = $1",
+		"DELETE FROM yauth_backup_codes WHERE user_id = $1",
+		"DELETE FROM yauth_account_locks WHERE user_id = $1",
+		"DELETE FROM yauth_unlock_tokens WHERE user_id = $1",
+		"DELETE FROM yauth_external_identities WHERE user_id = $1",
+		"DELETE FROM yauth_device_codes WHERE user_id = $1",
+		"DELETE FROM yauth_passwords WHERE user_id = $1",
+		"DELETE FROM yauth_password_history WHERE user_id = $1",
+		"DELETE FROM yauth_email_verifications WHERE user_id = $1",
+		"DELETE FROM yauth_password_resets WHERE user_id = $1",
+		"DELETE FROM yauth_magic_links WHERE email = (SELECT email FROM yauth_users WHERE id = $1)",
 	}
-	if n == 0 {
-		return yautherr.ErrNotFound
-	}
-	return nil
+	return r.withTx(ctx, func(tx pgx.Tx) error {
+		for _, stmt := range cascades {
+			if _, err := tx.Exec(ctx, stmt, id); err != nil {
+				return err
+			}
+		}
+		n, err := pgxgen.New(tx).DeleteUser(ctx, id)
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return yautherr.ErrNotFound
+		}
+		return nil
+	})
 }
 
 func (r *Repo) AnyUserExists(ctx context.Context) (bool, error) {
@@ -1492,6 +1539,10 @@ func (r *Repo) GetDeviceCodeByDeviceCodeHash(ctx context.Context, deviceCodeHash
 }
 
 func (r *Repo) UpdateDeviceCodeStatus(ctx context.Context, id, status string, userID *string) error {
+	// Compare-and-swap: the SQL only matches pending rows (or an approved
+	// row being redeemed to consumed), so a zero-row update means the code
+	// is missing, already terminal, or lost a concurrent race — all of
+	// which surface as ErrNotFound. See DeviceCodeRepository docs.
 	n, err := r.q.UpdateDeviceCodeStatus(ctx, pgxgen.UpdateDeviceCodeStatusParams{
 		ID:     id,
 		Status: status,
@@ -2164,11 +2215,16 @@ func (r *Repo) UpdateMembership(ctx context.Context, id string, changes domain.U
 			return notFound(err)
 		}
 		if changes.Role != nil && row.Role == pgxOwnerRole && *changes.Role != pgxOwnerRole {
-			count, err := q.CountOrgOwners(ctx, row.OrganizationID)
+			// Last-owner protection under a row lock: FOR UPDATE on every
+			// owner row of the org serializes concurrent demotions, so two
+			// transactions that both read count=2 can no longer both
+			// commit and leave the org ownerless. The loser blocks on the
+			// lock until the winner commits, then sees count<=1.
+			owners, err := q.LockOrgOwners(ctx, row.OrganizationID)
 			if err != nil {
 				return err
 			}
-			if count <= 1 {
+			if len(owners) <= 1 {
 				return yautherr.ErrOwnerProtected
 			}
 		}
@@ -2216,11 +2272,14 @@ func (r *Repo) DeleteMembership(ctx context.Context, id string) error {
 			return err
 		}
 		if row.Role == pgxOwnerRole {
-			count, err := q.CountOrgOwners(ctx, row.OrganizationID)
+			// Same FOR UPDATE serialization as UpdateMembership: a
+			// concurrent delete blocks here until the winner commits, then
+			// observes the post-commit owner set.
+			owners, err := q.LockOrgOwners(ctx, row.OrganizationID)
 			if err != nil {
 				return err
 			}
-			if count <= 1 {
+			if len(owners) <= 1 {
 				return yautherr.ErrOwnerProtected
 			}
 		}

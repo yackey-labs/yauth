@@ -759,6 +759,7 @@ func (q *Queries) UpdateDeviceCodeLastPolled(ctx context.Context, arg UpdateDevi
 
 const updateDeviceCodeStatus = `-- name: UpdateDeviceCodeStatus :execrows
 UPDATE yauth_device_codes SET status = $2, user_id = $3 WHERE id = $1
+  AND (status = 'pending' OR (status = 'approved' AND $2 = 'consumed'))
 `
 
 type UpdateDeviceCodeStatusParams struct {

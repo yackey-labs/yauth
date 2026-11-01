@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -12,9 +13,12 @@ import (
 // returned unchanged).
 type CORSConfig struct {
 	// AllowedOrigins is the list of origins permitted to call the API.
-	// "*" matches any origin (incompatible with AllowCredentials=true:
-	// in that combination the middleware reflects the request Origin
-	// instead, per the CORS spec).
+	// "*" matches any origin, but ONLY without credentials: the
+	// combination "*"+AllowCredentials is rejected (whose reflection
+	// would have let any site read credentialed responses) — in
+	// credentials mode the wildcard entry is ignored and only explicitly
+	// listed origins are honoured. The declarative config surface
+	// (yauthcfg) refuses it outright.
 	AllowedOrigins []string
 	// AllowedMethods is the value of Access-Control-Allow-Methods on
 	// preflight responses.
@@ -57,6 +61,24 @@ func CORS(cfg CORSConfig) func(http.Handler) http.Handler {
 		methodsHeader := strings.Join(methods, ", ")
 		headersHeader := strings.Join(headers, ", ")
 		maxAge := strconv.Itoa(int(cfg.MaxAge.Seconds()))
+
+		// "*" plus credentials would reflect every origin back with
+		// Access-Control-Allow-Credentials, letting any site read
+		// authenticated responses. The middleware refuses to do that —
+		// the wildcard entry is ignored in credentials mode — and the
+		// misconfiguration gets a loud warn here, because the magic
+		// quirk means an operator (or an embedder hand-assembling
+		// CORSConfig) sometimes ACQUIRES this combination by accident.
+		if cfg.AllowCredentials {
+			for _, o := range cfg.AllowedOrigins {
+				if strings.TrimSpace(o) == "*" {
+					slog.Warn("yauth: CORS configured with allowed_origins [\"*\"] and allow_credentials=true — " +
+						"the wildcard is ignored in credentials mode (it would reflect every origin); " +
+						"list the origins you actually serve")
+					break
+				}
+			}
+		}
 
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			origin := r.Header.Get("Origin")
@@ -111,14 +133,16 @@ func CORS(cfg CORSConfig) func(http.Handler) http.Handler {
 
 // matchOrigin returns the value to send in Access-Control-Allow-Origin
 // for the given request origin, plus a bool indicating whether the
-// origin is permitted. With AllowCredentials=true, "*" is illegal — the
-// middleware reflects the request Origin when AllowedOrigins includes "*"
-// in that mode.
+// origin is permitted. A literal "*" permits every origin but is
+// honoured only WITHOUT credentials: with AllowCredentials=true the
+// wildcard is ignored (an explicit origin list is required), because
+// accepting a wildcard in credentials mode is how any origin on the
+// internet gets to read credentialed responses.
 func matchOrigin(cfg CORSConfig, origin string) (string, bool) {
 	for _, o := range cfg.AllowedOrigins {
 		if o == "*" {
 			if cfg.AllowCredentials {
-				return origin, true
+				continue
 			}
 			return "*", true
 		}

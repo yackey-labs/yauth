@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -177,6 +178,89 @@ func TestBootstrapAdmin_OperatorPasswordNotLogged(t *testing.T) {
 	}
 	if ok, _ := auth.VerifyPassword(opPw, stored.PasswordHash); !ok {
 		t.Fatalf("operator password does not verify")
+	}
+}
+
+// TestBootstrapAdmin_PasswordEnvHonored verifies the *_env resolution: the
+// env-sourced password is the one stored, it never appears in the logs, and
+// it beats the inline password (env > file > inline).
+func TestBootstrapAdmin_PasswordEnvHonored(t *testing.T) {
+	r := memrepo.New()
+	var buf bytes.Buffer
+	const envPw = "Env-Sourced-Pw-123!x"
+	const inlinePw = "Inline-Loser-Pw-123!x"
+	t.Setenv("YAUTH_TEST_BOOTSTRAP_PW", envPw)
+	cfg := yauthcfg.BootstrapAdminConfig{
+		Enabled: true, Email: "admin@example.com",
+		Password: inlinePw, PasswordEnv: "YAUTH_TEST_BOOTSTRAP_PW",
+	}
+
+	bootstrapAdmin(context.Background(), r, capLogger(&buf), cfg, basePolicy())
+
+	logs := buf.String()
+	for _, secret := range []string{envPw, inlinePw} {
+		if strings.Contains(logs, secret) {
+			t.Fatalf("password leaked into logs:\n%s", logs)
+		}
+	}
+	u, _ := r.GetUserByEmail(context.Background(), "admin@example.com")
+	stored, err := r.GetPasswordByUserID(context.Background(), u.ID)
+	if err != nil {
+		t.Fatalf("GetPasswordByUserID: %v", err)
+	}
+	if ok, _ := auth.VerifyPassword(envPw, stored.PasswordHash); !ok {
+		t.Fatalf("env password was not stored (inline won over env?)")
+	}
+	if ok, _ := auth.VerifyPassword(inlinePw, stored.PasswordHash); ok {
+		t.Fatalf("inline password was stored despite password_env being set")
+	}
+}
+
+// TestBootstrapAdmin_PasswordFileHonored verifies the *_file resolution: the
+// trimmed file contents are stored, and an env var still beats the file.
+func TestBootstrapAdmin_PasswordFileHonored(t *testing.T) {
+	dir := t.TempDir()
+	filePw := "File-Sourced-Pw-123!x"
+	pwFile := dir + "/bootstrap_pw"
+	if err := os.WriteFile(pwFile, []byte(filePw+"\n"), 0o600); err != nil {
+		t.Fatalf("seed password file: %v", err)
+	}
+
+	r := memrepo.New()
+	var buf bytes.Buffer
+	cfg := yauthcfg.BootstrapAdminConfig{
+		Enabled: true, Email: "admin@example.com", PasswordFile: pwFile,
+	}
+	bootstrapAdmin(context.Background(), r, capLogger(&buf), cfg, basePolicy())
+
+	u, _ := r.GetUserByEmail(context.Background(), "admin@example.com")
+	stored, err := r.GetPasswordByUserID(context.Background(), u.ID)
+	if err != nil {
+		t.Fatalf("GetPasswordByUserID: %v", err)
+	}
+	if ok, _ := auth.VerifyPassword(filePw, stored.PasswordHash); !ok {
+		t.Fatalf("password_file contents were not stored (trailing newline must be trimmed)")
+	}
+	if strings.Contains(buf.String(), filePw) {
+		t.Fatalf("file password leaked into logs:\n%s", buf.String())
+	}
+
+	// Env beats file: re-run against a fresh repo with both set.
+	r2 := memrepo.New()
+	const envPw = "Env-Beats-File-Pw-123!x"
+	t.Setenv("YAUTH_TEST_BOOTSTRAP_PW2", envPw)
+	cfg2 := yauthcfg.BootstrapAdminConfig{
+		Enabled: true, Email: "admin@example.com",
+		PasswordFile: pwFile, PasswordEnv: "YAUTH_TEST_BOOTSTRAP_PW2",
+	}
+	bootstrapAdmin(context.Background(), r2, capLogger(&buf), cfg2, basePolicy())
+	u2, _ := r2.GetUserByEmail(context.Background(), "admin@example.com")
+	stored2, err := r2.GetPasswordByUserID(context.Background(), u2.ID)
+	if err != nil {
+		t.Fatalf("GetPasswordByUserID: %v", err)
+	}
+	if ok, _ := auth.VerifyPassword(envPw, stored2.PasswordHash); !ok {
+		t.Fatalf("password_env did not beat password_file")
 	}
 }
 

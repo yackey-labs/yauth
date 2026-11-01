@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"os"
 	"strings"
 	"time"
 
@@ -67,7 +68,27 @@ func bootstrapAdmin(ctx context.Context, r repo.Repository, logger *slog.Logger,
 	// Resolve the password BEFORE the insert so we know whether a generated
 	// one would need logging. Whether it is operator-provided or generated, we
 	// only log (and only ever the generated one) after a successful INSERT.
+	// Precedence is password_env, then password_file, then the inline
+	// password: env/file keep the secret out of the config document (the
+	// "secrets never inline" schema invariant), while the inline field
+	// survives for air-gapped setups and emits a SecurityWarnings entry.
+	// An unreadable password_file logs a WARN and falls back — it never
+	// fails startup, per the failure policy below.
 	password := cfg.Password
+	resolvedOutsideConfig := false
+	if cfg.PasswordEnv != "" {
+		if v := strings.TrimSpace(os.Getenv(cfg.PasswordEnv)); v != "" {
+			password = v
+			resolvedOutsideConfig = true
+		}
+	}
+	if !resolvedOutsideConfig && cfg.PasswordFile != "" {
+		if b, err := os.ReadFile(cfg.PasswordFile); err != nil {
+			logger.Warn("yauth: bootstrap_admin password_file unreadable — falling back to password/password_env or a generated password", "err", err)
+		} else if v := strings.TrimSpace(string(b)); v != "" {
+			password = v
+		}
+	}
 	generated := false
 	if password == "" {
 		pw, err := passwordpolicy.Generate(policy)

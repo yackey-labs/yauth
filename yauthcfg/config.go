@@ -425,6 +425,12 @@ type EmailPasswordPluginConfig struct {
 // email unique constraint so a restart, or two replicas racing, never creates
 // a duplicate or re-logs the password.
 //
+// Secret precedence is password_env, then password_file, then the inline
+// password field: env/file keep the secret out of the config document (the
+// "secrets never inline" schema invariant — every other secret-bearing field
+// in this package is *_env/*_path only), while the inline field survives for
+// air-gapped single-file setups and emits a SecurityWarnings entry when set.
+//
 // Prefer this over auto_admin_first_user. The two are mutually exclusive in
 // practice: a bootstrapped admin makes a user exist, so auto_admin_first_user
 // (which only promotes when NO user exists) never fires afterward.
@@ -437,7 +443,23 @@ type BootstrapAdminConfig struct {
 	// and NEVER logged. Leave empty to have yauth generate and log a strong
 	// random password once at creation. The user must change it on first
 	// login either way (must_change_password is set).
+	//
+	// Inline secrets violate this package's "secrets never inline"
+	// invariant (see the package comment): setting this emits a
+	// SecurityWarnings entry naming bootstrap_admin.password. Prefer
+	// PasswordEnv / PasswordFile, which take precedence over this field.
 	Password string `yaml:"password,omitempty" toml:"password,omitempty"`
+	// PasswordEnv is the name of the environment variable holding the
+	// admin's initial password. Takes precedence over PasswordFile and the
+	// inline Password. Empty means unset.
+	PasswordEnv string `yaml:"password_env,omitempty" toml:"password_env,omitempty"`
+	// PasswordFile is a path to a file whose trimmed contents are the
+	// admin's initial password (docker-secret / systemd LoadCredential
+	// shape: trailing newline tolerated). Takes precedence over the inline
+	// Password but loses to PasswordEnv. An unreadable file logs a WARN
+	// and falls back to the inline/generated password — it never fails
+	// startup. Empty means unset.
+	PasswordFile string `yaml:"password_file,omitempty" toml:"password_file,omitempty"`
 }
 
 // PasswordPolicyConfig mirrors auth/passwordpolicy.Policy.
@@ -898,6 +920,17 @@ type SCIMPluginConfig struct {
 	// "/api/auth"), used only to build absolute SCIM self/Location URLs. Empty
 	// falls back to the shared oidc/oauth2_server base path (server.prefix).
 	BasePath string `yaml:"base_path" toml:"base_path"`
+	// RequireKeyPermissions makes SCIM refuse an org-scoped API key that
+	// carries NEITHER a role NOR an explicit permission list. See
+	// scim.Config.RequireKeyPermissions.
+	//
+	// Default false: such a key keeps full SCIM access and logs a WARN once
+	// per key per process, so upgrading yauth does not silently stop
+	// deprovisioning across every existing integration. Set it true once
+	// every SCIM key in the deployment has been re-minted with role=admin
+	// (or the four member-lifecycle permissions). Deployments standing SCIM
+	// up fresh should set it true from the start.
+	RequireKeyPermissions bool `yaml:"require_key_permissions" toml:"require_key_permissions"`
 }
 
 // Default returns a Config populated with sensible development defaults

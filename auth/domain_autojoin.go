@@ -151,6 +151,13 @@ func AutoJoinFromEmail(
 // private copy whose comment said so. One definition means a later tightening
 // here — IDN homographs, say — reaches the federated login paths instead of
 // silently leaving them on the older, weaker rule.
+//
+// The domain portion is canonicalized via CanonicalizeDomain (trailing-dot
+// strip, lowercase, IDNA ToASCII), so "alice@ACME.com." and
+// "user@münchen.de" route to the same rows as "acme.com" and
+// "xn--mnchen-3ya.de". Canonicalization failure (empty, idna-rejected)
+// returns ("", false) — fail closed, no autojoin — rather than falling
+// back to the raw string.
 func ExtractEmailDomain(email string) (string, bool) {
 	at := strings.IndexByte(email, '@')
 	if at <= 0 || at == len(email)-1 {
@@ -162,7 +169,11 @@ func ExtractEmailDomain(email string) (string, bool) {
 	if strings.IndexByte(email[at+1:], '@') >= 0 {
 		return "", false
 	}
-	return strings.ToLower(strings.TrimSpace(email[at+1:])), true
+	canon, err := CanonicalizeDomain(email[at+1:])
+	if err != nil {
+		return "", false
+	}
+	return canon, true
 }
 
 // VerifiedDomainCoversEmail reports whether orgID holds a VERIFIED

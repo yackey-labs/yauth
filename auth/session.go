@@ -17,6 +17,24 @@ import (
 //
 // The caller is responsible for any audit logging or event emission; this
 // helper does the cryptographic and persistence work only.
+//
+// POLICY CAPS ARE OPT-IN, not automatic: IssueSession applies NO org policy.
+// MaxSessionDuration / MaxConcurrentSessions are enforced ONLY by
+// IssueSessionWithPolicy (pass an explicit *PolicyEnforcer). Every login
+// path in the tree currently calls this plain variant, so stored org caps
+// are returned by GET /organizations/{id}/policy but applied to no session
+// yauth issues until each path is migrated. Known plain-IssueSession login
+// call sites (audit of 2026-11-01; re-grep `IssueSession\(` when migrating):
+// plugins/emailpassword/handlers.go (login, password-change re-issue,
+// admin reset), plugins/magiclink, plugins/mfa, plugins/oauth,
+// plugins/passkey, plugins/ssooidc/handlers_login.go,
+// plugins/ssosaml/handlers_login.go, plugins/admin impersonation.
+// There is no single choke to wire: a user may belong to several orgs with
+// different caps, and turning a stored cap into a live one is a behavioural
+// change for deployments that set it decoratively. See
+// docs/org-policy-enforcement.md. New login paths MUST call
+// IssueSessionWithPolicy; migrating the list above is tracked work, not
+// part of this helper's contract.
 func IssueSession(
 	ctx context.Context,
 	sessions repo.SessionRepository,
@@ -57,14 +75,18 @@ func IssueSession(
 	return raw, &sess, nil
 }
 
-// IssueSessionWithPolicy is the policy-aware variant of IssueSession.
-// Port of yauth Rust #92 / yauth-go #21 session-create enforcement.
+// IssueSessionWithPolicy is the policy-aware variant of IssueSession and
+// the DOCUMENTED CHOKE for session-create enforcement (port of yauth Rust
+// #92 / yauth-go #21).
 //
-// NOTHING IN YAUTH CALLS THIS. Every login path — emailpassword,
-// magiclink, mfa, oauth, passkey, ssooidc, ssosaml, admin impersonation —
-// calls plain IssueSession, so an organization's max_session_duration_secs
-// and max_concurrent_sessions are stored and returned by
-// GET /organizations/{id}/policy but applied to no session yauth issues.
+// NOTHING IN YAUTH CALLS THIS YET (see the IssueSession caller registry
+// above: every login path calls plain IssueSession), so an organization's
+// max_session_duration_secs and max_concurrent_sessions are stored and
+// returned by GET /organizations/{id}/policy but applied to no session
+// yauth issues. The caps are therefore OPT-IN per call site until the
+// migration lands: pass the request's governing org enforcer explicitly.
+// A nil enforcer behaves identically to IssueSession.
+//
 // Wiring it is not a drop-in swap: a user may belong to several orgs with
 // different caps, and turning a stored cap into a live one is a
 // behavioural change for deployments that have been setting it

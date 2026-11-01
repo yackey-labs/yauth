@@ -45,6 +45,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -579,6 +580,7 @@ func TestWebhookDelivery_DirectReceiverStillWorks(t *testing.T) {
 		mu   sync.Mutex
 		gotB []byte
 		gotS string
+		gotT string
 		hits int
 	)
 	receiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -587,6 +589,7 @@ func TestWebhookDelivery_DirectReceiverStillWorks(t *testing.T) {
 		hits++
 		gotB = body
 		gotS = req.Header.Get("X-YAuth-Signature")
+		gotT = req.Header.Get("X-YAuth-Timestamp")
 		mu.Unlock()
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -610,6 +613,11 @@ func TestWebhookDelivery_DirectReceiverStillWorks(t *testing.T) {
 		t.Fatalf("receiver saw %d requests, want 1", hits)
 	}
 	mac := hmac.New(sha256.New, []byte(secret))
+	ts, err := strconv.ParseInt(gotT, 10, 64)
+	if err != nil {
+		t.Fatalf("X-YAuth-Timestamp %q: %v", gotT, err)
+	}
+	fmt.Fprintf(mac, "%d.", ts)
 	mac.Write(gotB)
 	want := signaturePrefix + hex.EncodeToString(mac.Sum(nil))
 	if gotS != want {

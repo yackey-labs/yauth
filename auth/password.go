@@ -12,6 +12,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -177,16 +178,17 @@ func parsePHC(encoded string) (argonParams, []byte, []byte, error) {
 	}
 
 	var version int
-	if _, err := fmt.Sscanf(parts[2], "v=%d", &version); err != nil {
-		return argonParams{}, nil, nil, ErrInvalidHash
+	version, err := parsePHCVersion(parts[2])
+	if err != nil {
+		return argonParams{}, nil, nil, err
 	}
 	if version != argon2.Version {
 		return argonParams{}, nil, nil, ErrIncompatibleVersion
 	}
 
-	var p argonParams
-	if _, err := fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &p.memory, &p.time, &p.threads); err != nil {
-		return argonParams{}, nil, nil, ErrInvalidHash
+	p, err := parsePHCParams(parts[3])
+	if err != nil {
+		return argonParams{}, nil, nil, err
 	}
 
 	salt, err := rawStdEncoding.DecodeString(parts[4])
@@ -244,4 +246,77 @@ func parsePHC(encoded string) (argonParams, []byte, []byte, error) {
 	}
 
 	return p, salt, hash, nil
+}
+
+// parsePHCVersion parses the "v=<number>" segment, requiring full
+// consumption: any trailing bytes (e.g. "v=19X") are rejected with
+// ErrInvalidHash. fmt.Sscanf with "v=%d" would silently accept such a
+// suffix (it reports n=1, err=nil), so the digits are validated
+// explicitly instead.
+func parsePHCVersion(s string) (int, error) {
+	if !strings.HasPrefix(s, "v=") {
+		return 0, ErrInvalidHash
+	}
+	num := s[len("v="):]
+	if num == "" || !isAllDigits(num) {
+		return 0, ErrInvalidHash
+	}
+	v, err := strconv.Atoi(num)
+	if err != nil {
+		return 0, ErrInvalidHash
+	}
+	return v, nil
+}
+
+// parsePHCParams parses the "m=<n>,t=<n>,p=<n>" segment, requiring full
+// consumption of every number. As with the version segment, Sscanf
+// "%d" accepts trailing garbage on the final field ("p=4q"), so each
+// field is split on its literal delimiters and validated as pure digits.
+func parsePHCParams(s string) (argonParams, error) {
+	var p argonParams
+	fields := strings.Split(s, ",")
+	if len(fields) != 3 {
+		return argonParams{}, ErrInvalidHash
+	}
+	memStr, ok := strings.CutPrefix(fields[0], "m=")
+	if !ok || memStr == "" || !isAllDigits(memStr) {
+		return argonParams{}, ErrInvalidHash
+	}
+	timeStr, ok := strings.CutPrefix(fields[1], "t=")
+	if !ok || timeStr == "" || !isAllDigits(timeStr) {
+		return argonParams{}, ErrInvalidHash
+	}
+	parStr, ok := strings.CutPrefix(fields[2], "p=")
+	if !ok || parStr == "" || !isAllDigits(parStr) {
+		return argonParams{}, ErrInvalidHash
+	}
+	mem64, err := strconv.ParseUint(memStr, 10, 32)
+	if err != nil {
+		return argonParams{}, ErrInvalidHash
+	}
+	time64, err := strconv.ParseUint(timeStr, 10, 32)
+	if err != nil {
+		return argonParams{}, ErrInvalidHash
+	}
+	par64, err := strconv.ParseUint(parStr, 10, 8)
+	if err != nil {
+		return argonParams{}, ErrInvalidHash
+	}
+	p.memory = uint32(mem64)
+	p.time = uint32(time64)
+	p.threads = uint8(par64)
+	return p, nil
+}
+
+// isAllDigits reports whether s is non-empty ASCII digits.
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
 }

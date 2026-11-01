@@ -1,9 +1,13 @@
 package middleware
 
 import (
+	"bytes"
 	"context"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -316,6 +320,43 @@ func TestRateLimit_FailOpenOnRepoError(t *testing.T) {
 	}
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+}
+
+// The fail-open path must be LOUD: a dead rate-limit backend used to remove
+// every throttle in the deployment with nothing in the log. The request still
+// passes (fail-open is the contract), but a WARN naming the limiter must be
+// emitted. The limiter name is unique per run because the throttle map
+// (rateLimitWarns) is process-wide and would suppress a repeat within a minute.
+func TestRateLimit_FailOpenLogsWarn(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	stub := &stubRateLimitRepo{
+		checkFunc: func(_ string, _ int, _ time.Duration) (domain.RateLimitResult, error) {
+			return domain.RateLimitResult{}, errBackend
+		},
+	}
+	name := fmt.Sprintf("warn-probe-%d", time.Now().UnixNano())
+	called := false
+	h := RateLimit(stub, name, 10, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/login", nil)
+	req.RemoteAddr = "10.0.0.1:1"
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if !called || rec.Code != http.StatusOK {
+		t.Fatalf("fail-open: next must run with 200 on repo error (called=%v code=%d)", called, rec.Code)
+	}
+	logs := buf.String()
+	if !strings.Contains(logs, "failing open") || !strings.Contains(logs, name) {
+		t.Errorf("fail-open WARN missing: want log naming limiter %q\n%s", name, logs)
 	}
 }
 

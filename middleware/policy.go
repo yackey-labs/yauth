@@ -160,12 +160,15 @@ func (e *OrgPolicyEnforcer) Wrap(next http.Handler) http.Handler {
 		for _, orgID := range e.governingOrgs(r, au) {
 			policy, err := e.repo.GetOrganizationPolicy(r.Context(), orgID)
 			if err != nil && !errors.Is(err, yautherr.ErrNotFound) {
-				// Treat repo failures as fail-open per the
-				// rate-limit precedent: an enforcer error should not
-				// hard-fail the request, but it must be loud in the
-				// logs (the caller's request-log middleware sees the
-				// 500 swallowed here). For now we just continue.
-				continue
+				// Fail CLOSED: a repo error means the policy is UNKNOWN,
+				// and skipping the allowlist + idle checks on an unknown
+				// policy fails open exactly where the deployment asked to
+				// be strict. 500, with no policy detail in the body — the
+				// row's contents are not the caller's business.
+				// NotFound still means "no policy row" and passes through
+				// to the inherit-global path below.
+				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+				return
 			}
 
 			enf := auth.NewPolicyEnforcer(policy, auth.GlobalPolicyDefaults{

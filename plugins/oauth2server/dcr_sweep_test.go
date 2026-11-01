@@ -13,6 +13,7 @@ import (
 	"github.com/yackey-labs/yauth/domain"
 	"github.com/yackey-labs/yauth/plugins/bearer"
 	"github.com/yackey-labs/yauth/plugins/oauth2server"
+	"github.com/yackey-labs/yauth/repo"
 	"github.com/yackey-labs/yauth/repo/memrepo"
 )
 
@@ -20,8 +21,19 @@ import (
 // enabled (short interval for the test). Returns the server + repo.
 func newSweepHarness(t *testing.T, ttl, interval time.Duration) (*httptest.Server, *memrepo.Repo) {
 	t.Helper()
+	return newSweepHarnessWrapped(t, ttl, interval, nil)
+}
+
+// newSweepHarnessWrapped is newSweepHarness with the repo yauth sees
+// optionally wrapped; the returned memrepo is the underlying store.
+func newSweepHarnessWrapped(t *testing.T, ttl, interval time.Duration, wrap func(repo.Repository) repo.Repository) (*httptest.Server, *memrepo.Repo) {
+	t.Helper()
 	r := memrepo.New()
-	ya, err := yauth.New(r, yauth.NewDefaultConfig()).
+	var yr repo.Repository = r
+	if wrap != nil {
+		yr = wrap(r)
+	}
+	ya, err := yauth.New(yr, yauth.NewDefaultConfig()).
 		WithJWTSecret([]byte("test-only-jwt-secret-please-change-32b")).
 		WithPlugin(bearer.New(bearer.Config{})).
 		WithPlugin(oauth2server.New(oauth2server.Config{
@@ -84,7 +96,11 @@ func TestDCR_MarksDynamicAndAudits(t *testing.T) {
 // client, leaves admin-provisioned clients alone, and writes an
 // oauth2.client.swept audit event.
 func TestDCRSweep_ReclaimsStale(t *testing.T) {
-	srv, r := newSweepHarness(t, time.Hour, 40*time.Millisecond)
+	// Slow the audit write so the delete-then-audit gap the sweep has in
+	// production is wide here too: a test that reads the audit log once,
+	// as soon as the client disappears, fails every time against this.
+	srv, r := newSweepHarnessWrapped(t, time.Hour, 40*time.Millisecond,
+		func(inner repo.Repository) repo.Repository { return slowAuditRepo{inner} })
 	_ = srv
 	ctx := context.Background()
 	old := time.Now().UTC().Add(-48 * time.Hour)
@@ -116,16 +132,37 @@ func TestDCRSweep_ReclaimsStale(t *testing.T) {
 	if got, _ := r.GetOAuth2ClientByClientID(ctx, "admin-prov"); got == nil {
 		t.Fatal("admin-provisioned client must survive the sweep")
 	}
-	logs, _ := r.ListAuditLog(ctx, domain.ListAuditFilters{Limit: 50})
-	var sawSwept bool
+	// The sweep goroutine deletes first and audits after, so the client can
+	// vanish a moment before the audit row lands. Wait for it on the same
+	// deadline rather than reading once (that raced under -race in CI).
+	for !sawAuditEvent(ctx, t, r, "oauth2.client.swept") {
+		if time.Now().After(deadline) {
+			t.Fatal("expected oauth2.client.swept audit event")
+		}
+		time.Sleep(30 * time.Millisecond)
+	}
+}
+
+// slowAuditRepo delays every audit write.
+type slowAuditRepo struct{ repo.Repository }
+
+func (s slowAuditRepo) LogAuditEvent(ctx context.Context, in domain.NewAuditLog) error {
+	time.Sleep(200 * time.Millisecond)
+	return s.Repository.LogAuditEvent(ctx, in)
+}
+
+func sawAuditEvent(ctx context.Context, t *testing.T, r *memrepo.Repo, eventType string) bool {
+	t.Helper()
+	logs, err := r.ListAuditLog(ctx, domain.ListAuditFilters{Limit: 50})
+	if err != nil {
+		t.Fatalf("list audit: %v", err)
+	}
 	for _, e := range logs {
-		if e.EventType == "oauth2.client.swept" {
-			sawSwept = true
+		if e.EventType == eventType {
+			return true
 		}
 	}
-	if !sawSwept {
-		t.Fatal("expected oauth2.client.swept audit event")
-	}
+	return false
 }
 
 func jsonArr() []byte { return []byte(`[]`) }

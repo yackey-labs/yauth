@@ -1,7 +1,7 @@
 # yauth
 
 Modular, plugin-based authentication library for Go (`net/http`) with a
-generated TypeScript client, Vue 3 components, and SolidJS components.
+generated TypeScript client and Vue 3 components.
 
 - **Plugin system** — register only the auth methods you want
 - **Two repository backends** — native pgx/v5 + sqlc for Postgres

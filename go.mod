@@ -14,7 +14,7 @@ require (
 	github.com/go-webauthn/webauthn v0.18.2
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
-	github.com/jackc/pgx/v5 v5.11.0
+	github.com/jackc/pgx/v5 v5.12.0
 	github.com/lestrrat-go/jwx/v3 v3.4.0
 	github.com/pquerna/otp v1.5.0
 	github.com/pressly/goose/v3 v3.29.0
